@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backpack</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@^2.0/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" />
+</head>
+
+
+<style>
+    .dark {
+        background-color: #000000;
+        color: #fff;
+    }
+
+    .dark .container {
+        background-color: #222123;
+    }
+
+    .dark .text-gray-800 {
+        color: #148b34;
+    }
+
+    .dark .bg-gray-200 {
+        background-color: #121010
+    }
+
+    .dark .bg-gray-800 {
+        background-color: #1e4e23
+    }
+</style>
+
+<body class="bg-gray-100 dark:bg-gray-900 flex justify-center items-start min-h-screen m-0 p-0 font-sans" id="body"
+    style="margin-bottom: 100px;">
+    <div class="dark:bg-gray-800 container mx-auto p-6 bg-white  shadow-lg rounded-lg mt-4 w-full max-w-3xl relative">
+        <button id="dark-mode-button"
+            class="absolute top-4 right-4 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 text-gray-800 dark:text-gray-200 font-bold py-2 px-4 rounded">
+            <i class="fas fa-moon"></i>
+        </button>
+        <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-200  text-center mb-6">System Stats
+            and Port Usage
+        </h1>
+        <div class="space-y-4 mb-6 p-4">
+            <div class="flex items-center"><i class="fas fa-link mr-2 "></i><strong>Tunnel Status:&nbsp;</strong>
+                <span id="tunnel-status" class="dark:text-gray-200">Loading...</span>
+            </div>
+            <div class="flex items-center"><i class="fas fa-microchip mr-2 "></i><strong>CPU
+                    Usage:&nbsp;</strong> <span id="cpu-usage" class="dark:text-gray-200">Loading...</span></div>
+            <div class="flex items-center"><i class="fas fa-memory mr-2"></i><strong>RAM Usage:&nbsp;</strong> <span
+                    id="ram-usage" class="dark:text-gray-200">Loading...</span></div>
+            <div class="flex items-center"><i class="fas fa-hdd mr-2"></i><strong>Disk Usage:&nbsp;</strong> <span
+                    id="disk-usage" class="dark:text-gray-200">Loading...</span></div>
+            <div class="flex items-center"><i class="fas fa-exchange-alt mr-2"></i><strong>Swap Usage:&nbsp;</strong>
+                <span id="swap-usage" class="dark:text-gray-200">Loading...</span>
+            </div>
+            <div class="flex items-center"><i class="fas fa-network-wired mr-2"></i><strong>Network
+                    Traffic:&nbsp;</strong> <span id="network-traffic" class="dark:text-gray-200">Loading...</span>
+            </div>
+            <div class="flex items-center"><i class="fas fa-route mr-2"></i><strong>Tunnel Traffic:&nbsp;</strong>
+                <span id="tunnel-traffic" class="dark:text-gray-200">Loading...</span>
+            </div>
+
+            <div class="flex items-center"><i class="fas fa-download mr-2"></i><strong>Download Speed:&nbsp;</strong>
+                <span id="download-speed" class="dark:text-gray-200">Loading...</span>
+            </div>
+            <div class="flex items-center"><i class="fas fa-upload mr-2"></i><strong>Upload Speed:&nbsp;</strong> <span
+                    id="upload-speed" class="dark:text-gray-200">Loading...</span></div>
+            <div class="flex items-center"><i class="fas fa-project-diagram mr-2"></i><strong>All
+                    Connections:&nbsp;</strong>
+                <span id="all-connections" class="dark:text-gray-200">Loading...</span>
+            </div>
+            <div class="flex items-center"><i class="fas fa-eye mr-2"></i><strong>Sniffer:&nbsp;</strong> <span
+                    id="sniffer" class="dark:text-gray-200">Loading...</span></div>
+        </div>
+
+        <table id="port-usage-table" class="dark:bg-gray-800 w-full border-collapse text-left"
+            style="margin-bottom: 10px;">
+            <thead class="border px-4 py-2 bg-gray-200 dark:bg-gray-700">
+                <tr>
+                    <th class="border px-4 py-2 bg-gray-200 dark:bg-gray-700">Port</th>
+                    <th class="border px-4 py-2 bg-gray-200 dark:bg-gray-700">Usage</th>
+                </tr>
+            </thead>
+            <tbody class="bg-gray-10">
+                <tr>
+                    <td colspan="2" class="border px-4 py-2 text-center">Loading...
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <footer class="fixed bottom-0 w-full bg-gray-800 text-white text-center py-2">
+        &copy; 2025 Backpack Project
+    </footer>
+
+
+    <script>
+        async function fetchData() {
+            try {
+                const response = await fetch('/data'); // Replace with your data endpoint
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+
+                const tableBody = document.querySelector('#port-usage-table tbody');
+                tableBody.innerHTML = ''; // Clear existing rows
+
+                if (data.length === 0) {
+                    tableBody.innerHTML = '<tr><td colspan="2" class="border px-4 py-2 text-center">No data available</td></tr>';
+                } else {
+                    data.forEach(item => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `<td class="border px-4 py-2">${item.Port}</td><td class="border px-4 py-2">${item.ReadableUsage}</td>`;
+                        tableBody.appendChild(row);
+                    });
+                }
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                const tableBody = document.querySelector('#port-usage-table tbody');
+                tableBody.innerHTML = '<tr><td colspan="2" class="border px-4 py-2 text-center">Error loading data</td></tr>';
+            }
+        }
+
+        async function fetchSystemStats() {
+            try {
+                const response = await fetch('/stats'); // Replace with your stats endpoint
+                if (!response.ok) throw new Error('Network response was not ok');
+                const stats = await response.json();
+                document.getElementById('tunnel-status').textContent = stats.tunnelStatus;
+                document.getElementById('cpu-usage').textContent = stats.cpuUsage;
+                document.getElementById('ram-usage').textContent = stats.ramUsage;
+                document.getElementById('disk-usage').textContent = stats.diskUsage;
+                document.getElementById('swap-usage').textContent = stats.swapUsage;
+                document.getElementById('network-traffic').textContent = stats.networkTraffic;
+                document.getElementById('download-speed').textContent = stats.downloadSpeed;
+                document.getElementById('upload-speed').textContent = stats.uploadSpeed;
+                document.getElementById('tunnel-traffic').textContent = stats.tunnelTraffic;
+                document.getElementById('sniffer').textContent = stats.sniffer;
+                document.getElementById('all-connections').textContent = stats.allConnections;
+            } catch (error) {
+                console.error('Error fetching system stats:', error);
+                document.querySelector('.space-y-4').innerHTML = '<div>Error loading stats</div>';
+            }
+        }
+
+        // Fetch data every 3 seconds
+        setInterval(() => {
+            fetchData();
+            fetchSystemStats();
+        }, 3000);
+
+        // Initial fetch
+        fetchData();
+        fetchSystemStats();
+
+        // Dark mode button
+        const darkModeButton = document.getElementById('dark-mode-button');
+        darkModeButton.addEventListener('click', () => {
+            const body = document.getElementById('body');
+            body.classList.toggle('dark'); // Toggle the dark class
+            if (body.classList.contains('dark')) {
+                darkModeButton.innerHTML = '<i class="fas fa-sun"></i>';
+            } else {
+                darkModeButton.innerHTML = '<i class="fas fa-moon"></i>';
+            }
+        });
+    </script>
+</body>
+
+</html>

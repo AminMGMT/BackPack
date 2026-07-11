@@ -1,0 +1,14 @@
+Backpack
+Copyright (C) 2026 Amin Mohammadi (AminMGMT). All rights reserved.
+
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+See the LICENSE file for the full text.
+
+--------------------------------------------------------------------------------
+Third-party attribution (required by AGPL-3.0)
+--------------------------------------------------------------------------------
+
+Portions of the tunnel data-plane are derived from prior AGPL-3.0 / GPL-3.0
+open-source work. This single line is retained only to satisfy the copyleft
+attribution requirement of that license; all product branding, CLI, web UI, and
+management code are original to Backpack by Amin Mohammadi.

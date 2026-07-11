@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backpack · Login</title>
+<style>
+  :root{
+    --bg:#0a0a0b; --card:rgba(255,255,255,.045); --stroke:rgba(255,255,255,.09);
+    --accent-rgb:255,69,58;
+    --accent:rgb(var(--accent-rgb));
+    --red:var(--accent);
+    --red-soft:color-mix(in srgb, var(--accent) 60%, #fff);
+    --red-deep:color-mix(in srgb, var(--accent) 68%, #000);
+    --txt:#f5f5f7; --muted:#9a9aa0; --radius:26px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Inter,system-ui,sans-serif;
+    background:var(--bg); color:var(--txt);
+    display:grid; place-items:center; overflow:hidden; -webkit-font-smoothing:antialiased;
+    min-height:100dvh;
+  }
+  .ic{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+  :focus-visible{outline:2px solid var(--red);outline-offset:3px}
+
+  .glow{position:fixed;inset:0;z-index:0;filter:blur(90px);opacity:.6}
+  .glow::before,.glow::after{content:"";position:absolute;border-radius:50%}
+  .glow::before{width:520px;height:520px;background:radial-gradient(circle,var(--red-deep),transparent 65%);
+    top:-160px;left:-120px;animation:float1 14s ease-in-out infinite}
+  .glow::after{width:420px;height:420px;background:radial-gradient(circle,#7a0d08,transparent 65%);
+    bottom:-140px;right:-100px;animation:float2 18s ease-in-out infinite}
+  @keyframes float1{50%{transform:translate(120px,80px) scale(1.15)}}
+  @keyframes float2{50%{transform:translate(-100px,-60px) scale(1.1)}}
+
+  .card{
+    position:relative;z-index:1;width:min(92vw,380px);padding:44px 34px 30px;
+    background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
+    backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);
+    box-shadow:0 30px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08);
+    text-align:center;animation:rise .7s cubic-bezier(.16,1,.3,1) both;
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(24px) scale(.98)}}
+  .logo{
+    width:66px;height:66px;margin:0 auto 18px;border-radius:20px;display:grid;place-items:center;color:#fff;
+    background:linear-gradient(145deg,var(--red),var(--red-deep));
+    box-shadow:0 10px 30px rgba(var(--accent-rgb),.45), inset 0 1px 0 rgba(255,255,255,.4);
+    animation:pop .8s cubic-bezier(.16,1,.3,1) .1s both;
+  }
+  .logo .ic{width:32px;height:32px}
+  @keyframes pop{from{opacity:0;transform:scale(.5) rotate(-12deg)}}
+  h1{font-size:22px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:13px;margin:6px 0 26px}
+
+  form{display:flex;flex-direction:column;gap:14px}
+  .field{position:relative;display:flex;align-items:center}
+  input{
+    width:100%;padding:16px 52px 16px 18px;font-size:20px;letter-spacing:.5em;text-align:center;
+    color:var(--txt);background:rgba(255,255,255,.05);border:1px solid var(--stroke);
+    border-radius:16px;outline:none;transition:border-color .25s,box-shadow .25s,background .25s;
+    font-variant-numeric:tabular-nums;
+  }
+  input::placeholder{letter-spacing:.2em;color:#5a5a5f}
+  input:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18);background:rgba(255,255,255,.07)}
+  .toggle{position:absolute;right:8px;width:38px;height:38px;border-radius:10px;border:none;cursor:pointer;
+    background:transparent;color:var(--muted);display:grid;place-items:center;transition:color .2s}
+  .toggle:hover{color:var(--red-soft)}
+  button[type=submit]{
+    min-height:52px;padding:0 16px;font-size:16px;font-weight:600;color:#fff;cursor:pointer;
+    background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;border-radius:16px;
+    transition:transform .25s,box-shadow .25s;box-shadow:0 10px 26px rgba(var(--accent-rgb),.35);touch-action:manipulation;
+  }
+  button[type=submit]:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(var(--accent-rgb),.5)}
+  button[type=submit]:active{transform:translateY(0) scale(.99)}
+  .foot{margin-top:22px;color:var(--muted);font-size:11.5px;letter-spacing:.03em}
+  .foot b{color:var(--red-soft);font-weight:600}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <div class="glow" aria-hidden="true"></div>
+  <div class="card">
+    <div class="logo" aria-hidden="true">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg>
+    </div>
+    <h1>Backpack</h1>
+    <div class="sub">Enter your access password</div>
+    <form method="post" action="/login">
+      <label class="sr-only" for="pw">Access password</label>
+      <div class="field">
+        <input id="pw" name="password" type="password" maxlength="128"
+               placeholder="Password" autofocus autocomplete="current-password" required>
+        <button type="button" class="toggle" id="toggle" aria-label="Show code" aria-pressed="false" onclick="togglePw()">
+          <svg class="ic" viewBox="0 0 24 24" id="eye"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <button type="submit">Unlock</button>
+    </form>
+    <div class="foot">TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
+  </div>
+<script>
+  // Apply the theme chosen on the dashboard (shared via localStorage).
+  (function(){ const s=localStorage.getItem('bp_accent'); if(s) document.documentElement.style.setProperty('--accent-rgb',s); })();
+  function togglePw(){
+    const i=document.getElementById('pw'), t=document.getElementById('toggle'), e=document.getElementById('eye');
+    const show=i.type==='password';
+    i.type=show?'text':'password';
+    t.setAttribute('aria-pressed',show); t.setAttribute('aria-label',show?'Hide code':'Show code');
+    e.innerHTML=show
+      ?'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>'
+      :'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
+    i.focus();
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backpack · Dashboard</title>
+<style>
+  :root{
+    --bg:#0a0a0b; --bg2:#0e0e10;
+    --card:rgba(255,255,255,.045); --card-hi:rgba(255,255,255,.07);
+    --stroke:rgba(255,255,255,.09);
+    --accent-rgb:255,69,58;                              /* themeable accent */
+    --accent:rgb(var(--accent-rgb));
+    --red:var(--accent);
+    --red-soft:color-mix(in srgb, var(--accent) 60%, #fff);
+    --red-deep:color-mix(in srgb, var(--accent) 68%, #000);
+    --green:#30d158; --amber:#ff9f0a;
+    --txt:#f5f5f7; --muted:#9a9aa0; --muted2:#636366;
+    --radius:22px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Inter,system-ui,sans-serif;
+    background:var(--bg); color:var(--txt); -webkit-font-smoothing:antialiased;
+    min-height:100dvh; padding:22px clamp(14px,4vw,40px) 60px;
+    background-image:
+      radial-gradient(1100px 620px at 6% -8%, rgba(var(--accent-rgb),.13), transparent 58%),
+      radial-gradient(900px 520px at 98% 2%, rgba(var(--accent-rgb),.07), transparent 55%),
+      radial-gradient(760px 760px at 50% 118%, rgba(var(--accent-rgb),.06), transparent 60%),
+      linear-gradient(180deg, rgba(255,255,255,.015), transparent 30%);
+    background-attachment:fixed;
+  }
+  .wrap{max-width:1200px;margin:0 auto}
+  .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  button{font-family:inherit;touch-action:manipulation}
+  :focus-visible{outline:2px solid var(--red);outline-offset:3px;border-radius:10px}
+  /* elevation scale for depth (skill: consistent shadow scale) */
+  header,.meter,.pill,.tun{box-shadow:0 1px 2px rgba(0,0,0,.22),0 10px 30px rgba(0,0,0,.20)}
+  .meter:hover,.tun:hover{box-shadow:0 2px 6px rgba(0,0,0,.28),0 20px 48px rgba(0,0,0,.30)}
+  ::selection{background:rgba(var(--accent-rgb),.35)}
+
+  /* ---------- header ---------- */
+  header{
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:16px 20px;margin-bottom:22px;
+    background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
+    backdrop-filter:blur(26px) saturate(160%);-webkit-backdrop-filter:blur(26px) saturate(160%);
+    animation:rise .6s cubic-bezier(.16,1,.3,1) both;
+  }
+  .brand{display:flex;align-items:center;gap:12px}
+  .mark{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;color:#fff;
+    background:linear-gradient(145deg,var(--red),var(--red-deep));
+    box-shadow:0 8px 22px rgba(var(--accent-rgb),.45),inset 0 1px 0 rgba(255,255,255,.4)}
+  .mark .ic{width:24px;height:24px;stroke-width:2}
+  .brand h1{font-size:19px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .brand small{color:var(--muted);font-size:12px}
+  .hostmeta{display:flex;gap:20px;flex-wrap:wrap;margin-left:6px}
+  .hm{font-size:12px;color:var(--muted)}
+  .hm b{display:block;color:var(--txt);font-size:13px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+  .spacer{flex:1}
+  .logout{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 16px;border-radius:12px;
+    font-size:13px;font-weight:600;cursor:pointer;
+    background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.22s}
+  .logout:hover{background:rgba(var(--accent-rgb),.22);transform:translateY(-1px)}
+  .iconbtn{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;cursor:pointer;
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
+  .iconbtn:hover{background:rgba(255,255,255,.1);transform:translateY(-1px);color:var(--red-soft)}
+  .iconbtn .ic{width:20px;height:20px}
+
+  /* ---------- centered modal (settings) ---------- */
+  .modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;
+    background:rgba(0,0,0,.55);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .3s}
+  .modal.on{opacity:1;pointer-events:auto}
+  .modal .box{width:min(92vw,400px);background:var(--bg2);border:1px solid var(--stroke);border-radius:22px;
+    padding:26px;box-shadow:0 30px 80px rgba(0,0,0,.6);transform:translateY(14px) scale(.98);transition:transform .3s cubic-bezier(.16,1,.3,1)}
+  .modal.on .box{transform:none}
+  .modal h3{font-size:17px;font-weight:700;margin-bottom:4px}
+  .modal p{font-size:12.5px;color:var(--muted);margin-bottom:18px}
+  .modal label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .modal input{width:100%;padding:13px 15px;font-size:15px;color:var(--txt);background:rgba(255,255,255,.05);
+    border:1px solid var(--stroke);border-radius:12px;outline:none;transition:.2s;margin-bottom:14px}
+  .modal input:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18)}
+  .modal .msg{font-size:12.5px;min-height:18px;margin-bottom:10px}
+  .modal .msg.err{color:var(--red-soft)} .modal .msg.ok{color:var(--green)}
+  .modal .actions{display:flex;gap:10px}
+  .modal .actions button{flex:1;min-height:46px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;transition:.22s}
+  .btn-ghost{background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt)}
+  .btn-ghost:hover{background:rgba(255,255,255,.1)}
+  .btn-primary{background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;color:#fff;
+    box-shadow:0 8px 22px rgba(var(--accent-rgb),.35)}
+  .btn-primary:hover{transform:translateY(-1px)}
+  .setrow{margin-bottom:16px}
+  .setrow h4{font-size:13px;font-weight:600;margin-bottom:10px;color:var(--txt)}
+  .divider{height:1px;background:var(--stroke);margin:16px 0}
+  .swatches{display:flex;gap:12px;flex-wrap:wrap}
+  .sw{width:32px;height:32px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .2s,border-color .2s}
+  .sw:hover{transform:scale(1.12)}
+  .sw.active{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.14)}
+  .upd{display:flex;align-items:center;gap:12px}
+  .upd .umsg{font-size:12.5px;color:var(--muted);flex:1}
+  .btn-sm{min-height:40px;padding:0 16px;border-radius:11px;font-size:13px;font-weight:600;cursor:pointer;flex:none;
+    background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.2s}
+  .btn-sm:hover{background:rgba(var(--accent-rgb),.24)}
+  .btn-sm:disabled{opacity:.5;cursor:default}
+  .modal select{width:100%;padding:12px 15px;font-size:15px;color:var(--txt);background:rgba(255,255,255,.05);
+    border:1px solid var(--stroke);border-radius:12px;outline:none;margin-bottom:14px}
+  .modal .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt);margin:-4px 0 14px;cursor:pointer}
+  .modal .chk input{width:auto;margin:0}
+  .modal code{display:inline-block;margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.06);
+    border:1px solid var(--stroke);font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--red-soft)}
+  .addbtn{margin-left:auto;display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 15px;border-radius:11px;
+    font-size:13px;font-weight:600;cursor:pointer;background:rgba(var(--accent-rgb),.14);
+    border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.2s}
+  .addbtn:hover{background:rgba(var(--accent-rgb),.24);transform:translateY(-1px)}
+  .tun .acts{display:flex;gap:6px;margin-bottom:10px}
+  .tun .act{flex:1;min-height:40px;border-radius:10px;display:grid;place-items:center;cursor:pointer;
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--muted);transition:.2s}
+  .tun .act:hover{color:var(--txt);background:rgba(255,255,255,.1)}
+  .tun .act.danger:hover{color:var(--red-soft);background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35)}
+  .flag{font-size:17px;line-height:1}
+  code.copy{cursor:pointer;transition:.2s}
+  code.copy:hover{background:rgba(var(--accent-rgb),.18);border-color:rgba(var(--accent-rgb),.4)}
+  code.copy.copied{background:rgba(48,209,88,.18);border-color:rgba(48,209,88,.4)}
+  .wallets{display:flex;flex-direction:column;gap:10px}
+  .wal{position:relative;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.05);
+    border:1px solid var(--stroke);cursor:pointer;transition:.2s}
+  .wal:hover{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.3)}
+  .wal.copied{background:rgba(48,209,88,.12);border-color:rgba(48,209,88,.35)}
+  .wal .wl{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--txt);margin-bottom:4px}
+  .wal .waddr{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);word-break:break-all;padding-right:52px}
+  .wal .tip{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;color:var(--red-soft)}
+
+  /* ---------- meters ---------- */
+  .grid-meters{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}
+  .meter{
+    background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
+    padding:20px 16px 16px;text-align:center;position:relative;overflow:hidden;
+    backdrop-filter:blur(20px);transition:transform .3s,background .3s,border-color .3s;
+    animation:rise .6s cubic-bezier(.16,1,.3,1) both;
+  }
+  .meter:hover{transform:translateY(-4px);background:var(--card-hi);border-color:rgba(255,255,255,.16)}
+  .ring{width:112px;height:112px;margin:0 auto 10px;position:relative}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .track{stroke:rgba(255,255,255,.08)}
+  .ring .bar{stroke-linecap:round;transition:stroke-dashoffset .7s cubic-bezier(.16,1,.3,1),stroke .4s}
+  .ring .val{position:absolute;inset:0;display:grid;place-items:center;
+    font-size:23px;font-weight:700;font-variant-numeric:tabular-nums}
+  .ring .val span{font-size:11px;color:var(--muted);font-weight:500;margin-top:2px}
+  .meter .label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);
+    letter-spacing:.03em;text-transform:uppercase}
+  .meter .label .ic{width:14px;height:14px}
+  .meter .detail{font-size:12px;color:var(--txt);margin-top:3px;font-variant-numeric:tabular-nums}
+
+  /* ---------- quick stats ---------- */
+  .grid-stats{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:26px}
+  .pill{background:var(--card);border:1px solid var(--stroke);border-radius:16px;padding:14px 16px;
+    display:flex;align-items:center;gap:12px;backdrop-filter:blur(20px);transition:transform .25s,background .25s;
+    animation:rise .6s cubic-bezier(.16,1,.3,1) both}
+  .pill:hover{transform:translateY(-3px);background:var(--card-hi)}
+  .pill .ico{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;color:var(--red-soft);
+    background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.22)}
+  .pill .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .pill .v{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+
+  /* ---------- section title ---------- */
+  .sec{display:flex;align-items:center;gap:10px;margin:6px 2px 14px}
+  .sec h2{font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .sec .count{font-size:12px;color:var(--muted);background:rgba(255,255,255,.06);
+    padding:3px 10px;border-radius:20px;border:1px solid var(--stroke);font-variant-numeric:tabular-nums}
+
+  /* ---------- tunnels ---------- */
+  .grid-tun{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+  .tun{background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
+    padding:18px;backdrop-filter:blur(20px);transition:transform .3s,background .3s,border-color .3s;
+    position:relative;overflow:hidden;animation:rise .5s cubic-bezier(.16,1,.3,1) both}
+  .tun::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--muted2);transition:.3s}
+  .tun.online::before{background:linear-gradient(var(--green),#1a8f3c);box-shadow:0 0 18px rgba(48,209,88,.5)}
+  .tun.offline::before{background:linear-gradient(var(--amber),#b5710a);box-shadow:0 0 18px rgba(255,159,10,.45)}
+  .tun.stopped::before{background:linear-gradient(var(--red),var(--red-deep));box-shadow:0 0 18px rgba(var(--accent-rgb),.4)}
+  .tun:hover{transform:translateY(-4px);background:var(--card-hi);border-color:rgba(255,255,255,.16)}
+  .tun .top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .tun .name{font-size:16px;font-weight:700;letter-spacing:-.01em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .dot.online{background:var(--green);animation:pulse 1.8s infinite}
+  .dot.offline{background:var(--amber);animation:pulse-a 1.8s infinite}
+  .dot.stopped{background:var(--red)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(48,209,88,.55)}70%{box-shadow:0 0 0 8px rgba(48,209,88,0)}100%{box-shadow:0 0 0 0 rgba(48,209,88,0)}}
+  @keyframes pulse-a{0%{box-shadow:0 0 0 0 rgba(255,159,10,.55)}70%{box-shadow:0 0 0 8px rgba(255,159,10,0)}100%{box-shadow:0 0 0 0 rgba(255,159,10,0)}}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:8px;
+    letter-spacing:.02em;background:rgba(255,255,255,.06);border:1px solid var(--stroke);color:var(--txt)}
+  .badge .ic{width:12px;height:12px}
+  .badge.role{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.28);color:var(--red-soft)}
+  .badge.bot{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.26);color:var(--red-soft)}
+  .badge.online{background:rgba(48,209,88,.14);border-color:rgba(48,209,88,.3);color:var(--green)}
+  .badge.offline{background:rgba(255,159,10,.14);border-color:rgba(255,159,10,.3);color:var(--amber)}
+  .badge.stopped{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.3);color:var(--red-soft)}
+  .rows{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-bottom:14px}
+  .r .k{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .r .v{font-size:13px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .r.full{grid-column:1/-1}
+  .ping.good{color:var(--green)} .ping.mid{color:var(--amber)} .ping.bad{color:var(--red)}
+  .logbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;
+    border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
+  .logbtn:hover{background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35);color:var(--red-soft)}
+
+  /* ---------- log drawer ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);z-index:40;
+    opacity:0;pointer-events:none;transition:opacity .3s}
+  .scrim.on{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;left:0;right:0;bottom:0;z-index:50;max-height:78dvh;
+    background:var(--bg2);border-top:1px solid var(--stroke);border-radius:24px 24px 0 0;
+    box-shadow:0 -20px 60px rgba(0,0,0,.6);transform:translateY(100%);transition:transform .4s cubic-bezier(.16,1,.3,1);
+    display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom)}
+  .drawer.on{transform:translateY(0)}
+  .drawer .dh{position:relative;display:flex;align-items:center;gap:12px;padding:18px 22px 14px;border-bottom:1px solid var(--stroke)}
+  .drawer .dh h3{font-size:15px;font-weight:700;flex:1}
+  .drawer .dh .grip{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:42px;height:5px;
+    border-radius:3px;background:rgba(255,255,255,.18)}
+  .close{width:40px;height:40px;border-radius:11px;border:1px solid var(--stroke);background:rgba(255,255,255,.05);
+    color:var(--txt);cursor:pointer;display:grid;place-items:center;transition:.2s}
+  .close:hover{background:rgba(var(--accent-rgb),.18);color:var(--red-soft)}
+  .logbox{flex:1;overflow:auto;padding:16px 22px;margin:0;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;line-height:1.7;
+    color:#c7c7cc;white-space:pre-wrap;word-break:break-word}
+  .logbox::-webkit-scrollbar{width:8px}.logbox::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:8px}
+
+  .empty{text-align:center;color:var(--muted);padding:50px 0;font-size:14px}
+  @keyframes rise{from{opacity:0;transform:translateY(18px)}}
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg>
+      </div>
+      <div><h1>Backpack</h1><small id="host">loading…</small></div>
+    </div>
+    <div class="hostmeta">
+      <div class="hm">OS<b id="os">—</b></div>
+      <div class="hm">Uptime<b id="uptime">—</b></div>
+      <div class="hm">IPv4<b id="ipv4">—</b></div>
+      <div class="hm">IPv6<b id="ipv6">—</b></div>
+      <div class="hm">Location<b id="loc">—</b></div>
+      <div class="hm">ISP<b id="isp">—</b></div>
+    </div>
+    <div class="spacer"></div>
+    <button class="iconbtn" onclick="openSupport()" aria-label="Support" title="Support">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.6l-1-1a5.5 5.5 0 10-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 000-7.8z"/></svg>
+    </button>
+    <button class="iconbtn" onclick="openTelegram()" aria-label="Telegram bot" title="Telegram bot">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M22 3L2 11l6 2 2 6 3-4 5 4z"/><path d="M8 13l8-6"/></svg>
+    </button>
+    <button class="iconbtn" onclick="openSettings()" aria-label="Settings">
+      <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    </button>
+    <button class="logout" onclick="location.href='/logout'" aria-label="Sign out">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      Sign out
+    </button>
+  </header>
+
+  <div class="grid-meters">
+    <div class="meter"><div class="ring" id="ring-cpu"></div>
+      <div class="label"><svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="6" height="6"/><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>CPU</div>
+      <div class="detail" id="d-cpu">—</div></div>
+    <div class="meter"><div class="ring" id="ring-mem"></div>
+      <div class="label"><svg class="ic" viewBox="0 0 24 24"><path d="M3 8h18v8H3z"/><path d="M7 8V6M12 8V6M17 8V6"/></svg>Memory</div>
+      <div class="detail" id="d-mem">—</div></div>
+    <div class="meter"><div class="ring" id="ring-disk"></div>
+      <div class="label"><svg class="ic" viewBox="0 0 24 24"><path d="M22 12H2"/><path d="M5.5 6h13l3 6v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"/><circle cx="7" cy="16" r="1"/></svg>Disk</div>
+      <div class="detail" id="d-disk">—</div></div>
+    <div class="meter"><div class="ring" id="ring-swap"></div>
+      <div class="label"><svg class="ic" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>Swap</div>
+      <div class="detail" id="d-swap">—</div></div>
+  </div>
+
+  <div class="grid-stats" id="stats">
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/></svg></div><div><div class="k">Download</div><div class="v" id="down">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/></svg></div><div><div class="k">Upload</div><div class="v" id="up">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></div><div><div class="k">Total In</div><div class="v" id="tin">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></div><div><div class="k">Total Out</div><div class="v" id="tout">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div><div><div class="k">Load</div><div class="v" id="load">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg></div><div><div class="k">Tunnels</div><div class="v" id="tun-count">—</div></div></div>
+  </div>
+
+  <div class="sec"><h2>Tunnels</h2><span class="count" id="tsum">0</span>
+    <button class="addbtn" onclick="openAdd()" aria-label="Add tunnel">
+      <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M12 5v14M5 12h14"/></svg>Add Tunnel
+    </button>
+  </div>
+  <div class="grid-tun" id="tunnels"></div>
+  <div class="empty" id="empty" style="display:none">No tunnels configured yet. Create one from the CLI menu.</div>
+</div>
+
+<div class="modal" id="settings" onclick="if(event.target===this)closeSettings()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="settitle">
+    <h3 id="settitle">Settings</h3>
+    <p>Personalize the panel, update, and secure access.</p>
+
+    <div class="setrow">
+      <h4>Theme color</h4>
+      <div class="swatches" id="swatches"></div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Update</h4>
+      <div class="upd">
+        <span class="umsg" id="umsg">Check GitHub for the latest version.</span>
+        <button class="btn-sm" id="ubtn" onclick="checkUpdate()">Check</button>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Auto refresh (restart all tunnels)</h4>
+      <div class="upd">
+        <input id="sched" type="number" min="0" max="168" step="1" style="width:90px;margin:0"
+               placeholder="hours" aria-label="Auto refresh interval in hours">
+        <span class="umsg" id="schmsg">0 = disabled</span>
+        <button class="btn-sm" id="schbtn" onclick="saveSchedule()">Save</button>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Change password</h4>
+      <label for="np">New password (4–128 characters)</label>
+      <input id="np" type="password" autocomplete="new-password" placeholder="New password" maxlength="128">
+      <label for="np2">Confirm password</label>
+      <input id="np2" type="password" autocomplete="new-password" placeholder="Repeat password" maxlength="128">
+      <div class="msg" id="pwmsg"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeSettings()">Close</button>
+      <button class="btn-primary" onclick="savePassword()">Save password</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="support" onclick="if(event.target===this)closeSupport()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="suptitle">
+    <h3 id="suptitle">Support Backpack</h3>
+    <p>Free & open-source. If it helps you, a star or a small tip means a lot. 🙏</p>
+    <div class="actions" style="margin-bottom:16px">
+      <button class="btn-ghost" onclick="window.open('https://github.com/AminMGMT','_blank','noopener')">
+        <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px;display:inline;vertical-align:-3px;margin-right:6px"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 00-1-2.6c3-.3 6.5-1.5 6.5-7A5.4 5.4 0 0020 4.8 5 5 0 0019.9 1S18.7.6 16 2.5a13.4 13.4 0 00-7 0C6.3.6 5.1 1 5.1 1A5 5 0 005 4.8 5.4 5.4 0 003.5 8.5c0 5.5 3.5 6.7 6.5 7a3.4 3.4 0 00-1 2.6V22"/></svg>GitHub
+      </button>
+      <button class="btn-primary" onclick="window.open('https://t.me/BlackProtocols','_blank','noopener')">
+        <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px;display:inline;vertical-align:-3px;margin-right:6px"><path d="M22 3L2 11l6 2 2 6 3-4 5 4z"/><path d="M8 13l8-6"/></svg>Telegram
+      </button>
+    </div>
+    <h4 style="font-size:13px;font-weight:600;margin-bottom:10px">Donate (click an address to copy)</h4>
+    <div class="wallets">
+      <div class="wal" data-tip="Copy" onclick="copyText('TTzuUAtsEsrLgNpFVLNTyLVJVRRFNWESYc',this)">
+        <div class="wl">🔺 Tron · TRX</div>
+        <div class="waddr">TTzuUAtsEsrLgNpFVLNTyLVJVRRFNWESYc</div><span class="tip">Copy</span>
+      </div>
+      <div class="wal" data-tip="Copy" onclick="copyText('0xc112AE9bfF7c59dEcFb34E988A397848D3093E82',this)">
+        <div class="wl">💠 USDT · BEP20</div>
+        <div class="waddr">0xc112AE9bfF7c59dEcFb34E988A397848D3093E82</div><span class="tip">Copy</span>
+      </div>
+      <div class="wal" data-tip="Copy" onclick="copyText('UQD9g40QubAICJ6zPqegtCY7s-joMx2DB8aIqA0xF1aHoCDs',this)">
+        <div class="wl">💎 Toncoin · TON</div>
+        <div class="waddr">UQD9g40QubAICJ6zPqegtCY7s-joMx2DB8aIqA0xF1aHoCDs</div><span class="tip">Copy</span>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:18px">
+      <button class="btn-ghost" onclick="closeSupport()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="telegram" onclick="if(event.target===this)closeTelegram()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="tgtitle">
+    <h3 id="tgtitle">Telegram bot</h3>
+    <p>Receive periodic status reports. If this server can’t reach Telegram (e.g. Iran), send via a tunnel.</p>
+    <label for="tg-token">Bot token (from @BotFather)</label>
+    <input id="tg-token" placeholder="123456:ABC..." autocomplete="off">
+    <label for="tg-admin">Admin user id (from @userinfobot)</label>
+    <input id="tg-admin" placeholder="173656773" inputmode="numeric" autocomplete="off">
+    <label for="tg-via">Send via</label>
+    <select id="tg-via"><option value="">Direct (this server reaches Telegram)</option></select>
+    <label for="tg-interval">Report every N hours</label>
+    <input id="tg-interval" type="number" min="0" max="168" value="6">
+    <div class="msg" id="tgmsg"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeTelegram()">Close</button>
+      <button class="btn-ghost" onclick="testTelegram()">Send test</button>
+      <button class="btn-primary" onclick="saveTelegram()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="addtunnel" onclick="if(event.target===this)closeAdd()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="addtitle">
+    <h3 id="addtitle">Add server tunnel</h3>
+    <p>Creates a Best-Performance server tunnel (run this on the Iran server). A 64-char token is generated — use it on the client.</p>
+    <label for="t-name">Name (optional)</label>
+    <input id="t-name" placeholder="server-5656" maxlength="40">
+    <label for="t-port">Tunnel port</label>
+    <input id="t-port" type="number" min="1" max="65535" placeholder="5656">
+    <label for="t-transport">Transport</label>
+    <select id="t-transport"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+    <label for="t-ports">Exposed ports (comma separated)</label>
+    <input id="t-ports" placeholder="8080, 2083, 443=1.1.1.1:443">
+    <label for="t-country">Country (peer location — shown on the card)</label>
+    <select id="t-country"></select>
+    <label for="t-socks">SOCKS5 relay port (optional — used by the Telegram bot)</label>
+    <input id="t-socks" type="number" min="1" max="65535" placeholder="leave empty for none">
+    <label class="chk"><input type="checkbox" id="t-ipv6"> Listen on IPv6 too</label>
+    <div class="msg" id="addmsg"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeAdd()">Cancel</button>
+      <button class="btn-primary" onclick="createTunnel()">Create</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" onclick="closeLogs()"></div>
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="logtitle">
+  <div class="dh"><span class="grip"></span>
+    <svg class="ic" viewBox="0 0 24 24" style="color:var(--red-soft)"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>
+    <h3 id="logtitle">Logs</h3>
+    <button class="close" onclick="closeLogs()" aria-label="Close logs">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <pre class="logbox" id="logbox" tabindex="0">Loading…</pre>
+</div>
+
+<script>
+const C = 2*Math.PI*50;
+const $=id=>document.getElementById(id);
+const ICON={
+  play:'<svg class="ic" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>',
+  stop:'<svg class="ic" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>',
+  restart:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9 9 0 00-7 3.3"/><path d="M3 3v4h4"/></svg>',
+  trash:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
+  logs:'<svg class="ic" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>',
+  bot:'<svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V5M9 3h6M9 13h.01M15 13h.01M8 19v2M16 19v2"/></svg>',
+};
+const COUNTRIES=[
+  ['','—'],['DE','Germany'],['NL','Netherlands'],['FR','France'],['GB','United Kingdom'],
+  ['US','United States'],['FI','Finland'],['SE','Sweden'],['CH','Switzerland'],['AT','Austria'],
+  ['PL','Poland'],['RO','Romania'],['RU','Russia'],['TR','Turkey'],['AE','UAE'],['QA','Qatar'],
+  ['OM','Oman'],['AM','Armenia'],['GE','Georgia'],['AZ','Azerbaijan'],['KZ','Kazakhstan'],
+  ['IN','India'],['SG','Singapore'],['JP','Japan'],['HK','Hong Kong'],['CA','Canada'],
+  ['IT','Italy'],['ES','Spain'],['CZ','Czechia'],['LT','Lithuania'],['LV','Latvia'],
+  ['EE','Estonia'],['BG','Bulgaria'],['UA','Ukraine'],['IR','Iran'],
+];
+function flagEmoji(code){
+  if(!code||code.length!==2) return '';
+  return String.fromCodePoint(...[...code.toUpperCase()].map(c=>0x1F1E6+c.charCodeAt(0)-65));
+}
+function countryName(code){ const c=COUNTRIES.find(x=>x[0]===code); return c?c[1]:code; }
+async function copyText(text,el){
+  try{ await navigator.clipboard.writeText(text); }
+  catch(e){ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(_){} ta.remove(); }
+  if(el){
+    el.classList.add('copied');
+    const tip=el.querySelector('.tip'); if(tip) tip.textContent='Copied!';
+    setTimeout(()=>{ el.classList.remove('copied'); if(tip) tip.textContent=el.getAttribute('data-tip')||'Copy'; },1300);
+  }
+}
+function openSupport(){ $('support').classList.add('on'); }
+function closeSupport(){ $('support').classList.remove('on'); }
+function ringColor(p){ return p<60?'var(--green)':p<85?'var(--amber)':'var(--red)'; }
+function makeRing(el,p){
+  el.innerHTML =
+    `<svg width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="${Math.round(p)} percent">
+       <circle class="track" cx="56" cy="56" r="50" fill="none" stroke-width="9"/>
+       <circle class="bar" cx="56" cy="56" r="50" fill="none" stroke-width="9"
+         stroke="${ringColor(p)}" stroke-dasharray="${C}" stroke-dashoffset="${C}"/>
+     </svg>
+     <div class="val">${Math.round(p)}<span>%</span></div>`;
+  requestAnimationFrame(()=>{ el.querySelector('.bar').style.strokeDashoffset = C*(1-p/100); });
+}
+function setRing(id,p){
+  const el=$(id), bar=el.querySelector('.bar');
+  if(!bar){ makeRing(el,p); return; }
+  bar.style.stroke=ringColor(p);
+  bar.style.strokeDashoffset=C*(1-p/100);
+  el.querySelector('svg').setAttribute('aria-label',Math.round(p)+' percent');
+  el.querySelector('.val').firstChild.textContent=Math.round(p);
+}
+
+async function loadStats(){
+  try{
+    const s=await (await fetch('/api/stats')).json();
+    $('host').textContent=s.hostname||'server';
+    $('os').textContent=s.os||'—'; $('uptime').textContent=s.uptime||'—';
+    $('ipv4').textContent=s.ipv4||'—'; $('ipv6').textContent=s.ipv6&&s.ipv6!=='-'?s.ipv6:'—';
+    $('loc').textContent=s.location||'—'; $('isp').textContent=s.isp||'—';
+    setRing('ring-cpu',s.cpuPercent); $('d-cpu').textContent=(s.cpuCores||'?')+' cores';
+    setRing('ring-mem',s.memPercent); $('d-mem').textContent=s.memUsed+' / '+s.memTotal;
+    setRing('ring-disk',s.diskPercent); $('d-disk').textContent=s.diskUsed+' / '+s.diskTotal;
+    setRing('ring-swap',s.swapPercent); $('d-swap').textContent=s.swapUsed+' / '+s.swapTotal;
+    $('down').textContent=s.downSpeed; $('up').textContent=s.upSpeed;
+    $('tin').textContent=s.totalRecv; $('tout').textContent=s.totalSent;
+    $('load').textContent=s.load||'—';
+    $('tun-count').textContent=s.tunnelsRunning+' / '+s.tunnelsTotal;
+  }catch(e){}
+}
+
+const STATE_LABEL={online:'ONLINE',offline:'OFFLINE',stopped:'STOPPED'};
+function pingClass(p){ return p<0?'':p<80?'good':p<200?'mid':'bad'; }
+function pingText(p){ return p<0?'—':p+' ms'; }
+function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// Cards are created once and then updated in place, so nodes don't flicker or
+// re-animate on every poll.
+let cardMap={}, lastTunnels=[];
+function buildCard(t){
+  const n=esc(t.name);
+  const el=document.createElement('div');
+  el.className='tun';
+  el.dataset.name=t.name;
+  el.innerHTML=`
+    <div class="top"><span class="dot"></span><span class="flag"></span><span class="name" title="${n}">${n}</span></div>
+    <div class="badges">
+      <span class="badge role">${esc(t.role)}</span>
+      <span class="badge tr"></span>
+      <span class="badge st"></span>
+      <span class="badge bot" style="display:none" title="A hidden port on this tunnel relays the Telegram bot">${ICON.bot} bot relay</span>
+    </div>
+    <div class="rows">
+      <div class="r"><div class="k">Ping</div><div class="v ping"></div></div>
+      <div class="r"><div class="k">Address</div><div class="v addr"></div></div>
+      <div class="r full"><div class="k">${t.role==='server'?'Ports':'Remote'}</div><div class="v ports"></div></div>
+      <div class="r full peerrow" style="display:none"><div class="k">Peer</div><div class="v peer"></div></div>
+    </div>
+    <div class="acts">
+      <button class="act" title="Start" aria-label="Start ${n}" onclick="tunnelAction('${n}','start')">${ICON.play}</button>
+      <button class="act" title="Stop" aria-label="Stop ${n}" onclick="tunnelAction('${n}','stop')">${ICON.stop}</button>
+      <button class="act" title="Restart" aria-label="Restart ${n}" onclick="tunnelAction('${n}','restart')">${ICON.restart}</button>
+      <button class="act danger" title="Delete" aria-label="Delete ${n}" onclick="tunnelAction('${n}','delete')">${ICON.trash}</button>
+    </div>
+    <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} View Logs</button>`;
+  return el;
+}
+function updateCard(el,t){
+  const st=t.state||'stopped';
+  if(el.classList.contains(st)===false){ el.className='tun '+st; }
+  const dot=el.querySelector('.dot'); if(dot.className!=='dot '+st) dot.className='dot '+st;
+  const fl=el.querySelector('.flag'); const fe=t.country?flagEmoji(t.country):'';
+  if(fl.textContent!==fe){ fl.textContent=fe; fl.title=t.country?countryName(t.country):''; }
+  const sb=el.querySelector('.badge.st'); const lbl=STATE_LABEL[st];
+  if(sb.textContent!==lbl){ sb.className='badge st '+st; sb.textContent=lbl; }
+  setText(el.querySelector('.badge.tr'),(t.transport||'').toUpperCase());
+  el.querySelector('.badge.bot').style.display=t.botRelay?'':'none';
+  const pe=el.querySelector('.ping'); const pc='v ping '+pingClass(t.ping), pt=pingText(t.ping);
+  if(pe.className!==pc) pe.className=pc; setText(pe,pt);
+  setText(el.querySelector('.addr'),t.addr||'—');
+  setText(el.querySelector('.ports'),t.ports||t.addr||'—');
+  const peerTxt=[t.peerLocation,t.peerISP].filter(Boolean).join(' · ');
+  const pr=el.querySelector('.peerrow');
+  pr.style.display=peerTxt?'':'none';
+  setText(pr.querySelector('.peer'),peerTxt);
+}
+function setText(node,v){ if(node&&node.textContent!==v) node.textContent=v; }
+
+async function loadTunnels(){
+  try{
+    const list=await (await fetch('/api/tunnels')).json()||[];
+    lastTunnels=list;
+    $('tsum').textContent=list.length;
+    $('empty').style.display=list.length?'none':'block';
+    const box=$('tunnels'), names=new Set(list.map(t=>t.name));
+    Object.keys(cardMap).forEach(n=>{ if(!names.has(n)){ cardMap[n].remove(); delete cardMap[n]; } });
+    list.forEach(t=>{
+      let el=cardMap[t.name];
+      if(!el){ el=buildCard(t); box.appendChild(el); cardMap[t.name]=el; }
+      updateCard(el,t);
+    });
+  }catch(e){}
+}
+
+let logTimer=null, logName=null;
+async function fetchLog(){
+  if(!logName)return;
+  try{
+    const txt=await (await fetch('/api/logs?name='+encodeURIComponent(logName))).text();
+    const box=$('logbox'); const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-40;
+    box.textContent=txt;
+    if(atBottom) box.scrollTop=box.scrollHeight;
+  }catch(e){}
+}
+function openLogs(name){
+  logName=name; $('logtitle').textContent='Logs · '+name; $('logbox').textContent='Loading…';
+  $('scrim').classList.add('on'); $('drawer').classList.add('on');
+  fetchLog(); clearInterval(logTimer); logTimer=setInterval(fetchLog,2000);
+  setTimeout(()=>{const b=$('logbox');b.scrollTop=b.scrollHeight;b.focus();},300);
+}
+function closeLogs(){
+  $('scrim').classList.remove('on'); $('drawer').classList.remove('on');
+  clearInterval(logTimer); logName=null;
+}
+// ---- theme ----
+const THEMES=[
+  {name:'Red',    rgb:'255,69,58'},
+  {name:'Mist',   rgb:'173,202,214'},
+  {name:'Cyan',   rgb:'65,187,217'},
+  {name:'Amber',  rgb:'255,155,84'},
+  {name:'Lime',   rgb:'127,184,0'},
+];
+function applyTheme(rgb){
+  document.documentElement.style.setProperty('--accent-rgb',rgb);
+  localStorage.setItem('bp_accent',rgb);
+  renderSwatches();
+}
+function renderSwatches(){
+  const cur=localStorage.getItem('bp_accent')||'255,69,58';
+  $('swatches').innerHTML=THEMES.map(t=>
+    `<div class="sw ${t.rgb===cur?'active':''}" style="background:rgb(${t.rgb})" title="${t.name}"
+      role="button" tabindex="0" aria-label="${t.name} theme" onclick="applyTheme('${t.rgb}')"></div>`).join('');
+}
+// apply saved theme immediately on load
+(function(){ const s=localStorage.getItem('bp_accent'); if(s) document.documentElement.style.setProperty('--accent-rgb',s); })();
+
+// ---- update ----
+async function checkUpdate(){
+  const m=$('umsg'), b=$('ubtn'); m.textContent='Checking…'; b.disabled=true;
+  try{
+    const r=await (await fetch('/api/update')).json();
+    b.disabled=false;
+    if(r.error){ m.textContent=r.summary; return; }
+    if(r.available){ m.textContent=r.summary; b.textContent='Update now'; b.onclick=doUpdate; }
+    else { m.textContent=r.summary||'Up to date.'; }
+  }catch(e){ m.textContent='Check failed.'; b.disabled=false; }
+}
+async function doUpdate(){
+  const m=$('umsg'), b=$('ubtn');
+  m.textContent='Updating… the panel will restart and this page will reload.'; b.disabled=true;
+  try{ await fetch('/api/update',{method:'POST'}); }catch(e){}
+  setTimeout(()=>location.reload(),30000);
+}
+
+// ---- auto refresh ----
+async function loadSchedule(){
+  try{ const r=await (await fetch('/api/schedule')).json();
+    $('sched').value=r.hours; $('schmsg').textContent=r.hours>0?('every '+r.hours+'h'):'0 = disabled';
+  }catch(e){}
+}
+async function saveSchedule(){
+  const h=parseInt($('sched').value||'0',10), m=$('schmsg');
+  m.textContent='Saving…';
+  try{
+    const body=new URLSearchParams({hours:String(isNaN(h)?0:h)});
+    const r=await (await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})).json();
+    $('sched').value=r.hours; m.textContent=r.hours>0?('Saved · every '+r.hours+'h'):'Disabled';
+  }catch(e){ m.textContent='Failed.'; }
+}
+
+// ---- add / manage tunnels ----
+function openAdd(){
+  ['t-name','t-port','t-ports','t-socks'].forEach(i=>$(i).value='');
+  $('t-transport').value='tcp'; $('t-ipv6').checked=false;
+  const cs=$('t-country'); if(!cs.options.length){ cs.innerHTML=COUNTRIES.map(c=>`<option value="${c[0]}">${c[0]?flagEmoji(c[0])+'  ':''}${c[1]}</option>`).join(''); }
+  cs.value='';
+  $('addmsg').textContent=''; $('addmsg').className='msg';
+  $('addtunnel').classList.add('on'); setTimeout(()=>$('t-port').focus(),200);
+}
+function closeAdd(){ $('addtunnel').classList.remove('on'); }
+async function createTunnel(){
+  const m=$('addmsg'); m.className='msg'; m.textContent='Creating…';
+  const body=new URLSearchParams({
+    name:$('t-name').value, port:$('t-port').value, transport:$('t-transport').value,
+    ports:$('t-ports').value, ipv6:$('t-ipv6').checked?'true':'false',
+    country:$('t-country').value, socks_port:$('t-socks').value
+  });
+  try{
+    const res=await fetch('/api/tunnels/create',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    if(!res.ok){ m.className='msg err'; m.textContent=await res.text(); return; }
+    const r=await res.json();
+    m.className='msg ok';
+    m.innerHTML='Created! Token (click to copy — paste it on the client):<br>'+
+      `<code class="copy" title="Click to copy" onclick="copyText('${esc(r.token)}',this)">${esc(r.token)}</code>`;
+    loadTunnels();
+  }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
+}
+async function tunnelAction(name,action){
+  if(action==='delete' && !confirm('Delete tunnel "'+name+'" permanently?'))return;
+  try{
+    await fetch('/api/tunnels/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({name,action})});
+    loadTunnels();
+  }catch(e){}
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAdd();});
+
+// ---- telegram ----
+async function loadTelegram(){
+  // Populate the "send via" dropdown from the current tunnels.
+  const sel=$('tg-via'), cur=sel.value;
+  sel.innerHTML='<option value="">Direct (this server reaches Telegram)</option>'+
+    lastTunnels.map(t=>`<option value="${esc(t.name)}">Via ${esc(t.name)} (relay through peer)</option>`).join('');
+  try{
+    const c=await (await fetch('/api/telegram')).json();
+    $('tg-token').value=c.token||''; $('tg-admin').value=c.admin_id||'';
+    $('tg-interval').value=c.interval||6; sel.value=c.via_tunnel||cur||'';
+  }catch(e){}
+}
+async function saveTelegram(){
+  const m=$('tgmsg'); m.className='msg'; m.textContent='Saving…';
+  const body=new URLSearchParams({token:$('tg-token').value,admin_id:$('tg-admin').value,
+    via_tunnel:$('tg-via').value,interval:$('tg-interval').value});
+  try{
+    const res=await fetch('/api/telegram',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    if(!res.ok){ m.className='msg err'; m.textContent=await res.text(); return; }
+    m.className='msg ok'; m.textContent='Saved.'+($('tg-via').value?' Restart the client tunnel once to expose the relay port.':'');
+  }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
+}
+async function testTelegram(){
+  const m=$('tgmsg'); m.className='msg'; m.textContent='Sending test…';
+  try{
+    const res=await fetch('/api/telegram/test',{method:'POST'});
+    if(!res.ok){ m.className='msg err'; m.textContent='Failed: '+await res.text(); return; }
+    m.className='msg ok'; m.textContent='Test message sent.';
+  }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
+}
+function openTelegram(){ $('tgmsg').textContent=''; $('tgmsg').className='msg'; loadTelegram(); $('telegram').classList.add('on'); setTimeout(()=>$('tg-token').focus(),200); }
+function closeTelegram(){ $('telegram').classList.remove('on'); }
+
+// ---- settings / change password ----
+function openSettings(){
+  $('np').value=''; $('np2').value=''; $('pwmsg').textContent=''; $('pwmsg').className='msg';
+  renderSwatches();
+  const b=$('ubtn'); b.textContent='Check'; b.onclick=checkUpdate; b.disabled=false;
+  $('umsg').textContent='Check GitHub for the latest version.';
+  loadSchedule();
+  $('settings').classList.add('on'); setTimeout(()=>$('np').focus(),200);
+}
+function closeSettings(){ $('settings').classList.remove('on'); }
+async function savePassword(){
+  const a=$('np').value, b=$('np2').value, msg=$('pwmsg');
+  if(a.length<4||a.length>128){ msg.className='msg err'; msg.textContent='Password must be 4–128 characters.'; return; }
+  if(a!==b){ msg.className='msg err'; msg.textContent='Passwords do not match.'; return; }
+  try{
+    const body=new URLSearchParams({password:a});
+    const res=await fetch('/api/password',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    if(!res.ok){ msg.className='msg err'; msg.textContent=await res.text()||'Failed to update.'; return; }
+    msg.className='msg ok'; msg.textContent='Password changed. Signing you out…';
+    setTimeout(()=>location.href='/login',1200);
+  }catch(e){ msg.className='msg err'; msg.textContent='Network error.'; }
+}
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeTelegram();closeSupport();closeAdd();}});
+
+['ring-cpu','ring-mem','ring-disk','ring-swap'].forEach(id=>makeRing($(id),0));
+loadStats(); loadTunnels();
+setInterval(loadStats,4000);
+setInterval(loadTunnels,6000);
+</script>
+</body>
+</html>
