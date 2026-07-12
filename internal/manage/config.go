@@ -43,6 +43,13 @@ type TunnelSpec struct {
 	// Sniffer web panel
 	Sniffer bool
 	WebPort int
+
+	// TLS (server, wss/wssmux only)
+	TLSCert string
+	TLSKey  string
+
+	// Edge/CDN IP override (client, websocket transports only)
+	EdgeIP string
 }
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
@@ -61,6 +68,26 @@ func (s TunnelSpec) writeTuning(p func(string, ...any)) {
 // isMux reports whether a transport multiplexes over SMUX.
 func isMux(t string) bool {
 	return t == "tcpmux" || t == "wsmux" || t == "wssmux"
+}
+
+// isWS reports whether a transport rides over websocket.
+func isWS(t string) bool {
+	return t == "ws" || t == "wss" || t == "wsmux" || t == "wssmux"
+}
+
+// needsTLS reports whether a transport terminates TLS on the server and
+// therefore requires a certificate/key pair.
+func needsTLS(t string) bool {
+	return t == "wss" || t == "wssmux"
+}
+
+// validTransport reports whether t is one of the engine's supported transports.
+func validTransport(t string) bool {
+	switch t {
+	case "tcp", "tcpmux", "udp", "ws", "wss", "wsmux", "wssmux":
+		return true
+	}
+	return false
 }
 
 // Render returns the TOML representation of the tunnel.
@@ -82,8 +109,13 @@ func (s TunnelSpec) Render() string {
 		p("heartbeat = %d\n", s.Heartbeat)
 		p("log_level = %q\n", s.LogLevel)
 		s.writeTuning(p)
-		if s.Transport == "tcp" || s.Transport == "udp" {
+		if s.Transport == "tcp" {
+			// accept_udp is only honoured by the plain TCP transport in the engine.
 			p("accept_udp = %t\n", s.AcceptUDP)
+		}
+		if needsTLS(s.Transport) {
+			p("tls_cert = %q\n", s.TLSCert)
+			p("tls_key = %q\n", s.TLSKey)
 		}
 		if isMux(s.Transport) {
 			p("mux_con = %d\n", s.MuxCon)
@@ -117,6 +149,9 @@ func (s TunnelSpec) Render() string {
 	p("dial_timeout = %d\n", 10)
 	p("log_level = %q\n", s.LogLevel)
 	s.writeTuning(p)
+	if isWS(s.Transport) && s.EdgeIP != "" {
+		p("edge_ip = %q\n", s.EdgeIP)
+	}
 	if isMux(s.Transport) {
 		p("mux_session = %d\n", s.MuxCon)
 		p("mux_version = %d\n", s.MuxVersion)

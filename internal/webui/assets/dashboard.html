@@ -404,21 +404,61 @@
 
 <div class="modal" id="addtunnel" onclick="if(event.target===this)closeAdd()">
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="addtitle">
-    <h3 id="addtitle">Add server tunnel</h3>
-    <p>Creates a Best-Performance server tunnel (run this on the Iran server). A 64-char token is generated — use it on the client.</p>
+    <h3 id="addtitle">Add tunnel</h3>
+    <p id="addhint">Creates a Best-Performance tunnel. Server = Iran/edge (exposes ports, generates the token). Client = kharej/origin (connects out using that token).</p>
+    <label for="t-role">Role</label>
+    <select id="t-role" onchange="updateAddForm()">
+      <option value="server">Server — Iran/edge (exposes ports)</option>
+      <option value="client">Client — kharej/origin (connects to server)</option>
+    </select>
     <label for="t-name">Name (optional)</label>
     <input id="t-name" placeholder="server-5656" maxlength="40">
-    <label for="t-port">Tunnel port</label>
-    <input id="t-port" type="number" min="1" max="65535" placeholder="5656">
     <label for="t-transport">Transport</label>
-    <select id="t-transport"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
-    <label for="t-ports">Exposed ports (comma separated)</label>
-    <input id="t-ports" placeholder="8080, 2083, 443=1.1.1.1:443">
+    <select id="t-transport" onchange="updateAddForm()">
+      <option value="tcp">TCP</option>
+      <option value="tcpmux">TCP Mux (multiplexed)</option>
+      <option value="udp">UDP</option>
+      <option value="ws">WS — WebSocket</option>
+      <option value="wsmux">WS Mux (WebSocket + multiplexed)</option>
+      <option value="wss">WSS — Secure WebSocket (TLS)</option>
+      <option value="wssmux">WSS Mux (TLS WebSocket + multiplexed)</option>
+    </select>
+    <div id="f-host" style="display:none">
+      <label for="t-host">Server address (IP or domain of the server)</label>
+      <input id="t-host" placeholder="1.2.3.4 or tunnel.example.com">
+    </div>
+    <label for="t-port" id="t-port-label">Tunnel port</label>
+    <input id="t-port" type="number" min="1" max="65535" placeholder="5656">
+    <div id="f-token" style="display:none">
+      <label for="t-token">Token (the one generated on the server)</label>
+      <input id="t-token" placeholder="paste the server token" autocomplete="off">
+    </div>
+    <div id="f-edge" style="display:none">
+      <label for="t-edge">Edge IP (optional — connect via a CDN edge, e.g. Cloudflare)</label>
+      <input id="t-edge" placeholder="leave empty to connect directly">
+    </div>
+    <div id="f-tls" style="display:none">
+      <label for="t-tlsmode">TLS certificate</label>
+      <select id="t-tlsmode" onchange="updateAddForm()">
+        <option value="auto">Generate self-signed automatically (recommended)</option>
+        <option value="custom">Use existing certificate/key files</option>
+      </select>
+      <div id="f-tlspaths" style="display:none">
+        <label for="t-tlscert">Certificate path</label>
+        <input id="t-tlscert" placeholder="/etc/letsencrypt/live/example/fullchain.pem">
+        <label for="t-tlskey">Key path</label>
+        <input id="t-tlskey" placeholder="/etc/letsencrypt/live/example/privkey.pem">
+      </div>
+    </div>
+    <div id="f-server">
+      <label for="t-ports">Exposed ports (comma separated)</label>
+      <input id="t-ports" placeholder="8080, 2083, 443=1.1.1.1:443">
+      <label for="t-socks">SOCKS5 relay port (optional — used by the Telegram bot)</label>
+      <input id="t-socks" type="number" min="1" max="65535" placeholder="leave empty for none">
+      <label class="chk"><input type="checkbox" id="t-ipv6"> Listen on IPv6 too</label>
+    </div>
     <label for="t-country">Country (peer location — shown on the card)</label>
     <select id="t-country"></select>
-    <label for="t-socks">SOCKS5 relay port (optional — used by the Telegram bot)</label>
-    <input id="t-socks" type="number" min="1" max="65535" placeholder="leave empty for none">
-    <label class="chk"><input type="checkbox" id="t-ipv6"> Listen on IPv6 too</label>
     <div class="msg" id="addmsg"></div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeAdd()">Cancel</button>
@@ -663,29 +703,57 @@ async function saveSchedule(){
 }
 
 // ---- add / manage tunnels ----
+const WS_TRANSPORTS=['ws','wss','wsmux','wssmux'], TLS_TRANSPORTS=['wss','wssmux'];
+// Show/hide the conditional fields so the form always matches the engine's
+// engine semantics: TLS certs only for wss/wssmux servers, edge IP only
+// for websocket clients, exposed ports / token only where they apply.
+function updateAddForm(){
+  const role=$('t-role').value, tr=$('t-transport').value;
+  const client=role==='client';
+  $('f-host').style.display=client?'':'none';
+  $('f-token').style.display=client?'':'none';
+  $('f-server').style.display=client?'none':'';
+  $('f-edge').style.display=(client&&WS_TRANSPORTS.includes(tr))?'':'none';
+  $('f-tls').style.display=(!client&&TLS_TRANSPORTS.includes(tr))?'':'none';
+  $('f-tlspaths').style.display=$('t-tlsmode').value==='custom'?'':'none';
+  $('t-port-label').textContent=client?'Server tunnel port':'Tunnel port';
+  $('t-name').placeholder=(client?'client':'server')+'-5656';
+}
 function openAdd(){
-  ['t-name','t-port','t-ports','t-socks'].forEach(i=>$(i).value='');
-  $('t-transport').value='tcp'; $('t-ipv6').checked=false;
+  ['t-name','t-port','t-ports','t-socks','t-host','t-token','t-edge','t-tlscert','t-tlskey'].forEach(i=>$(i).value='');
+  $('t-role').value='server'; $('t-transport').value='tcp'; $('t-tlsmode').value='auto'; $('t-ipv6').checked=false;
   const cs=$('t-country'); if(!cs.options.length){ cs.innerHTML=COUNTRIES.map(c=>`<option value="${c[0]}">${c[0]?flagEmoji(c[0])+'  ':''}${c[1]}</option>`).join(''); }
   cs.value='';
+  updateAddForm();
   $('addmsg').textContent=''; $('addmsg').className='msg';
   $('addtunnel').classList.add('on'); setTimeout(()=>$('t-port').focus(),200);
 }
 function closeAdd(){ $('addtunnel').classList.remove('on'); }
 async function createTunnel(){
   const m=$('addmsg'); m.className='msg'; m.textContent='Creating…';
-  const body=new URLSearchParams({
-    name:$('t-name').value, port:$('t-port').value, transport:$('t-transport').value,
-    ports:$('t-ports').value, ipv6:$('t-ipv6').checked?'true':'false',
-    country:$('t-country').value, socks_port:$('t-socks').value
-  });
+  const role=$('t-role').value;
+  const params={
+    role, name:$('t-name').value, port:$('t-port').value,
+    transport:$('t-transport').value, country:$('t-country').value
+  };
+  if(role==='client'){
+    params.host=$('t-host').value; params.token=$('t-token').value; params.edge_ip=$('t-edge').value;
+  }else{
+    params.ports=$('t-ports').value; params.ipv6=$('t-ipv6').checked?'true':'false';
+    params.socks_port=$('t-socks').value;
+    if($('t-tlsmode').value==='custom'){ params.tls_cert=$('t-tlscert').value; params.tls_key=$('t-tlskey').value; }
+  }
   try{
-    const res=await fetch('/api/tunnels/create',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    const res=await fetch('/api/tunnels/create',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(params)});
     if(!res.ok){ m.className='msg err'; m.textContent=await res.text(); return; }
     const r=await res.json();
     m.className='msg ok';
-    m.innerHTML='Created! Token (click to copy — paste it on the client):<br>'+
-      `<code class="copy" title="Click to copy" onclick="copyText('${esc(r.token)}',this)">${esc(r.token)}</code>`;
+    if(r.token){
+      m.innerHTML='Created! Token (click to copy — paste it on the client):<br>'+
+        `<code class="copy" title="Click to copy" onclick="copyText('${esc(r.token)}',this)">${esc(r.token)}</code>`;
+    }else{
+      m.textContent='Client tunnel created — it will connect to the server shortly.';
+    }
     loadTunnels();
   }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
 }

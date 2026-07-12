@@ -283,8 +283,9 @@ func (s *server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleTunnelCreate creates a best-performance server tunnel (web equivalent
-// of the CLI "Setup Server") and returns the generated token.
+// handleTunnelCreate creates a best-performance tunnel (web equivalent of the
+// CLI "Setup Server" / "Setup Client" flows). role=server (default) generates
+// and returns a token; role=client requires the server's token.
 func (s *server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -294,12 +295,25 @@ func (s *server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
 	port := r.FormValue("port")
 	transport := r.FormValue("transport")
+	country := r.FormValue("country")
+
+	if r.FormValue("role") == "client" {
+		err := manage.CreateClientTunnel(name, r.FormValue("host"), port, transport,
+			r.FormValue("token"), r.FormValue("edge_ip"), country)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "created"})
+		return
+	}
+
 	ipv6 := r.FormValue("ipv6") == "true" || r.FormValue("ipv6") == "1"
 	ports := strings.Split(r.FormValue("ports"), ",")
-	country := r.FormValue("country")
 	socksPort, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("socks_port")))
 
-	token, err := manage.CreateServerTunnel(name, port, transport, ports, ipv6, country, socksPort)
+	token, err := manage.CreateServerTunnel(name, port, transport, ports, ipv6, country, socksPort,
+		r.FormValue("tls_cert"), r.FormValue("tls_key"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

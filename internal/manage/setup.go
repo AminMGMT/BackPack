@@ -10,9 +10,15 @@ import (
 )
 
 // transportOptions is the ordered list shown to the user; index maps to value.
+// This is the full transport set supported by the engine
 var transportOptions = []struct{ label, value string }{
 	{"TCP", "tcp"},
+	{"TCP Mux  [multiplexed — many streams over few connections]", "tcpmux"},
 	{"UDP", "udp"},
+	{"WS   — WebSocket  [HTTP camouflage, CDN-friendly]", "ws"},
+	{"WS Mux  [WebSocket + multiplexing]", "wsmux"},
+	{"WSS  — Secure WebSocket  [TLS encrypted]", "wss"},
+	{"WSS Mux  [TLS WebSocket + multiplexing]", "wssmux"},
 }
 
 func chooseTransport() string {
@@ -62,6 +68,9 @@ func applyManualTuning(s *TunnelSpec) {
 	s.LogLevel = tui.PromptDefault("Log level (info/debug/warn/error)", "info")
 	if s.Role == "server" {
 		s.ChannelSize = tui.PromptInt("Channel size", 2048)
+		if s.Transport == "tcp" {
+			s.AcceptUDP = tui.Confirm("Accept UDP traffic over the TCP transport (accept_udp)", false)
+		}
 	} else {
 		s.ConnectionPool = tui.PromptInt("Connection pool size", 8)
 		s.AggressivePool = tui.Confirm("Enable aggressive pool", false)
@@ -73,6 +82,41 @@ func applyManualTuning(s *TunnelSpec) {
 		s.MuxRecvBuffer = tui.PromptInt("Mux receive buffer", 4194304)
 		s.MuxStreamBuffer = tui.PromptInt("Mux stream buffer", 65536)
 	}
+}
+
+// setupServerTLS collects the certificate for wss/wssmux servers: either an
+// auto-generated self-signed pair (fine — clients skip verification) or paths
+// to an existing certificate. Returns false if setup should be aborted.
+func setupServerTLS(s *TunnelSpec) bool {
+	tui.Info("WSS transports need a TLS certificate. A self-signed one works out of")
+	tui.Info("the box (clients don't verify it); use your own for a real domain.")
+	choice := tui.Choose("TLS certificate:", []string{
+		"Generate self-signed automatically (recommended)",
+		"Use existing certificate/key files",
+	})
+	switch choice {
+	case 0:
+		host := strings.TrimSpace(tui.PromptDefault("Domain or IP to embed in the cert (optional)", ""))
+		cert, key, err := EnsureSelfSignedCert(s.Name, host)
+		if err != nil {
+			tui.Error("Certificate generation failed: " + err.Error())
+			tui.PressEnter()
+			return false
+		}
+		s.TLSCert, s.TLSKey = cert, key
+		tui.Success("Self-signed certificate created: " + cert)
+	case 1:
+		s.TLSCert = strings.TrimSpace(tui.Prompt("Path to TLS certificate (e.g. /etc/letsencrypt/live/x/fullchain.pem): "))
+		s.TLSKey = strings.TrimSpace(tui.Prompt("Path to TLS key (e.g. /etc/letsencrypt/live/x/privkey.pem): "))
+		if err := validCertPair(s.TLSCert, s.TLSKey); err != nil {
+			tui.Error("Invalid certificate: " + err.Error())
+			tui.PressEnter()
+			return false
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 // uniqueName ensures the chosen name is not already taken.
@@ -126,6 +170,10 @@ func SetupServer() {
 		return
 	}
 
+	if needsTLS(transport) && !setupServerTLS(&s) {
+		return
+	}
+
 	best := tui.Confirm("Use Best Performance preset (recommended)", true)
 	if best {
 		bestPerfPreset(&s)
@@ -166,6 +214,12 @@ func SetupClient() {
 
 	tui.Info("Enter the SAME token you configured on the server.")
 	s.Token = tui.PromptDefault("Security token", "backpack")
+
+	if isWS(transport) {
+		tui.Info("Optional edge IP: connect to a CDN edge (e.g. Cloudflare) instead of")
+		tui.Info("resolving the server address directly. Leave empty to skip.")
+		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
+	}
 
 	best := tui.Confirm("Use Best Performance preset (recommended)", true)
 	if best {

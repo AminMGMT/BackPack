@@ -15,7 +15,7 @@ dashboard — so you can run and manage everything with or without a terminal.
 
 ## Features
 
-- **Transports:** TCP & UDP, reverse tunneling with connection pooling.
+- **Transports:** TCP, TCP Mux, UDP, WS, WS Mux, WSS & WSS Mux — reverse tunneling with connection pooling (self-signed TLS auto-generated for WSS).
 - **Best-Performance preset:** one choice tunes everything (nodelay, large pools,
   8 MB socket buffers, BBR + kernel tuning) for low latency & high throughput.
 - **Interactive CLI:** setup, live status, per-tunnel control, optimize, updates.
@@ -55,7 +55,7 @@ The client needs the Iran address + the token that the server generates.
 Run as root on the VPS. **GitHub is blocked from Iran**, so the two sides use
 different clone URLs:
 
-**Abroad (kharej) — direct:**
+**direct:**
 
 ```bash
 git clone https://github.com/AminMGMT/BackPack.git && cd BackPack && sudo bash install.sh && sudo backpack
@@ -100,7 +100,7 @@ copy the whole folder to the offline VPS, and run `sudo bash install.sh`. See
 sudo backpack   →  1. Setup Server
 ```
 
-Choose TCP/UDP, the tunnel port, the exposed ports, accept the suggested
+Choose the transport (TCP/TCPMux/UDP/WS/WSMux/WSS/WSSMux), the tunnel port, the exposed ports, accept the suggested
 **64-char token** (press Enter), and pick the **Best Performance** preset.
 Copy the token — you’ll need it on the client.
 

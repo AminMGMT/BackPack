@@ -16,7 +16,10 @@ import (
 // CreateServerTunnel builds and starts a best-performance server tunnel from the
 // minimal parameters the web UI collects. It generates a 64-char token and
 // returns it. This mirrors the CLI "Setup Server" flow.
-func CreateServerTunnel(name, port, transport string, ports []string, ipv6 bool, country string, socksPort int) (string, error) {
+// For wss/wssmux: pass tlsCert/tlsKey paths to use an existing certificate, or
+// leave both empty to auto-generate a self-signed pair (tunnel clients skip
+// certificate verification, so self-signed works out of the box).
+func CreateServerTunnel(name, port, transport string, ports []string, ipv6 bool, country string, socksPort int, tlsCert, tlsKey string) (string, error) {
 	name = strings.TrimSpace(name)
 	port = strings.TrimSpace(port)
 	if !validPort(port) {
@@ -28,8 +31,8 @@ func CreateServerTunnel(name, port, transport string, ports []string, ipv6 bool,
 	if fileExists(app.ConfigPath(name)) {
 		return "", fmt.Errorf("a tunnel named %q already exists", name)
 	}
-	if transport != "tcp" && transport != "udp" {
-		transport = "tcp"
+	if !validTransport(transport) {
+		return "", fmt.Errorf("unknown transport %q", transport)
 	}
 
 	var clean []string
@@ -65,6 +68,20 @@ func CreateServerTunnel(name, port, transport string, ports []string, ipv6 bool,
 		Token:     token,
 		Ports:     clean,
 	}
+
+	if needsTLS(transport) {
+		tlsCert, tlsKey = strings.TrimSpace(tlsCert), strings.TrimSpace(tlsKey)
+		if tlsCert == "" && tlsKey == "" {
+			var err error
+			if tlsCert, tlsKey, err = EnsureSelfSignedCert(name, ""); err != nil {
+				return "", fmt.Errorf("could not generate TLS certificate: %v", err)
+			}
+		} else if err := validCertPair(tlsCert, tlsKey); err != nil {
+			return "", err
+		}
+		s.TLSCert, s.TLSKey = tlsCert, tlsKey
+	}
+
 	bestPerfPreset(&s)
 
 	optimize.ApplyQuiet()
@@ -73,6 +90,54 @@ func CreateServerTunnel(name, port, transport string, ports []string, ipv6 bool,
 	}
 	SetTunnelCountry(name, strings.ToUpper(strings.TrimSpace(country)))
 	return token, nil
+}
+
+// CreateClientTunnel builds and starts a best-performance client tunnel from
+// the parameters the web UI collects. It mirrors the CLI "Setup Client" flow:
+// the token must be the one generated on the server side. edgeIP is optional
+// and only meaningful for the websocket transports.
+func CreateClientTunnel(name, host, port, transport, token, edgeIP, country string) error {
+	name = strings.TrimSpace(name)
+	host = strings.TrimSpace(host)
+	port = strings.TrimSpace(port)
+	token = strings.TrimSpace(token)
+	if host == "" || !validPort(port) {
+		return fmt.Errorf("invalid server address or port")
+	}
+	if token == "" {
+		return fmt.Errorf("the server token is required")
+	}
+	if name == "" {
+		name = "client-" + port
+	}
+	if fileExists(app.ConfigPath(name)) {
+		return fmt.Errorf("a tunnel named %q already exists", name)
+	}
+	if !validTransport(transport) {
+		return fmt.Errorf("unknown transport %q", transport)
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]" // IPv6 literal
+	}
+
+	s := TunnelSpec{
+		Role:       "client",
+		Transport:  transport,
+		RemoteAddr: host + ":" + port,
+		Name:       name,
+		Token:      token,
+	}
+	if isWS(transport) {
+		s.EdgeIP = strings.TrimSpace(edgeIP)
+	}
+	bestPerfPreset(&s)
+
+	optimize.ApplyQuiet()
+	if _, err := s.Save(); err != nil {
+		return err
+	}
+	SetTunnelCountry(name, strings.ToUpper(strings.TrimSpace(country)))
+	return nil
 }
 
 // loadServerSpec reconstructs a server tunnel's spec from its config file so it
@@ -87,21 +152,30 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		return TunnelSpec{}, fmt.Errorf("%q is not a server tunnel", name)
 	}
 	return TunnelSpec{
-		Role:        "server",
-		Name:        name,
-		Transport:   string(sc.Transport),
-		BindAddr:    sc.BindAddr,
-		Token:       sc.Token,
-		ChannelSize: sc.ChannelSize,
-		KeepAlive:   sc.Keepalive,
-		Nodelay:     sc.Nodelay,
-		Heartbeat:   sc.Heartbeat,
-		LogLevel:    sc.LogLevel,
-		AcceptUDP:   sc.AcceptUDP,
-		Ports:       sc.Ports,
-		MSS:         sc.MSS,
-		SoRcvBuf:    sc.SO_RCVBUF,
-		SoSndBuf:    sc.SO_SNDBUF,
+		Role:            "server",
+		Name:            name,
+		Transport:       string(sc.Transport),
+		BindAddr:        sc.BindAddr,
+		Token:           sc.Token,
+		ChannelSize:     sc.ChannelSize,
+		KeepAlive:       sc.Keepalive,
+		Nodelay:         sc.Nodelay,
+		Heartbeat:       sc.Heartbeat,
+		LogLevel:        sc.LogLevel,
+		AcceptUDP:       sc.AcceptUDP,
+		Ports:           sc.Ports,
+		MSS:             sc.MSS,
+		SoRcvBuf:        sc.SO_RCVBUF,
+		SoSndBuf:        sc.SO_SNDBUF,
+		TLSCert:         sc.TLSCertFile,
+		TLSKey:          sc.TLSKeyFile,
+		MuxCon:          sc.MuxCon,
+		MuxVersion:      sc.MuxVersion,
+		MuxFrameSize:    sc.MaxFrameSize,
+		MuxRecvBuffer:   sc.MaxReceiveBuffer,
+		MuxStreamBuffer: sc.MaxStreamBuffer,
+		Sniffer:         sc.Sniffer,
+		WebPort:         sc.WebPort,
 	}, nil
 }
 
