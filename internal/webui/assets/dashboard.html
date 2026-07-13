@@ -333,6 +333,17 @@
     <div class="divider"></div>
 
     <div class="setrow">
+      <h4>Backup &amp; restore</h4>
+      <div class="upd">
+        <span class="umsg" id="bkmsg">Download or restore all tunnels &amp; settings.</span>
+        <button class="btn-sm" onclick="downloadBackup()">Backup</button>
+        <button class="btn-sm" onclick="document.getElementById('restorefile').click()">Restore</button>
+      </div>
+      <input id="restorefile" type="file" accept=".gz,.tar.gz,application/gzip" style="display:none" onchange="restoreBackup(this)">
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
       <h4>Change password</h4>
       <label for="np">New password (4–128 characters)</label>
       <input id="np" type="password" autocomplete="new-password" placeholder="New password" maxlength="128">
@@ -700,6 +711,33 @@ async function saveSchedule(){
     const r=await (await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})).json();
     $('sched').value=r.hours; m.textContent=r.hours>0?('Saved · every '+r.hours+'h'):'Disabled';
   }catch(e){ m.textContent='Failed.'; }
+}
+
+// ---- backup / restore ----
+function downloadBackup(){
+  const m=$('bkmsg'); m.textContent='Preparing download…';
+  // A direct navigation lets the browser handle the file download with the
+  // session cookie attached.
+  window.location='/api/backup';
+  setTimeout(()=>{ m.textContent='Download started.'; }, 800);
+}
+async function restoreBackup(input){
+  const f=input.files&&input.files[0]; const m=$('bkmsg');
+  input.value=''; // allow re-selecting the same file later
+  if(!f) return;
+  if(!confirm('Restore from "'+f.name+'"? This overwrites existing tunnels and settings.')) return;
+  m.textContent='Restoring…';
+  try{
+    const body=new FormData(); body.append('backup', f);
+    const resp=await fetch('/api/restore',{method:'POST',body});
+    if(!resp.ok){ m.textContent='Failed: '+(await resp.text()); return; }
+    const r=await resp.json();
+    let s='Restored '+r.files+' file(s)';
+    if(r.tunnels&&r.tunnels.length) s+=' · '+r.tunnels.length+' tunnel(s), '+r.started+' started';
+    m.textContent=s+'.';
+    // Reload data so the new tunnels/settings appear.
+    setTimeout(()=>location.reload(), 1500);
+  }catch(e){ m.textContent='Failed to restore.'; }
 }
 
 // ---- add / manage tunnels ----

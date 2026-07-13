@@ -126,6 +126,8 @@ func Serve() error {
 	mux.HandleFunc("/api/tunnels/action", srv.requireAuth(srv.handleTunnelAction))
 	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))
 	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
+	mux.HandleFunc("/api/backup", srv.requireAuth(srv.handleBackup))
+	mux.HandleFunc("/api/restore", srv.requireAuth(srv.handleRestore))
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
@@ -383,6 +385,58 @@ func (s *server) handleTelegramTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "sent"})
+}
+
+// handleBackup streams a full configuration backup (.tar.gz) as a download.
+func (s *server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	name := fmt.Sprintf("backpack-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	if err := manage.WriteBackup(w); err != nil {
+		// Headers may already be sent; log-shaped fallback for the client.
+		http.Error(w, "backup failed: "+err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleRestore accepts an uploaded backup archive (multipart field "backup"),
+// restores tunnels and settings, then ensures the web panel keeps running.
+func (s *server) handleRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Cap the upload at 64 MB — configs are tiny; this is just a safety valve.
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		http.Error(w, "invalid upload", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("backup")
+	if err != nil {
+		http.Error(w, "no backup file provided", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	res, err := manage.Restore(file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Make sure the panel service exists and is running after the restore.
+	if _, err := EnsureRunning(); err != nil {
+		// Non-fatal: the restore itself succeeded.
+		_ = err
+	}
+	writeJSON(w, map[string]any{
+		"status":             "ok",
+		"files":              res.Files,
+		"tunnels":            res.Tunnels,
+		"started":            res.Started,
+		"failed":             res.Failed,
+		"webui_config":       res.WebUIConfig,
+		"telegram_config":    res.TelegramConfig,
+		"auto_refresh_hours": res.AutoRefreshHours,
+	})
 }
 
 func atoiDefault(s string, def int) int {

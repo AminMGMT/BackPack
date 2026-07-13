@@ -198,7 +198,7 @@ func (s *TcpMuxTransport) channelHandshake() {
 			conn.SetReadDeadline(time.Time{})
 
 			if msg != s.config.Token {
-				s.logger.Warnf("invalid security token received: %s", msg)
+				s.logger.Warnf("invalid security token received")
 				conn.Close()
 				continue
 			}

@@ -4,7 +4,7 @@ package app
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.0.0"
+	Version = "v1.2.0"
 
 	// ConfigDir is where per-tunnel TOML configs and runtime state live.
 	ConfigDir = "/etc/backpack"

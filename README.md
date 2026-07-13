@@ -27,6 +27,9 @@ dashboard — so you can run and manage everything with or without a terminal.
   Telegram (e.g. Iran), it relays through a tunnel peer via a built-in SOCKS5.
 - **Auto-refresh:** restart all tunnels every N hours.
 - **One-click updates** from your GitHub repo (git pull + rebuild).
+- **Full backup & restore:** bundle every tunnel, the panel password, Telegram
+  settings, TLS certs and the auto-refresh schedule into a single portable
+  `.tar.gz` — from the CLI or the web panel — and restore it on any server.
 - **Self-healing watchdog:** detects a dropped tunnel (either side) and restarts it within ~1 minute.
 - **systemd-managed** services that survive reboots and closed terminals.
 
@@ -124,7 +127,7 @@ Enter the **Iran server IP**, the tunnel port, and the **same token**. Done.
 1. Setup Server            (Iran — exposes ports)
 2. Setup Client            (kharej — connects out)
 3. Web Panel               (link + login code, regenerate, restart, stop)
-4. Manage                  (Manage tunnels, Status, Restart ALL)
+4. Manage                  (Manage tunnels, Status, Restart ALL, Backup & Restore)
 5. Auto Refresh Schedule   (restart all tunnels every N hours; 0 = disable)
 6. Status                  (live table)
 7. Optimize                (BBR + fq, buffers, backlog, file limits)
@@ -179,6 +182,34 @@ The bot is **interactive** — every message carries three buttons:
 - **📊 Status** — real-time status of all servers/tunnels.
 - **🖥 Web UI** — the panel URL and password.
 - **💬 Support** — GitHub, Telegram channel, and donation addresses.
+
+## Backup & restore
+
+A backup captures your **entire** Backpack setup in one file: every tunnel
+config (with its token), the web-panel password, the Telegram bot settings, the
+auto-generated TLS certificates, per-tunnel metadata (country), and the
+auto-refresh schedule. It's a plain `.tar.gz` you can copy anywhere.
+
+**From the CLI:** `sudo backpack → 4. Manage → Backup & Restore`
+
+- **Create a backup file** — writes `backpack-backup-YYYYMMDD-HHMMSS.tar.gz`
+  to a directory you choose (default `/root`).
+- **Restore from a backup file** — give the path to an archive; Backpack
+  extracts the configs, re-registers a systemd service for every tunnel, starts
+  them, restores the auto-refresh schedule, and brings the web panel back up.
+
+**From the web panel:** open **⚙️ Settings → Backup & restore**
+
+- **Backup** downloads the archive straight to your browser.
+- **Restore** uploads an archive and applies it, then reloads the dashboard.
+
+> ⚠️ A backup contains tunnel **tokens** and the **panel password** in plain
+> text — keep it private. Restoring **overwrites** any tunnel/setting with the
+> same name; tunnels that only exist locally are left untouched.
+
+**Typical use — migrate to a new server:** install Backpack on the new box
+(`sudo bash install.sh`), copy your `.tar.gz` over, then restore it from the CLI
+or panel. All tunnels and settings come back exactly as they were.
 
 ## Updates
 

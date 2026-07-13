@@ -192,7 +192,7 @@ func (c *TcpMuxTransport) channelDialer() {
 
 				return
 			} else {
-				c.logger.Errorf("invalid token received. Expected: %s, Received: %s. Retrying...", c.config.Token, message)
+				c.logger.Errorf("invalid token received (does not match the server's token). Retrying...")
 				tunnelConn.Close() // Close connection if the token is invalid
 				time.Sleep(c.config.RetryInterval)
 				continue
