@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -89,24 +90,61 @@ func sources(timeout time.Duration) []source {
 	return out
 }
 
-// latestTag discovers the newest release tag by following the
-// /releases/latest redirect — no API calls, no rate limits.
+// tagNameRe pulls "tag_name":"v1.3.0" out of the GitHub API JSON.
+var tagNameRe = regexp.MustCompile(`"tag_name"\s*:\s*"([^"]+)"`)
+
+// versionValidRe sanity-checks a version string read from the raw VERSION file.
+var versionValidRe = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}$`)
+
+// latestTag discovers the newest published version. It tries two methods across
+// every source (direct → tunnel relay → mirrors) so it works from Iran too:
+//
+//  1. the GitHub API releases/latest endpoint (JSON tag_name) — the accurate
+//     "latest release", used when the server or its tunnel peer can reach
+//     api.github.com directly (own IP, not rate limited).
+//  2. the raw VERSION file on main — the reliable path through mirrors, because
+//     gh-proxy.com proxies raw.githubusercontent.com fine, whereas it 403s the
+//     HTML releases page and shares an IP that hits the API rate limit. The
+//     VERSION file is bumped together with each release.
 func latestTag() (string, error) {
 	var lastErr error = fmt.Errorf("no source reachable")
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", app.RepoOwner, app.RepoName)
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/VERSION", app.RepoOwner, app.RepoName)
+
+	// 1) GitHub API JSON — accurate, works direct and via the tunnel relay.
 	for _, s := range sources(20 * time.Second) {
-		resp, err := s.client.Get(s.prefix + repoURL() + "/releases/latest")
+		resp, err := s.client.Get(s.prefix + apiURL)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		finalPath := resp.Request.URL.Path
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 		resp.Body.Close()
-		if i := strings.LastIndex(finalPath, "/tag/"); i >= 0 {
-			return strings.TrimSpace(finalPath[i+len("/tag/"):]), nil
+		if resp.StatusCode == http.StatusOK {
+			if m := tagNameRe.FindSubmatch(body); m != nil {
+				return strings.TrimSpace(string(m[1])), nil
+			}
 		}
-		lastErr = fmt.Errorf("no release tag found via %s", s.name)
+		lastErr = fmt.Errorf("api via %s: status %d", s.name, resp.StatusCode)
 	}
-	return "", fmt.Errorf("could not reach GitHub releases (direct, relay or mirrors): %v", lastErr)
+
+	// 2) raw VERSION file — works through mirrors that rate-limit/deny the API.
+	for _, s := range sources(20 * time.Second) {
+		resp, err := s.client.Get(s.prefix + rawURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			if v := strings.TrimSpace(string(body)); versionValidRe.MatchString(v) {
+				return v, nil
+			}
+		}
+		lastErr = fmt.Errorf("VERSION via %s: status %d", s.name, resp.StatusCode)
+	}
+	return "", fmt.Errorf("could not reach GitHub (direct, relay or mirrors): %v", lastErr)
 }
 
 // normVersion strips a leading "v" so v1.3.0 and 1.3.0 compare equal.
