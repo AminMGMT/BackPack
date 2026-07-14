@@ -16,7 +16,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
-	"github.com/backpack/backpack/internal/schedule"
+
 	"github.com/backpack/backpack/internal/socks"
 	"github.com/backpack/backpack/internal/telegram"
 )
@@ -41,7 +41,14 @@ func newSessionStore() *sessionStore {
 func (s *sessionStore) create() string {
 	tok := randomHex(24)
 	s.mu.Lock()
-	s.sessions[tok] = time.Now().Add(12 * time.Hour)
+	// Purge expired sessions so the map can't grow without bound over time.
+	now := time.Now()
+	for t, exp := range s.sessions {
+		if now.After(exp) {
+			delete(s.sessions, t)
+		}
+	}
+	s.sessions[tok] = now.Add(12 * time.Hour)
 	s.mu.Unlock()
 	return tok
 }
@@ -112,6 +119,9 @@ func Serve() error {
 	// the bot is configured; runs only where it is configured (normally Iran).
 	go telegram.RunBot(context.Background())
 
+	// The panel is a monitoring dashboard: live stats, tunnel state and logs.
+	// Tunnels are created and managed from the CLI; the only mutating actions
+	// here are panel-scoped (password, port, self-update).
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
 	mux.HandleFunc("/logout", srv.handleLogout)
@@ -121,13 +131,7 @@ func Serve() error {
 	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
-	mux.HandleFunc("/api/schedule", srv.requireAuth(srv.handleSchedule))
-	mux.HandleFunc("/api/tunnels/create", srv.requireAuth(srv.handleTunnelCreate))
-	mux.HandleFunc("/api/tunnels/action", srv.requireAuth(srv.handleTunnelAction))
-	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))
-	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
-	mux.HandleFunc("/api/backup", srv.requireAuth(srv.handleBackup))
-	mux.HandleFunc("/api/restore", srv.requireAuth(srv.handleRestore))
+	mux.HandleFunc("/api/panelport", srv.requireAuth(srv.handlePanelPort))
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
@@ -261,189 +265,39 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSchedule gets (GET) or sets (POST) the auto-refresh interval in hours.
-func (s *server) handleSchedule(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, map[string]int{"hours": schedule.AutoRefreshHours()})
-	case http.MethodPost:
-		r.ParseForm()
-		h, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("hours")))
-		if h < 0 {
-			h = 0
-		}
-		if h > 168 {
-			h = 168
-		}
-		if err := schedule.SetAutoRefresh(h); err != nil {
-			http.Error(w, "could not update schedule", http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, map[string]int{"hours": schedule.AutoRefreshHours()})
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleTunnelCreate creates a best-performance tunnel (web equivalent of the
-// CLI "Setup Server" / "Setup Client" flows). role=server (default) generates
-// and returns a token; role=client requires the server's token.
-func (s *server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
+// handlePanelPort moves the web panel itself to a new port. The response is
+// sent first, then the service restarts — the browser must reconnect on the
+// new port (the frontend handles the redirect).
+func (s *server) handlePanelPort(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	r.ParseForm()
-	name := r.FormValue("name")
-	port := r.FormValue("port")
-	transport := r.FormValue("transport")
-	country := r.FormValue("country")
-
-	if r.FormValue("role") == "client" {
-		err := manage.CreateClientTunnel(name, r.FormValue("host"), port, transport,
-			r.FormValue("token"), r.FormValue("edge_ip"), country)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, map[string]string{"status": "created"})
+	p, err := strconv.Atoi(strings.TrimSpace(r.FormValue("port")))
+	if err != nil || p < 1 || p > 65535 {
+		http.Error(w, "port must be between 1 and 65535", http.StatusBadRequest)
 		return
 	}
-
-	ipv6 := r.FormValue("ipv6") == "true" || r.FormValue("ipv6") == "1"
-	ports := strings.Split(r.FormValue("ports"), ",")
-	socksPort, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("socks_port")))
-
-	token, err := manage.CreateServerTunnel(name, port, transport, ports, ipv6, country, socksPort,
-		r.FormValue("tls_cert"), r.FormValue("tls_key"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	c := Load()
+	if p == c.Port {
+		writeJSON(w, map[string]any{"status": "ok", "port": p})
 		return
 	}
-	writeJSON(w, map[string]string{"status": "created", "token": token})
-}
-
-// handleTunnelAction starts/stops/restarts/deletes a tunnel by name.
-func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if manage.PortInUse(strconv.Itoa(p)) {
+		http.Error(w, fmt.Sprintf("port %d is already in use", p), http.StatusBadRequest)
 		return
 	}
-	r.ParseForm()
-	if err := manage.TunnelAction(r.FormValue("name"), r.FormValue("action")); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	c.Port = p
+	if err := Save(c); err != nil {
+		http.Error(w, "could not save config", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-// handleTelegram gets (GET) or saves (POST) the Telegram bot configuration.
-func (s *server) handleTelegram(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		c := telegram.Load()
-		writeJSON(w, map[string]any{
-			"token":      c.Token,
-			"admin_id":   c.AdminID,
-			"interval":   c.IntervalHours,
-			"via_tunnel": c.ViaTunnel,
-		})
-	case http.MethodPost:
-		r.ParseForm()
-		c := telegram.Config{
-			Token:         strings.TrimSpace(r.FormValue("token")),
-			AdminID:       strings.TrimSpace(r.FormValue("admin_id")),
-			IntervalHours: atoiDefault(r.FormValue("interval"), 6),
-			ViaTunnel:     strings.TrimSpace(r.FormValue("via_tunnel")),
-		}
-		if c.Token == "" || c.AdminID == "" {
-			http.Error(w, "bot token and admin id are required", http.StatusBadRequest)
-			return
-		}
-		if c.ViaTunnel != "" {
-			port, err := manage.EnsureSocksPort(c.ViaTunnel)
-			if err != nil {
-				http.Error(w, "relay setup failed: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			c.SocksPort = port
-		}
-		if err := telegram.Configure(c); err != nil {
-			http.Error(w, "could not save: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, map[string]string{"status": "ok"})
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleTelegramTest sends a test message with the saved configuration.
-func (s *server) handleTelegramTest(w http.ResponseWriter, r *http.Request) {
-	if err := telegram.SendTest(telegram.Load()); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "sent"})
-}
-
-// handleBackup streams a full configuration backup (.tar.gz) as a download.
-func (s *server) handleBackup(w http.ResponseWriter, r *http.Request) {
-	name := fmt.Sprintf("backpack-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
-	if err := manage.WriteBackup(w); err != nil {
-		// Headers may already be sent; log-shaped fallback for the client.
-		http.Error(w, "backup failed: "+err.Error(), http.StatusInternalServerError)
-	}
-}
-
-// handleRestore accepts an uploaded backup archive (multipart field "backup"),
-// restores tunnels and settings, then ensures the web panel keeps running.
-func (s *server) handleRestore(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// Cap the upload at 64 MB — configs are tiny; this is just a safety valve.
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		http.Error(w, "invalid upload", http.StatusBadRequest)
-		return
-	}
-	file, _, err := r.FormFile("backup")
-	if err != nil {
-		http.Error(w, "no backup file provided", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	res, err := manage.Restore(file)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Make sure the panel service exists and is running after the restore.
-	if _, err := EnsureRunning(); err != nil {
-		// Non-fatal: the restore itself succeeded.
-		_ = err
-	}
-	writeJSON(w, map[string]any{
-		"status":             "ok",
-		"files":              res.Files,
-		"tunnels":            res.Tunnels,
-		"started":            res.Started,
-		"failed":             res.Failed,
-		"webui_config":       res.WebUIConfig,
-		"telegram_config":    res.TelegramConfig,
-		"auto_refresh_hours": res.AutoRefreshHours,
-	})
-}
-
-func atoiDefault(s string, def int) int {
-	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 0 {
-		return n
-	}
-	return def
+	writeJSON(w, map[string]any{"status": "ok", "port": p})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		manage.RestartService(app.WebUIService)
+	}()
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

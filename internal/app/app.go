@@ -4,7 +4,18 @@ package app
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.2.0"
+	Version = "v1.3.0"
+
+	// RepoOwner/RepoName identify the GitHub repository used by the installer
+	// and the release-based updater.
+	RepoOwner = "AminMGMT"
+	RepoName  = "BackPack"
+
+	// InstallDir is where the release bundle lives on the VPS.
+	InstallDir = "/root/BackPack"
+
+	// BackupDir is the default folder for configuration backups.
+	BackupDir = InstallDir + "/backups"
 
 	// ConfigDir is where per-tunnel TOML configs and runtime state live.
 	ConfigDir = "/etc/backpack"

@@ -76,6 +76,21 @@ func SetPassword(pw string) (Config, error) {
 	return c, nil
 }
 
+// SetPort persists a new panel port and restarts the panel service so it
+// listens there. Used from the CLI (a separate process from the server).
+func SetPort(port int) (Config, error) {
+	c := Load()
+	if port < 1 || port > 65535 {
+		return c, fmt.Errorf("port must be between 1 and 65535")
+	}
+	c.Port = port
+	if err := Save(c); err != nil {
+		return c, err
+	}
+	manage.RestartService(app.WebUIService)
+	return c, nil
+}
+
 // EnsureRunning makes sure a password exists and the web-panel systemd service
 // is installed and running. Safe to call repeatedly (idempotent).
 func EnsureRunning() (Config, error) {

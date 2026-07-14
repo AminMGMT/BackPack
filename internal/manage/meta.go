@@ -34,18 +34,6 @@ func saveMeta(m map[string]tunnelMeta) {
 	os.WriteFile(metaPath(), data, 0644)
 }
 
-// SetTunnelCountry records the country code for a tunnel.
-func SetTunnelCountry(name, country string) {
-	if country == "" {
-		return
-	}
-	metaMu.Lock()
-	defer metaMu.Unlock()
-	m := loadMeta()
-	m[name] = tunnelMeta{Country: country}
-	saveMeta(m)
-}
-
 // TunnelCountry returns the recorded country code for a tunnel, or "".
 func TunnelCountry(name string) string {
 	metaMu.Lock()

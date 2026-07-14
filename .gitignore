@@ -1,16 +1,13 @@
 # Build artifacts
 /backpack
 /dist/
+/release/
 
 # Go module cache accidentally copied into the project (must live outside it)
 /go/
-/prerequisite/.goroot/
 
 # Vendored deps are optional to commit; uncomment to keep the repo small.
 # /vendor/
-
-# Local dev helper — not part of the published repo
-/publish.sh
 
 # OS / editor cruft
 .DS_Store

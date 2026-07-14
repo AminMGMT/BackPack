@@ -33,7 +33,7 @@ func StatusLive() {
 
 	render := func() {
 		tui.Clear()
-		tui.Colorize(tui.Cyan, "Live Tunnel Status", true)
+		tui.Title("Live Tunnel Status")
 		fmt.Printf("%sIPv4:%s %s    %sIPv6:%s %s\n",
 			tui.Gray, tui.Reset, ipv4, tui.Gray, tui.Reset, ipv6)
 		fmt.Printf("%sUpdated: %s   (press Ctrl+C to return)%s\n\n",
@@ -62,7 +62,7 @@ func printStatusTable(tunnels []Tunnel) {
 	for _, t := range tunnels {
 		plainState, color := "stopped", tui.Red
 		if IsActive(t.Service) {
-			plainState, color = "running", tui.Green
+			plainState, color = "running", tui.Bold+tui.White
 		}
 		state := colorPad(tui.Color(color, plainState), plainState, 8)
 

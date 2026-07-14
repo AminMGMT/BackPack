@@ -10,23 +10,25 @@ import (
 )
 
 // transportOptions is the ordered list shown to the user; index maps to value.
-// This is the full transport set supported by the engine
-var transportOptions = []struct{ label, value string }{
-	{"TCP", "tcp"},
-	{"TCP Mux  [multiplexed — many streams over few connections]", "tcpmux"},
-	{"UDP", "udp"},
-	{"WS   — WebSocket  [HTTP camouflage, CDN-friendly]", "ws"},
-	{"WS Mux  [WebSocket + multiplexing]", "wsmux"},
-	{"WSS  — Secure WebSocket  [TLS encrypted]", "wss"},
-	{"WSS Mux  [TLS WebSocket + multiplexing]", "wssmux"},
+// This is the full transport set supported by the engine.
+var transportOptions = []struct {
+	label, desc, value string
+}{
+	{"TCP", "plain & fast — the safe default", "tcp"},
+	{"TCP Mux", "many streams over few connections — multiplexed", "tcpmux"},
+	{"UDP", "for UDP-based services", "udp"},
+	{"WS", "WebSocket — HTTP camouflage, CDN friendly", "ws"},
+	{"WSS", "secure WebSocket — TLS encrypted", "wss"},
+	{"WS Mux", "WebSocket — multiplexed", "wsmux"},
+	{"WSS Mux", "TLS WebSocket — multiplexed", "wssmux"},
 }
 
 func chooseTransport() string {
-	labels := make([]string, len(transportOptions))
+	opts := make([]tui.Option, len(transportOptions))
 	for i, o := range transportOptions {
-		labels[i] = o.label
+		opts[i] = tui.Option{Title: o.label, Desc: o.desc}
 	}
-	idx := tui.Choose("Select transport:", labels)
+	idx := tui.ChooseOpt("Select transport:", opts)
 	if idx < 0 {
 		return ""
 	}
@@ -90,9 +92,9 @@ func applyManualTuning(s *TunnelSpec) {
 func setupServerTLS(s *TunnelSpec) bool {
 	tui.Info("WSS transports need a TLS certificate. A self-signed one works out of")
 	tui.Info("the box (clients don't verify it); use your own for a real domain.")
-	choice := tui.Choose("TLS certificate:", []string{
-		"Generate self-signed automatically (recommended)",
-		"Use existing certificate/key files",
+	choice := tui.ChooseOpt("TLS certificate:", []tui.Option{
+		{Title: "Generate self-signed automatically", Desc: "recommended — works out of the box"},
+		{Title: "Use existing certificate/key files", Desc: "e.g. Let's Encrypt paths"},
 	})
 	switch choice {
 	case 0:
@@ -119,19 +121,26 @@ func setupServerTLS(s *TunnelSpec) bool {
 	return true
 }
 
-// uniqueName ensures the chosen name is not already taken.
+// uniqueName ensures the chosen name is valid and not already taken.
 func uniqueName(name string) string {
-	for fileExists(app.ConfigPath(name)) {
-		tui.Warn(fmt.Sprintf("A tunnel named %q already exists.", name))
+	for {
+		switch {
+		case !validName(name):
+			tui.Warn(fmt.Sprintf("Invalid name %q — use letters, digits, dots, dashes (max 40).", name))
+		case fileExists(app.ConfigPath(name)):
+			tui.Warn(fmt.Sprintf("A tunnel named %q already exists.", name))
+		default:
+			return name
+		}
 		name = tui.Prompt("Choose a different name: ")
 	}
-	return name
 }
 
 // SetupServer runs the interactive server (edge/Iran) setup flow.
 func SetupServer() {
 	tui.Clear()
-	tui.Colorize(tui.Cyan, "Setup Server  [Reverse tunnel — exposes ports on this machine]", true)
+	tui.Title("Setup Server")
+	tui.Warn("Iran side — reverse tunnel that exposes ports on this machine.")
 	fmt.Println()
 
 	transport := chooseTransport()
@@ -159,13 +168,18 @@ func SetupServer() {
 
 	suggested := randomToken(64)
 	tui.Info("Suggested 64-char token (press Enter to accept — copy it to the client):")
-	fmt.Println("  " + tui.Color(tui.Yellow, suggested))
+	fmt.Println("  " + tui.Color(tui.Bold+tui.White, suggested))
 	s.Token = tui.PromptDefault("Security token", suggested)
 
 	portsRaw := tui.Prompt("Exposed ports (comma separated, e.g. 443,8080 or 443=1.1.1.1:443): ")
 	s.Ports = parsePorts(portsRaw)
 	if len(s.Ports) == 0 {
 		tui.Error("No valid ports entered.")
+		tui.PressEnter()
+		return
+	}
+	if err := validatePortSpecs(s.Ports); err != nil {
+		tui.Error(err.Error())
 		tui.PressEnter()
 		return
 	}
@@ -187,7 +201,8 @@ func SetupServer() {
 // SetupClient runs the interactive client (origin/kharej) setup flow.
 func SetupClient() {
 	tui.Clear()
-	tui.Colorize(tui.Cyan, "Setup Client  [Reverse tunnel — connects out to the server]", true)
+	tui.Title("Setup Client")
+	tui.Warn("Kharej side — reverse tunnel that dials out to the Iran server.")
 	fmt.Println()
 
 	transport := chooseTransport()

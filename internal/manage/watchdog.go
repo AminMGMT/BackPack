@@ -81,11 +81,22 @@ func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
 		return true // can't parse → don't act
 	}
 	// Client: healthy if connected to the remote server's tunnel port.
-	if _, rport, err := net.SplitHostPort(t.Addr); err == nil {
+	if rhost, rport, err := net.SplitHostPort(t.Addr); err == nil {
+		rip := net.ParseIP(rhost)
 		for _, p := range pairs {
-			if portOf(p[1]) == rport {
-				return true
+			ph, pp, err := net.SplitHostPort(p[1])
+			if err != nil || pp != rport {
+				continue
 			}
+			// When the configured host is a literal IP, require it to match
+			// too — otherwise any unrelated outbound connection to the same
+			// port (e.g. 443) would make a dropped tunnel look healthy.
+			if rip != nil {
+				if pip := net.ParseIP(ph); pip == nil || !pip.Equal(rip) {
+					continue
+				}
+			}
+			return true
 		}
 		return false
 	}

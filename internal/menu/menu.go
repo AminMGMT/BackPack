@@ -5,6 +5,8 @@ package menu
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/backpack/backpack/internal/app"
@@ -16,16 +18,15 @@ import (
 	"github.com/backpack/backpack/internal/webui"
 )
 
-// ipStore caches the server's public IPv4 so the frequently-redrawn header
-// never blocks on a network lookup.
+// ipStore caches the server's public IPv4 so menus never block on a lookup.
 var ipStore atomic.Value // holds string
 
 // Run starts the interactive menu loop.
 func Run() {
 	requireRoot()
 
-	// Bring the web panel up immediately so it's ready before the first tunnel,
-	// and start resolving the public IP in the background for the header.
+	// Bring the monitoring web panel up in the background and start resolving
+	// the public IP (shown inside the Web Panel section).
 	if _, err := webui.EnsureRunning(); err != nil {
 		tui.Warn("Web panel could not start: " + err.Error())
 		tui.PressEnter()
@@ -35,33 +36,29 @@ func Run() {
 	for {
 		tui.Clear()
 		tui.Logo(app.Version)
-		printHeader()
+		tui.Rule()
 		printMenu()
 
 		switch tui.Prompt("Select an option: ") {
 		case "1":
 			manage.SetupServer()
-			afterSetupWeb()
 		case "2":
 			manage.SetupClient()
-			afterSetupWeb()
 		case "3":
-			webPanelMenu()
-		case "4":
 			manageMenu()
+		case "4":
+			backupMenu()
 		case "5":
-			autoRefreshMenu()
+			webPanelMenu()
 		case "6":
-			manage.StatusLive()
-		case "7":
 			optimizeMenu()
-		case "8":
+		case "7":
 			telegramMenu()
-		case "9":
+		case "8":
 			updateMenu()
-		case "10":
+		case "9":
 			uninstallMenu()
-		case "11", "0":
+		case "10", "0":
 			tui.Info("Goodbye!")
 			return
 		default:
@@ -71,68 +68,35 @@ func Run() {
 	}
 }
 
-// printHeader shows the version, web-panel access details and a live summary
-// of tunnels and the auto-refresh schedule under the logo.
-func printHeader() {
-	tui.Rule()
-
-	cfg := webui.Load()
-	if webui.Running() {
-		url := fmt.Sprintf("http://%s:%d", cachedServerIP(), cfg.Port)
-		headerLine("Web Panel", tui.Color(tui.Bold+tui.White, url)+"  "+tui.Color(tui.Green, "● running"))
-		headerLine("Login code", tui.Color(tui.Bold+tui.Yellow, cfg.Password))
-	} else {
-		headerLine("Web Panel", tui.Color(tui.Red, "○ stopped")+tui.Color(tui.Gray, "  (start it from menu → Web Panel)"))
-	}
-
-	tunnels := manage.List()
-	running := 0
-	for _, t := range tunnels {
-		if manage.IsActive(t.Service) {
-			running++
-		}
-	}
-	headerLine("Tunnels", fmt.Sprintf("%d total · %s%d running%s", len(tunnels), tui.Green, running, tui.Reset))
-	headerLine("Auto-refresh", refreshLabel())
-
-	tui.Rule()
-}
-
-// headerLine prints one aligned "Label   value" row in the status block.
-func headerLine(label, value string) {
-	fmt.Printf("  %s%-12s%s %s\n", tui.Cyan, label, tui.Reset, value)
-}
-
-// printMenu renders the main menu with a short description beside each option.
+// printMenu renders the main menu: red numbers, white titles, gray descriptions.
 func printMenu() {
 	fmt.Println()
 	menuItem(1, "Setup Server", "Iran side — exposes ports to users")
-	menuItem(2, "Setup Client", "Kharej side — dials out to the service")
-	menuItem(3, "Web Panel", "link, login code, start / stop")
-	menuItem(4, "Manage", "tunnels, status, backup & restore")
-	menuItem(5, "Auto Refresh", "restart all tunnels every N hours")
-	menuItem(6, "Status", "live tunnel table")
-	menuItem(7, "Optimize", "kernel & network tuning (BBR, buffers)")
-	menuItem(8, "Telegram Bot", "status reports to your admin")
-	menuItem(9, "Update", "pull latest & rebuild")
-	menuItem(10, "Uninstall", "remove everything")
-	menuItem(11, "Exit", "")
+	menuItem(2, "Setup Client", "Kharej side — dials out to the Iran server")
+	menuItem(3, "Manage", "tunnels, edit ports, status, restart all, auto refresh")
+	menuItem(4, "Backup & Restore", "save or restore the full configuration")
+	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")
+	menuItem(6, "Optimize", "kernel & network tuning — BBR, buffers, limits")
+	menuItem(7, "Telegram Bot", "status reports, relayed through a tunnel")
+	menuItem(8, "Update", "download & install the latest release")
+	menuItem(9, "Uninstall", "remove everything")
+	menuItem(10, "Exit", "")
 	fmt.Println()
 }
 
 // menuItem prints one aligned, colored menu row.
 func menuItem(n int, title, desc string) {
-	num := tui.Color(tui.Magenta, fmt.Sprintf("%2d)", n))
+	num := tui.Color(tui.Red, fmt.Sprintf("%2d)", n))
 	if desc == "" {
-		fmt.Printf("  %s %s%-14s%s\n", num, tui.Bold, title, tui.Reset)
+		fmt.Printf("  %s %s%-18s%s\n", num, tui.Bold+tui.White, title, tui.Reset)
 		return
 	}
-	fmt.Printf("  %s %s%-14s%s %s%s%s\n",
-		num, tui.Bold, title, tui.Reset, tui.Gray, desc, tui.Reset)
+	fmt.Printf("  %s %s%-18s%s %s%s%s\n",
+		num, tui.Bold+tui.White, title, tui.Reset, tui.Gray, desc, tui.Reset)
 }
 
 // cachedServerIP returns the resolved public IPv4 if known, otherwise a
-// placeholder — it never blocks, so it's safe for the redrawn header.
+// placeholder — it never blocks, so it's safe for redrawn screens.
 func cachedServerIP() string {
 	if v, _ := ipStore.Load().(string); v != "" {
 		return v
@@ -162,17 +126,15 @@ func refreshLabel() string {
 	return fmt.Sprintf("every %dh", h)
 }
 
-// manageMenu is menu item 3.
+// manageMenu is main-menu item 3.
 func manageMenu() {
 	for {
 		tui.Clear()
-		tui.Colorize(tui.Cyan, "Manage", true)
-		fmt.Println()
-		idx := tui.Choose("Choose:", []string{
-			"Manage Tunnels",
-			"Status",
-			"Restart ALL",
-			"Backup & Restore",
+		idx := tui.ChooseOpt("Manage", []tui.Option{
+			{Title: "Manage Tunnels", Desc: "edit ports, start/stop, live log, delete"},
+			{Title: "Status", Desc: "live tunnel table"},
+			{Title: "Restart ALL", Desc: "restart every tunnel at once"},
+			{Title: "Auto Refresh", Desc: "restart all tunnels every N hours — " + refreshLabel()},
 		})
 		switch idx {
 		case 0:
@@ -184,7 +146,7 @@ func manageMenu() {
 			tui.Success(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 			tui.PressEnter()
 		case 3:
-			backupMenu()
+			autoRefreshMenu()
 		default:
 			return
 		}
@@ -193,19 +155,20 @@ func manageMenu() {
 
 // backupMenu creates or restores a full configuration backup (all tunnels, the
 // web-panel password, Telegram settings, certificates and the auto-refresh
-// schedule) as a single portable .tar.gz archive.
+// schedule) as a single portable .tar.gz archive kept under app.BackupDir.
 func backupMenu() {
 	for {
 		tui.Clear()
-		tui.Colorize(tui.Cyan, "Backup & Restore", true)
+		tui.Title("Backup & Restore")
 		fmt.Println()
-		tui.Info("A backup bundles every tunnel, the web-panel password, Telegram")
-		tui.Info("settings, TLS certs and the auto-refresh schedule into one file.")
+		tui.Warn("A backup bundles every tunnel, the web-panel password, Telegram")
+		tui.Warn("settings, TLS certs and the auto-refresh schedule into one file.")
+		tui.Warn("Backups live in " + app.BackupDir)
 		fmt.Println()
 
-		idx := tui.Choose("Choose:", []string{
-			"Create a backup file",
-			"Restore from a backup file",
+		idx := tui.ChooseOpt("Choose:", []tui.Option{
+			{Title: "Create a backup file", Desc: "saved into " + app.BackupDir},
+			{Title: "Restore from a backup file", Desc: "pick one from the folder or enter a path"},
 		})
 		switch idx {
 		case 0:
@@ -218,9 +181,9 @@ func backupMenu() {
 	}
 }
 
-// createBackup writes a timestamped archive to /root and shows its path.
+// createBackup writes a timestamped archive to the backup folder.
 func createBackup() {
-	dir := tui.PromptDefault("Save the backup in which directory", "/root")
+	dir := tui.PromptDefault("Save the backup in which directory", app.BackupDir)
 	path, err := manage.BackupToFile(dir)
 	if err != nil {
 		tui.Error("Backup failed: " + err.Error())
@@ -234,12 +197,36 @@ func createBackup() {
 	tui.PressEnter()
 }
 
-// restoreBackup restores tunnels and settings from a chosen archive.
+// restoreBackup restores tunnels and settings from an archive picked from the
+// backup folder (or a manually entered path).
 func restoreBackup() {
-	path := tui.Prompt("Path to the backup .tar.gz file: ")
+	archives, _ := filepath.Glob(app.BackupDir + "/*.tar.gz")
+
+	var path string
+	if len(archives) > 0 {
+		opts := make([]tui.Option, 0, len(archives)+1)
+		for _, a := range archives {
+			opts = append(opts, tui.Option{Title: filepath.Base(a), Desc: "in " + app.BackupDir})
+		}
+		opts = append(opts, tui.Option{Title: "Enter a custom path", Desc: "an archive somewhere else"})
+		fmt.Println()
+		idx := tui.ChooseOpt("Restore which backup:", opts)
+		switch {
+		case idx < 0:
+			return
+		case idx < len(archives):
+			path = archives[idx]
+		default:
+			path = tui.Prompt("Path to the backup .tar.gz file: ")
+		}
+	} else {
+		tui.Warn("No backups found in " + app.BackupDir + " — enter a path manually.")
+		path = tui.Prompt("Path to the backup .tar.gz file: ")
+	}
 	if path == "" {
 		return
 	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		tui.Error("Cannot open file: " + err.Error())
@@ -263,6 +250,10 @@ func restoreBackup() {
 	// Bring the web panel back up (it may have a restored password now).
 	if _, err := webui.EnsureRunning(); err != nil {
 		tui.Warn("Web panel could not start: " + err.Error())
+	} else if res.WebUIConfig {
+		// The restored config may carry a different port/password — restart the
+		// already-running panel so it actually serves with them.
+		_ = manage.RestartService(app.WebUIService)
 	}
 
 	tui.Success(fmt.Sprintf("Restored %d file(s).", res.Files))
@@ -279,35 +270,104 @@ func restoreBackup() {
 	tui.PressEnter()
 }
 
-// afterSetupWeb ensures the web panel is running after a tunnel is created and
-// shows the user its URL and login code.
-func afterSetupWeb() {
-	cfg, err := webui.EnsureRunning()
-	if err != nil {
-		tui.Warn("Web panel could not start: " + err.Error())
+// panelHeader prints the web panel's live status, URL and login code — shown
+// at the top of the Web Panel section.
+func panelHeader(cfg webui.Config) {
+	tui.Rule()
+	if webui.Running() {
+		fmt.Printf("  %sStatus%s      %s● running%s\n", tui.Gray, tui.Reset, tui.Bold+tui.White, tui.Reset)
+		fmt.Printf("  %sWeb Panel%s   %shttp://%s:%d%s\n", tui.Gray, tui.Reset,
+			tui.Bold+tui.White, cachedServerIP(), cfg.Port, tui.Reset)
+		fmt.Printf("  %sLogin code%s  %s%s%s\n", tui.Gray, tui.Reset, tui.Bold+tui.Red, cfg.Password, tui.Reset)
+	} else {
+		fmt.Printf("  %sStatus%s      %s○ stopped%s %s(use Restart panel to start it)%s\n",
+			tui.Gray, tui.Reset, tui.Red, tui.Reset, tui.Gray, tui.Reset)
+	}
+	tui.Rule()
+}
+
+// webPanelMenu is main-menu item 5 — the monitoring web UI.
+func webPanelMenu() {
+	for {
+		tui.Clear()
+		tui.Title("Web Panel")
+		tui.Warn("Monitoring-only dashboard — recommended on the IRAN server.")
+		fmt.Println()
+		cfg := webui.Load()
+		panelHeader(cfg)
+		fmt.Println()
+
+		idx := tui.ChooseOpt("Choose:", []tui.Option{
+			{Title: "Change panel port", Desc: fmt.Sprintf("current: %d", cfg.Port)},
+			{Title: "Regenerate login code", Desc: "new random 8-digit code"},
+			{Title: "Set a custom password", Desc: "replace the login code with your own"},
+			{Title: "Restart panel", Desc: "also starts it when stopped"},
+			{Title: "Stop panel", Desc: "disable the web UI"},
+		})
+		switch idx {
+		case 0:
+			changePanelPort()
+		case 1:
+			c, err := webui.RegeneratePassword()
+			if err != nil {
+				tui.Error("Failed: " + err.Error())
+			} else {
+				tui.Success("New login code generated: " + c.Password)
+			}
+			tui.PressEnter()
+		case 2:
+			setCustomPassword()
+		case 3:
+			if _, err := webui.EnsureRunning(); err != nil {
+				tui.Error("Failed: " + err.Error())
+			} else if err := manage.RestartService(app.WebUIService); err != nil {
+				tui.Error("Failed: " + err.Error())
+			} else {
+				tui.Success("Web panel restarted.")
+			}
+			tui.PressEnter()
+		case 4:
+			if err := webui.Disable(); err != nil {
+				tui.Error("Failed: " + err.Error())
+			} else {
+				tui.Success("Web panel stopped.")
+			}
+			tui.PressEnter()
+		default:
+			return
+		}
+	}
+}
+
+// changePanelPort moves the web panel to a different port and restarts it.
+func changePanelPort() {
+	fmt.Println()
+	cur := webui.Load().Port
+	p := tui.PromptInt("New panel port", cur)
+	if p == cur {
+		return
+	}
+	if p < 1 || p > 65535 {
+		tui.Error("Invalid port — must be between 1 and 65535.")
 		tui.PressEnter()
 		return
 	}
-	showWebCreds(cfg)
-}
-
-// showWebCreds prints the web panel URL and 8-digit login code.
-func showWebCreds(cfg webui.Config) {
-	tui.Clear()
-	tui.Success("Web panel is live.")
-	fmt.Println()
-	ip := resolveServerIP()
-	tui.Info(fmt.Sprintf("  URL:    http://%s:%d", ip, cfg.Port))
-	tui.Info(fmt.Sprintf("  Code:   %s   (8-digit login)", cfg.Password))
-	fmt.Println()
-	tui.Warn("Keep this code private. Regenerate it any time from the Web Panel menu.")
+	if manage.PortInUse(strconv.Itoa(p)) {
+		tui.Error(fmt.Sprintf("Port %d is already in use on this machine.", p))
+		tui.PressEnter()
+		return
+	}
+	if _, err := webui.SetPort(p); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success(fmt.Sprintf("Panel moved to port %d — the panel was restarted.", p))
 	tui.PressEnter()
 }
 
 // setCustomPassword prompts for a custom web-panel password and applies it.
 func setCustomPassword() {
-	tui.Clear()
-	tui.Colorize(tui.Cyan, "Set a custom web panel password", true)
 	fmt.Println()
 	pw := tui.Prompt("New password (4–128 chars, letters/digits/symbols): ")
 	if len(pw) < 4 || len(pw) > 128 {
@@ -321,84 +381,19 @@ func setCustomPassword() {
 		tui.PressEnter()
 		return
 	}
-	c, err := webui.SetPassword(pw)
-	if err != nil {
+	if _, err := webui.SetPassword(pw); err != nil {
 		tui.Error("Failed: " + err.Error())
 		tui.PressEnter()
 		return
 	}
 	tui.Success("Password updated.")
-	showWebCreds(c)
+	tui.PressEnter()
 }
 
-// webPanelMenu manages the web panel (item under Manage).
-func webPanelMenu() {
-	for {
-		tui.Clear()
-		tui.Colorize(tui.Cyan, "Web Panel", true)
-		fmt.Println()
-		cfg := webui.Load()
-		if webui.Running() {
-			tui.Info(fmt.Sprintf("Status: running on port %d", cfg.Port))
-		} else {
-			tui.Warn("Status: stopped")
-		}
-		fmt.Println()
-
-		idx := tui.Choose("Choose:", []string{
-			"Show link & login code",
-			"Enable / Start panel",
-			"Regenerate login code (random 8-digit)",
-			"Set a custom password",
-			"Restart panel",
-			"Stop panel",
-		})
-		switch idx {
-		case 0:
-			showWebCreds(webui.Load())
-		case 1:
-			c, err := webui.EnsureRunning()
-			if err != nil {
-				tui.Error("Failed: " + err.Error())
-				tui.PressEnter()
-			} else {
-				showWebCreds(c)
-			}
-		case 2:
-			c, err := webui.RegeneratePassword()
-			if err != nil {
-				tui.Error("Failed: " + err.Error())
-				tui.PressEnter()
-			} else {
-				tui.Success("New login code generated.")
-				showWebCreds(c)
-			}
-		case 3:
-			setCustomPassword()
-		case 4:
-			if err := manage.RestartService(app.WebUIService); err != nil {
-				tui.Error("Failed: " + err.Error())
-			} else {
-				tui.Success("Web panel restarted.")
-			}
-			tui.PressEnter()
-		case 5:
-			if err := webui.Disable(); err != nil {
-				tui.Error("Failed: " + err.Error())
-			} else {
-				tui.Success("Web panel stopped.")
-			}
-			tui.PressEnter()
-		default:
-			return
-		}
-	}
-}
-
-// autoRefreshMenu is menu item 4.
+// autoRefreshMenu lives under Manage.
 func autoRefreshMenu() {
 	tui.Clear()
-	tui.Colorize(tui.Cyan, "Auto Refresh Schedule", true)
+	tui.Title("Auto Refresh Schedule")
 	fmt.Println()
 	tui.Info(fmt.Sprintf("Current interval: %s", refreshLabel()))
 	fmt.Println()
@@ -413,10 +408,10 @@ func autoRefreshMenu() {
 	tui.PressEnter()
 }
 
-// optimizeMenu is menu item 6.
+// optimizeMenu is main-menu item 6.
 func optimizeMenu() {
 	tui.Clear()
-	tui.Colorize(tui.Cyan, "Optimize — kernel & network tuning (BBR, buffers, limits)", true)
+	tui.Title("Optimize — kernel & network tuning (BBR, buffers, limits)")
 	fmt.Println()
 	if !tui.Confirm("Apply system-wide network optimizations now", true) {
 		return
@@ -428,24 +423,27 @@ func optimizeMenu() {
 	tui.PressEnter()
 }
 
-// telegramMenu is menu item 7.
+// telegramMenu is main-menu item 7.
 func telegramMenu() {
 	tui.Clear()
-	tui.Colorize(tui.Cyan, "Telegram Bot", true)
+	tui.Title("Telegram Bot")
 	fmt.Println()
 
 	cfg := telegram.Load()
 	if cfg.Token != "" {
 		tui.Info(fmt.Sprintf("Configured — reports every %d hour(s).", telegram.IntervalHours()))
+		if cfg.ViaTunnel != "" {
+			tui.Warn("Relayed through tunnel " + cfg.ViaTunnel + " (works from Iran).")
+		}
 	} else {
 		tui.Info("Not configured yet.")
 	}
 	fmt.Println()
 
-	idx := tui.Choose("Choose:", []string{
-		"Configure / Update bot",
-		"Send a test report now",
-		"Disable reports",
+	idx := tui.ChooseOpt("Choose:", []tui.Option{
+		{Title: "Configure / Update bot", Desc: "token, admin id, tunnel relay"},
+		{Title: "Send a test report now", Desc: "verify the bot works"},
+		{Title: "Disable reports", Desc: "stop the scheduled reports"},
 	})
 	switch idx {
 	case 0:
@@ -467,6 +465,10 @@ func telegramMenu() {
 	}
 }
 
+// configureTelegram sets up the bot. On an Iran server Telegram is blocked, so
+// the primary path relays traffic through a tunnel: backpack exposes a random
+// port on the chosen tunnel that maps to the peer's built-in SOCKS5 proxy and
+// sends every bot request through it — this works 100% from Iran.
 func configureTelegram(cfg telegram.Config) {
 	tui.Info("Get a bot token from @BotFather and your numeric user id from @userinfobot.")
 	fmt.Println()
@@ -479,37 +481,46 @@ func configureTelegram(cfg telegram.Config) {
 		return
 	}
 
-	// If this server can't reach Telegram (e.g. Iran), relay through a tunnel
-	// whose peer (e.g. kharej) can.
 	fmt.Println()
-	if tui.Confirm("Can THIS server reach Telegram directly", true) {
-		cfg.ViaTunnel = ""
-	} else {
-		tunnels := manage.List()
-		if len(tunnels) == 0 {
-			tui.Error("No tunnels to relay through — create a tunnel first.")
-			tui.PressEnter()
+	tunnels := manage.List()
+	if len(tunnels) == 0 {
+		tui.Warn("No tunnels yet. On an IRAN server the bot can only reach Telegram")
+		tui.Warn("through a tunnel relay — create a tunnel first for reliable delivery.")
+		if !tui.Confirm("Send DIRECTLY instead (only works where Telegram is reachable)", false) {
 			return
 		}
-		labels := make([]string, len(tunnels))
-		for i, t := range tunnels {
-			labels[i] = fmt.Sprintf("%s  [%s %s]", t.Name, t.Role, t.Transport)
+		cfg.ViaTunnel = ""
+	} else {
+		opts := make([]tui.Option, 0, len(tunnels)+1)
+		for _, t := range tunnels {
+			opts = append(opts, tui.Option{
+				Title: "Relay via " + t.Name,
+				Desc:  fmt.Sprintf("%s %s — recommended, works from Iran", t.Role, t.Transport),
+			})
 		}
-		idx := tui.Choose("Relay Telegram through which tunnel (its peer must reach Telegram):", labels)
+		opts = append(opts, tui.Option{
+			Title: "Direct",
+			Desc:  "only if THIS server can reach Telegram (e.g. kharej)",
+		})
+		idx := tui.ChooseOpt("Send Telegram traffic through:", opts)
 		if idx < 0 {
 			return
 		}
-		cfg.ViaTunnel = tunnels[idx].Name
-		tui.Info("Setting up a SOCKS relay through tunnel " + cfg.ViaTunnel + "...")
-		port, err := manage.EnsureSocksPort(cfg.ViaTunnel)
-		if err != nil {
-			tui.Error("Could not set up relay: " + err.Error())
-			tui.PressEnter()
-			return
+		if idx < len(tunnels) {
+			cfg.ViaTunnel = tunnels[idx].Name
+			tui.Info("Setting up a SOCKS5 relay through tunnel " + cfg.ViaTunnel + "...")
+			port, err := manage.EnsureSocksPort(cfg.ViaTunnel)
+			if err != nil {
+				tui.Error("Could not set up relay: " + err.Error())
+				tui.PressEnter()
+				return
+			}
+			cfg.SocksPort = port
+			tui.Success(fmt.Sprintf("Relay ready — port %d added to the tunnel.", port))
+			tui.Warn("Reconnect/restart the CLIENT tunnel once so it picks up the new port.")
+		} else {
+			cfg.ViaTunnel = ""
 		}
-		cfg.SocksPort = port
-		tui.Success(fmt.Sprintf("Relay ready — port %d added to the tunnel.", port))
-		tui.Warn("Reconnect/restart the CLIENT tunnel once so it picks up the new port.")
 	}
 
 	fmt.Println()
@@ -527,12 +538,12 @@ func configureTelegram(cfg telegram.Config) {
 	tui.PressEnter()
 }
 
-// updateMenu checks GitHub for a newer version and updates in place.
+// updateMenu checks GitHub releases for a newer version and updates in place.
 func updateMenu() {
 	tui.Clear()
-	tui.Colorize(tui.Cyan, "Update Backpack", true)
+	tui.Title("Update Backpack")
 	fmt.Println()
-	tui.Info("Checking GitHub for updates...")
+	tui.Info("Checking GitHub releases (direct, then tunnel relay, then mirrors)...")
 
 	available, summary, err := manage.CheckUpdate()
 	if err != nil {
@@ -559,19 +570,22 @@ func updateMenu() {
 	tui.PressEnter()
 }
 
-// uninstallMenu is menu item 9.
+// uninstallMenu is main-menu item 9.
 func uninstallMenu() {
 	tui.Clear()
-	tui.Colorize(tui.Red, "Uninstall Backpack", true)
+	tui.Title("Uninstall Backpack")
 	fmt.Println()
 	tui.Warn("This removes EVERYTHING: all tunnels, services, schedules, configs,")
-	tui.Warn("the backpack binary, AND the backpack source folder itself.")
+	tui.Warn("the backpack binary, AND the " + app.InstallDir + " folder (incl. backups).")
 	if !tui.Confirm("Are you absolutely sure", false) {
 		return
 	}
 
-	// Capture the repo path before we delete the config that records it.
+	// Capture the install path before we delete the config that records it.
 	repo := manage.InstallPath()
+	if repo == "" {
+		repo = app.InstallDir
+	}
 
 	for _, t := range manage.List() {
 		_ = manage.Delete(t.Name)
@@ -585,9 +599,9 @@ func uninstallMenu() {
 	}
 	if repo != "" && repo != "/" && repo != os.Getenv("HOME") {
 		if err := os.RemoveAll(repo); err != nil {
-			tui.Warn("Could not remove source folder " + repo + " — remove it manually.")
+			tui.Warn("Could not remove folder " + repo + " — remove it manually.")
 		} else {
-			tui.Info("Removed source folder: " + repo)
+			tui.Info("Removed folder: " + repo)
 		}
 	}
 	tui.Success("Backpack has been completely uninstalled. Goodbye!")

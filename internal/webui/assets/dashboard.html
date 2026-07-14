@@ -103,25 +103,9 @@
     background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.2s}
   .btn-sm:hover{background:rgba(var(--accent-rgb),.24)}
   .btn-sm:disabled{opacity:.5;cursor:default}
-  .modal select{width:100%;padding:12px 15px;font-size:15px;color:var(--txt);background:rgba(255,255,255,.05);
-    border:1px solid var(--stroke);border-radius:12px;outline:none;margin-bottom:14px}
-  .modal .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt);margin:-4px 0 14px;cursor:pointer}
-  .modal .chk input{width:auto;margin:0}
   .modal code{display:inline-block;margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.06);
     border:1px solid var(--stroke);font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--red-soft)}
-  .addbtn{margin-left:auto;display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 15px;border-radius:11px;
-    font-size:13px;font-weight:600;cursor:pointer;background:rgba(var(--accent-rgb),.14);
-    border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.2s}
-  .addbtn:hover{background:rgba(var(--accent-rgb),.24);transform:translateY(-1px)}
-  .tun .acts{display:flex;gap:6px;margin-bottom:10px}
-  .tun .act{flex:1;min-height:40px;border-radius:10px;display:grid;place-items:center;cursor:pointer;
-    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--muted);transition:.2s}
-  .tun .act:hover{color:var(--txt);background:rgba(255,255,255,.1)}
-  .tun .act.danger:hover{color:var(--red-soft);background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35)}
   .flag{font-size:17px;line-height:1}
-  code.copy{cursor:pointer;transition:.2s}
-  code.copy:hover{background:rgba(var(--accent-rgb),.18);border-color:rgba(var(--accent-rgb),.4)}
-  code.copy.copied{background:rgba(48,209,88,.18);border-color:rgba(48,209,88,.4)}
   .wallets{display:flex;flex-direction:column;gap:10px}
   .wal{position:relative;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.05);
     border:1px solid var(--stroke);cursor:pointer;transition:.2s}
@@ -256,9 +240,6 @@
     <button class="iconbtn" onclick="openSupport()" aria-label="Support" title="Support">
       <svg class="ic" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.6l-1-1a5.5 5.5 0 10-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 000-7.8z"/></svg>
     </button>
-    <button class="iconbtn" onclick="openTelegram()" aria-label="Telegram bot" title="Telegram bot">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M22 3L2 11l6 2 2 6 3-4 5 4z"/><path d="M8 13l8-6"/></svg>
-    </button>
     <button class="iconbtn" onclick="openSettings()" aria-label="Settings">
       <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     </button>
@@ -293,12 +274,10 @@
   </div>
 
   <div class="sec"><h2>Tunnels</h2><span class="count" id="tsum">0</span>
-    <button class="addbtn" onclick="openAdd()" aria-label="Add tunnel">
-      <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M12 5v14M5 12h14"/></svg>Add Tunnel
-    </button>
+    <span class="count" style="margin-left:auto" title="Tunnels are created and managed from the CLI">monitoring only</span>
   </div>
   <div class="grid-tun" id="tunnels"></div>
-  <div class="empty" id="empty" style="display:none">No tunnels configured yet. Create one from the CLI menu.</div>
+  <div class="empty" id="empty" style="display:none">No tunnels configured yet. Create one from the CLI menu (sudo backpack).</div>
 </div>
 
 <div class="modal" id="settings" onclick="if(event.target===this)closeSettings()">
@@ -322,24 +301,13 @@
     <div class="divider"></div>
 
     <div class="setrow">
-      <h4>Auto refresh (restart all tunnels)</h4>
+      <h4>Panel port</h4>
       <div class="upd">
-        <input id="sched" type="number" min="0" max="168" step="1" style="width:90px;margin:0"
-               placeholder="hours" aria-label="Auto refresh interval in hours">
-        <span class="umsg" id="schmsg">0 = disabled</span>
-        <button class="btn-sm" id="schbtn" onclick="saveSchedule()">Save</button>
+        <input id="pport" type="number" min="1" max="65535" step="1" style="width:90px;margin:0"
+               placeholder="7777" aria-label="Web panel port">
+        <span class="umsg" id="ppmsg">The panel restarts on the new port.</span>
+        <button class="btn-sm" id="ppbtn" onclick="savePanelPort()">Save</button>
       </div>
-    </div>
-    <div class="divider"></div>
-
-    <div class="setrow">
-      <h4>Backup &amp; restore</h4>
-      <div class="upd">
-        <span class="umsg" id="bkmsg">Download or restore all tunnels &amp; settings.</span>
-        <button class="btn-sm" onclick="downloadBackup()">Backup</button>
-        <button class="btn-sm" onclick="document.getElementById('restorefile').click()">Restore</button>
-      </div>
-      <input id="restorefile" type="file" accept=".gz,.tar.gz,application/gzip" style="display:none" onchange="restoreBackup(this)">
     </div>
     <div class="divider"></div>
 
@@ -392,92 +360,6 @@
   </div>
 </div>
 
-<div class="modal" id="telegram" onclick="if(event.target===this)closeTelegram()">
-  <div class="box" role="dialog" aria-modal="true" aria-labelledby="tgtitle">
-    <h3 id="tgtitle">Telegram bot</h3>
-    <p>Receive periodic status reports. If this server can’t reach Telegram (e.g. Iran), send via a tunnel.</p>
-    <label for="tg-token">Bot token (from @BotFather)</label>
-    <input id="tg-token" placeholder="123456:ABC..." autocomplete="off">
-    <label for="tg-admin">Admin user id (from @userinfobot)</label>
-    <input id="tg-admin" placeholder="173656773" inputmode="numeric" autocomplete="off">
-    <label for="tg-via">Send via</label>
-    <select id="tg-via"><option value="">Direct (this server reaches Telegram)</option></select>
-    <label for="tg-interval">Report every N hours</label>
-    <input id="tg-interval" type="number" min="0" max="168" value="6">
-    <div class="msg" id="tgmsg"></div>
-    <div class="actions">
-      <button class="btn-ghost" onclick="closeTelegram()">Close</button>
-      <button class="btn-ghost" onclick="testTelegram()">Send test</button>
-      <button class="btn-primary" onclick="saveTelegram()">Save</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="addtunnel" onclick="if(event.target===this)closeAdd()">
-  <div class="box" role="dialog" aria-modal="true" aria-labelledby="addtitle">
-    <h3 id="addtitle">Add tunnel</h3>
-    <p id="addhint">Creates a Best-Performance tunnel. Server = Iran/edge (exposes ports, generates the token). Client = kharej/origin (connects out using that token).</p>
-    <label for="t-role">Role</label>
-    <select id="t-role" onchange="updateAddForm()">
-      <option value="server">Server — Iran/edge (exposes ports)</option>
-      <option value="client">Client — kharej/origin (connects to server)</option>
-    </select>
-    <label for="t-name">Name (optional)</label>
-    <input id="t-name" placeholder="server-5656" maxlength="40">
-    <label for="t-transport">Transport</label>
-    <select id="t-transport" onchange="updateAddForm()">
-      <option value="tcp">TCP</option>
-      <option value="tcpmux">TCP Mux (multiplexed)</option>
-      <option value="udp">UDP</option>
-      <option value="ws">WS — WebSocket</option>
-      <option value="wsmux">WS Mux (WebSocket + multiplexed)</option>
-      <option value="wss">WSS — Secure WebSocket (TLS)</option>
-      <option value="wssmux">WSS Mux (TLS WebSocket + multiplexed)</option>
-    </select>
-    <div id="f-host" style="display:none">
-      <label for="t-host">Server address (IP or domain of the server)</label>
-      <input id="t-host" placeholder="1.2.3.4 or tunnel.example.com">
-    </div>
-    <label for="t-port" id="t-port-label">Tunnel port</label>
-    <input id="t-port" type="number" min="1" max="65535" placeholder="5656">
-    <div id="f-token" style="display:none">
-      <label for="t-token">Token (the one generated on the server)</label>
-      <input id="t-token" placeholder="paste the server token" autocomplete="off">
-    </div>
-    <div id="f-edge" style="display:none">
-      <label for="t-edge">Edge IP (optional — connect via a CDN edge, e.g. Cloudflare)</label>
-      <input id="t-edge" placeholder="leave empty to connect directly">
-    </div>
-    <div id="f-tls" style="display:none">
-      <label for="t-tlsmode">TLS certificate</label>
-      <select id="t-tlsmode" onchange="updateAddForm()">
-        <option value="auto">Generate self-signed automatically (recommended)</option>
-        <option value="custom">Use existing certificate/key files</option>
-      </select>
-      <div id="f-tlspaths" style="display:none">
-        <label for="t-tlscert">Certificate path</label>
-        <input id="t-tlscert" placeholder="/etc/letsencrypt/live/example/fullchain.pem">
-        <label for="t-tlskey">Key path</label>
-        <input id="t-tlskey" placeholder="/etc/letsencrypt/live/example/privkey.pem">
-      </div>
-    </div>
-    <div id="f-server">
-      <label for="t-ports">Exposed ports (comma separated)</label>
-      <input id="t-ports" placeholder="8080, 2083, 443=1.1.1.1:443">
-      <label for="t-socks">SOCKS5 relay port (optional — used by the Telegram bot)</label>
-      <input id="t-socks" type="number" min="1" max="65535" placeholder="leave empty for none">
-      <label class="chk"><input type="checkbox" id="t-ipv6"> Listen on IPv6 too</label>
-    </div>
-    <label for="t-country">Country (peer location — shown on the card)</label>
-    <select id="t-country"></select>
-    <div class="msg" id="addmsg"></div>
-    <div class="actions">
-      <button class="btn-ghost" onclick="closeAdd()">Cancel</button>
-      <button class="btn-primary" onclick="createTunnel()">Create</button>
-    </div>
-  </div>
-</div>
-
 <div class="scrim" id="scrim" onclick="closeLogs()"></div>
 <div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="logtitle">
   <div class="dh"><span class="grip"></span>
@@ -494,10 +376,6 @@
 const C = 2*Math.PI*50;
 const $=id=>document.getElementById(id);
 const ICON={
-  play:'<svg class="ic" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>',
-  stop:'<svg class="ic" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>',
-  restart:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9 9 0 00-7 3.3"/><path d="M3 3v4h4"/></svg>',
-  trash:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
   logs:'<svg class="ic" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>',
   bot:'<svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V5M9 3h6M9 13h.01M15 13h.01M8 19v2M16 19v2"/></svg>',
 };
@@ -590,12 +468,6 @@ function buildCard(t){
       <div class="r"><div class="k">Address</div><div class="v addr"></div></div>
       <div class="r full"><div class="k">${t.role==='server'?'Ports':'Remote'}</div><div class="v ports"></div></div>
       <div class="r full peerrow" style="display:none"><div class="k">Peer</div><div class="v peer"></div></div>
-    </div>
-    <div class="acts">
-      <button class="act" title="Start" aria-label="Start ${n}" onclick="tunnelAction('${n}','start')">${ICON.play}</button>
-      <button class="act" title="Stop" aria-label="Stop ${n}" onclick="tunnelAction('${n}','stop')">${ICON.stop}</button>
-      <button class="act" title="Restart" aria-label="Restart ${n}" onclick="tunnelAction('${n}','restart')">${ICON.restart}</button>
-      <button class="act danger" title="Delete" aria-label="Delete ${n}" onclick="tunnelAction('${n}','delete')">${ICON.trash}</button>
     </div>
     <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} View Logs</button>`;
   return el;
@@ -697,146 +569,23 @@ async function doUpdate(){
   setTimeout(()=>location.reload(),30000);
 }
 
-// ---- auto refresh ----
-async function loadSchedule(){
-  try{ const r=await (await fetch('/api/schedule')).json();
-    $('sched').value=r.hours; $('schmsg').textContent=r.hours>0?('every '+r.hours+'h'):'0 = disabled';
-  }catch(e){}
-}
-async function saveSchedule(){
-  const h=parseInt($('sched').value||'0',10), m=$('schmsg');
-  m.textContent='Saving…';
+// ---- panel port ----
+async function savePanelPort(){
+  const m=$('ppmsg'), b=$('ppbtn');
+  const p=parseInt($('pport').value,10);
+  if(isNaN(p)||p<1||p>65535){ m.textContent='Invalid port (1–65535).'; return; }
+  const cur=parseInt(location.port||'80',10);
+  if(p===cur){ m.textContent='Already on port '+p+'.'; return; }
+  if(!confirm('Move the panel to port '+p+'? You will be redirected to the new address.')) return;
+  m.textContent='Saving…'; b.disabled=true;
   try{
-    const body=new URLSearchParams({hours:String(isNaN(h)?0:h)});
-    const r=await (await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})).json();
-    $('sched').value=r.hours; m.textContent=r.hours>0?('Saved · every '+r.hours+'h'):'Disabled';
-  }catch(e){ m.textContent='Failed.'; }
+    const body=new URLSearchParams({port:String(p)});
+    const res=await fetch('/api/panelport',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    if(!res.ok){ m.textContent=await res.text(); b.disabled=false; return; }
+    m.textContent='Panel restarting on port '+p+' — redirecting…';
+    setTimeout(()=>{ location.href='http://'+location.hostname+':'+p+'/'; },2500);
+  }catch(e){ m.textContent='Failed.'; b.disabled=false; }
 }
-
-// ---- backup / restore ----
-function downloadBackup(){
-  const m=$('bkmsg'); m.textContent='Preparing download…';
-  // A direct navigation lets the browser handle the file download with the
-  // session cookie attached.
-  window.location='/api/backup';
-  setTimeout(()=>{ m.textContent='Download started.'; }, 800);
-}
-async function restoreBackup(input){
-  const f=input.files&&input.files[0]; const m=$('bkmsg');
-  input.value=''; // allow re-selecting the same file later
-  if(!f) return;
-  if(!confirm('Restore from "'+f.name+'"? This overwrites existing tunnels and settings.')) return;
-  m.textContent='Restoring…';
-  try{
-    const body=new FormData(); body.append('backup', f);
-    const resp=await fetch('/api/restore',{method:'POST',body});
-    if(!resp.ok){ m.textContent='Failed: '+(await resp.text()); return; }
-    const r=await resp.json();
-    let s='Restored '+r.files+' file(s)';
-    if(r.tunnels&&r.tunnels.length) s+=' · '+r.tunnels.length+' tunnel(s), '+r.started+' started';
-    m.textContent=s+'.';
-    // Reload data so the new tunnels/settings appear.
-    setTimeout(()=>location.reload(), 1500);
-  }catch(e){ m.textContent='Failed to restore.'; }
-}
-
-// ---- add / manage tunnels ----
-const WS_TRANSPORTS=['ws','wss','wsmux','wssmux'], TLS_TRANSPORTS=['wss','wssmux'];
-// Show/hide the conditional fields so the form always matches the engine's
-// engine semantics: TLS certs only for wss/wssmux servers, edge IP only
-// for websocket clients, exposed ports / token only where they apply.
-function updateAddForm(){
-  const role=$('t-role').value, tr=$('t-transport').value;
-  const client=role==='client';
-  $('f-host').style.display=client?'':'none';
-  $('f-token').style.display=client?'':'none';
-  $('f-server').style.display=client?'none':'';
-  $('f-edge').style.display=(client&&WS_TRANSPORTS.includes(tr))?'':'none';
-  $('f-tls').style.display=(!client&&TLS_TRANSPORTS.includes(tr))?'':'none';
-  $('f-tlspaths').style.display=$('t-tlsmode').value==='custom'?'':'none';
-  $('t-port-label').textContent=client?'Server tunnel port':'Tunnel port';
-  $('t-name').placeholder=(client?'client':'server')+'-5656';
-}
-function openAdd(){
-  ['t-name','t-port','t-ports','t-socks','t-host','t-token','t-edge','t-tlscert','t-tlskey'].forEach(i=>$(i).value='');
-  $('t-role').value='server'; $('t-transport').value='tcp'; $('t-tlsmode').value='auto'; $('t-ipv6').checked=false;
-  const cs=$('t-country'); if(!cs.options.length){ cs.innerHTML=COUNTRIES.map(c=>`<option value="${c[0]}">${c[0]?flagEmoji(c[0])+'  ':''}${c[1]}</option>`).join(''); }
-  cs.value='';
-  updateAddForm();
-  $('addmsg').textContent=''; $('addmsg').className='msg';
-  $('addtunnel').classList.add('on'); setTimeout(()=>$('t-port').focus(),200);
-}
-function closeAdd(){ $('addtunnel').classList.remove('on'); }
-async function createTunnel(){
-  const m=$('addmsg'); m.className='msg'; m.textContent='Creating…';
-  const role=$('t-role').value;
-  const params={
-    role, name:$('t-name').value, port:$('t-port').value,
-    transport:$('t-transport').value, country:$('t-country').value
-  };
-  if(role==='client'){
-    params.host=$('t-host').value; params.token=$('t-token').value; params.edge_ip=$('t-edge').value;
-  }else{
-    params.ports=$('t-ports').value; params.ipv6=$('t-ipv6').checked?'true':'false';
-    params.socks_port=$('t-socks').value;
-    if($('t-tlsmode').value==='custom'){ params.tls_cert=$('t-tlscert').value; params.tls_key=$('t-tlskey').value; }
-  }
-  try{
-    const res=await fetch('/api/tunnels/create',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(params)});
-    if(!res.ok){ m.className='msg err'; m.textContent=await res.text(); return; }
-    const r=await res.json();
-    m.className='msg ok';
-    if(r.token){
-      m.innerHTML='Created! Token (click to copy — paste it on the client):<br>'+
-        `<code class="copy" title="Click to copy" onclick="copyText('${esc(r.token)}',this)">${esc(r.token)}</code>`;
-    }else{
-      m.textContent='Client tunnel created — it will connect to the server shortly.';
-    }
-    loadTunnels();
-  }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
-}
-async function tunnelAction(name,action){
-  if(action==='delete' && !confirm('Delete tunnel "'+name+'" permanently?'))return;
-  try{
-    await fetch('/api/tunnels/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body:new URLSearchParams({name,action})});
-    loadTunnels();
-  }catch(e){}
-}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAdd();});
-
-// ---- telegram ----
-async function loadTelegram(){
-  // Populate the "send via" dropdown from the current tunnels.
-  const sel=$('tg-via'), cur=sel.value;
-  sel.innerHTML='<option value="">Direct (this server reaches Telegram)</option>'+
-    lastTunnels.map(t=>`<option value="${esc(t.name)}">Via ${esc(t.name)} (relay through peer)</option>`).join('');
-  try{
-    const c=await (await fetch('/api/telegram')).json();
-    $('tg-token').value=c.token||''; $('tg-admin').value=c.admin_id||'';
-    $('tg-interval').value=c.interval||6; sel.value=c.via_tunnel||cur||'';
-  }catch(e){}
-}
-async function saveTelegram(){
-  const m=$('tgmsg'); m.className='msg'; m.textContent='Saving…';
-  const body=new URLSearchParams({token:$('tg-token').value,admin_id:$('tg-admin').value,
-    via_tunnel:$('tg-via').value,interval:$('tg-interval').value});
-  try{
-    const res=await fetch('/api/telegram',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-    if(!res.ok){ m.className='msg err'; m.textContent=await res.text(); return; }
-    m.className='msg ok'; m.textContent='Saved.'+($('tg-via').value?' Restart the client tunnel once to expose the relay port.':'');
-  }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
-}
-async function testTelegram(){
-  const m=$('tgmsg'); m.className='msg'; m.textContent='Sending test…';
-  try{
-    const res=await fetch('/api/telegram/test',{method:'POST'});
-    if(!res.ok){ m.className='msg err'; m.textContent='Failed: '+await res.text(); return; }
-    m.className='msg ok'; m.textContent='Test message sent.';
-  }catch(e){ m.className='msg err'; m.textContent='Failed.'; }
-}
-function openTelegram(){ $('tgmsg').textContent=''; $('tgmsg').className='msg'; loadTelegram(); $('telegram').classList.add('on'); setTimeout(()=>$('tg-token').focus(),200); }
-function closeTelegram(){ $('telegram').classList.remove('on'); }
 
 // ---- settings / change password ----
 function openSettings(){
@@ -844,7 +593,7 @@ function openSettings(){
   renderSwatches();
   const b=$('ubtn'); b.textContent='Check'; b.onclick=checkUpdate; b.disabled=false;
   $('umsg').textContent='Check GitHub for the latest version.';
-  loadSchedule();
+  $('pport').value=location.port||'80'; $('ppmsg').textContent='The panel restarts on the new port.'; $('ppbtn').disabled=false;
   $('settings').classList.add('on'); setTimeout(()=>$('np').focus(),200);
 }
 function closeSettings(){ $('settings').classList.remove('on'); }
@@ -861,7 +610,7 @@ async function savePassword(){
   }catch(e){ msg.className='msg err'; msg.textContent='Network error.'; }
 }
 
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeTelegram();closeSupport();closeAdd();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeSupport();}});
 
 ['ring-cpu','ring-mem','ring-disk','ring-swap'].forEach(id=>makeRing($(id),0));
 loadStats(); loadTunnels();
