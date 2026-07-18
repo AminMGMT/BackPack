@@ -28,7 +28,10 @@ type UdpTransport struct {
 	controlFlow     chan struct{}
 }
 type UdpConfig struct {
-	RemoteAddr     string
+	RemoteAddr string
+	// Endpoints rotates through the server addresses (primary + fallbacks)
+	// so a filtered IP or blocked port does not stop the tunnel.
+	Endpoints      *network.Endpoints
 	Token          string
 	SnifferLog     string
 	TunnelStatus   string
@@ -122,9 +125,14 @@ func (c *UdpTransport) channelDialer() {
 		case <-c.ctx.Done():
 			return
 		default:
-			tunnelTCPConn, err := network.TcpDialer(c.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
+			tunnelTCPConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
+				// The current endpoint did not answer — move to the next one so a
+				// filtered IP or blocked port cannot stall the tunnel forever.
+				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
+					c.logger.Infof("trying next server endpoint: %s", next)
+				}
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
@@ -316,7 +324,7 @@ func (c *UdpTransport) channelHandler() {
 func (c *UdpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
-	remoteAddr, err := net.ResolveUDPAddr("udp", c.config.RemoteAddr)
+	remoteAddr, err := net.ResolveUDPAddr("udp", c.config.Endpoints.Current())
 	if err != nil {
 		c.logger.Error("failed to resolve tunnel address:", err)
 		return

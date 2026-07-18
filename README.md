@@ -18,8 +18,15 @@ dashboard — so you can run and manage everything with or without a terminal.
 - **Transports:** TCP, TCP Mux, UDP, WS, WS Mux, WSS & WSS Mux — reverse tunneling with connection pooling (self-signed TLS auto-generated for WSS).
 - **Best-Performance preset:** one choice tunes everything (nodelay, large pools,
   8 MB socket buffers, BBR + kernel tuning) for low latency & high throughput.
-- **Interactive CLI:** setup, **edit ports**, live status, per-tunnel control,
-  optimize, backup/restore, Telegram, updates — everything is managed here.
+- **Interactive CLI:** setup, **edit ports & transport**, live status, per-tunnel
+  control, **health check**, optimize, backup/restore, Telegram, updates.
+- **Automatic failover:** a client can keep backup server addresses (second IP,
+  another port, a CDN edge) and switches to them on its own when the main
+  address gets filtered — the tunnel stays up without you touching anything.
+- **Never breaks itself:** updates and edits save a restore point, verify the
+  result, and **roll back automatically** if the tunnel doesn't come back up.
+- **Health check:** one screen that tests the server, the panel and every tunnel
+  and tells you exactly how to fix whatever is wrong.
 - **Monitoring web dashboard (port 7777):** login-protected dark UI with live
   CPU/RAM/disk/traffic, per-tunnel status + ping + logs. Monitoring-only — best
   run on the **Iran** server. (Settings: theme, update, panel port, password.)
@@ -132,10 +139,18 @@ Enter the **Iran server IP**, the tunnel port, and the **same token**. Done.
 ## Quick overview
 
 - **CLI menu (`sudo backpack`):** Setup Server / Setup Client · **Manage**
-  (per-tunnel **Edit** for the tunnel port & forwarded ports, start/stop/restart,
-  live log, delete · live status table · restart all · auto refresh) ·
-  **Backup & Restore** · **Web Panel** · Optimize · Telegram Bot · Update ·
+  (per-tunnel **Edit** for ports, transport and backup server addresses,
+  start/stop/restart, live log, delete · live status · **Health Check** ·
+  restart all · auto refresh · **File Locations**) · **Backup & Restore** ·
+  **Web Panel** · Optimize · Telegram Bot · **Update** (with restore points) ·
   Uninstall. Every option shows a short gray description beside it.
+- **Backup server addresses:** on a client, add extra addresses in
+  **Edit → Backup server addresses** (`1.2.3.4, 5.6.7.8:8443, edge.example.com:443`).
+  If the main one stops answering the client fails over automatically — this is
+  what keeps a tunnel alive after a server IP gets filtered.
+- **Health Check & File Locations:** under **Manage**. The health check verifies
+  kernel tuning, the panel, every tunnel's state, real TCP reachability, TLS
+  expiry and token strength, and prints a fix under each problem.
 - **Web panel (port 7777):** a **monitoring-only** dashboard — live
   CPU/RAM/disk/traffic, tunnel state + real ping + logs. Best run on the
   **Iran** server; the link & login code are shown in the CLI under
@@ -153,8 +168,10 @@ Enter the **Iran server IP**, the tunnel port, and the **same token**. Done.
   restore re-registers and starts every tunnel.
 - **Updates:** the **Update** menu detects a newer GitHub release and installs
   the prebuilt `backpack_linux_<arch>.tar.gz` (direct → tunnel relay → public
-  mirrors — works from Iran). Upgrading from an old clone-based install
-  (≤ v1.2.0): run Update once; after that it is release-based automatically.
+  mirrors — works from Iran). It saves a **restore point** first, health-checks
+  afterwards, and rolls back by itself if anything fails to come up; you can also
+  roll back on demand from **Update → Restore points**. Upgrading from an old
+  clone-based install (≤ v1.2.0): run Update once; after that it is release-based.
 - **Layout on the server:** release bundle + backups in `/root/BackPack`,
   tunnel configs in `/etc/backpack`, binary at `/usr/local/bin/backpack`.
 

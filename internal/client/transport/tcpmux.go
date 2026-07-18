@@ -34,7 +34,10 @@ type TcpMuxTransport struct {
 }
 
 type TcpMuxConfig struct {
-	RemoteAddr       string
+	RemoteAddr string
+	// Endpoints rotates through the server addresses (primary + fallbacks)
+	// so a filtered IP or blocked port does not stop the tunnel.
+	Endpoints        *network.Endpoints
 	Token            string
 	SnifferLog       string
 	TunnelStatus     string
@@ -145,9 +148,14 @@ func (c *TcpMuxTransport) channelDialer() {
 		case <-c.ctx.Done():
 			return
 		default:
-			tunnelConn, err := network.TcpDialer(c.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			tunnelConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
+				// The current endpoint did not answer — move to the next one so a
+				// filtered IP or blocked port cannot stall the tunnel forever.
+				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
+					c.logger.Infof("trying next server endpoint: %s", next)
+				}
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
@@ -332,7 +340,7 @@ func (c *TcpMuxTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new tunnel connection to address %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
-	tunnelConn, err := network.TcpDialer(c.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	tunnelConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 

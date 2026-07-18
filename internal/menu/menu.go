@@ -73,12 +73,12 @@ func printMenu() {
 	fmt.Println()
 	menuItem(1, "Setup Server", "Iran side — exposes ports to users")
 	menuItem(2, "Setup Client", "Kharej side — dials out to the Iran server")
-	menuItem(3, "Manage", "tunnels, edit ports, status, restart all, auto refresh")
+	menuItem(3, "Manage", "tunnels, ports, transport, status, health check")
 	menuItem(4, "Backup & Restore", "save or restore the full configuration")
 	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")
 	menuItem(6, "Optimize", "kernel & network tuning — BBR, buffers, limits")
 	menuItem(7, "Telegram Bot", "status reports, relayed through a tunnel")
-	menuItem(8, "Update", "download & install the latest release")
+	menuItem(8, "Update", "safe update with automatic rollback")
 	menuItem(9, "Uninstall", "remove everything")
 	menuItem(10, "Exit", "")
 	fmt.Println()
@@ -131,10 +131,12 @@ func manageMenu() {
 	for {
 		tui.Clear()
 		idx := tui.ChooseOpt("Manage", []tui.Option{
-			{Title: "Manage Tunnels", Desc: "edit ports, start/stop, live log, delete"},
+			{Title: "Manage Tunnels", Desc: "edit ports & transport, start/stop, live log, delete"},
 			{Title: "Status", Desc: "live tunnel table"},
+			{Title: "Health Check", Desc: "find problems and get a fix for each one"},
 			{Title: "Restart ALL", Desc: "restart every tunnel at once"},
 			{Title: "Auto Refresh", Desc: "restart all tunnels every N hours — " + refreshLabel()},
+			{Title: "File Locations", Desc: "where every config, service and backup lives"},
 		})
 		switch idx {
 		case 0:
@@ -142,11 +144,15 @@ func manageMenu() {
 		case 1:
 			manage.StatusLive()
 		case 2:
+			manage.HealthCheck()
+		case 3:
 			ok, failed := manage.RestartAll()
 			tui.Success(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 			tui.PressEnter()
-		case 3:
+		case 4:
 			autoRefreshMenu()
+		case 5:
+			manage.FileLocations()
 		default:
 			return
 		}
@@ -538,10 +544,34 @@ func configureTelegram(cfg telegram.Config) {
 	tui.PressEnter()
 }
 
-// updateMenu checks GitHub releases for a newer version and updates in place.
+// updateMenu offers a safe update and the restore points it creates.
 func updateMenu() {
+	for {
+		tui.Clear()
+		tui.Title("Update Backpack")
+		tui.Warn("Current version: " + app.Version)
+		fmt.Println()
+
+		idx := tui.ChooseOpt("Choose:", []tui.Option{
+			{Title: "Check for updates", Desc: "install the latest release — safely, with automatic rollback"},
+			{Title: "Restore points", Desc: "go back to a previous version if something went wrong"},
+		})
+		switch idx {
+		case 0:
+			runUpdate()
+		case 1:
+			restorePointMenu()
+		default:
+			return
+		}
+	}
+}
+
+// runUpdate checks for and installs a newer release. A restore point is taken
+// first and the update rolls itself back if the services do not come back up.
+func runUpdate() {
 	tui.Clear()
-	tui.Title("Update Backpack")
+	tui.Title("Check for updates")
 	fmt.Println()
 	tui.Info("Checking GitHub releases (direct, then tunnel relay, then mirrors)...")
 
@@ -558,6 +588,10 @@ func updateMenu() {
 	}
 
 	tui.Warn(summary)
+	fmt.Println()
+	tui.Info("A restore point is saved first. If anything fails to come back up,")
+	tui.Info("Backpack puts the previous version back automatically.")
+	fmt.Println()
 	if !tui.Confirm("Download and install the update now", true) {
 		return
 	}
@@ -566,6 +600,49 @@ func updateMenu() {
 		tui.Error("Update failed: " + err.Error())
 	} else {
 		tui.Success("Backpack updated successfully.")
+	}
+	tui.PressEnter()
+}
+
+// restorePointMenu lists saved restore points and can roll back to one.
+func restorePointMenu() {
+	tui.Clear()
+	tui.Title("Restore points")
+	tui.Warn("Saved automatically before every update — binary plus all configs.")
+	fmt.Println()
+
+	points := manage.ListSnapshots()
+	if len(points) == 0 {
+		tui.Info("No restore points yet — one is created the first time you update.")
+		tui.PressEnter()
+		return
+	}
+
+	opts := make([]tui.Option, len(points))
+	for i, p := range points {
+		desc := fmt.Sprintf("version %s", p.Meta.Version)
+		if n := len(p.Meta.Tunnels); n > 0 {
+			desc += fmt.Sprintf(" · %d tunnel(s)", n)
+		}
+		opts[i] = tui.Option{Title: p.Meta.Stamp, Desc: desc}
+	}
+	idx := tui.ChooseOpt("Roll back to which restore point:", opts)
+	if idx < 0 {
+		return
+	}
+
+	chosen := points[idx]
+	fmt.Println()
+	tui.Warn("This puts back the binary and ALL configs from " + chosen.Meta.Stamp + ",")
+	tui.Warn("then restarts the panel and every tunnel.")
+	if !tui.Confirm("Roll back now", false) {
+		return
+	}
+	fmt.Println()
+	if err := manage.RollbackUpdate(chosen, func(l string) { tui.Info("• " + l) }); err != nil {
+		tui.Error("Rollback failed: " + err.Error())
+	} else {
+		tui.Success("Rolled back to " + chosen.Meta.Version + " successfully.")
 	}
 	tui.PressEnter()
 }

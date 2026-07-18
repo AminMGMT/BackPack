@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -104,8 +105,26 @@ func WriteBackup(w io.Writer) error {
 	})
 }
 
+// backupRetention is how many backup archives are kept in the backup folder;
+// older ones are pruned automatically so backups never fill the disk.
+const backupRetention = 10
+
+// pruneBackups deletes all but the newest backupRetention archives in dir.
+func pruneBackups(dir string) {
+	matches, _ := filepath.Glob(filepath.Join(dir, "backpack-backup-*.tar.gz"))
+	if len(matches) <= backupRetention {
+		return
+	}
+	// Names are timestamped, so lexical order is chronological.
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	for _, old := range matches[backupRetention:] {
+		os.Remove(old)
+	}
+}
+
 // BackupToFile writes a timestamped backup archive into dir and returns its
-// path. dir is created if missing.
+// path. dir is created if missing, and old archives beyond the retention limit
+// are pruned.
 func BackupToFile(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
@@ -124,6 +143,7 @@ func BackupToFile(dir string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", err
 	}
+	pruneBackups(dir)
 	return path, nil
 }
 

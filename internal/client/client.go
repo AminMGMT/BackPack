@@ -9,6 +9,7 @@ import (
 	"github.com/backpack/backpack/config"
 
 	"github.com/backpack/backpack/internal/client/transport"
+	"github.com/backpack/backpack/internal/utils/network"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -46,10 +47,19 @@ func (c *Client) Start() {
 
 	c.logger.Infof("client with remote address %s started successfully", c.config.RemoteAddr)
 
+	// One rotating endpoint list shared by every transport: the primary
+	// address plus any fallbacks, so a filtered IP or blocked port is
+	// retried against the next option instead of stalling the tunnel.
+	endpoints := network.NewEndpoints(c.config.RemoteAddr, c.config.FallbackAddrs...)
+	if endpoints.Len() > 1 {
+		c.logger.Infof("%d server endpoints configured (failover enabled)", endpoints.Len())
+	}
+
 	switch c.config.Transport {
 	case config.TCP:
 		tcpConfig := &transport.TcpConfig{
 			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
 			Nodelay:        c.config.Nodelay,
 			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
 			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
@@ -70,6 +80,7 @@ func (c *Client) Start() {
 	case config.TCPMUX:
 		tcpMuxConfig := &transport.TcpMuxConfig{
 			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
 			Nodelay:          c.config.Nodelay,
 			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
 			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
@@ -94,6 +105,7 @@ func (c *Client) Start() {
 	case config.WS, config.WSS:
 		WsConfig := &transport.WsConfig{
 			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
 			Nodelay:        c.config.Nodelay,
 			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
 			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
@@ -113,6 +125,7 @@ func (c *Client) Start() {
 	case config.WSMUX, config.WSSMUX:
 		wsMuxConfig := &transport.WsMuxConfig{
 			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
 			Nodelay:          c.config.Nodelay,
 			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
 			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
@@ -136,6 +149,7 @@ func (c *Client) Start() {
 	case config.UDP:
 		udpConfig := &transport.UdpConfig{
 			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
 			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
 			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
 			ConnPoolSize:   c.config.ConnectionPool,

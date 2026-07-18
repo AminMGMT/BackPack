@@ -33,7 +33,10 @@ type WsTransport struct {
 	controlFlow     chan struct{}
 }
 type WsConfig struct {
-	RemoteAddr     string
+	RemoteAddr string
+	// Endpoints rotates through the server addresses (primary + fallbacks)
+	// so a filtered IP or blocked port does not stop the tunnel.
+	Endpoints      *network.Endpoints
 	Token          string
 	SnifferLog     string
 	TunnelStatus   string
@@ -131,9 +134,14 @@ func (c *WsTransport) channelDialer() {
 		case <-c.ctx.Done():
 			return
 		default:
-			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
 			if err != nil {
 				c.logger.Errorf("control channel dialer: %v", err)
+				// The current endpoint did not answer — move to the next one so a
+				// filtered IP or blocked port cannot stall the tunnel forever.
+				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
+					c.logger.Infof("trying next server endpoint: %s", next)
+				}
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
@@ -288,7 +296,7 @@ func (c *WsTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new websocket tunnel connection to address %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
-	tunnelConn, err := network.WebSocketDialer(c.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 1024*1024, 1024*1024)
+	tunnelConn, err := network.WebSocketDialer(c.ctx, c.config.Endpoints.Current(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 1024*1024, 1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 

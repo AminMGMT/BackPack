@@ -19,6 +19,11 @@ type TunnelSpec struct {
 	Token      string   // shared secret
 	Ports      []string // server: exposed/forwarded ports
 
+	// FallbackAddrs are extra server addresses a client tries, in order, when
+	// the primary one cannot be reached — a second IP, a different port, or a
+	// CDN edge. This keeps the tunnel up when one address gets filtered.
+	FallbackAddrs []string
+
 	Nodelay        bool
 	Heartbeat      int
 	KeepAlive      int
@@ -139,6 +144,13 @@ func (s TunnelSpec) Render() string {
 	// client
 	b.WriteString("[client]\n")
 	p("remote_addr = %q\n", s.RemoteAddr)
+	if len(s.FallbackAddrs) > 0 {
+		b.WriteString("fallback_addrs = [\n")
+		for _, a := range s.FallbackAddrs {
+			p("    %q,\n", a)
+		}
+		b.WriteString("]\n")
+	}
 	p("transport = %q\n", s.Transport)
 	p("token = %q\n", s.Token)
 	p("connection_pool = %d\n", s.ConnectionPool)

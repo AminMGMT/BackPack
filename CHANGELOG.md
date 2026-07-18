@@ -2,6 +2,44 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.4.0 — 2026-07-18
+
+### Added
+- **Automatic failover to backup server addresses.** A client tunnel can hold a
+  list of extra server addresses (a second IP, a different port, a CDN edge).
+  When the main address stops answering — a filtered IP, a blocked port — the
+  client rotates to the next one automatically until something connects, and all
+  data connections follow it. Set it during **Setup Client** or later from
+  **Manage → Manage Tunnels → Edit → Backup server addresses**.
+- **Safe updates with automatic rollback.** Every update first saves a **restore
+  point** (the binary plus every config), installs the release, then health-checks
+  the panel and all tunnels. If anything fails to come back up it restores the
+  previous version by itself. Restore points are also listed under
+  **Update → Restore points** so you can roll back on demand.
+- **Safe edits.** Changing a port, address or transport keeps the previous config,
+  verifies the tunnel actually came back up, and **reverts automatically** if it
+  did not — reporting the reason from the log (e.g. "address already in use").
+  A bad edit can no longer leave a dead tunnel and a lost config behind.
+- **Change transport on an existing tunnel** (tcp ↔ tcpmux ↔ udp ↔ ws ↔ wss ↔
+  wsmux ↔ wssmux) without recreating it: the name, token and forwarded ports stay
+  as they are, mux settings are filled in, and a TLS certificate is generated
+  automatically when switching to wss/wssmux.
+- **Health Check** (**Manage → Health Check**): one screen that checks the server
+  (BBR, queue discipline, socket buffers, open-file limit, binary, root, systemd),
+  the web panel (service, port, firewall hint) and every tunnel (state, listening
+  port, port syntax, real TCP reachability, TLS certificate expiry, token
+  strength) — with a ✓ / ! / ✗ per item and a plain-language fix for each problem.
+- **File Locations** (**Manage → File Locations**): every config, service, backup
+  and certificate path with a ✓/✗ so you can see what is installed and where.
+
+### Changed
+- Reachability is measured over **TCP, never ICMP** — networks that drop ping no
+  longer look "offline" when the tunnel port works fine.
+- Backups are pruned to the newest 10 archives, and restore points to the newest
+  5, so neither can fill the disk.
+
+
+
 ## v1.3.0 — 2026-07-14
 
 ### Added

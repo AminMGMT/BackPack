@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/backpack/backpack/internal/app"
@@ -234,6 +235,25 @@ func SetupClient() {
 		tui.Info("Optional edge IP: connect to a CDN edge (e.g. Cloudflare) instead of")
 		tui.Info("resolving the server address directly. Leave empty to skip.")
 		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
+	}
+
+	// Backup addresses make the tunnel survive a filtered server IP: the client
+	// tries each one in turn until something answers.
+	fmt.Println()
+	tui.Info("Optional backup server addresses — if the main address ever stops")
+	tui.Info("answering, the client fails over to these automatically.")
+	tui.Warn("Comma separated; a bare IP reuses the main port. Leave empty to skip.")
+	if raw := strings.TrimSpace(tui.PromptDefault("Backup addresses", "")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, _, err := net.SplitHostPort(part); err != nil {
+				part = net.JoinHostPort(strings.Trim(part, "[]"), remotePort)
+			}
+			s.FallbackAddrs = append(s.FallbackAddrs, part)
+		}
 	}
 
 	best := tui.Confirm("Use Best Performance preset (recommended)", true)

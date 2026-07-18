@@ -46,7 +46,10 @@ type ServerConfig struct {
 
 // ClientConfig represents the configuration for the client.
 type ClientConfig struct {
-	RemoteAddr       string        `toml:"remote_addr"`
+	RemoteAddr string `toml:"remote_addr"`
+	// FallbackAddrs are additional server addresses tried in order whenever the
+	// primary cannot be reached (a filtered IP, a blocked port, a CDN edge).
+	FallbackAddrs    []string      `toml:"fallback_addrs"`
 	Transport        TransportType `toml:"transport"`
 	Token            string        `toml:"token"`
 	ConnectionPool   int           `toml:"connection_pool"`

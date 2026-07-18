@@ -274,9 +274,15 @@ func extractBinary(archive string) error {
 	return fmt.Errorf("no `backpack` binary found inside the archive")
 }
 
-// ApplyUpdate downloads the latest release, replaces the binary and restarts
-// the web panel and every tunnel.
+// ApplyUpdate downloads the latest release and installs it safely:
+// a full snapshot is taken first, the new binary is put in place, every service
+// is restarted and health-checked, and if anything fails to come back up the
+// snapshot is rolled back automatically — so a broken release can never leave
+// the server without working tunnels.
 func ApplyUpdate(logf func(string)) error {
+	if logf == nil {
+		logf = func(string) {}
+	}
 	tag, err := latestTag()
 	if err != nil {
 		return err
@@ -290,6 +296,15 @@ func ApplyUpdate(logf func(string)) error {
 	if err != nil {
 		return err
 	}
+
+	// Snapshot BEFORE touching anything, so we can always get back.
+	logf("Taking a safety snapshot...")
+	snap, err := TakeSnapshot("pre-update")
+	if err != nil {
+		// A snapshot we cannot take is a good reason not to proceed blindly.
+		return fmt.Errorf("could not take a safety snapshot: %w", err)
+	}
+	logf("Snapshot saved: " + filepath.Base(snap.Dir))
 
 	logf("Installing " + tag + "...")
 	if err := extractBinary(archive); err != nil {
@@ -307,6 +322,46 @@ func ApplyUpdate(logf func(string)) error {
 	RestartService(app.WebUIService)
 	ok, failed := RestartAll()
 	logf(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
+
+	// Health check: every tunnel that has a unit must come back active.
+	logf("Checking health...")
+	if bad := unhealthyAfterUpdate(); len(bad) > 0 {
+		logf("Health check FAILED for: " + strings.Join(bad, ", "))
+		logf("Rolling back to the previous version...")
+		if rerr := RestoreSnapshot(snap, logf); rerr != nil {
+			return fmt.Errorf("update failed AND rollback failed: %v (rollback: %v) — "+
+				"restore manually from %s", strings.Join(bad, ", "), rerr, snap.Dir)
+		}
+		return fmt.Errorf("update to %s failed health check (%s) — rolled back to %s",
+			tag, strings.Join(bad, ", "), snap.Meta.Version)
+	}
+
+	logf("Health check passed.")
 	logf("Update complete — now running " + tag + ".")
 	return nil
+}
+
+// unhealthyAfterUpdate returns the names of services that did not come back up
+// after an update. It waits briefly, since systemd restarts are not instant.
+func unhealthyAfterUpdate() []string {
+	var bad []string
+	if fileExists(app.ServiceDir+"/"+app.WebUIService) &&
+		!WaitServiceActive(app.WebUIService, 20*time.Second) {
+		bad = append(bad, "web panel")
+	}
+	for _, t := range List() {
+		// Only judge tunnels that are supposed to be running.
+		if !fileExists(app.ServiceDir + "/" + t.Service) {
+			continue
+		}
+		if !WaitServiceActive(t.Service, 20*time.Second) {
+			bad = append(bad, t.Name)
+		}
+	}
+	return bad
+}
+
+// RollbackUpdate restores a snapshot on demand (menu: Update → Rollback).
+func RollbackUpdate(s Snapshot, logf func(string)) error {
+	return RestoreSnapshot(s, logf)
 }

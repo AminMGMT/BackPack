@@ -121,31 +121,43 @@ func editPortsMenu(name string) {
 		if spec.Role == "server" {
 			tui.Info("Tunnel (control) port : " + addrPort(spec.BindAddr))
 			tui.Info("Forwarded ports       : " + strings.Join(VisiblePorts(spec.Ports), ", "))
+			tui.Info("Transport             : " + transportLabel(spec.Transport))
 			fmt.Println()
 			idx := tui.ChooseOpt("Choose:", []tui.Option{
 				{Title: "Change tunnel port", Desc: "the control-channel port clients dial"},
 				{Title: "Change forwarded ports", Desc: "the ports exposed to users"},
+				{Title: "Change transport", Desc: "switch carrier — keeps the token and ports"},
 			})
 			switch idx {
 			case 0:
 				changeTunnelPort(name, spec)
 			case 1:
 				changeForwardedPorts(name, spec)
+			case 2:
+				changeTunnelTransport(name, spec)
 			default:
 				return
 			}
 		} else {
 			tui.Info("Server address : " + spec.RemoteAddr)
+			tui.Info("Transport      : " + transportLabel(spec.Transport))
+			tui.Info("Backup servers : " + fallbackSummary(spec.FallbackAddrs))
 			fmt.Println()
 			idx := tui.ChooseOpt("Choose:", []tui.Option{
 				{Title: "Change server tunnel port", Desc: "must match the server side"},
 				{Title: "Change server address", Desc: "IP or domain of the Iran server"},
+				{Title: "Change transport", Desc: "switch carrier — keeps the token"},
+				{Title: "Backup server addresses", Desc: "auto-failover when the main IP gets blocked"},
 			})
 			switch idx {
 			case 0:
 				changeTunnelPort(name, spec)
 			case 1:
 				changeClientHost(name, spec)
+			case 2:
+				changeTunnelTransport(name, spec)
+			case 3:
+				changeFallbackAddrs(name, spec)
 			default:
 				return
 			}
@@ -204,6 +216,88 @@ func changeForwardedPorts(name string, spec TunnelSpec) {
 		return
 	}
 	tui.Success("Forwarded ports updated and the tunnel was restarted.")
+	tui.PressEnter()
+}
+
+// fallbackSummary renders the backup-address list for the Edit header.
+func fallbackSummary(addrs []string) string {
+	if len(addrs) == 0 {
+		return "none"
+	}
+	return strings.Join(addrs, ", ")
+}
+
+// changeTunnelTransport switches the tunnel's carrier, keeping its name, token
+// and ports. Both ends must match, so the user is reminded to switch the peer.
+func changeTunnelTransport(name string, spec TunnelSpec) {
+	fmt.Println()
+	tui.Info("Current transport: " + transportLabel(spec.Transport))
+	tui.Warn("The other side must use the SAME transport, so switch it there too.")
+	fmt.Println()
+
+	newTransport := chooseTransport()
+	if newTransport == "" {
+		return
+	}
+	if newTransport == spec.Transport {
+		tui.Info("That is already the current transport.")
+		tui.PressEnter()
+		return
+	}
+	if spec.Role == "server" && needsTLS(newTransport) {
+		tui.Info("A self-signed TLS certificate will be generated automatically if needed.")
+	}
+	if !tui.Confirm(fmt.Sprintf("Switch %q to %s now", name, transportLabel(newTransport)), true) {
+		return
+	}
+
+	if err := ChangeTransport(name, newTransport); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("Transport switched to " + transportLabel(newTransport) + " and the tunnel restarted.")
+	tui.Warn("Now switch the OTHER side to the same transport, or it cannot reconnect.")
+	tui.PressEnter()
+}
+
+// changeFallbackAddrs manages the client's backup server addresses. This is what
+// keeps a tunnel alive when the main server IP is filtered: the client walks the
+// list until one address answers.
+func changeFallbackAddrs(name string, spec TunnelSpec) {
+	fmt.Println()
+	tui.Title("Backup server addresses")
+	tui.Warn("If the main server address stops answering (a filtered IP, a blocked")
+	tui.Warn("port, or a CDN edge you want to use), the client automatically tries")
+	tui.Warn("these in order until one connects — no manual switching needed.")
+	fmt.Println()
+	tui.Info("Main address : " + spec.RemoteAddr)
+	tui.Info("Backups now  : " + fallbackSummary(spec.FallbackAddrs))
+	fmt.Println()
+	tui.Warn("Enter the FULL new list, comma separated. A bare IP/host reuses the")
+	tui.Warn("main port, e.g.:  1.2.3.4, 5.6.7.8:8443, edge.example.com:443")
+	tui.Warn("Leave empty to remove all backups.")
+	fmt.Println()
+
+	raw := tui.Prompt("Backup addresses: ")
+	var addrs []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			addrs = append(addrs, p)
+		}
+	}
+
+	if err := SetFallbackAddrs(name, addrs); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	if len(addrs) == 0 {
+		tui.Success("Backup addresses cleared — the tunnel restarted.")
+	} else {
+		tui.Success(fmt.Sprintf("%d backup address(es) saved — the tunnel restarted.", len(addrs)))
+		tui.Info("The client will fail over automatically if the main address stops answering.")
+	}
 	tui.PressEnter()
 }
 
