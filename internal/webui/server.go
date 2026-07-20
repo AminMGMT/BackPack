@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
@@ -16,9 +15,6 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
-
-	"github.com/backpack/backpack/internal/socks"
-	"github.com/backpack/backpack/internal/telegram"
 )
 
 //go:embed assets/login.html
@@ -105,19 +101,9 @@ func Serve() error {
 	}
 	srv := &server{sessions: newSessionStore()}
 
-	// Built-in SOCKS5 proxy on localhost, authenticated by any local tunnel
-	// token. When exposed over a tunnel it lets the peer (e.g. Iran) reach the
-	// internet through this node (e.g. kharej) — used for Telegram relaying.
-	go socks.Serve(context.Background(),
-		fmt.Sprintf("127.0.0.1:%d", app.SocksInternalPort),
-		func(_, pass string) bool { return manage.TokenMatches(pass) })
-
-	// Self-healing watchdog: detect and restart dropped tunnels quickly.
-	go manage.RunWatchdog(context.Background())
-
-	// Interactive Telegram bot (Status / Web UI / Support buttons). No-op until
-	// the bot is configured; runs only where it is configured (normally Iran).
-	go telegram.RunBot(context.Background())
+	// The SOCKS5 relay, the watchdog, the Telegram bot and the alerts all
+	// deliberately run elsewhere — in the backpack-monitor service. See
+	// internal/monitor for why.
 
 	// The panel is a monitoring dashboard: live stats, tunnel state and logs.
 	// Tunnels are created and managed from the CLI; the only mutating actions
@@ -131,7 +117,13 @@ func Serve() error {
 	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
+	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
 	mux.HandleFunc("/api/panelport", srv.requireAuth(srv.handlePanelPort))
+	mux.HandleFunc("/api/backup/export", srv.requireAuth(srv.handleBackupExport))
+	mux.HandleFunc("/api/backup/import", srv.requireAuth(srv.handleBackupImport))
+	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))
+	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
+	mux.HandleFunc("/api/relays", srv.requireAuth(srv.handleRelayOptions))
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
@@ -258,11 +250,70 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{"available": available, "summary": summary})
 	case http.MethodPost:
-		go manage.ApplyUpdate(func(string) {})
+		updateProgress.start()
+		go func() {
+			err := manage.ApplyUpdate(updateProgress.log)
+			updateProgress.finish(err)
+		}()
 		writeJSON(w, map[string]string{"status": "started"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// updateProgress records what the last update attempt did.
+//
+// An update can now decline to install — an archive whose checksum cannot be
+// fetched or does not match is refused rather than written over the binary that
+// runs every tunnel here. Discarding the log and the error, as this did, meant
+// the panel showed "updating…", reloaded, and left the operator looking at the
+// old version with nothing to explain why. The browser has no other channel to
+// learn that: the CLI prints these lines, the panel has to fetch them.
+var updateProgress = &updateRecord{}
+
+type updateRecord struct {
+	mu      sync.Mutex
+	running bool
+	lines   []string
+	err     string
+}
+
+func (u *updateRecord) start() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.running, u.lines, u.err = true, nil, ""
+}
+
+func (u *updateRecord) log(line string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	// Bounded: a stuck update must not grow this without limit, and only the
+	// tail is of any use when reading back what happened.
+	if len(u.lines) >= 200 {
+		u.lines = u.lines[1:]
+	}
+	u.lines = append(u.lines, line)
+}
+
+func (u *updateRecord) finish(err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.running = false
+	if err != nil {
+		u.err = err.Error()
+	}
+}
+
+func (u *updateRecord) snapshot() (bool, []string, string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.running, append([]string(nil), u.lines...), u.err
+}
+
+// handleUpdateStatus reports the progress of a running or finished update.
+func (s *server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	running, lines, errMsg := updateProgress.snapshot()
+	writeJSON(w, map[string]any{"running": running, "log": lines, "error": errMsg})
 }
 
 // handlePanelPort moves the web panel itself to a new port. The response is

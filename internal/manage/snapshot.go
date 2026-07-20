@@ -155,6 +155,10 @@ func RestoreSnapshot(s Snapshot, logf func(string)) error {
 	}
 	_ = DaemonReload()
 	RestartService(app.WebUIService)
+	// The monitor runs the binary that was just rolled back, so it has to be
+	// restarted too — otherwise a rollback leaves the watchdog and the alerts
+	// running the version that failed.
+	_ = RestartMonitorService()
 	ok, failed := RestartAll()
 	logf(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 	return nil

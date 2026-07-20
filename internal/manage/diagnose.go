@@ -41,6 +41,7 @@ func Diagnose() []Check {
 	var out []Check
 	out = append(out, systemChecks()...)
 	out = append(out, panelChecks()...)
+	out = append(out, monitorChecks()...)
 	out = append(out, tunnelChecks()...)
 	return out
 }
@@ -148,6 +149,30 @@ func systemChecks() []Check {
 	return out
 }
 
+// --- monitor ----------------------------------------------------------------
+
+// monitorChecks reports on the service that runs the watchdog, the Telegram bot
+// and the alerts. This one matters more than it looks: when it is down nothing
+// visibly breaks, tunnels simply stop being restarted and alerts stop arriving,
+// and the only way to find that out is to be told here.
+func monitorChecks() []Check {
+	const g = "Monitor"
+	var out []Check
+
+	if !fileExists(app.ServiceDir + "/" + app.MonitorService) {
+		return append(out, Check{Group: g, Name: "Service", Level: CheckWarn,
+			Detail: "not installed — no watchdog and no alerts",
+			Fix:    "restart the CLI (sudo backpack); it installs the service on launch"})
+	}
+	if MonitorRunning() {
+		return append(out, Check{Group: g, Name: "Service", Level: CheckOK,
+			Detail: "running — watchdog and alerts active"})
+	}
+	return append(out, Check{Group: g, Name: "Service", Level: CheckFail,
+		Detail: "installed but not running — dropped tunnels will NOT be restarted",
+		Fix:    "systemctl restart " + app.MonitorService + " (logs: journalctl -u " + app.MonitorService + " -n 30)"})
+}
+
 // --- web panel --------------------------------------------------------------
 
 func panelChecks() []Check {
@@ -253,7 +278,9 @@ func tunnelChecks() []Check {
 			// The control port must actually be bound.
 			if p := addrPort(spec.BindAddr); p != "" {
 				if n, _ := strconv.Atoi(p); n > 0 {
-					if listening(n) || spec.Transport == "udp" {
+					// UDP-based transports do not appear in the TCP listen
+					// table, so a "not listening" verdict would be wrong.
+					if listening(n) || isDatagram(spec.Transport) {
 						out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK, Detail: p + " listening"})
 					} else {
 						out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
@@ -263,7 +290,7 @@ func tunnelChecks() []Check {
 				}
 			}
 			// Forwarded ports the users actually connect to.
-			vis := VisiblePorts(spec.Ports)
+			vis := VisiblePorts(spec.Ports, spec.Token)
 			if len(vis) == 0 {
 				out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
 					Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
@@ -279,15 +306,23 @@ func tunnelChecks() []Check {
 			// Client: can we actually reach the server's tunnel port over TCP?
 			host, port := addrHost(spec.RemoteAddr, ""), addrPort(spec.RemoteAddr)
 			out = append(out, Check{Group: g, Name: "Server address", Level: CheckInfo, Detail: spec.RemoteAddr})
-			if host != "" && port != "" && spec.Transport != "udp" {
-				if reachable(host, port, 4*time.Second) {
-					out = append(out, Check{Group: g, Name: "Reachability", Level: CheckOK,
-						Detail: "TCP connect to " + spec.RemoteAddr + " works"})
-				} else {
-					out = append(out, Check{Group: g, Name: "Reachability", Level: CheckFail,
-						Detail: "cannot open TCP to " + spec.RemoteAddr,
-						Fix:    "check the server is up, the port matches, and the firewall allows it — or add a fallback address in Edit"})
-				}
+			switch {
+			case host == "" || port == "":
+				// Nothing to probe.
+			case isDatagram(spec.Transport):
+				// There is no connect step to test on UDP: a silent port and a
+				// working one look identical from outside. Say so plainly
+				// rather than reporting a failure that may not be real.
+				out = append(out, Check{Group: g, Name: "Reachability", Level: CheckInfo,
+					Detail: "not testable on a UDP transport — trust the tunnel state above",
+					Fix:    "if it will not connect, check that UDP " + port + " is open on the server firewall"})
+			case reachable(host, port, 4*time.Second):
+				out = append(out, Check{Group: g, Name: "Reachability", Level: CheckOK,
+					Detail: "TCP connect to " + spec.RemoteAddr + " works"})
+			default:
+				out = append(out, Check{Group: g, Name: "Reachability", Level: CheckFail,
+					Detail: "cannot open TCP to " + spec.RemoteAddr,
+					Fix:    "check the server is up, the port matches, and the firewall allows it — or add a fallback address in Edit"})
 			}
 		}
 
@@ -427,6 +462,7 @@ func Locations() []Location {
 		{Label: "Telegram config", Path: app.TelegramConfig},
 		{Label: "TLS certificates", Path: app.ConfigDir + "/certs"},
 		{Label: "Web panel service", Path: app.ServiceDir + "/" + app.WebUIService},
+		{Label: "Monitor service", Path: app.ServiceDir + "/" + app.MonitorService},
 	}
 	for i := range out {
 		out[i].Exists = fileExists(out[i].Path)

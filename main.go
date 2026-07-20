@@ -13,6 +13,7 @@ import (
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/menu"
+	"github.com/backpack/backpack/internal/monitor"
 	"github.com/backpack/backpack/internal/telegram"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/webui"
@@ -34,6 +35,7 @@ func main() {
 	restartAll := flag.Bool("restart-all", false, "restart every configured tunnel and exit (used by the auto-refresh job)")
 	tgReport := flag.Bool("telegram-report", false, "send a Telegram status report and exit (used by the scheduled job)")
 	webPanel := flag.Bool("webui", false, "run the web panel (used by the backpack-webui service)")
+	monitorMode := flag.Bool("monitor", false, "run the watchdog, Telegram bot and alerts (used by the backpack-monitor service)")
 	flag.Parse()
 
 	switch {
@@ -54,6 +56,9 @@ func main() {
 		if err := webui.Serve(); err != nil {
 			logger.Fatalf("web panel failed: %v", err)
 		}
+		return
+	case *monitorMode:
+		monitor.Run()
 		return
 	}
 

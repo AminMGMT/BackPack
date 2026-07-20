@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -20,11 +21,8 @@ import (
 type TcpTransport struct {
 	config          *TcpConfig
 	parentctx       context.Context
-	ctx             context.Context
-	cancel          context.CancelFunc
+	state           clientState
 	logger          *logrus.Logger
-	controlChannel  net.Conn
-	usageMonitor    *web.Usage
 	restartMutex    sync.Mutex
 	poolConnections int32
 	loadConnections int32
@@ -49,6 +47,20 @@ type TcpConfig struct {
 	MSS            int
 	SO_RCVBUF      int
 	SO_SNDBUF      int
+	// Stealth wraps every tunnel-carrying connection in the Noise record layer,
+	// so the stream has no fingerprint for deep packet inspection to match.
+	Stealth bool
+}
+
+// wrapStealth upgrades a freshly dialled tunnel connection to the Noise record
+// layer when this tunnel runs in stealth mode, and returns it unchanged
+// otherwise. Only tunnel-carrying connections are wrapped; the dial to the
+// local backend stays plain, since that traffic never leaves the machine.
+func (c *TcpTransport) wrapStealth(conn net.Conn) (net.Conn, error) {
+	if !c.config.Stealth {
+		return conn, nil
+	}
+	return network.NoiseClientConn(conn, c.config.Token, c.config.DialTimeOut)
 }
 
 func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -59,22 +71,21 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 	client := &TcpTransport{
 		config:          config,
 		parentctx:       parentCtx,
-		ctx:             ctx,
-		cancel:          cancel,
 		logger:          logger,
-		controlChannel:  nil, // will be set when a control connection is established
-		usageMonitor:    web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
 	}
 
+	// Seed the first generation through the same path a restart uses, so
+	// there is only one way this state is ever published.
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
 	return client
 }
 
 func (c *TcpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.usageMonitor.Monitor()
+		go c.state.Usage().Monitor()
 	}
 
 	c.config.TunnelStatus = "Disconnected (TCP)"
@@ -94,28 +105,24 @@ func (c *TcpTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.cancel != nil {
-		c.cancel()
+	if c.state.Cancel() != nil {
+		c.state.Cancel()()
 	}
 
 	// close control channel connection
-	if c.controlChannel != nil {
-		c.controlChannel.Close()
-	}
+	c.state.CloseConn()
 
 	time.Sleep(2 * time.Second)
 
 	ctx, cancel := context.WithCancel(c.parentctx)
-	c.ctx = ctx
-	c.cancel = cancel
 
-	// Re-initialize variables
-	c.controlChannel = nil
-	c.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger)
+	// Publish the whole new generation at once: a reader must never see
+	// the new context paired with the old monitor, or vice versa.
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
 	c.config.TunnelStatus = ""
-	c.poolConnections = 0
-	c.loadConnections = 0
-	c.controlFlow = make(chan struct{}, 100)
+	atomic.StoreInt32(&c.poolConnections, 0)
+	atomic.StoreInt32(&c.loadConnections, 0)
+	drain(c.controlFlow)
 
 	// set the log level again
 	c.logger.SetLevel(level)
@@ -128,11 +135,11 @@ func (c *TcpTransport) channelDialer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 		default:
 			//set default behaviour of control channel to nodelay, also using default buffer parameters
-			tunnelTCPConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -140,6 +147,17 @@ func (c *TcpTransport) channelDialer() {
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
+				time.Sleep(c.config.RetryInterval)
+				continue
+			}
+
+			// In stealth mode the Noise handshake runs first, so the token and
+			// everything after it cross an already-encrypted, unfingerprintable
+			// channel. A wrong token fails here, before any tunnel bytes.
+			tunnelTCPConn, err := c.wrapStealth(rawConn)
+			if err != nil {
+				c.logger.Errorf("channel dialer: stealth handshake failed: %v", err)
+				rawConn.Close()
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
@@ -175,7 +193,7 @@ func (c *TcpTransport) channelDialer() {
 			tunnelTCPConn.SetReadDeadline(time.Time{})
 
 			if message == c.config.Token {
-				c.controlChannel = tunnelTCPConn
+				c.state.SetConn(tunnelTCPConn)
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (TCP)"
@@ -224,7 +242,7 @@ func (c *TcpTransport) poolMaintainer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 
 		case <-tickerPool.C:
@@ -266,12 +284,12 @@ func (c *TcpTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-c.ctx.Done():
+			case <-c.state.Ctx().Done():
 				return
 			default:
-				msg, err := utils.ReceiveBinaryByte(c.controlChannel)
+				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.cancel != nil {
+					if c.state.Cancel() != nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -285,8 +303,8 @@ func (c *TcpTransport) channelHandler() {
 	// Main loop to listen for context cancellation or received messages
 	for {
 		select {
-		case <-c.ctx.Done():
-			_ = utils.SendBinaryByte(c.controlChannel, utils.SG_Closed)
+		case <-c.state.Ctx().Done():
+			_ = utils.SendBinaryByte(c.state.Conn(), utils.SG_Closed)
 			return
 
 		case msg := <-msgChan:
@@ -311,7 +329,7 @@ func (c *TcpTransport) channelHandler() {
 				return
 
 			case utils.SG_RTT:
-				err := utils.SendBinaryByte(c.controlChannel, utils.SG_RTT)
+				err := utils.SendBinaryByte(c.state.Conn(), utils.SG_RTT)
 				if err != nil {
 					c.logger.Error("failed to send RTT signal, restarting client: ", err)
 					go c.Restart()
@@ -332,10 +350,22 @@ func (c *TcpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
-	tcpConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	// Next() rather than Current(): with load balancing enabled the pool
+	// spreads its connections over every configured endpoint, so one
+	// congested route only slows its own share of the traffic.
+	rawConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Next(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Error("tunnel server dialer: ", err)
 
+		return
+	}
+
+	// Same stealth upgrade as the control channel: the data connection carries
+	// its bytes through the Noise record layer when the tunnel is in that mode.
+	tcpConn, err := c.wrapStealth(rawConn)
+	if err != nil {
+		c.logger.Debugf("tunnel dialer: stealth handshake failed: %v", err)
+		rawConn.Close()
 		return
 	}
 
@@ -368,7 +398,7 @@ func (c *TcpTransport) tunnelDialer() {
 		c.localDialer(tcpConn, resolvedAddr, port)
 
 	case utils.SG_UDP:
-		UDPDialer(tcpConn, resolvedAddr, c.logger, c.usageMonitor, port, c.config.Sniffer)
+		UDPDialer(tcpConn, resolvedAddr, c.logger, c.state.Usage(), port, c.config.Sniffer)
 
 	default:
 		c.logger.Error("undefined transport. close the connection.")
@@ -389,14 +419,14 @@ func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port i
 		recvBuf = c.config.SO_RCVBUF
 	}
 
-	localConnection, err := network.TcpDialer(c.ctx, resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
 	if err != nil {
-		c.logger.Errorf("local dialer: %v", err)
+		localDial.Report(c.logger, resolvedAddr, err)
 		tcpConn.Close()
 		return
 	}
 
 	c.logger.Debugf("connected to local address %s successfully", resolvedAddr)
 
-	handlers.TCPConnectionHandler(c.ctx, false, tcpConn, localConnection, c.logger, c.usageMonitor, port, c.config.Sniffer)
+	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(tcpConn), localConnection, c.logger, c.state.Usage(), port, c.config.Sniffer)
 }

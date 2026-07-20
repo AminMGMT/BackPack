@@ -35,6 +35,7 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		Nodelay:         sc.Nodelay,
 		Heartbeat:       sc.Heartbeat,
 		LogLevel:        sc.LogLevel,
+		LogFormat:       sc.LogFormat,
 		AcceptUDP:       sc.AcceptUDP,
 		Ports:           sc.Ports,
 		MSS:             sc.MSS,
@@ -42,6 +43,8 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		SoSndBuf:        sc.SO_SNDBUF,
 		TLSCert:         sc.TLSCertFile,
 		TLSKey:          sc.TLSKeyFile,
+		ACMEDomain:      sc.ACMEDomain,
+		ACMEEmail:       sc.ACMEEmail,
 		MuxCon:          sc.MuxCon,
 		MuxVersion:      sc.MuxVersion,
 		MuxFrameSize:    sc.MaxFrameSize,
@@ -49,6 +52,20 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		MuxStreamBuffer: sc.MaxStreamBuffer,
 		Sniffer:         sc.Sniffer,
 		WebPort:         sc.WebPort,
+		ProxyProtocol:   sc.ProxyProtocol,
+		MaxConnections:  sc.MaxConnections,
+		BandwidthMbps:   sc.BandwidthMbps,
+		Preset:          sc.Preset,
+		KCPMTU:          sc.MTU,
+		KCPInterval:     sc.Interval,
+		KCPResend:       sc.Resend,
+		KCPNoDelay:      sc.NoDelay,
+		KCPNoCongestion: sc.NoCongestion,
+		KCPSndWnd:       sc.SndWnd,
+		KCPRcvWnd:       sc.RcvWnd,
+		KCPAckNoDelay:   sc.AckNoDelay,
+		KCPDataShards:   sc.DataShards,
+		KCPParityShards: sc.ParityShards,
 	}, nil
 }
 
@@ -75,6 +92,7 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		KeepAlive:       cc.Keepalive,
 		Nodelay:         cc.Nodelay,
 		LogLevel:        cc.LogLevel,
+		LogFormat:       cc.LogFormat,
 		MSS:             cc.MSS,
 		SoRcvBuf:        cc.SO_RCVBUF,
 		SoSndBuf:        cc.SO_SNDBUF,
@@ -86,6 +104,18 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		MuxStreamBuffer: cc.MaxStreamBuffer,
 		Sniffer:         cc.Sniffer,
 		WebPort:         cc.WebPort,
+		Preset:          cc.Preset,
+		LoadBalance:     cc.LoadBalance,
+		KCPMTU:          cc.MTU,
+		KCPInterval:     cc.Interval,
+		KCPResend:       cc.Resend,
+		KCPNoDelay:      cc.NoDelay,
+		KCPNoCongestion: cc.NoCongestion,
+		KCPSndWnd:       cc.SndWnd,
+		KCPRcvWnd:       cc.RcvWnd,
+		KCPAckNoDelay:   cc.AckNoDelay,
+		KCPDataShards:   cc.DataShards,
+		KCPParityShards: cc.ParityShards,
 	}, nil
 }
 
@@ -119,16 +149,29 @@ func addrPort(addr string) string {
 
 // isBotRelayPort reports whether a port mapping is the hidden mapping to the
 // peer's built-in SOCKS5 proxy (used for the Telegram relay).
-func isBotRelayPort(p string) bool {
-	return strings.HasSuffix(strings.TrimSpace(p), fmt.Sprintf("=127.0.0.1:%d", app.SocksInternalPort))
+func isBotRelayPort(p, token string) bool {
+	p = strings.TrimSpace(p)
+	// The Telegram forward, which the bot adds for itself.
+	if isTelegramPort(p) {
+		return true
+	}
+	// The legacy fixed port, still present in configs written before the port
+	// was derived from the token.
+	if strings.HasSuffix(p, fmt.Sprintf("=127.0.0.1:%d", app.SocksInternalPort)) {
+		return true
+	}
+	if token == "" {
+		return false
+	}
+	return strings.HasSuffix(p, fmt.Sprintf("=127.0.0.1:%d", app.SocksPortForToken(token)))
 }
 
 // VisiblePorts filters the hidden bot-relay mapping out of a forwarded-ports
 // list, for display and editing.
-func VisiblePorts(ports []string) []string {
+func VisiblePorts(ports []string, token string) []string {
 	var out []string
 	for _, p := range ports {
-		if !isBotRelayPort(p) {
+		if !isBotRelayPort(p, token) {
 			out = append(out, p)
 		}
 	}
@@ -182,7 +225,7 @@ func EditTunnel(name, host, tunnelPort string, ports []string) error {
 		}
 		var clean []string
 		for _, p := range ports {
-			if p = strings.TrimSpace(p); p != "" && !isBotRelayPort(p) {
+			if p = strings.TrimSpace(p); p != "" && !isBotRelayPort(p, s.Token) {
 				clean = append(clean, p)
 			}
 		}
@@ -194,7 +237,7 @@ func EditTunnel(name, host, tunnelPort string, ports []string) error {
 		}
 		// Keep the hidden Telegram/SOCKS relay mapping the user never sees.
 		for _, p := range s.Ports {
-			if isBotRelayPort(p) {
+			if isBotRelayPort(p, s.Token) {
 				clean = append(clean, p)
 			}
 		}
@@ -304,10 +347,92 @@ func ChangeTransport(name, transport string) error {
 		}
 		s.TLSCert, s.TLSKey = cert, key
 	}
+	// A tunnel that was never on KCP has all its KCP knobs at zero. Fill them
+	// from the tunnel's own preset so switching to KCP produces a working
+	// session rather than one with a zero window and no tick interval.
+	if isKCP(transport) && s.KCPInterval <= 0 {
+		preset := s.Preset
+		if !validPreset(preset) {
+			preset = PresetTurbo
+		}
+		applyKCPPreset(&s, preset)
+	}
 	// accept_udp is only meaningful on the plain TCP transport.
 	if transport != "tcp" {
 		s.AcceptUDP = false
 	}
+	return applySpec(s)
+}
+
+// SetLoadBalance turns load balancing across the configured server addresses
+// on or off for a client tunnel.
+func SetLoadBalance(name string, on bool) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if s.Role != "client" {
+		return fmt.Errorf("load balancing is a client-side setting")
+	}
+	if on && len(s.FallbackAddrs) == 0 {
+		return fmt.Errorf("add at least one backup server address first — there is nothing to balance across")
+	}
+	if s.LoadBalance == on {
+		return fmt.Errorf("load balancing is already %s", map[bool]string{true: "on", false: "off"}[on])
+	}
+	s.LoadBalance = on
+	return applySpec(s)
+}
+
+// SetProxyProtocol turns the real-client-IP header on or off for a server
+// tunnel.
+func SetProxyProtocol(name string, on bool) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if s.Role != "server" {
+		return fmt.Errorf("this is a server-side setting")
+	}
+	if !supportsProxyProtocol(s.Transport) {
+		return fmt.Errorf("the %s transport cannot carry a PROXY protocol header", s.Transport)
+	}
+	if s.ProxyProtocol == on {
+		return fmt.Errorf("it is already %s", map[bool]string{true: "on", false: "off"}[on])
+	}
+	s.ProxyProtocol = on
+	return applySpec(s)
+}
+
+// SetLimits applies per-tunnel caps. Zero means unlimited for either value.
+func SetLimits(name string, maxConns, bandwidthMbps int) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if s.Role != "server" {
+		return fmt.Errorf("limits are a server-side setting — they apply where connections arrive")
+	}
+	if maxConns < 0 || bandwidthMbps < 0 {
+		return fmt.Errorf("a limit cannot be negative")
+	}
+	s.MaxConnections = maxConns
+	s.BandwidthMbps = bandwidthMbps
+	return applySpec(s)
+}
+
+// ChangePreset re-applies a whole performance profile to an existing tunnel.
+// Every tuning field is rewritten from the preset; the identity of the tunnel
+// (name, token, ports, addresses, certificates) is untouched.
+func ChangePreset(name, preset string) error {
+	if !validPreset(preset) {
+		return fmt.Errorf("unknown preset %q", preset)
+	}
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	ApplyPreset(&s, preset)
 	return applySpec(s)
 }
 
@@ -380,4 +505,38 @@ func lastLogLine(service string) string {
 		}
 	}
 	return ""
+}
+
+// SetCertificate switches a TLS tunnel between its self-signed certificate and
+// a Let's Encrypt one. An empty domain means self-signed.
+//
+// The self-signed pair is left on disk either way. It costs nothing to keep,
+// and it means switching back is instant rather than requiring regeneration —
+// which matters when the reason for switching back is that ACME just failed.
+func SetCertificate(name, domain, email string) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if s.Role != "server" {
+		return fmt.Errorf("the certificate is a server-side setting — the client does not present one")
+	}
+	if !needsTLS(s.Transport) {
+		return fmt.Errorf("transport %s does not use TLS", s.Transport)
+	}
+
+	s.ACMEDomain = domain
+	s.ACMEEmail = email
+
+	// Even on the ACME path the self-signed pair must exist: it is the fallback
+	// the config still points at, and regenerating it later would need the
+	// tunnel to be down.
+	if s.TLSCert == "" || !fileExists(s.TLSCert) {
+		cert, key, err := EnsureSelfSignedCert(s.Name, domain)
+		if err != nil {
+			return fmt.Errorf("could not prepare the self-signed certificate: %w", err)
+		}
+		s.TLSCert, s.TLSKey = cert, key
+	}
+	return applySpec(s)
 }

@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"math/rand"
 	"net"
@@ -10,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/backpack/backpack/config"
+	"github.com/gorilla/websocket"
 )
 
 func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
@@ -88,9 +87,11 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	// Pick a random User-Agent
 	randomUserAgent := userAgents[rand.Intn(len(userAgents))]
 
-	// Setup headers with authorization and X-user-id
+	// Setup headers with X-user-id and a browser User-Agent. The Authorization
+	// header is added per mode below: over plain ws it carries the token; over
+	// wss it carries a proof bound to the TLS session, so the token itself is
+	// never sent where something terminating the TLS could read it.
 	headers := http.Header{}
-	headers.Add("Authorization", fmt.Sprintf("Bearer %v", token))
 	headers.Add("X-User-Id", fmt.Sprintf("%d", randomUserID))
 	headers.Add("User-Agent", randomUserAgent)
 
@@ -104,7 +105,10 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 			return nil, fmt.Errorf("invalid address format, failed to parse: %w", err)
 		}
 
-		edgeIP = fmt.Sprintf("%s:%s", edgeIP, port)
+		// JoinHostPort rather than string concatenation: an IPv6 edge address
+		// needs brackets, and gluing "::1" to a port produces something that
+		// will not resolve.
+		edgeIP = net.JoinHostPort(edgeIP, port)
 	} else {
 		edgeIP = addr
 	}
@@ -117,6 +121,9 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	switch mode {
 	case config.WS, config.WSMUX:
 		wsURL = fmt.Sprintf("ws://%s%s", addr, path)
+
+		// Plain ws has no session to bind to, so the token is the credential.
+		headers.Set("Authorization", fmt.Sprintf("Bearer %v", token))
 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
@@ -132,21 +139,34 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	case config.WSS, config.WSSMUX:
 		wsURL = fmt.Sprintf("wss://%s%s", addr, path)
 
-		// Create a TLS configuration that allows insecure connections
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true, // Skip server certificate verification
+		// The SNI names the real server even when the TCP connection goes to a
+		// CDN edge, and it is what the browser fingerprint would carry.
+		sni := sniFromAddr(addr)
+
+		// The TLS handshake is done up front, before the websocket upgrade, so
+		// its keying material can be bound into the credential. gorilla is then
+		// handed the finished connection and only writes the HTTP upgrade over
+		// it — it does no TLS of its own, and TLSClientConfig is not consulted.
+		rawConn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
+		if err != nil {
+			return nil, err
 		}
+		uconn, err := uTLSClientConn(ctx, rawConn, sni, timeout)
+		if err != nil {
+			return nil, err
+		}
+		proof, err := wssClientBinding(uconn, token)
+		if err != nil {
+			uconn.Close()
+			return nil, fmt.Errorf("wss: could not bind the credential to the TLS session: %w", err)
+		}
+		headers.Set("Authorization", "Bearer "+proof)
 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
-			TLSClientConfig:   tlsConfig,        // Pass the insecure TLS config here
 			HandshakeTimeout:  45 * time.Second, // default handshake timeout
-			NetDial: func(_, addr string) (net.Conn, error) {
-				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
-				if err != nil {
-					return nil, err
-				}
-				return conn, nil
+			NetDialTLSContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return uconn, nil
 			},
 		}
 	}

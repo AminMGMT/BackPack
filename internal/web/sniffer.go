@@ -40,17 +40,17 @@ type PortUsage struct {
 }
 
 type SystemStats struct {
-	TunnelStatus    string `json:"tunnelStatus"`
-	CPUUsage        string `json:"cpuUsage"`
-	RAMUsage        string `json:"ramUsage"`
-	DiskUsage       string `json:"diskUsage"`
-	SwapUsage       string `json:"swapUsage"`
-	NetworkTraffic  string `json:"networkTraffic"`
-	UploadSpeed     string `json:"uploadSpeed"`
-	DownloadSpeed   string `json:"downloadSpeed"`
-	TunnelTraffic string `json:"tunnelTraffic"`
-	Sniffer         string `json:"sniffer"`
-	AllConnections  string `json:"allConnections"`
+	TunnelStatus   string `json:"tunnelStatus"`
+	CPUUsage       string `json:"cpuUsage"`
+	RAMUsage       string `json:"ramUsage"`
+	DiskUsage      string `json:"diskUsage"`
+	SwapUsage      string `json:"swapUsage"`
+	NetworkTraffic string `json:"networkTraffic"`
+	UploadSpeed    string `json:"uploadSpeed"`
+	DownloadSpeed  string `json:"downloadSpeed"`
+	TunnelTraffic  string `json:"tunnelTraffic"`
+	Sniffer        string `json:"sniffer"`
+	AllConnections string `json:"allConnections"`
 }
 
 func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus *string, logger *logrus.Logger) *Usage {
@@ -404,17 +404,17 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	downloadSpeed := float64(finalStats.BytesRecv - initialStats.BytesRecv)
 
 	stats := &SystemStats{
-		TunnelStatus:    *m.tunnelStatus,
-		CPUUsage:        m.formatFloat(cpuPercent[0]),
-		RAMUsage:        m.convertBytesToReadable(memStats.Used),
-		DiskUsage:       m.convertBytesToReadable(diskStats.Used),
-		SwapUsage:       m.convertBytesToReadable(swapStats.Used),
-		NetworkTraffic:  m.convertBytesToReadable(netStats[0].BytesSent + netStats[0].BytesRecv),
-		DownloadSpeed:   m.formatSpeed(downloadSpeed),
-		UploadSpeed:     m.formatSpeed(uploadSpeed),
-		TunnelTraffic: m.convertBytesToReadable(m.totalTraffic),
-		Sniffer:         map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
-		AllConnections:  fmt.Sprintf("%d", len(connections)),
+		TunnelStatus:   *m.tunnelStatus,
+		CPUUsage:       m.formatFloat(cpuPercent[0]),
+		RAMUsage:       m.convertBytesToReadable(memStats.Used),
+		DiskUsage:      m.convertBytesToReadable(diskStats.Used),
+		SwapUsage:      m.convertBytesToReadable(swapStats.Used),
+		NetworkTraffic: m.convertBytesToReadable(netStats[0].BytesSent + netStats[0].BytesRecv),
+		DownloadSpeed:  m.formatSpeed(downloadSpeed),
+		UploadSpeed:    m.formatSpeed(uploadSpeed),
+		TunnelTraffic:  m.convertBytesToReadable(m.totalTraffic),
+		Sniffer:        map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
+		AllConnections: fmt.Sprintf("%d", len(connections)),
 	}
 
 	return stats, nil

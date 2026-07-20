@@ -9,11 +9,15 @@
     --bg:#0a0a0b; --bg2:#0e0e10;
     --card:rgba(255,255,255,.045); --card-hi:rgba(255,255,255,.07);
     --stroke:rgba(255,255,255,.09);
-    --accent-rgb:255,69,58;                              /* themeable accent */
+    /* The single fixed accent: the red-orange of the CLI menu. The panel has
+       one theme on purpose, so what you see here matches `sudo backpack`. */
+    --accent-rgb:255,69,58;
     --accent:rgb(var(--accent-rgb));
     --red:var(--accent);
     --red-soft:color-mix(in srgb, var(--accent) 60%, #fff);
     --red-deep:color-mix(in srgb, var(--accent) 68%, #000);
+    /* Green is reserved for one meaning only: a tunnel that is up. Amber marks
+       one that is down. Nothing decorative uses either. */
     --green:#30d158; --amber:#ff9f0a;
     --txt:#f5f5f7; --muted:#9a9aa0; --muted2:#636366;
     --radius:22px;
@@ -82,7 +86,9 @@
     border:1px solid var(--stroke);border-radius:12px;outline:none;transition:.2s;margin-bottom:14px}
   .modal input:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18)}
   .modal .msg{font-size:12.5px;min-height:18px;margin-bottom:10px}
-  .modal .msg.err{color:var(--red-soft)} .modal .msg.ok{color:var(--green)}
+  /* Matches the CLI, where a success line is bold white and only an error is
+     colored — green here would be a second meaning for the status color. */
+  .modal .msg.err{color:var(--red-soft)} .modal .msg.ok{color:var(--txt);font-weight:600}
   .modal .actions{display:flex;gap:10px}
   .modal .actions button{flex:1;min-height:46px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;transition:.22s}
   .btn-ghost{background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt)}
@@ -93,10 +99,6 @@
   .setrow{margin-bottom:16px}
   .setrow h4{font-size:13px;font-weight:600;margin-bottom:10px;color:var(--txt)}
   .divider{height:1px;background:var(--stroke);margin:16px 0}
-  .swatches{display:flex;gap:12px;flex-wrap:wrap}
-  .sw{width:32px;height:32px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .2s,border-color .2s}
-  .sw:hover{transform:scale(1.12)}
-  .sw.active{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.14)}
   .upd{display:flex;align-items:center;gap:12px}
   .upd .umsg{font-size:12.5px;color:var(--muted);flex:1}
   .btn-sm{min-height:40px;padding:0 16px;border-radius:11px;font-size:13px;font-weight:600;cursor:pointer;flex:none;
@@ -106,11 +108,44 @@
   .modal code{display:inline-block;margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.06);
     border:1px solid var(--stroke);font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--red-soft)}
   .flag{font-size:17px;line-height:1}
+  .modal .box{max-height:88vh;overflow-y:auto}
+  .modal .hint{color:var(--muted2);font-weight:400}
+  .sel{width:100%;padding:12px 14px;font-size:14px;color:var(--txt);background:rgba(255,255,255,.05);
+    border:1px solid var(--stroke);border-radius:12px;outline:none;margin-bottom:14px;
+    -webkit-appearance:none;appearance:none;cursor:pointer}
+  .sel:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18)}
+  .sel option{background:var(--bg2);color:var(--txt)}
+  .toggles{display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 12px}
+  .tg{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt);cursor:pointer;margin:0}
+  .tg input{width:auto;margin:0;accent-color:var(--accent);cursor:pointer}
+  .thresholds{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  .thresholds label{font-size:11px;color:var(--muted);margin:0}
+  .thresholds input{margin-top:5px;margin-bottom:0;padding:9px 10px;font-size:13px}
+  /* Sign out lives at the bottom of Settings: it is the one irreversible thing
+     in here, so it should take deliberate effort to reach rather than sitting
+     next to everything else in the header. */
+  .signout{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;
+    border-radius:12px;font-size:13.5px;font-weight:600;cursor:pointer;
+    background:rgba(var(--accent-rgb),.1);border:1px solid rgba(var(--accent-rgb),.28);
+    color:var(--red-soft);transition:.22s}
+  .signout:hover{background:rgba(var(--accent-rgb),.2)}
+  .signout .ic{width:16px;height:16px}
+
+  /* Support sits in the corner and stays there while the page scrolls — always
+     reachable, never in the way of the data. */
+  .supportfab{position:fixed;right:max(16px,env(safe-area-inset-right));
+    bottom:max(16px,env(safe-area-inset-bottom));z-index:50;
+    width:46px;height:46px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
+    background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;color:#fff;
+    box-shadow:0 10px 28px rgba(var(--accent-rgb),.42),inset 0 1px 0 rgba(255,255,255,.35);
+    transition:transform .22s}
+  .supportfab:hover{transform:translateY(-2px) scale(1.05)}
+  .supportfab .ic{width:20px;height:20px}
   .wallets{display:flex;flex-direction:column;gap:10px}
   .wal{position:relative;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.05);
     border:1px solid var(--stroke);cursor:pointer;transition:.2s}
   .wal:hover{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.3)}
-  .wal.copied{background:rgba(48,209,88,.12);border-color:rgba(48,209,88,.35)}
+  .wal.copied{background:rgba(var(--accent-rgb),.18);border-color:rgba(var(--accent-rgb),.45)}
   .wal .wl{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--txt);margin-bottom:4px}
   .wal .waddr{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);word-break:break-all;padding-right:52px}
   .wal .tip{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;color:var(--red-soft)}
@@ -237,16 +272,10 @@
       <div class="hm">ISP<b id="isp">—</b></div>
     </div>
     <div class="spacer"></div>
-    <button class="iconbtn" onclick="openSupport()" aria-label="Support" title="Support">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.6l-1-1a5.5 5.5 0 10-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 000-7.8z"/></svg>
-    </button>
     <button class="iconbtn" onclick="openSettings()" aria-label="Settings">
       <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     </button>
-    <button class="logout" onclick="location.href='/logout'" aria-label="Sign out">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
-      Sign out
-    </button>
+
   </header>
 
   <div class="grid-meters">
@@ -283,13 +312,7 @@
 <div class="modal" id="settings" onclick="if(event.target===this)closeSettings()">
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="settitle">
     <h3 id="settitle">Settings</h3>
-    <p>Personalize the panel, update, and secure access.</p>
-
-    <div class="setrow">
-      <h4>Theme color</h4>
-      <div class="swatches" id="swatches"></div>
-    </div>
-    <div class="divider"></div>
+    <p>Update the panel and secure access.</p>
 
     <div class="setrow">
       <h4>Update</h4>
@@ -312,20 +335,82 @@
     <div class="divider"></div>
 
     <div class="setrow">
+      <h4>Backup</h4>
+      <p style="margin-bottom:10px">Every tunnel and token, the panel password, Telegram settings and
+      certificates — in one file. Keep it private.</p>
+      <div class="upd">
+        <button class="btn-sm" onclick="exportBackup()">Download backup</button>
+        <button class="btn-sm" onclick="$('bfile').click()">Restore from file…</button>
+        <input id="bfile" type="file" accept=".gz,.tar.gz,application/gzip"
+               style="display:none" onchange="importBackup(this)">
+      </div>
+      <div class="msg" id="bkmsg"></div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Telegram bot</h4>
+      <div class="msg" id="tgstate" style="margin-bottom:10px">Loading…</div>
+
+      <label for="tgtoken">Bot token <span class="hint">from @BotFather</span></label>
+      <input id="tgtoken" type="password" autocomplete="off" placeholder="leave blank to keep the current one">
+      <label for="tgadmin">Your numeric user id <span class="hint">from @userinfobot</span></label>
+      <input id="tgadmin" inputmode="numeric" autocomplete="off" placeholder="123456789">
+
+      <label for="tgrelay">Send through</label>
+      <select id="tgrelay" class="sel">
+        <option value="auto">Automatic — pick a live tunnel, switch if it drops</option>
+        <option value="direct">Direct — only where Telegram is reachable</option>
+      </select>
+
+      <label for="tgevery">Status report every (hours, 0 = off)</label>
+      <input id="tgevery" type="number" min="0" max="168" step="1" placeholder="6">
+
+      <div class="toggles">
+        <label class="tg"><input type="checkbox" id="tgalerts"> Alerts</label>
+        <label class="tg"><input type="checkbox" id="tgdown"> Tunnel up/down</label>
+        <label class="tg"><input type="checkbox" id="tgrel"> New version</label>
+      </div>
+      <div class="thresholds">
+        <label>CPU %<input type="number" id="tgcpu" min="0" max="100"></label>
+        <label>RAM %<input type="number" id="tgmem" min="0" max="100"></label>
+        <label>Disk %<input type="number" id="tgdisk" min="0" max="100"></label>
+      </div>
+
+      <div class="upd">
+        <span class="umsg" id="tgmsg"></span>
+        <button class="btn-sm" id="tgtestbtn" onclick="testTelegram()">Send test</button>
+        <button class="btn-sm" id="tgsavebtn" onclick="saveTelegram()">Save</button>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
       <h4>Change password</h4>
       <label for="np">New password (4–128 characters)</label>
       <input id="np" type="password" autocomplete="new-password" placeholder="New password" maxlength="128">
       <label for="np2">Confirm password</label>
       <input id="np2" type="password" autocomplete="new-password" placeholder="Repeat password" maxlength="128">
       <div class="msg" id="pwmsg"></div>
+      <button class="btn-primary" style="width:100%;min-height:46px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer"
+              onclick="savePassword()">Save password</button>
     </div>
 
-    <div class="actions">
+    <div class="divider"></div>
+    <button class="signout" onclick="location.href='/logout'">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      Sign out
+    </button>
+
+    <div class="actions" style="margin-top:14px">
       <button class="btn-ghost" onclick="closeSettings()">Close</button>
-      <button class="btn-primary" onclick="savePassword()">Save password</button>
     </div>
   </div>
 </div>
+
+<button class="supportfab" onclick="openSupport()" aria-label="Support Backpack" title="Support Backpack">
+  <svg class="ic" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8l1.1 1L12 21l7.7-7.6 1.1-1a5.5 5.5 0 000-7.8z"/></svg>
+</button>
 
 <div class="modal" id="support" onclick="if(event.target===this)closeSupport()">
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="suptitle">
@@ -404,7 +489,11 @@ async function copyText(text,el){
 }
 function openSupport(){ $('support').classList.add('on'); }
 function closeSupport(){ $('support').classList.remove('on'); }
-function ringColor(p){ return p<60?'var(--green)':p<85?'var(--amber)':'var(--red)'; }
+// The gauges are decoration, not status, so they carry the accent rather than a
+// traffic-light scale. Load still has to be readable at a glance, so instead of
+// changing hue it brightens: normal sits at the CLI accent, and anything from
+// 85% up shifts to the lighter tint the panel already uses for emphasis.
+function ringColor(p){ return p<85?'var(--accent)':'var(--red-soft)'; }
 function makeRing(el,p){
   el.innerHTML =
     `<svg width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="${Math.round(p)} percent">
@@ -456,36 +545,48 @@ function buildCard(t){
   el.className='tun';
   el.dataset.name=t.name;
   el.innerHTML=`
-    <div class="top"><span class="dot"></span><span class="flag"></span><span class="name" title="${n}">${n}</span></div>
-    <div class="badges">
-      <span class="badge role">${esc(t.role)}</span>
+    <div class="top">
+      <span class="dot" title=""></span>
+      <span class="flag"></span>
+      <span class="name" title="${n}">${n}</span>
       <span class="badge tr"></span>
-      <span class="badge st"></span>
-      <span class="badge bot" style="display:none" title="A hidden port on this tunnel relays the Telegram bot">${ICON.bot} bot relay</span>
+      <span class="badge bot" style="display:none" title="This tunnel relays the Telegram bot">${ICON.bot}</span>
     </div>
     <div class="rows">
+      <div class="r"><div class="k">${t.role==='server'?'Tunnel Port':'Server'}</div><div class="v addr"></div></div>
       <div class="r"><div class="k">Ping</div><div class="v ping"></div></div>
-      <div class="r"><div class="k">Address</div><div class="v addr"></div></div>
-      <div class="r full"><div class="k">${t.role==='server'?'Ports':'Remote'}</div><div class="v ports"></div></div>
+      <div class="r full"><div class="k">${t.role==='server'?'Forwarded Ports':'Remote'}</div><div class="v ports"></div></div>
       <div class="r full peerrow" style="display:none"><div class="k">Peer</div><div class="v peer"></div></div>
     </div>
-    <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} View Logs</button>`;
+    <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} Logs</button>`;
   return el;
 }
 function updateCard(el,t){
   const st=t.state||'stopped';
   if(el.classList.contains(st)===false){ el.className='tun '+st; }
-  const dot=el.querySelector('.dot'); if(dot.className!=='dot '+st) dot.className='dot '+st;
-  const fl=el.querySelector('.flag'); const fe=t.country?flagEmoji(t.country):'';
-  if(fl.textContent!==fe){ fl.textContent=fe; fl.title=t.country?countryName(t.country):''; }
-  const sb=el.querySelector('.badge.st'); const lbl=STATE_LABEL[st];
-  if(sb.textContent!==lbl){ sb.className='badge st '+st; sb.textContent=lbl; }
+  // The dot is the whole status display now, so it carries the label as a
+  // tooltip — the information is still reachable, just not shouted.
+  const dot=el.querySelector('.dot');
+  if(dot.className!=='dot '+st) dot.className='dot '+st;
+  if(dot.title!==STATE_LABEL[st]) dot.title=STATE_LABEL[st];
+
+  // Prefer the country detected from the peer's address; fall back to a label
+  // set by hand, so an explicit choice is never overwritten by a lookup.
+  const cc=t.peerCountry||t.country||'';
+  const fl=el.querySelector('.flag'), fe=cc?flagEmoji(cc):'';
+  if(fl.textContent!==fe){ fl.textContent=fe; fl.title=cc?countryName(cc):''; }
+
   setText(el.querySelector('.badge.tr'),(t.transport||'').toUpperCase());
   el.querySelector('.badge.bot').style.display=t.botRelay?'':'none';
-  const pe=el.querySelector('.ping'); const pc='v ping '+pingClass(t.ping), pt=pingText(t.ping);
-  if(pe.className!==pc) pe.className=pc; setText(pe,pt);
-  setText(el.querySelector('.addr'),t.addr||'—');
+
+  const pe=el.querySelector('.ping'), pc='v ping '+pingClass(t.ping);
+  if(pe.className!==pc) pe.className=pc;
+  setText(pe,pingText(t.ping));
+
+  // A server card shows the port clients dial; the full bind address is noise.
+  setText(el.querySelector('.addr'), t.role==='server' ? (t.tunnelPort||'—') : (t.addr||'—'));
   setText(el.querySelector('.ports'),t.ports||t.addr||'—');
+
   const peerTxt=[t.peerLocation,t.peerISP].filter(Boolean).join(' · ');
   const pr=el.querySelector('.peerrow');
   pr.style.display=peerTxt?'':'none';
@@ -529,28 +630,6 @@ function closeLogs(){
   $('scrim').classList.remove('on'); $('drawer').classList.remove('on');
   clearInterval(logTimer); logName=null;
 }
-// ---- theme ----
-const THEMES=[
-  {name:'Red',    rgb:'255,69,58'},
-  {name:'Mist',   rgb:'173,202,214'},
-  {name:'Cyan',   rgb:'65,187,217'},
-  {name:'Amber',  rgb:'255,155,84'},
-  {name:'Lime',   rgb:'127,184,0'},
-];
-function applyTheme(rgb){
-  document.documentElement.style.setProperty('--accent-rgb',rgb);
-  localStorage.setItem('bp_accent',rgb);
-  renderSwatches();
-}
-function renderSwatches(){
-  const cur=localStorage.getItem('bp_accent')||'255,69,58';
-  $('swatches').innerHTML=THEMES.map(t=>
-    `<div class="sw ${t.rgb===cur?'active':''}" style="background:rgb(${t.rgb})" title="${t.name}"
-      role="button" tabindex="0" aria-label="${t.name} theme" onclick="applyTheme('${t.rgb}')"></div>`).join('');
-}
-// apply saved theme immediately on load
-(function(){ const s=localStorage.getItem('bp_accent'); if(s) document.documentElement.style.setProperty('--accent-rgb',s); })();
-
 // ---- update ----
 async function checkUpdate(){
   const m=$('umsg'), b=$('ubtn'); m.textContent='Checking…'; b.disabled=true;
@@ -564,9 +643,30 @@ async function checkUpdate(){
 }
 async function doUpdate(){
   const m=$('umsg'), b=$('ubtn');
-  m.textContent='Updating… the panel will restart and this page will reload.'; b.disabled=true;
+  m.textContent='Updating…'; b.disabled=true;
   try{ await fetch('/api/update',{method:'POST'}); }catch(e){}
-  setTimeout(()=>location.reload(),30000);
+
+  // An update can refuse to install — a download whose checksum does not verify
+  // is not written over the binary. Poll for the outcome rather than assuming
+  // success and reloading into the old version with nothing explaining why.
+  let gone=false;
+  const poll=setInterval(async()=>{
+    let s;
+    try{ s=await (await fetch('/api/update/status')).json(); }
+    catch(e){
+      // The panel restarting is what success looks like from here.
+      if(!gone){ gone=true; m.textContent='Installing — the panel is restarting…'; }
+      return;
+    }
+    if(s.running){ m.textContent=s.log&&s.log.length?s.log[s.log.length-1]:'Updating…'; return; }
+    clearInterval(poll);
+    if(s.error){ m.textContent='Update failed: '+s.error; b.disabled=false; return; }
+    m.textContent='Installed — reloading…';
+    setTimeout(()=>location.reload(),3000);
+  },2000);
+
+  // If nothing conclusive arrives, reload anyway rather than spinning forever.
+  setTimeout(()=>{ clearInterval(poll); location.reload(); },120000);
 }
 
 // ---- panel port ----
@@ -587,13 +687,115 @@ async function savePanelPort(){
   }catch(e){ m.textContent='Failed.'; b.disabled=false; }
 }
 
+// ---- backup ----
+async function exportBackup(){
+  const m=$('bkmsg'); m.className='msg'; m.textContent='Preparing…';
+  // A plain navigation rather than fetch+blob: the archive can be large and the
+  // browser's own download handling deals with that better than holding it all
+  // in memory.
+  location.href='/api/backup/export';
+  setTimeout(()=>{ m.textContent='Download started. Keep the file private — it holds every token.'; },600);
+}
+
+async function importBackup(input){
+  const m=$('bkmsg'), f=input.files&&input.files[0];
+  input.value=''; // so choosing the same file twice still fires
+  if(!f) return;
+  if(!confirm('Restore from '+f.name+'?\n\nThis replaces the current tunnels and settings, '+
+              'and you will be signed out.')) return;
+
+  m.className='msg'; m.textContent='Restoring…';
+  try{
+    const body=new FormData(); body.append('backup',f);
+    const r=await fetch('/api/backup/import',{method:'POST',body});
+    if(!r.ok){ m.className='msg err'; m.textContent=await r.text(); return; }
+    const res=await r.json();
+    m.className='msg ok';
+    m.textContent=`Restored ${res.files} files, started ${res.started} tunnel(s). Signing out…`;
+    setTimeout(()=>location.href='/logout',2200);
+  }catch(e){ m.className='msg err'; m.textContent='Restore failed.'; }
+}
+
+// ---- telegram ----
+async function loadTelegram(){
+  try{
+    const t=await (await fetch('/api/telegram')).json();
+    $('tgstate').className='msg';
+    $('tgstate').textContent = t.configured
+      ? 'Configured ('+t.tokenHint+') · relay: '+t.relay
+      : 'Not configured yet — a bot token and your user id are all it needs.';
+    $('tgtoken').placeholder = t.configured ? 'leave blank to keep the current one' : 'paste the token from @BotFather';
+    $('tgadmin').value=t.adminId||'';
+    $('tgevery').value=t.intervalHours||0;
+    $('tgalerts').checked=!!t.alerts.enabled;
+    $('tgdown').checked=!!t.alerts.tunnelDown;
+    $('tgrel').checked=!!t.alerts.newRelease;
+    $('tgcpu').value=t.alerts.cpu; $('tgmem').value=t.alerts.mem; $('tgdisk').value=t.alerts.disk;
+    await fillRelayOptions(t.relayMode);
+  }catch(e){ $('tgstate').textContent='Could not load the bot settings.'; }
+}
+
+// The relay list is rebuilt each time so a tunnel added since the page loaded
+// can be chosen without a refresh.
+async function fillRelayOptions(current){
+  const sel=$('tgrelay');
+  [...sel.querySelectorAll('option[data-tunnel]')].forEach(o=>o.remove());
+  try{
+    const list=await (await fetch('/api/relays')).json()||[];
+    list.forEach(t=>{
+      const o=document.createElement('option');
+      o.value=t.name; o.dataset.tunnel='1';
+      o.textContent='Always use '+t.name+' ('+(t.transport||'').toUpperCase()+
+                    (t.state==='online'?'':' — '+t.state)+')';
+      sel.appendChild(o);
+    });
+  }catch(e){}
+  sel.value=current||'auto';
+  if(!sel.value) sel.value='auto';
+}
+
+async function saveTelegram(){
+  const m=$('tgmsg'), b=$('tgsavebtn');
+  m.textContent='Saving…'; b.disabled=true;
+  try{
+    const body=new URLSearchParams({
+      token:$('tgtoken').value.trim(),
+      adminId:$('tgadmin').value.trim(),
+      relayMode:$('tgrelay').value,
+      intervalHours:$('tgevery').value||'0',
+      alertsEnabled:$('tgalerts').checked?'1':'0',
+      alertTunnelDown:$('tgdown').checked?'1':'0',
+      alertNewRelease:$('tgrel').checked?'1':'0',
+      alertCPU:$('tgcpu').value, alertMem:$('tgmem').value, alertDisk:$('tgdisk').value,
+    });
+    const r=await fetch('/api/telegram',{method:'POST',body});
+    b.disabled=false;
+    if(!r.ok){ m.textContent=await r.text(); return; }
+    $('tgtoken').value='';
+    m.textContent='Saved.';
+    await loadTelegram();
+  }catch(e){ m.textContent='Save failed.'; b.disabled=false; }
+}
+
+async function testTelegram(){
+  const m=$('tgmsg'), b=$('tgtestbtn');
+  m.textContent='Sending…'; b.disabled=true;
+  try{
+    const r=await (await fetch('/api/telegram/test',{method:'POST'})).json();
+    b.disabled=false;
+    m.textContent = r.status==='ok' ? 'Sent — check Telegram.' : ('Failed: '+(r.error||'unknown'));
+  }catch(e){ m.textContent='Failed to send.'; b.disabled=false; }
+}
+
 // ---- settings / change password ----
 function openSettings(){
   $('np').value=''; $('np2').value=''; $('pwmsg').textContent=''; $('pwmsg').className='msg';
-  renderSwatches();
   const b=$('ubtn'); b.textContent='Check'; b.onclick=checkUpdate; b.disabled=false;
   $('umsg').textContent='Check GitHub for the latest version.';
   $('pport').value=location.port||'80'; $('ppmsg').textContent='The panel restarts on the new port.'; $('ppbtn').disabled=false;
+  $('bkmsg').textContent=''; $('bkmsg').className='msg';
+  $('tgmsg').textContent=''; $('tgtoken').value='';
+  loadTelegram();
   $('settings').classList.add('on'); setTimeout(()=>$('np').focus(),200);
 }
 function closeSettings(){ $('settings').classList.remove('on'); }

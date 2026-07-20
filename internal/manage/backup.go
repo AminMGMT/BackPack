@@ -39,7 +39,10 @@ type RestoreResult struct {
 	AutoRefreshHours int      // auto-refresh interval restored from the archive
 }
 
-// WriteBackup streams a gzip-compressed tar of the entire config directory
+// WriteBackup streams a gzip-compressed tar of the entire config directory.
+//
+// Exported because the web panel streams a backup straight to the browser as a
+// download; everything else goes through BackupToFile.
 // (every tunnel TOML, webui.json, telegram.json, certificates, meta and the
 // recorded install path) plus a small sidecar capturing the auto-refresh
 // schedule, to w. It is the single source for both the CLI and web downloads.
@@ -259,11 +262,22 @@ func Restore(r io.Reader) (RestoreResult, error) {
 				res.Failed++
 				continue
 			}
+			// Enabled first so it survives a reboot, then restarted.
+			//
+			// Starting is not enough: `systemctl start` does nothing to a
+			// service that is already running, so a tunnel that was up would
+			// carry on with the configuration it was started with and quietly
+			// ignore the one just restored. It would also keep writing its old
+			// traffic totals over the restored ones.
 			if err := StartService(app.ServiceName(t.Name)); err != nil {
 				res.Failed++
-			} else {
-				res.Started++
+				continue
 			}
+			if err := RestartService(app.ServiceName(t.Name)); err != nil {
+				res.Failed++
+				continue
+			}
+			res.Started++
 		}
 	}
 

@@ -68,6 +68,22 @@ func RunWatchdog(ctx context.Context) {
 // tunnelHealthy reports whether a running tunnel currently has its connection up,
 // based on the established TCP sockets in `pairs` ([local, peer] address pairs).
 func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
+	// UDP-based transports (udp, kcp) hold no TCP sockets at all, so the TCP
+	// table says nothing about them.
+	//
+	// A client keeps a connected UDP socket per session, which does show up
+	// with its peer, so it can be checked properly. A server's KCP listener is
+	// a single unconnected socket that never records who is talking to it —
+	// there is nothing to observe, so a running service is reported healthy
+	// rather than being restarted forever on the strength of a check that
+	// cannot succeed.
+	if isDatagram(t.Transport) {
+		if t.Role == "server" {
+			return true
+		}
+		pairs = establishedUDPPairs()
+	}
+
 	if t.Role == "server" {
 		// Healthy if any client is connected to the control (bind) port.
 		if _, tport, err := net.SplitHostPort(t.Addr); err == nil {
@@ -118,6 +134,63 @@ func establishedPairs() [][2]string {
 		pairs = append(pairs, [2]string{f[len(f)-2], f[len(f)-1]})
 	}
 	return pairs
+}
+
+// establishedUDPPairs returns [localAddr, peerAddr] for every connected UDP
+// socket. A UDP socket only has a peer once it has been connected to one, which
+// is exactly what a KCP or UDP client session does — so these are the tunnel's
+// own sockets and nobody else's.
+func establishedUDPPairs() [][2]string {
+	// Deliberately not `ss -u state established`.
+	//
+	// UDP has no connection state for the kernel to filter on, and iproute2
+	// versions disagree about what that filter means for datagram sockets —
+	// some return nothing at all. That made a connected KCP client look
+	// unconnected, which the health check then reported as "running, but not
+	// connected to the server" on a tunnel that was carrying traffic.
+	//
+	// So every UDP socket is listed and the connected ones are identified by
+	// what actually distinguishes them: a real peer address. A socket that has
+	// called connect() has one; a listener shows a wildcard.
+	out, err := exec.Command("ss", "-Huan").Output()
+	if err != nil {
+		return nil
+	}
+
+	var pairs [][2]string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		local, peer := f[len(f)-2], f[len(f)-1]
+		if !hasRealPeer(peer) {
+			continue
+		}
+		pairs = append(pairs, [2]string{local, peer})
+	}
+	return pairs
+}
+
+// hasRealPeer reports whether an `ss` peer column names an actual remote end
+// rather than a listening socket's wildcard.
+func hasRealPeer(peer string) bool {
+	if peer == "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(peer)
+	if err != nil {
+		return false
+	}
+	// A listener renders as *:*, 0.0.0.0:*, or [::]:* depending on the family.
+	if port == "*" || port == "0" {
+		return false
+	}
+	switch host {
+	case "*", "", "0.0.0.0", "::", "[::]":
+		return false
+	}
+	return true
 }
 
 func portOf(hostPort string) string {

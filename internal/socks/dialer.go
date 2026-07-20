@@ -74,18 +74,30 @@ func negotiate(conn net.Conn, user, pass, host string, port int) error {
 	if head[1] != repOK {
 		return fmt.Errorf("socks5: connect failed (code %d)", head[1])
 	}
-	// Consume bound address + port.
+	// Consume the bound address and port.
+	//
+	// These errors are returned rather than ignored: leaving unread bytes in
+	// the socket does not fail here, it fails later — the next read is the
+	// caller's, which parses the leftovers as the start of its own response.
+	// The symptom is a request that mysteriously returns garbage instead of a
+	// connection error, which is far harder to diagnose than the real fault.
+	var skip int
 	switch head[3] {
 	case atypIPv4:
-		io.ReadFull(conn, make([]byte, 4+2))
+		skip = 4 + 2
 	case atypIPv6:
-		io.ReadFull(conn, make([]byte, 16+2))
+		skip = 16 + 2
 	case atypHost:
 		l := make([]byte, 1)
 		if _, err := io.ReadFull(conn, l); err != nil {
-			return err
+			return fmt.Errorf("socks5: reading the bound address length: %w", err)
 		}
-		io.ReadFull(conn, make([]byte, int(l[0])+2))
+		skip = int(l[0]) + 2
+	default:
+		return fmt.Errorf("socks5: unknown address type %d in reply", head[3])
+	}
+	if _, err := io.ReadFull(conn, make([]byte, skip)); err != nil {
+		return fmt.Errorf("socks5: reading the bound address: %w", err)
 	}
 	conn.SetDeadline(time.Time{})
 	return nil

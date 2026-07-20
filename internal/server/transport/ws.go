@@ -14,6 +14,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 
 	"github.com/gorilla/websocket"
@@ -29,9 +30,10 @@ type WsTransport struct {
 	tunnelChannel  chan TunnelChannel
 	localChannel   chan LocalTCPConn
 	reqNewConnChan chan struct{}
-	controlChannel *websocket.Conn
+	controlChannel wsControl
 	restartMutex   sync.Mutex
 	usageMonitor   *web.Usage
+	limits         *limiter
 }
 
 type WsConfig struct {
@@ -39,6 +41,9 @@ type WsConfig struct {
 	SnifferLog   string
 	TLSCertFile  string // Path to the TLS certificate file
 	TLSKeyFile   string // Path to the TLS key file
+	ACMEDomain   string // non-empty switches to Let's Encrypt for this domain
+	ACMEEmail    string
+	ACMECacheDir string
 	TunnelStatus string
 	Token        string
 	Ports        []string
@@ -50,6 +55,10 @@ type WsConfig struct {
 	WebPort      int
 	Mode         config.TransportType // ws or wss
 
+	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
+	MaxConnections int
+	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
+	BandwidthMbps int
 }
 
 func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
@@ -66,8 +75,8 @@ func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 		tunnelChannel:  make(chan TunnelChannel, config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		controlChannel: nil, // will be set when a control connection is established
 		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
 	return server
@@ -101,7 +110,7 @@ func (s *WsTransport) Restart() {
 	}
 
 	// Close control channel connection
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.controlChannel.Close()
 	}
 
@@ -115,7 +124,7 @@ func (s *WsTransport) Restart() {
 	s.tunnelChannel = make(chan TunnelChannel, s.config.ChannelSize)
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
-	s.controlChannel = nil
+	s.controlChannel.Clear()
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
 
@@ -140,7 +149,7 @@ func (s *WsTransport) channelHandler() {
 				return
 
 			default:
-				_, msg, err := s.controlChannel.ReadMessage()
+				_, msg, err := s.controlChannel.Get().ReadMessage()
 				// Exit if there's an error
 				if err != nil {
 					if s.cancel != nil {
@@ -157,10 +166,10 @@ func (s *WsTransport) channelHandler() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			_ = s.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
+			_ = s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
 			return
 		case <-s.reqNewConnChan:
-			err := s.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Chan})
+			err := s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Chan})
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -168,7 +177,7 @@ func (s *WsTransport) channelHandler() {
 			}
 
 		case <-ticker.C:
-			err := s.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
+			err := s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
 			if err != nil {
 				s.logger.Errorf("failed to send heartbeat signal. Error: %v.", err)
 				go s.Restart()
@@ -218,11 +227,13 @@ func (s *WsTransport) tunnelListener() {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			s.logger.Tracef("received http request from %s", r.RemoteAddr)
 
-			// Read the "Authorization" header
-			authHeader := r.Header.Get("Authorization")
-			if authHeader != fmt.Sprintf("Bearer %v", s.config.Token) {
-				s.logger.Warnf("unauthorized request from %s, closing connection", r.RemoteAddr)
-				http.Error(w, "unauthorized", http.StatusUnauthorized) // Send 401 Unauthorized response
+			// Only a genuine tunnel connection (websocket upgrade, tunnel path,
+			// valid credential) is served as a tunnel. Everything else — a
+			// browser, a scanner, a probe with the wrong token — gets the decoy
+			// website, so on 443 this looks like an ordinary HTTPS site rather
+			// than a tunnel that answers with 401.
+			if !isTunnelRequest(r, s.config.Token) {
+				serveDecoy(w)
 				return
 			}
 
@@ -233,14 +244,14 @@ func (s *WsTransport) tunnelListener() {
 			}
 
 			if r.URL.Path == "/channel" {
-				if s.controlChannel != nil {
+				if s.controlChannel.IsSet() {
 					s.logger.Warn("new control channel requested.")
 					s.controlChannel.Close()
 					conn.Close()
 					go s.Restart()
 					return
 				}
-				s.controlChannel = conn
+				s.controlChannel.Set(conn)
 
 				s.logger.Info("control channel established successfully")
 
@@ -281,7 +292,7 @@ func (s *WsTransport) tunnelListener() {
 	if s.config.Mode == config.WS {
 		go func() {
 			s.logger.Infof("ws server starting, listening on %s", addr)
-			if s.controlChannel == nil {
+			if !s.controlChannel.IsSet() {
 				s.logger.Info("waiting for ws control channel connection")
 			}
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -289,12 +300,24 @@ func (s *WsTransport) tunnelListener() {
 			}
 		}()
 	} else {
+		// Built before the goroutine starts so a bad certificate or an
+		// unwritable ACME cache is reported here, at startup, instead of
+		// surfacing later as handshake failures on a listener that is up.
+		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
+		if err != nil {
+			s.logger.Fatalf("failed to set up TLS on %s: %v", addr, err)
+		}
+		server.TLSConfig = tlsCfg
+
 		go func() {
 			s.logger.Infof("wss server starting, listening on %s", addr)
-			if s.controlChannel == nil {
+			if !s.controlChannel.IsSet() {
 				s.logger.Info("waiting for wss control channel connection")
 			}
-			if err := server.ListenAndServeTLS(s.config.TLSCertFile, s.config.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+			// Empty paths: the certificate comes from TLSConfig.GetCertificate,
+			// which is what allows a renewed certificate to be picked up
+			// without restarting the tunnel.
+			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
 			}
 		}()
@@ -308,7 +331,7 @@ func (s *WsTransport) tunnelListener() {
 		s.logger.Errorf("Failed to gracefully shutdown the server: %v", err)
 	}
 
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.controlChannel.Close()
 	}
 
@@ -463,6 +486,16 @@ func (s *WsTransport) acceptLocalConn(listener net.Listener, remoteAddr string) 
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
+			// Enforce the tunnel's limits before the connection costs anything:
+			// a refused connection should be refused here, not after it has
+			// taken a slot in the pool.
+			if !s.limits.acquire() {
+				s.logger.Warnf("connection limit reached, refusing %s", conn.RemoteAddr())
+				conn.Close()
+				continue
+			}
+			conn = s.limits.wrap(conn)
+
 			select {
 			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 
@@ -478,6 +511,7 @@ func (s *WsTransport) acceptLocalConn(listener net.Listener, remoteAddr string) 
 
 			default: // channel is full, discard the connection
 				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
+				s.limits.release()
 				conn.Close()
 			}
 		}
@@ -510,7 +544,12 @@ func (s *WsTransport) handleLoop() {
 						continue loop
 					}
 					// Handle data exchange between connections
-					go handlers.WSConnectionHandler(s.ctx, tunnelConnection.conn, localConn.conn, s.logger, s.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+					go func(tunnelConn TunnelChannel, localConn LocalTCPConn) {
+						// Free the connection slot once the transfer ends, or
+						// the limit would fill up permanently.
+						defer s.limits.release()
+						handlers.WSConnectionHandler(s.ctx, tunnelConn.conn, localConn.conn, s.logger, s.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+					}(tunnelConnection, localConn)
 					break loop
 				}
 			}
@@ -548,5 +587,17 @@ func (s *WsTransport) keepAlive(conn *TunnelChannel) {
 			conn.mu.Unlock()
 			s.logger.Trace("ping sent to the client")
 		}
+	}
+}
+
+// tlsSettings describes how this listener should obtain its certificate:
+// Let's Encrypt when a domain is configured, otherwise the PEM pair on disk.
+func (s *WsTransport) tlsSettings() network.TLSSettings {
+	return network.TLSSettings{
+		CertFile:     s.config.TLSCertFile,
+		KeyFile:      s.config.TLSKeyFile,
+		ACMEDomain:   s.config.ACMEDomain,
+		ACMEEmail:    s.config.ACMEEmail,
+		ACMECacheDir: s.config.ACMECacheDir,
 	}
 }

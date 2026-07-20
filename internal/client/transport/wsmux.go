@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -23,11 +24,8 @@ type WsMuxTransport struct {
 	config          *WsMuxConfig
 	smuxConfig      *smux.Config
 	parentctx       context.Context
-	ctx             context.Context
-	cancel          context.CancelFunc
+	state           clientState
 	logger          *logrus.Logger
-	controlChannel  *websocket.Conn
-	usageMonitor    *web.Usage
 	restartMutex    sync.Mutex
 	poolConnections int32
 	loadConnections int32
@@ -73,22 +71,21 @@ func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logr
 		},
 		config:          config,
 		parentctx:       parentCtx,
-		ctx:             ctx,
-		cancel:          cancel,
 		logger:          logger,
-		controlChannel:  nil, // will be set when a control connection is established
-		usageMonitor:    web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
 	}
 
+	// Seed the first generation through the same path a restart uses, so
+	// there is only one way this state is ever published.
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
 	return client
 }
 
 func (c *WsMuxTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.usageMonitor.Monitor()
+		go c.state.Usage().Monitor()
 	}
 
 	c.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", c.config.Mode)
@@ -109,28 +106,24 @@ func (c *WsMuxTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.cancel != nil {
-		c.cancel()
+	if c.state.Cancel() != nil {
+		c.state.Cancel()()
 	}
 
 	// close control channel connection
-	if c.controlChannel != nil {
-		c.controlChannel.Close()
-	}
+	c.state.CloseConn()
 
 	time.Sleep(2 * time.Second)
 
 	ctx, cancel := context.WithCancel(c.parentctx)
-	c.ctx = ctx
-	c.cancel = cancel
 
-	// Re-initialize variables
-	c.controlChannel = nil
-	c.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger)
+	// Publish the whole new generation at once: a reader must never see
+	// the new context paired with the old monitor, or vice versa.
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
 	c.config.TunnelStatus = ""
-	c.poolConnections = 0
-	c.loadConnections = 0
-	c.controlFlow = make(chan struct{}, 100)
+	atomic.StoreInt32(&c.poolConnections, 0)
+	atomic.StoreInt32(&c.loadConnections, 0)
+	drain(c.controlFlow)
 
 	// set the log level again
 	c.logger.SetLevel(level)
@@ -143,11 +136,11 @@ func (c *WsMuxTransport) channelDialer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 		default:
 
-			tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
 			if err != nil {
 				c.logger.Errorf("control channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -158,7 +151,7 @@ func (c *WsMuxTransport) channelDialer() {
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
-			c.controlChannel = tunnelWSConn
+			c.state.SetWSConn(tunnelWSConn)
 			c.logger.Info("control channel established successfully")
 
 			c.config.TunnelStatus = fmt.Sprintf("Connected (%s)", c.config.Mode)
@@ -201,7 +194,7 @@ func (c *WsMuxTransport) poolMaintainer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 
 		case <-tickerPool.C:
@@ -243,13 +236,13 @@ func (c *WsMuxTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-c.ctx.Done():
+			case <-c.state.Ctx().Done():
 				return
 
 			default:
-				_, msg, err := c.controlChannel.ReadMessage()
+				_, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
-					if c.cancel != nil {
+					if c.state.Cancel() != nil {
 						c.logger.Error("failed to read from channel connection. ", err)
 						go c.Restart()
 					}
@@ -262,8 +255,8 @@ func (c *WsMuxTransport) channelHandler() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
-			_ = c.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
+		case <-c.state.Ctx().Done():
+			_ = c.state.WSConn().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
 			return
 
 		case msg := <-msgChan:
@@ -280,7 +273,7 @@ func (c *WsMuxTransport) channelHandler() {
 
 			case utils.SG_HB:
 				c.logger.Debug("heartbeat received successfully")
-				err := c.controlChannel.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
+				err := c.state.WSConn().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
 				if err != nil {
 					c.logger.Errorf("failed to send heartbeat: %v", msg)
 					go c.Restart()
@@ -307,7 +300,10 @@ func (c *WsMuxTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new %s tunnel connection to address %s", c.config.Mode, c.config.RemoteAddr)
 
 	// Dial to the tunnel server
-	tunnelWSConn, err := network.WebSocketDialer(c.ctx, c.config.Endpoints.Current(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 2*1024*1024, 2*1024*1024)
+	// Next() rather than Current(): with load balancing enabled the pool
+	// spreads its connections over every configured endpoint, so one
+	// congested route only slows its own share of the traffic.
+	tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 2*1024*1024, 2*1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
@@ -334,7 +330,7 @@ func (c *WsMuxTransport) handleSession(tunnelConn *websocket.Conn) {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 		default:
 			stream, err := session.AcceptStream()
@@ -377,14 +373,14 @@ func (c *WsMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 		recvBuf = 0
 	}
 
-	localConnection, err := network.TcpDialer(c.ctx, resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
 	if err != nil {
-		c.logger.Errorf("local dialer: %v", err)
+		localDial.Report(c.logger, resolvedAddr, err)
 		stream.Close()
 		return
 	}
 
 	c.logger.Debugf("connected to local address %s successfully", remoteAddr)
 
-	handlers.TCPConnectionHandler(c.ctx, false, stream, localConnection, c.logger, c.usageMonitor, int(port), c.config.Sniffer)
+	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(stream), localConnection, c.logger, c.state.Usage(), int(port), c.config.Sniffer)
 }

@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
@@ -31,11 +33,26 @@ func Run() {
 		tui.Warn("Web panel could not start: " + err.Error())
 		tui.PressEnter()
 	}
+
+	// The watchdog, the Telegram bot and the alerts run in their own service so
+	// they survive the panel being stopped. Installing it here is also how an
+	// install that predates the service picks it up.
+	if err := manage.EnsureMonitorService(); err != nil {
+		tui.Warn("Monitor service could not start: " + err.Error())
+		tui.PressEnter()
+	}
+
 	go resolveServerIP()
+
+	// Look for a newer release in the background. The menu itself only ever
+	// reads the cached answer, so a slow or blocked GitHub cannot delay a
+	// redraw — the notice simply appears once the check comes back.
+	go manage.RefreshUpdateCheckIfStale(6 * time.Hour)
 
 	for {
 		tui.Clear()
 		tui.Logo(app.Version)
+		printUpdateBanner()
 		tui.Rule()
 		printMenu()
 
@@ -68,6 +85,18 @@ func Run() {
 	}
 }
 
+// printUpdateBanner shows a one-line notice when a newer release exists. It
+// reads the cache only, so it costs nothing and prints nothing until the
+// background check has an answer.
+func printUpdateBanner() {
+	tag, ok := manage.UpdateAvailable()
+	if !ok {
+		return
+	}
+	fmt.Printf("  %s⬆ %s is available%s %s— option 8 to update safely%s\n",
+		tui.Bold+tui.Red, tag, tui.Reset, tui.Gray, tui.Reset)
+}
+
 // printMenu renders the main menu: red numbers, white titles, gray descriptions.
 func printMenu() {
 	fmt.Println()
@@ -78,7 +107,11 @@ func printMenu() {
 	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")
 	menuItem(6, "Optimize", "kernel & network tuning — BBR, buffers, limits")
 	menuItem(7, "Telegram Bot", "status reports, relayed through a tunnel")
-	menuItem(8, "Update", "safe update with automatic rollback")
+	updateDesc := "safe update with automatic rollback"
+	if tag, ok := manage.UpdateAvailable(); ok {
+		updateDesc = tag + " is out — safe update with automatic rollback"
+	}
+	menuItem(8, "Update", updateDesc)
 	menuItem(9, "Uninstall", "remove everything")
 	menuItem(10, "Exit", "")
 	fmt.Println()
@@ -134,6 +167,8 @@ func manageMenu() {
 			{Title: "Manage Tunnels", Desc: "edit ports & transport, start/stop, live log, delete"},
 			{Title: "Status", Desc: "live tunnel table"},
 			{Title: "Health Check", Desc: "find problems and get a fix for each one"},
+			{Title: "Link Test", Desc: "measure the link and get a transport recommendation"},
+			{Title: "Tunnel Metrics", Desc: "traffic, packet loss and error correction per tunnel"},
 			{Title: "Restart ALL", Desc: "restart every tunnel at once"},
 			{Title: "Auto Refresh", Desc: "restart all tunnels every N hours — " + refreshLabel()},
 			{Title: "File Locations", Desc: "where every config, service and backup lives"},
@@ -146,12 +181,16 @@ func manageMenu() {
 		case 2:
 			manage.HealthCheck()
 		case 3:
+			manage.LinkTest()
+		case 4:
+			manage.TunnelMetrics()
+		case 5:
 			ok, failed := manage.RestartAll()
 			tui.Success(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 			tui.PressEnter()
-		case 4:
+		case 6:
 			autoRefreshMenu()
-		case 5:
+		case 7:
 			manage.FileLocations()
 		default:
 			return
@@ -438,9 +477,8 @@ func telegramMenu() {
 	cfg := telegram.Load()
 	if cfg.Token != "" {
 		tui.Info(fmt.Sprintf("Configured — reports every %d hour(s).", telegram.IntervalHours()))
-		if cfg.ViaTunnel != "" {
-			tui.Warn("Relayed through tunnel " + cfg.ViaTunnel + " (works from Iran).")
-		}
+		tui.Info("Relay                 : " + telegram.RelayStatus())
+		tui.Info("Alerts                : " + alertSummaryLine(cfg.Alerts))
 	} else {
 		tui.Info("Not configured yet.")
 	}
@@ -448,6 +486,8 @@ func telegramMenu() {
 
 	idx := tui.ChooseOpt("Choose:", []tui.Option{
 		{Title: "Configure / Update bot", Desc: "token, admin id, tunnel relay"},
+		{Title: "Alerts", Desc: "warn when CPU, memory, disk or a tunnel goes bad"},
+		{Title: "Diagnose relay", Desc: "find which hop is broken when messages fail"},
 		{Title: "Send a test report now", Desc: "verify the bot works"},
 		{Title: "Disable reports", Desc: "stop the scheduled reports"},
 	})
@@ -455,13 +495,17 @@ func telegramMenu() {
 	case 0:
 		configureTelegram(cfg)
 	case 1:
+		configureAlerts(cfg)
+	case 2:
+		diagnoseRelay()
+	case 3:
 		if err := telegram.SendStatusNow(); err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
 			tui.Success("Report sent.")
 		}
 		tui.PressEnter()
-	case 2:
+	case 4:
 		if err := telegram.Disable(); err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
@@ -471,10 +515,80 @@ func telegramMenu() {
 	}
 }
 
+// alertSummaryLine renders the alert state as one line for the menu header.
+func alertSummaryLine(a telegram.AlertConfig) string {
+	if !a.Enabled {
+		return "off"
+	}
+	parts := []string{}
+	if a.CPUPercent > 0 {
+		parts = append(parts, fmt.Sprintf("cpu %d%%", a.CPUPercent))
+	}
+	if a.MemPercent > 0 {
+		parts = append(parts, fmt.Sprintf("ram %d%%", a.MemPercent))
+	}
+	if a.DiskPercent > 0 {
+		parts = append(parts, fmt.Sprintf("disk %d%%", a.DiskPercent))
+	}
+	if a.TunnelDown {
+		parts = append(parts, "tunnel up/down")
+	}
+	if a.NewRelease {
+		parts = append(parts, "new release")
+	}
+	if len(parts) == 0 {
+		return "on, but nothing is being watched"
+	}
+	return "on — " + strings.Join(parts, ", ")
+}
+
+// configureAlerts edits the alert thresholds.
+func configureAlerts(cfg telegram.Config) {
+	tui.Clear()
+	tui.Title("Alerts")
+	fmt.Println()
+	tui.Warn("The bot messages you when a threshold is crossed, and again when")
+	tui.Warn("it recovers. A value sitting on the line only reports once.")
+	tui.Warn("Enter 0 for a threshold to stop watching it.")
+	fmt.Println()
+
+	if cfg.Token == "" {
+		tui.Error("Configure the bot first — there is nowhere to send an alert.")
+		tui.PressEnter()
+		return
+	}
+
+	a := cfg.Alerts
+	a.Enabled = tui.Confirm("Send alerts", a.Enabled)
+	if a.Enabled {
+		a.CPUPercent = tui.PromptInt("Processor threshold %", a.CPUPercent)
+		a.MemPercent = tui.PromptInt("Memory threshold %", a.MemPercent)
+		a.DiskPercent = tui.PromptInt("Disk threshold %", a.DiskPercent)
+		a.TunnelDown = tui.Confirm("Alert when a tunnel goes down or comes back", a.TunnelDown)
+		a.NewRelease = tui.Confirm("Tell me when a new Backpack version is released", a.NewRelease)
+		a.CheckSeconds = tui.PromptInt("Check every (seconds)", a.CheckSeconds)
+		a.CooldownMinutes = tui.PromptInt("Repeat a standing alert every (minutes)", a.CooldownMinutes)
+	}
+
+	cfg.Alerts = a
+	if err := telegram.Save(cfg); err != nil {
+		tui.Error("Failed to save: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("Alert settings saved.")
+	fmt.Println()
+	tui.Info(a.Summary())
+	fmt.Println()
+	tui.Warn("Watched by the backpack-monitor service, which runs on its own —")
+	tui.Warn("alerts keep working even with the web panel stopped.")
+	tui.PressEnter()
+}
+
 // configureTelegram sets up the bot. On an Iran server Telegram is blocked, so
-// the primary path relays traffic through a tunnel: backpack exposes a random
-// port on the chosen tunnel that maps to the peer's built-in SOCKS5 proxy and
-// sends every bot request through it — this works 100% from Iran.
+// the primary path relays traffic through a tunnel: backpack forwards a
+// loopback port on the chosen tunnel straight to api.telegram.org and sends
+// every bot request through it, with the peer making the outbound connection.
 func configureTelegram(cfg telegram.Config) {
 	tui.Info("Get a bot token from @BotFather and your numeric user id from @userinfobot.")
 	fmt.Println()
@@ -497,23 +611,43 @@ func configureTelegram(cfg telegram.Config) {
 		}
 		cfg.ViaTunnel = ""
 	} else {
-		opts := make([]tui.Option, 0, len(tunnels)+1)
+		// Automatic first, and the default. Pinning a tunnel means the bot goes
+		// silent exactly when that tunnel drops — which is the moment its
+		// warnings matter most.
+		opts := []tui.Option{{
+			Title: "Automatic (recommended)",
+			Desc:  "picks a connected tunnel and switches by itself if it drops",
+		}}
 		for _, t := range tunnels {
 			opts = append(opts, tui.Option{
-				Title: "Relay via " + t.Name,
-				Desc:  fmt.Sprintf("%s %s — recommended, works from Iran", t.Role, t.Transport),
+				Title: "Always use " + t.Name,
+				Desc:  fmt.Sprintf("%s %s — pinned; the bot goes quiet if it drops", t.Role, t.Transport),
 			})
 		}
 		opts = append(opts, tui.Option{
 			Title: "Direct",
 			Desc:  "only if THIS server can reach Telegram (e.g. kharej)",
 		})
+
 		idx := tui.ChooseOpt("Send Telegram traffic through:", opts)
-		if idx < 0 {
+		switch {
+		case idx < 0:
 			return
-		}
-		if idx < len(tunnels) {
-			cfg.ViaTunnel = tunnels[idx].Name
+
+		case idx == 0:
+			cfg.ViaTunnel = telegram.AutoRelay
+			cfg.SocksPort = 0 // resolved per request
+			tui.Info("Preparing a relay on a connected tunnel...")
+			if name, port, err := telegram.PrepareAutoRelay(); err != nil {
+				tui.Warn("Could not prepare one yet: " + err.Error())
+				tui.Warn("The bot will keep trying as tunnels come up.")
+			} else {
+				tui.Success(fmt.Sprintf("Relay ready on %s (port %d).", name, port))
+				tui.Warn("Restart the CLIENT side of that tunnel once so it picks up the port.")
+			}
+
+		case idx <= len(tunnels):
+			cfg.ViaTunnel = tunnels[idx-1].Name
 			tui.Info("Setting up a SOCKS5 relay through tunnel " + cfg.ViaTunnel + "...")
 			port, err := manage.EnsureSocksPort(cfg.ViaTunnel)
 			if err != nil {
@@ -524,7 +658,8 @@ func configureTelegram(cfg telegram.Config) {
 			cfg.SocksPort = port
 			tui.Success(fmt.Sprintf("Relay ready — port %d added to the tunnel.", port))
 			tui.Warn("Reconnect/restart the CLIENT tunnel once so it picks up the new port.")
-		} else {
+
+		default:
 			cfg.ViaTunnel = ""
 		}
 	}
@@ -550,21 +685,52 @@ func updateMenu() {
 		tui.Clear()
 		tui.Title("Update Backpack")
 		tui.Warn("Current version: " + app.Version)
+		tui.Warn("Release channel : " + manage.ChannelLabel())
 		fmt.Println()
 
 		idx := tui.ChooseOpt("Choose:", []tui.Option{
 			{Title: "Check for updates", Desc: "install the latest release — safely, with automatic rollback"},
 			{Title: "Restore points", Desc: "go back to a previous version if something went wrong"},
+			{Title: "Release channel", Desc: "stable releases only, or also test pre-releases"},
 		})
 		switch idx {
 		case 0:
 			runUpdate()
 		case 1:
 			restorePointMenu()
+		case 2:
+			channelMenu()
 		default:
 			return
 		}
 	}
+}
+
+// channelMenu picks between stable releases and pre-releases.
+func channelMenu() {
+	tui.Clear()
+	tui.Title("Release channel")
+	fmt.Println()
+	tui.Info("Current: " + manage.ChannelLabel())
+	fmt.Println()
+	tui.Warn("Stable installs finished releases only. Beta also installs")
+	tui.Warn("pre-releases, so you can try a new version on one server before")
+	tui.Warn("it reaches everyone — useful for testing, riskier for a server")
+	tui.Warn("people depend on.")
+	fmt.Println()
+
+	opts, values := manage.ChannelOptions()
+	idx := tui.ChooseOpt("Choose a channel:", opts)
+	if idx < 0 {
+		return
+	}
+	if err := manage.SetChannel(values[idx]); err != nil {
+		tui.Error("Could not save the channel: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("Release channel set to " + manage.ChannelLabel() + ".")
+	tui.PressEnter()
 }
 
 // runUpdate checks for and installs a newer release. A restore point is taken
@@ -573,7 +739,7 @@ func runUpdate() {
 	tui.Clear()
 	tui.Title("Check for updates")
 	fmt.Println()
-	tui.Info("Checking GitHub releases (direct, then tunnel relay, then mirrors)...")
+	tui.Info("Checking GitHub releases (direct, then through the tunnel relay)...")
 
 	available, summary, err := manage.CheckUpdate()
 	if err != nil {
@@ -668,6 +834,7 @@ func uninstallMenu() {
 		_ = manage.Delete(t.Name)
 	}
 	_ = webui.Disable()
+	_ = manage.DisableMonitorService()
 	_ = schedule.SetAutoRefresh(0)
 	_ = telegram.Disable()
 	os.RemoveAll(app.ConfigDir)
@@ -697,4 +864,34 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// diagnoseRelay walks the relay chain and reports the first broken hop.
+func diagnoseRelay() {
+	tui.Clear()
+	tui.Title("Relay diagnosis")
+	fmt.Println()
+	tui.Warn("Checking each hop between this server and Telegram...")
+	fmt.Println()
+
+	steps := telegram.DiagnoseRelay()
+	for _, s := range steps {
+		mark := tui.Color(tui.Bold+tui.Red, "✗")
+		if s.OK {
+			mark = tui.Color(tui.Bold+tui.White, "✓")
+		}
+		fmt.Printf("  %s %s%-16s%s %s%s%s\n",
+			mark, tui.Bold+tui.White, s.Name, tui.Reset, tui.Gray, s.Detail, tui.Reset)
+		if s.Fix != "" {
+			tui.Error("      → " + s.Fix)
+		}
+	}
+
+	fmt.Println()
+	if len(steps) > 0 && steps[len(steps)-1].OK {
+		tui.Success("Every hop is working — the bot should be able to send.")
+	} else {
+		tui.Warn("The first ✗ above is where it breaks. Everything below it was not reached.")
+	}
+	tui.PressEnter()
 }

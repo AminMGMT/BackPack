@@ -19,6 +19,11 @@ import (
 type Endpoints struct {
 	list []string
 	idx  atomic.Int64
+	// spreadIdx is a second, independent cursor used by Next() so that
+	// balancing data connections never disturbs which endpoint the control
+	// channel is pinned to.
+	spreadIdx atomic.Int64
+	spread    atomic.Bool
 }
 
 // NewEndpoints builds the list from a primary address plus optional fallbacks,
@@ -58,6 +63,47 @@ func (e *Endpoints) Rotate() string {
 	}
 	e.idx.Add(1)
 	return e.Current()
+}
+
+// Next returns the endpoint a *new* data connection should use, advancing a
+// separate cursor each call so the pool spreads itself across every endpoint
+// instead of piling onto one.
+//
+// This is what turns a fallback list into load balancing and multipath: with
+// spread enabled the pool ends up holding connections over several addresses at
+// once, so one throttled or congested route only slows the share of traffic
+// riding on it rather than the whole tunnel.
+//
+// The control channel deliberately keeps using Current(): it must stay on one
+// endpoint, because it is the connection the server identifies the peer by.
+//
+// With spread disabled — or a single endpoint — this is exactly Current(), so
+// existing tunnels behave as before.
+func (e *Endpoints) Next() string {
+	if e == nil || len(e.list) == 0 {
+		return ""
+	}
+	if !e.spread.Load() || len(e.list) == 1 {
+		return e.Current()
+	}
+	i := int(e.spreadIdx.Add(1)-1) % len(e.list)
+	if i < 0 { // guard against a wrapped counter after a very long uptime
+		i = 0
+	}
+	return e.list[i]
+}
+
+// SetSpread turns load balancing across endpoints on or off.
+func (e *Endpoints) SetSpread(on bool) {
+	if e == nil {
+		return
+	}
+	e.spread.Store(on)
+}
+
+// Spread reports whether data connections are being spread across endpoints.
+func (e *Endpoints) Spread() bool {
+	return e != nil && e.spread.Load()
 }
 
 // Len reports how many endpoints are configured.

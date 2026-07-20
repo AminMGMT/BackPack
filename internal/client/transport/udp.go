@@ -17,11 +17,8 @@ import (
 type UdpTransport struct {
 	config          *UdpConfig
 	parentctx       context.Context
-	ctx             context.Context
-	cancel          context.CancelFunc
+	state           clientState
 	logger          *logrus.Logger
-	controlChannel  net.Conn
-	usageMonitor    *web.Usage
 	restartMutex    sync.Mutex
 	poolConnections int32
 	loadConnections int32
@@ -51,22 +48,21 @@ func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 	client := &UdpTransport{
 		config:          config,
 		parentctx:       parentCtx,
-		ctx:             ctx,
-		cancel:          cancel,
 		logger:          logger,
-		controlChannel:  nil, // will be set when a control connection is established
-		usageMonitor:    web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
 	}
 
+	// Seed the first generation through the same path a restart uses, so
+	// there is only one way this state is ever published.
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
 	return client
 }
 
 func (c *UdpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.usageMonitor.Monitor()
+		go c.state.Usage().Monitor()
 	}
 
 	c.config.TunnelStatus = "Disconnected (UDP)"
@@ -87,28 +83,24 @@ func (c *UdpTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.cancel != nil {
-		c.cancel()
+	if c.state.Cancel() != nil {
+		c.state.Cancel()()
 	}
 
 	// close control channel connection
-	if c.controlChannel != nil {
-		c.controlChannel.Close()
-	}
+	c.state.CloseConn()
 
 	time.Sleep(2 * time.Second)
 
 	ctx, cancel := context.WithCancel(c.parentctx)
-	c.ctx = ctx
-	c.cancel = cancel
 
-	// Re-initialize variables
-	c.controlChannel = nil
-	c.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger)
+	// Publish the whole new generation at once: a reader must never see
+	// the new context paired with the old monitor, or vice versa.
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
 	c.config.TunnelStatus = ""
-	c.poolConnections = 0
-	c.loadConnections = 0
-	c.controlFlow = make(chan struct{}, 100)
+	atomic.StoreInt32(&c.poolConnections, 0)
+	atomic.StoreInt32(&c.loadConnections, 0)
+	drain(c.controlFlow)
 
 	// set the log level again
 	c.logger.SetLevel(level)
@@ -122,10 +114,10 @@ func (c *UdpTransport) channelDialer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 		default:
-			tunnelTCPConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
+			tunnelTCPConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), "", c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -168,7 +160,7 @@ func (c *UdpTransport) channelDialer() {
 			tunnelTCPConn.SetReadDeadline(time.Time{})
 
 			if message == c.config.Token {
-				c.controlChannel = tunnelTCPConn
+				c.state.SetConn(tunnelTCPConn)
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (UDP)"
@@ -218,7 +210,7 @@ func (c *UdpTransport) poolMaintainer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 
 		case <-tickerPool.C:
@@ -260,12 +252,12 @@ func (c *UdpTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-c.ctx.Done():
+			case <-c.state.Ctx().Done():
 				return
 			default:
-				msg, err := utils.ReceiveBinaryByte(c.controlChannel)
+				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.cancel != nil {
+					if c.state.Cancel() != nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -279,8 +271,8 @@ func (c *UdpTransport) channelHandler() {
 	// Main loop to listen for context cancellation or received messages
 	for {
 		select {
-		case <-c.ctx.Done():
-			_ = utils.SendBinaryByte(c.controlChannel, utils.SG_Closed)
+		case <-c.state.Ctx().Done():
+			_ = utils.SendBinaryByte(c.state.Conn(), utils.SG_Closed)
 			return
 
 		case msg := <-msgChan:
@@ -305,7 +297,7 @@ func (c *UdpTransport) channelHandler() {
 				return
 
 			case utils.SG_RTT:
-				err := utils.SendBinaryByte(c.controlChannel, utils.SG_RTT)
+				err := utils.SendBinaryByte(c.state.Conn(), utils.SG_RTT)
 				if err != nil {
 					c.logger.Error("failed to send RTT signal, restarting client: ", err)
 					go c.Restart()
@@ -324,7 +316,10 @@ func (c *UdpTransport) channelHandler() {
 func (c *UdpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
-	remoteAddr, err := net.ResolveUDPAddr("udp", c.config.Endpoints.Current())
+	// Next() rather than Current(): with load balancing enabled the pool
+	// spreads its connections over every configured endpoint, so one
+	// congested route only slows its own share of the traffic.
+	remoteAddr, err := net.ResolveUDPAddr("udp", c.config.Endpoints.Next())
 	if err != nil {
 		c.logger.Error("failed to resolve tunnel address:", err)
 		return
@@ -349,7 +344,7 @@ func (c *UdpTransport) tunnelDialer() {
 	// Wait for either handleTunnelConn to finish or the context to be done
 	select {
 	case <-done:
-	case <-c.ctx.Done():
+	case <-c.state.Ctx().Done():
 	}
 }
 
@@ -464,7 +459,7 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
 
 		// Optionally update the port usage stats if sniffing is enabled
 		if c.config.Sniffer {
-			c.usageMonitor.AddOrUpdatePort(port, uint64(totalWritten))
+			c.state.Usage().AddOrUpdatePort(port, uint64(totalWritten))
 		}
 
 		c.logger.Debugf("forwarded %d bytes from %s to %s", n, srcConn.LocalAddr().String(), dstConn.RemoteAddr().String())

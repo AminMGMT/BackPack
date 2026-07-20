@@ -72,3 +72,27 @@ func PortInUse(port string) bool {
 	ln.Close()
 	return false
 }
+
+// udpPortInUse reports whether a UDP port is already bound locally.
+//
+// TCP and UDP are separate address spaces: nginx holding TCP/443 says nothing
+// about UDP/443, which is exactly the port a KCP tunnel wants — real
+// HTTP/3 lives there, so networks that drop UDP on high ports usually let it
+// through. Checking the wrong protocol would refuse a perfectly free port.
+func udpPortInUse(port string) bool {
+	conn, err := net.ListenPacket("udp", ":"+port)
+	if err != nil {
+		return true
+	}
+	conn.Close()
+	return false
+}
+
+// TunnelPortInUse reports whether a tunnel's control port is already taken,
+// checking the protocol that transport actually listens on.
+func TunnelPortInUse(transport, port string) bool {
+	if isDatagram(transport) {
+		return udpPortInUse(port)
+	}
+	return PortInUse(port)
+}

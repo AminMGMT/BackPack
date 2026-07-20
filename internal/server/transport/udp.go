@@ -24,7 +24,7 @@ type UdpTransport struct {
 	activeConnections map[string]*TunnelUDPConn
 	activeMu          sync.Mutex
 	reqNewConnChan    chan struct{}
-	controlChannel    net.Conn
+	controlChannel    netControl
 	restartMutex      sync.Mutex
 	usageMonitor      *web.Usage
 	rtt               int64 // for Fun!
@@ -57,7 +57,6 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 		activeConnections: map[string]*TunnelUDPConn{},
 		activeMu:          sync.Mutex{},
 		reqNewConnChan:    make(chan struct{}, config.ChannelSize),
-		controlChannel:    nil, // will be set when a control connection is established
 		usageMonitor:      web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		rtt:               0,
 	}
@@ -92,7 +91,7 @@ func (s *UdpTransport) Restart() {
 	}
 
 	// Close open connection
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.controlChannel.Close()
 	}
 
@@ -107,7 +106,7 @@ func (s *UdpTransport) Restart() {
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
-	s.controlChannel = nil
+	s.controlChannel.Clear()
 	s.activeConnections = map[string]*TunnelUDPConn{}
 	s.activeMu = sync.Mutex{}
 
@@ -179,7 +178,7 @@ loop:
 				continue
 			}
 
-			s.controlChannel = conn
+			s.controlChannel.Set(conn)
 
 			s.logger.Info("control channel successfully established.")
 
@@ -207,7 +206,7 @@ func (s *UdpTransport) channelHandler() {
 			case <-s.ctx.Done():
 				return
 			default:
-				message, err := utils.ReceiveBinaryByte(s.controlChannel)
+				message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
 				if err != nil {
 					if s.cancel != nil {
 						s.logger.Error("failed to read from channel connection. ", err)
@@ -222,7 +221,7 @@ func (s *UdpTransport) channelHandler() {
 
 	// RTT measurment
 	rtt := time.Now()
-	err := utils.SendBinaryByte(s.controlChannel, utils.SG_RTT)
+	err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_RTT)
 	if err != nil {
 		s.logger.Error("failed to send RTT signal, attempting to restart server...")
 		go s.Restart()
@@ -232,11 +231,11 @@ func (s *UdpTransport) channelHandler() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel, utils.SG_Closed)
+			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
 			return
 
 		case <-s.reqNewConnChan:
-			err := utils.SendBinaryByte(s.controlChannel, utils.SG_Chan)
+			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -244,7 +243,7 @@ func (s *UdpTransport) channelHandler() {
 			}
 
 		case <-ticker.C:
-			err := utils.SendBinaryByte(s.controlChannel, utils.SG_HB)
+			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB)
 			if err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()

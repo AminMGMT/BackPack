@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -22,11 +23,8 @@ type TcpMuxTransport struct {
 	config          *TcpMuxConfig
 	smuxConfig      *smux.Config
 	parentctx       context.Context
-	ctx             context.Context
-	cancel          context.CancelFunc
+	state           clientState
 	logger          *logrus.Logger
-	controlChannel  net.Conn
-	usageMonitor    *web.Usage
 	restartMutex    sync.Mutex
 	poolConnections int32
 	loadConnections int32
@@ -74,22 +72,21 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 		},
 		config:          config,
 		parentctx:       parentCtx,
-		ctx:             ctx,
-		cancel:          cancel,
 		logger:          logger,
-		controlChannel:  nil, // will be set when a control connection is established
-		usageMonitor:    web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
 	}
 
+	// Seed the first generation through the same path a restart uses, so
+	// there is only one way this state is ever published.
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
 	return client
 }
 
 func (c *TcpMuxTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.usageMonitor.Monitor()
+		go c.state.Usage().Monitor()
 	}
 
 	c.config.TunnelStatus = "Disconnected (TCPMUX)"
@@ -110,28 +107,24 @@ func (c *TcpMuxTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.cancel != nil {
-		c.cancel()
+	if c.state.Cancel() != nil {
+		c.state.Cancel()()
 	}
 
 	// close control channel connection
-	if c.controlChannel != nil {
-		c.controlChannel.Close()
-	}
+	c.state.CloseConn()
 
 	time.Sleep(2 * time.Second)
 
 	ctx, cancel := context.WithCancel(c.parentctx)
-	c.ctx = ctx
-	c.cancel = cancel
 
-	// Re-initialize variables
-	c.controlChannel = nil
-	c.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger)
+	// Publish the whole new generation at once: a reader must never see
+	// the new context paired with the old monitor, or vice versa.
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
 	c.config.TunnelStatus = ""
-	c.poolConnections = 0
-	c.loadConnections = 0
-	c.controlFlow = make(chan struct{}, 100)
+	atomic.StoreInt32(&c.poolConnections, 0)
+	atomic.StoreInt32(&c.loadConnections, 0)
+	drain(c.controlFlow)
 
 	// set the log level again
 	c.logger.SetLevel(level)
@@ -145,10 +138,10 @@ func (c *TcpMuxTransport) channelDialer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 		default:
-			tunnelConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			tunnelConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -190,7 +183,7 @@ func (c *TcpMuxTransport) channelDialer() {
 			tunnelConn.SetReadDeadline(time.Time{})
 
 			if message == c.config.Token {
-				c.controlChannel = tunnelConn
+				c.state.SetConn(tunnelConn)
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (TCPMux)"
@@ -240,7 +233,7 @@ func (c *TcpMuxTransport) poolMaintainer() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 
 		case <-tickerPool.C:
@@ -282,12 +275,12 @@ func (c *TcpMuxTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-c.ctx.Done():
+			case <-c.state.Ctx().Done():
 				return
 			default:
-				msg, err := utils.ReceiveBinaryByte(c.controlChannel)
+				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.cancel != nil {
+					if c.state.Cancel() != nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -301,8 +294,8 @@ func (c *TcpMuxTransport) channelHandler() {
 	// Main loop to listen for context cancellation or received messages
 	for {
 		select {
-		case <-c.ctx.Done():
-			_ = utils.SendBinaryByte(c.controlChannel, utils.SG_Closed)
+		case <-c.state.Ctx().Done():
+			_ = utils.SendBinaryByte(c.state.Conn(), utils.SG_Closed)
 			return
 
 		case msg := <-msgChan:
@@ -340,7 +333,10 @@ func (c *TcpMuxTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new tunnel connection to address %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
-	tunnelConn, err := network.TcpDialer(c.ctx, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	// Next() rather than Current(): with load balancing enabled the pool
+	// spreads its connections over every configured endpoint, so one
+	// congested route only slows its own share of the traffic.
+	tunnelConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Next(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
@@ -367,7 +363,7 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.state.Ctx().Done():
 			return
 		default:
 			stream, err := session.AcceptStream()
@@ -410,14 +406,14 @@ func (c *TcpMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 		recvBuf = c.config.SO_RCVBUF
 	}
 
-	localConnection, err := network.TcpDialer(c.ctx, resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
 	if err != nil {
-		c.logger.Errorf("local dialer: %v", err)
+		localDial.Report(c.logger, resolvedAddr, err)
 		stream.Close()
 		return
 	}
 
 	c.logger.Debugf("connected to local address %s successfully", remoteAddr)
 
-	handlers.TCPConnectionHandler(c.ctx, false, stream, localConnection, c.logger, c.usageMonitor, int(port), c.config.Sniffer)
+	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(stream), localConnection, c.logger, c.state.Usage(), int(port), c.config.Sniffer)
 }

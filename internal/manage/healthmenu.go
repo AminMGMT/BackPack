@@ -101,9 +101,11 @@ func FileLocations() {
 
 // transportLabel returns a friendly "TCP — plain & fast" style label.
 func transportLabel(value string) string {
-	for _, o := range transportOptions {
-		if o.value == value {
-			return o.label
+	for _, g := range transportGroups {
+		for _, e := range g.entries {
+			if e.value == value {
+				return e.label
+			}
 		}
 	}
 	return strings.ToUpper(value)

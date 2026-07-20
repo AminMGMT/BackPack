@@ -76,3 +76,13 @@ func RestartAll() (ok, failed int) {
 	}
 	return ok, failed
 }
+
+// Find returns one tunnel by name.
+func Find(name string) (Tunnel, bool) {
+	for _, t := range List() {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return Tunnel{}, false
+}

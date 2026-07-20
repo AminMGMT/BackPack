@@ -33,11 +33,10 @@ func Load() Config {
 
 // Save persists the config (0600, root only).
 func Save(c Config) error {
-	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
-		return err
-	}
 	data, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(app.WebUIConfig, data, 0600)
+	// Atomic: the panel reads this on every login and the CLI shows the password
+	// from it, so a truncated read would look like a wrong password.
+	return app.WriteFileAtomic(app.WebUIConfig, data, 0600)
 }
 
 // EnsurePassword returns the config, generating and saving an 8-digit password

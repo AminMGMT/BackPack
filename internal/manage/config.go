@@ -12,12 +12,22 @@ import (
 type TunnelSpec struct {
 	Name      string
 	Role      string // "server" (Iran/edge that exposes ports) or "client" (kharej/origin)
-	Transport string // tcp, udp, ws, wss, tcpmux, wsmux, wssmux
+	Transport string // tcp, tcpmux, udp, kcp, ws, wss, wsmux, wssmux
+
+	// Preset is the performance profile every tuning field was filled from:
+	// balance, turbo or aggressive. Empty means the values were set by hand or
+	// by a version that predates presets — either way they are left untouched.
+	Preset string
 
 	BindAddr   string   // server: listen address for the tunnel control channel
 	RemoteAddr string   // client: address of the server tunnel port
 	Token      string   // shared secret
 	Ports      []string // server: exposed/forwarded ports
+
+	// LoadBalance spreads data connections across FallbackAddrs instead of
+	// only using them when the primary fails. Every address must reach the
+	// same server.
+	LoadBalance bool
 
 	// FallbackAddrs are extra server addresses a client tries, in order, when
 	// the primary one cannot be reached — a second IP, a different port, or a
@@ -32,6 +42,8 @@ type TunnelSpec struct {
 	AggressivePool bool
 	AcceptUDP      bool
 	LogLevel       string
+	// LogFormat is "" for human-readable output or "json" for machine parsing.
+	LogFormat string
 
 	// SMUX / multiplexed transports
 	MuxCon          int
@@ -40,10 +52,36 @@ type TunnelSpec struct {
 	MuxRecvBuffer   int
 	MuxStreamBuffer int
 
+	// KCP transport (reliable ARQ over UDP). Filled from the preset; only
+	// written to the config when the transport is kcp.
+	KCPMTU          int
+	KCPInterval     int // ARQ tick in milliseconds — lower reacts faster, costs CPU
+	KCPResend       int // fast-retransmit threshold in duplicate ACKs
+	KCPNoDelay      int // 1 enables the low-latency ARQ mode
+	KCPNoCongestion int // 1 disables KCP's own congestion window
+	KCPSndWnd       int // send window in packets
+	KCPRcvWnd       int // receive window in packets
+	KCPAckNoDelay   bool
+	// FEC: every KCPDataShards packets carry KCPParityShards parity packets, so
+	// that many losses are repaired without waiting for a retransmit. 0 = off.
+	KCPDataShards   int
+	KCPParityShards int
+
 	// Throughput / latency tuning
 	MSS      int // TCP max segment size (0 = auto)
 	SoRcvBuf int // per-socket receive buffer (bytes)
 	SoSndBuf int // per-socket send buffer (bytes)
+
+	// ProxyProtocol makes the server prepend a PROXY protocol v2 header to
+	// every forwarded connection, so the service behind the tunnel sees the
+	// real client IP instead of the tunnel's. Panels need this to enforce
+	// per-user device/IP limits. The backend must be configured to expect it.
+	ProxyProtocol bool
+
+	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
+	MaxConnections int
+	// BandwidthMbps caps total tunnel throughput in Mbit/s (0 = unlimited).
+	BandwidthMbps int
 
 	// Sniffer web panel
 	Sniffer bool
@@ -52,6 +90,10 @@ type TunnelSpec struct {
 	// TLS (server, wss/wssmux only)
 	TLSCert string
 	TLSKey  string
+	// ACMEDomain, when set, makes the tunnel obtain a Let's Encrypt certificate
+	// for that domain instead of using the generated self-signed one.
+	ACMEDomain string
+	ACMEEmail  string
 
 	// Edge/CDN IP override (client, websocket transports only)
 	EdgeIP string
@@ -70,9 +112,51 @@ func (s TunnelSpec) writeTuning(p func(string, ...any)) {
 	}
 }
 
+// writeKCP emits the KCP knobs. It is a no-op for every other transport, so a
+// tunnel that is not on KCP never carries stale KCP settings in its config.
+func (s TunnelSpec) writeKCP(p func(string, ...any)) {
+	if !isKCP(s.Transport) {
+		return
+	}
+	p("kcp_mtu = %d\n", s.KCPMTU)
+	p("kcp_interval = %d\n", s.KCPInterval)
+	p("kcp_resend = %d\n", s.KCPResend)
+	p("kcp_nodelay = %d\n", s.KCPNoDelay)
+	p("kcp_nocongestion = %d\n", s.KCPNoCongestion)
+	p("kcp_sndwnd = %d\n", s.KCPSndWnd)
+	p("kcp_rcvwnd = %d\n", s.KCPRcvWnd)
+	p("kcp_acknodelay = %t\n", s.KCPAckNoDelay)
+	p("kcp_datashards = %d\n", s.KCPDataShards)
+	p("kcp_parityshards = %d\n", s.KCPParityShards)
+}
+
 // isMux reports whether a transport multiplexes over SMUX.
 func isMux(t string) bool {
-	return t == "tcpmux" || t == "wsmux" || t == "wssmux"
+	return t == "tcpmux" || t == "wsmux" || t == "wssmux" || t == "kcp"
+}
+
+// isKCP reports whether a transport rides on KCP (reliable ARQ over UDP).
+func isKCP(t string) bool {
+	return t == "kcp"
+}
+
+// isDatagram reports whether a transport is carried in UDP datagrams. Such a
+// tunnel never shows up in the TCP listen table and cannot be probed with a
+// TCP connect, so every check that assumes TCP has to skip it.
+func isDatagram(t string) bool {
+	return t == "udp" || t == "kcp"
+}
+
+// supportsProxyProtocol reports whether a transport can prepend the PROXY
+// protocol header. The plain websocket and raw UDP transports cannot: one has
+// no place to put it in its framing, the other carries datagrams with no
+// connection to describe.
+func supportsProxyProtocol(t string) bool {
+	switch t {
+	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth":
+		return true
+	}
+	return false
 }
 
 // isWS reports whether a transport rides over websocket.
@@ -89,7 +173,7 @@ func needsTLS(t string) bool {
 // validTransport reports whether t is one of the engine's supported transports.
 func validTransport(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "udp", "ws", "wss", "wsmux", "wssmux":
+	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth":
 		return true
 	}
 	return false
@@ -107,13 +191,20 @@ func (s TunnelSpec) Render() string {
 		b.WriteString("[server]\n")
 		p("bind_addr = %q\n", s.BindAddr)
 		p("transport = %q\n", s.Transport)
+		if s.Preset != "" {
+			p("preset = %q\n", s.Preset)
+		}
 		p("token = %q\n", s.Token)
 		p("channel_size = %d\n", s.ChannelSize)
 		p("keepalive_period = %d\n", s.KeepAlive)
 		p("nodelay = %t\n", s.Nodelay)
 		p("heartbeat = %d\n", s.Heartbeat)
 		p("log_level = %q\n", s.LogLevel)
+		if s.LogFormat != "" {
+			p("log_format = %q\n", s.LogFormat)
+		}
 		s.writeTuning(p)
+		s.writeKCP(p)
 		if s.Transport == "tcp" {
 			// accept_udp is only honoured by the plain TCP transport in the engine.
 			p("accept_udp = %t\n", s.AcceptUDP)
@@ -121,6 +212,14 @@ func (s TunnelSpec) Render() string {
 		if needsTLS(s.Transport) {
 			p("tls_cert = %q\n", s.TLSCert)
 			p("tls_key = %q\n", s.TLSKey)
+			// Emitted only when in use, so a config written before Let's
+			// Encrypt existed stays byte-identical after an edit.
+			if s.ACMEDomain != "" {
+				p("acme_domain = %q\n", s.ACMEDomain)
+				if s.ACMEEmail != "" {
+					p("acme_email = %q\n", s.ACMEEmail)
+				}
+			}
 		}
 		if isMux(s.Transport) {
 			p("mux_con = %d\n", s.MuxCon)
@@ -128,6 +227,15 @@ func (s TunnelSpec) Render() string {
 			p("mux_framesize = %d\n", s.MuxFrameSize)
 			p("mux_recievebuffer = %d\n", s.MuxRecvBuffer)
 			p("mux_streambuffer = %d\n", s.MuxStreamBuffer)
+		}
+		if supportsProxyProtocol(s.Transport) {
+			p("proxy_protocol = %t\n", s.ProxyProtocol)
+		}
+		if s.MaxConnections > 0 {
+			p("max_connections = %d\n", s.MaxConnections)
+		}
+		if s.BandwidthMbps > 0 {
+			p("bandwidth_mbps = %d\n", s.BandwidthMbps)
 		}
 		p("sniffer = %t\n", s.Sniffer)
 		if s.WebPort > 0 {
@@ -152,15 +260,25 @@ func (s TunnelSpec) Render() string {
 		b.WriteString("]\n")
 	}
 	p("transport = %q\n", s.Transport)
+	if s.Preset != "" {
+		p("preset = %q\n", s.Preset)
+	}
 	p("token = %q\n", s.Token)
 	p("connection_pool = %d\n", s.ConnectionPool)
 	p("aggressive_pool = %t\n", s.AggressivePool)
 	p("keepalive_period = %d\n", s.KeepAlive)
 	p("nodelay = %t\n", s.Nodelay)
+	if s.LoadBalance {
+		p("load_balance = true\n")
+	}
 	p("retry_interval = %d\n", 3)
 	p("dial_timeout = %d\n", 10)
 	p("log_level = %q\n", s.LogLevel)
+	if s.LogFormat != "" {
+		p("log_format = %q\n", s.LogFormat)
+	}
 	s.writeTuning(p)
+	s.writeKCP(p)
 	if isWS(s.Transport) && s.EdgeIP != "" {
 		p("edge_ip = %q\n", s.EdgeIP)
 	}

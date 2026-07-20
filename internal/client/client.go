@@ -31,17 +31,21 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 		config: cfg,
 		ctx:    ctx,
 		cancel: cancel,
-		logger: utils.NewLogger(cfg.LogLevel),
+		logger: utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
 	}
 }
 
 // Run starts the client and begins dialing the tunnel server
 func (c *Client) Start() {
-	// for pprof
+	// Profiling endpoint, off unless explicitly enabled in the config. Bound to
+	// loopback: pprof is unauthenticated and its heap dump would expose the
+	// tunnel token. Reach it with `ssh -L 6061:127.0.0.1:6061 root@server`.
 	if c.config.PPROF {
 		go func() {
-			c.logger.Info("pprof started at port 6061")
-			http.ListenAndServe("0.0.0.0:6061", nil)
+			c.logger.Info("pprof listening on 127.0.0.1:6061 (loopback only)")
+			if err := http.ListenAndServe("127.0.0.1:6061", nil); err != nil {
+				c.logger.Errorf("pprof server stopped: %v", err)
+			}
 		}()
 	}
 
@@ -54,9 +58,15 @@ func (c *Client) Start() {
 	if endpoints.Len() > 1 {
 		c.logger.Infof("%d server endpoints configured (failover enabled)", endpoints.Len())
 	}
+	// With balancing on, new data connections are spread over every endpoint
+	// rather than all following the control channel.
+	if c.config.LoadBalance && endpoints.Len() > 1 {
+		endpoints.SetSpread(true)
+		c.logger.Infof("load balancing enabled across %d endpoints", endpoints.Len())
+	}
 
 	switch c.config.Transport {
-	case config.TCP:
+	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
 			RemoteAddr:     c.config.RemoteAddr,
 			Endpoints:      endpoints,
@@ -73,6 +83,9 @@ func (c *Client) Start() {
 			MSS:            c.config.MSS,
 			SO_RCVBUF:      c.config.SO_RCVBUF,
 			SO_SNDBUF:      c.config.SO_SNDBUF,
+			// Stealth is the TCP transport with a Noise record layer over every
+			// tunnel connection; everything else about it is identical.
+			Stealth: c.config.Transport == config.STEALTH,
 		}
 		tcpClient := transport.NewTCPClient(c.ctx, tcpConfig, c.logger)
 		go tcpClient.Start()
@@ -101,6 +114,40 @@ func (c *Client) Start() {
 		}
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
+
+	case config.KCP:
+		kcp := c.config.KCPConfig.WithDefaults()
+		kcpConfig := &transport.KcpConfig{
+			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
+			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:     c.config.ConnectionPool,
+			Token:            c.config.Token,
+			MuxVersion:       c.config.MuxVersion,
+			MaxFrameSize:     c.config.MaxFrameSize,
+			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
+			MaxStreamBuffer:  c.config.MaxStreamBuffer,
+			Sniffer:          c.config.Sniffer,
+			WebPort:          c.config.WebPort,
+			SnifferLog:       c.config.SnifferLog,
+			AggressivePool:   c.config.AggressivePool,
+			SO_RCVBUF:        c.config.SO_RCVBUF,
+			SO_SNDBUF:        c.config.SO_SNDBUF,
+			MTU:              kcp.MTU,
+			Interval:         kcp.Interval,
+			Resend:           kcp.Resend,
+			NoDelay:          kcp.NoDelay,
+			NoCongestion:     kcp.NoCongestion,
+			SndWnd:           kcp.SndWnd,
+			RcvWnd:           kcp.RcvWnd,
+			AckNoDelay:       kcp.AckNoDelay,
+			DataShards:       kcp.DataShards,
+			ParityShards:     kcp.ParityShards,
+		}
+		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
+		go kcpClient.Start()
 
 	case config.WS, config.WSS:
 		WsConfig := &transport.WsConfig{

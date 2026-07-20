@@ -6,8 +6,9 @@ import (
 	"io"
 	"net"
 
-	"github.com/gorilla/websocket"
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/web"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -57,6 +58,8 @@ func transferWebSocketToTCP(wsConn *websocket.Conn, tcpConn net.Conn, logger *lo
 				tcpConn.Close()
 				return
 			}
+			// Arrived over the tunnel.
+			metrics.AddBytes(uint64(w), 0)
 			logger.Tracef("transferred data from WebSocket to TCP: %d bytes", w)
 			if sniffer {
 				usage.AddOrUpdatePort(remotePort, uint64(w))
@@ -95,6 +98,8 @@ func transferTCPToWebSocket(tcpConn net.Conn, wsConn *websocket.Conn, logger *lo
 			return
 		}
 
+		// Leaving over the tunnel.
+		metrics.AddBytes(0, uint64(n))
 		logger.Tracef("transferred data from TCP to WebSocket: %d bytes", n)
 		if sniffer {
 			usage.AddOrUpdatePort(remotePort, uint64(n))

@@ -24,6 +24,27 @@ func TunnelHealth(t Tunnel) Health {
 	return tunnelHealthWith(t, establishedPairs())
 }
 
+// AllHealth reports the health of every tunnel, keyed by name, from a single
+// socket snapshot.
+//
+// This exists so there is one answer to "is this tunnel up" rather than one per
+// caller. The web panel used to work it out itself by looking for peers in the
+// TCP socket table, which is correct for the TCP-based transports and silently
+// wrong for KCP and UDP: a datagram listener holds no TCP sockets at all, so a
+// perfectly healthy KCP tunnel appeared offline. The watchdog already knew
+// that; the panel did not, because it was asking a different question in a
+// different place.
+func AllHealth() map[string]Health {
+	pairs := establishedPairs()
+	tunnels := List()
+
+	out := make(map[string]Health, len(tunnels))
+	for _, t := range tunnels {
+		out[t.Name] = tunnelHealthWith(t, pairs)
+	}
+	return out
+}
+
 // tunnelHealthWith computes health reusing an already-collected socket table,
 // so checking many tunnels costs a single `ss` call.
 func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
@@ -41,7 +62,14 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 	default:
 		h.Connected = tunnelHealthy(t, pairs)
 		if h.Connected {
-			h.State, h.Detail = "online", "peer connected"
+			h.State = "online"
+			if isDatagram(t.Transport) && t.Role == "server" {
+				// Be straight about what was actually verified: a UDP listener
+				// keeps no record of its peers, so "running" is all we know.
+				h.Detail = "running — a UDP listener cannot report its peers"
+			} else {
+				h.Detail = "peer connected"
+			}
 		} else {
 			h.State = "offline"
 			if t.Role == "server" {
@@ -53,21 +81,6 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 	}
 	return h
 }
-
-// AllHealth returns the health of every tunnel using one socket snapshot.
-func AllHealth() []Health {
-	pairs := establishedPairs()
-	tunnels := List()
-	out := make([]Health, 0, len(tunnels))
-	for _, t := range tunnels {
-		out = append(out, tunnelHealthWith(t, pairs))
-	}
-	return out
-}
-
-// ServiceHealthy reports whether a service is active — the minimum bar used
-// after an update or a config change.
-func ServiceHealthy(service string) bool { return IsActive(service) }
 
 // WaitServiceActive waits up to timeout for a service to report active,
 // polling briefly. Returns true as soon as it is up.
@@ -81,25 +94,5 @@ func WaitServiceActive(service string, timeout time.Duration) bool {
 			return false
 		}
 		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-// WaitTunnelConnected waits up to timeout for a tunnel to have its peer
-// connection established (not just the service running).
-func WaitTunnelConnected(name string, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		for _, t := range List() {
-			if t.Name != name {
-				continue
-			}
-			if tunnelHealthWith(t, establishedPairs()).Connected {
-				return true
-			}
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(time.Second)
 	}
 }

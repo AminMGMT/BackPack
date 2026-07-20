@@ -145,37 +145,6 @@ func ReceiveBinaryTransportString(conn interface{}) (string, byte, error) {
 	return string(messageBuf), transport, nil
 }
 
-// SendPort sends the port number as a 2-byte big-endian unsigned integer.
-func SendBinaryInt(conn net.Conn, port uint16) error {
-	// Create a 2-byte slice to hold the port number
-	buf := make([]byte, 2)
-
-	// Encode the port number as a big-endian 2-byte unsigned integer
-	binary.BigEndian.PutUint16(buf, port)
-
-	// Send the 2-byte buffer over the connection
-	if _, err := conn.Write(buf); err != nil {
-		return fmt.Errorf("failed to send port number %d: %w", port, err)
-	}
-
-	// Successful
-	return nil
-}
-
-// ReceivePort reads a 2-byte big-endian unsigned integer directly from the connection
-func ReceiveBinaryInt(conn net.Conn) (uint16, error) {
-	var port uint16
-
-	// Use binary.Read to read the port directly from the connection
-	err := binary.Read(conn, binary.BigEndian, &port)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read port number from connection: %w", err)
-	}
-
-	// Successful
-	return port, nil
-}
-
 func SendBinaryByte(conn interface{}, message byte) error {
 	// Create a 1-byte buffer and send the message
 	messageBuf := [1]byte{message}

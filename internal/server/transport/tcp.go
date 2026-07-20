@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -27,10 +28,11 @@ type TcpTransport struct {
 	tunnelChannel  chan net.Conn
 	localChannel   chan LocalTCPConn
 	reqNewConnChan chan struct{}
-	controlChannel net.Conn
+	controlChannel netControl
 	restartMutex   sync.Mutex
 	usageMonitor   *web.Usage
 	rtt            int64 // in ms, for UDP
+	limits         *limiter
 }
 
 type TcpConfig struct {
@@ -50,6 +52,13 @@ type TcpConfig struct {
 	SO_RCVBUF     int
 	SO_SNDBUF     int
 	ProxyProtocol bool
+	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
+	MaxConnections int
+	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
+	BandwidthMbps int
+	// Stealth wraps every accepted tunnel connection in the Noise record layer,
+	// so the stream has no fingerprint for deep packet inspection to match.
+	Stealth bool
 }
 
 func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -66,8 +75,8 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 		tunnelChannel:  make(chan net.Conn, config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		controlChannel: nil, // will be set when a control connection is established
 		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 		rtt:            0,
 	}
 
@@ -85,7 +94,7 @@ func (s *TcpTransport) Start() {
 
 	s.channelHandshake()
 
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (TCP)"
 
 		numCPU := runtime.NumCPU()
@@ -121,7 +130,7 @@ func (s *TcpTransport) Restart() {
 	}
 
 	// Close open connection
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.controlChannel.Close()
 	}
 
@@ -137,7 +146,7 @@ func (s *TcpTransport) Restart() {
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
-	s.controlChannel = nil
+	s.controlChannel.Clear()
 
 	// set the log level again
 	s.logger.SetLevel(level)
@@ -189,7 +198,7 @@ func (s *TcpTransport) channelHandshake() {
 				continue
 			}
 
-			s.controlChannel = conn
+			s.controlChannel.Set(conn)
 
 			s.logger.Info("control channel successfully established.")
 			return
@@ -210,7 +219,7 @@ func (s *TcpTransport) channelHandler() {
 			case <-s.ctx.Done():
 				return
 			default:
-				message, err := utils.ReceiveBinaryByte(s.controlChannel)
+				message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
 				if err != nil {
 					if s.cancel != nil {
 						s.logger.Error("failed to read from channel connection. ", err)
@@ -225,7 +234,7 @@ func (s *TcpTransport) channelHandler() {
 
 	// RTT measurment
 	rtt := time.Now()
-	err := utils.SendBinaryByte(s.controlChannel, utils.SG_RTT)
+	err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_RTT)
 	if err != nil {
 		s.logger.Error("failed to send RTT signal, attempting to restart server...")
 		go s.Restart()
@@ -235,11 +244,11 @@ func (s *TcpTransport) channelHandler() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel, utils.SG_Closed)
+			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
 			return
 
 		case <-s.reqNewConnChan:
-			err := utils.SendBinaryByte(s.controlChannel, utils.SG_Chan)
+			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -247,7 +256,7 @@ func (s *TcpTransport) channelHandler() {
 			}
 
 		case <-ticker.C:
-			err := utils.SendBinaryByte(s.controlChannel, utils.SG_HB)
+			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB)
 			if err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()
@@ -321,8 +330,13 @@ func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
 			}
 
 			// Drop all suspicious packets from other address rather than server
-			if s.controlChannel != nil && s.controlChannel.RemoteAddr().(*net.TCPAddr).IP.String() != tcpConn.RemoteAddr().(*net.TCPAddr).IP.String() {
-				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr().(*net.TCPAddr).IP.String(), s.controlChannel.RemoteAddr().(*net.TCPAddr).IP.String())
+			// Read the peer address once: checking "is it set" and then asking
+			// for the address separately leaves a window where the control
+			// channel is cleared in between and the address comes back nil,
+			// which the old type assertion turned into a panic. Comparing
+			// through sameHost also handles IPv6 peers correctly.
+			if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, tcpConn.RemoteAddr()) {
+				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr(), peer)
 				tcpConn.Close()
 				continue
 			}
@@ -346,13 +360,39 @@ func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
-			select {
-			case s.tunnelChannel <- conn:
-			default: // The channel is full, do nothing
-				s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
-				conn.Close()
+			// In stealth mode the Noise handshake is completed before the
+			// connection joins the pool, so everything downstream — the token
+			// exchange, the control channel, the data conns — reads and writes
+			// through the encrypted record layer without knowing it is there.
+			// The handshake runs in its own goroutine so one slow or hostile
+			// peer cannot hold up accepting the next connection, and a peer
+			// without the token fails it and never reaches the pool.
+			if s.config.Stealth {
+				go func(raw net.Conn) {
+					wrapped, err := network.NoiseServerConn(raw, s.config.Token, 15*time.Second)
+					if err != nil {
+						s.logger.Debugf("stealth handshake failed from %s: %v", raw.RemoteAddr(), err)
+						raw.Close()
+						return
+					}
+					s.deliverTunnelConn(wrapped)
+				}(conn)
+				continue
 			}
+
+			s.deliverTunnelConn(conn)
 		}
+	}
+}
+
+// deliverTunnelConn hands an accepted (and, in stealth mode, already
+// Noise-wrapped) connection to the pool, dropping it if the pool is full.
+func (s *TcpTransport) deliverTunnelConn(conn net.Conn) {
+	select {
+	case s.tunnelChannel <- conn:
+	default: // The channel is full, do nothing
+		s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
+		conn.Close()
 	}
 }
 
@@ -506,6 +546,16 @@ func (s *TcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 				}
 			}
 
+			// Enforce the tunnel's limits before the connection costs anything:
+			// a refused connection should be refused here, not after it has
+			// taken a slot in the pool.
+			if !s.limits.acquire() {
+				s.logger.Warnf("connection limit reached, refusing %s", conn.RemoteAddr())
+				conn.Close()
+				continue
+			}
+			conn = s.limits.wrap(conn)
+
 			select {
 			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 
@@ -521,6 +571,7 @@ func (s *TcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 
 			default: // channel is full, discard the connection
 				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
+				s.limits.release()
 				conn.Close()
 			}
 		}
@@ -554,7 +605,12 @@ func (s *TcpTransport) handleLoop() {
 					}
 
 					// Handle data exchange between connections
-					go handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, localConn.conn, tunnelConn, s.logger, s.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+					go func(localConn LocalTCPConn, tunnelConn net.Conn) {
+						// Free the connection slot once the transfer ends, or
+						// the limit would fill up permanently.
+						defer s.limits.release()
+						handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, localConn.conn, metrics.CountedConn(tunnelConn), s.logger, s.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+					}(localConn, tunnelConn)
 					break loop
 
 				}

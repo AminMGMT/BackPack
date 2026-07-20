@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -31,11 +32,12 @@ type TcpMuxTransport struct {
 	handshakeChannel chan net.Conn
 	localChannel     chan LocalTCPConn
 	reqNewConnChan   chan struct{}
-	controlChannel   net.Conn
+	controlChannel   netControl
 	usageMonitor     *web.Usage
 	restartMutex     sync.Mutex
 	streamCounter    int32
 	sessionCounter   int32
+	limits           *limiter
 }
 
 type TcpMuxConfig struct {
@@ -59,6 +61,10 @@ type TcpMuxConfig struct {
 	SO_RCVBUF        int
 	SO_SNDBUF        int
 	ProxyProtocol    bool
+	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
+	MaxConnections int
+	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
+	BandwidthMbps int
 }
 
 func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
@@ -84,10 +90,10 @@ func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *lo
 		handshakeChannel: make(chan net.Conn),
 		localChannel:     make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan:   make(chan struct{}, config.ChannelSize),
-		controlChannel:   nil, // will be set when a control connection is established
 		streamCounter:    0,
 		sessionCounter:   0,
 		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
 	return server
@@ -103,7 +109,7 @@ func (s *TcpMuxTransport) Start() {
 
 	s.channelHandshake()
 
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (TCPMux)"
 
 		numCPU := runtime.NumCPU()
@@ -140,7 +146,7 @@ func (s *TcpMuxTransport) Restart() {
 	s.logger.SetLevel(logrus.FatalLevel)
 
 	// Close any open connections in the tunnel channel.
-	if s.controlChannel != nil {
+	if s.controlChannel.IsSet() {
 		s.controlChannel.Close()
 	}
 
@@ -155,7 +161,7 @@ func (s *TcpMuxTransport) Restart() {
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
 	s.handshakeChannel = make(chan net.Conn)
-	s.controlChannel = nil
+	s.controlChannel.Clear()
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
 	s.streamCounter = 0
@@ -220,7 +226,7 @@ func (s *TcpMuxTransport) channelHandshake() {
 				s.logger.Warnf("failed to set TCP_NODELAY for Control Channel %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
-			s.controlChannel = conn
+			s.controlChannel.Set(conn)
 
 			s.logger.Info("control channel successfully established.")
 
@@ -237,7 +243,7 @@ func (s *TcpMuxTransport) channelHandler() {
 	messageChan := make(chan byte, 1)
 
 	go func() {
-		message, err := utils.ReceiveBinaryByte(s.controlChannel)
+		message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
 		if err != nil {
 			if s.cancel != nil {
 				s.logger.Error("failed to read from channel connection. ", err)
@@ -251,11 +257,11 @@ func (s *TcpMuxTransport) channelHandler() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel, utils.SG_Closed)
+			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
 			return
 
 		case <-s.reqNewConnChan:
-			err := utils.SendBinaryByte(s.controlChannel, utils.SG_Chan)
+			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -263,7 +269,7 @@ func (s *TcpMuxTransport) channelHandler() {
 			}
 
 		case <-ticker.C:
-			err := utils.SendBinaryByte(s.controlChannel, utils.SG_HB)
+			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB)
 			if err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()
@@ -332,8 +338,13 @@ func (s *TcpMuxTransport) acceptTunnelConn(listener net.Listener) {
 			}
 
 			// Drop all suspicious packets from other address rather than server
-			if s.controlChannel != nil && s.controlChannel.RemoteAddr().(*net.TCPAddr).IP.String() != tcpConn.RemoteAddr().(*net.TCPAddr).IP.String() {
-				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr().(*net.TCPAddr).IP.String(), s.controlChannel.RemoteAddr().(*net.TCPAddr).IP.String())
+			// Read the peer address once: checking "is it set" and then asking
+			// for the address separately leaves a window where the control
+			// channel is cleared in between and the address comes back nil,
+			// which the old type assertion turned into a panic. Comparing
+			// through sameHost also handles IPv6 peers correctly.
+			if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, tcpConn.RemoteAddr()) {
+				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr(), peer)
 				tcpConn.Close()
 				continue
 			}
@@ -358,7 +369,7 @@ func (s *TcpMuxTransport) acceptTunnelConn(listener net.Listener) {
 			}
 
 			// try to establish a new channel
-			if s.controlChannel == nil {
+			if !s.controlChannel.IsSet() {
 				s.logger.Info("control channel not found, attempting to establish a new session")
 				select {
 				case s.handshakeChannel <- conn: // ok
@@ -524,6 +535,16 @@ func (s *TcpMuxTransport) acceptLocalConn(listener net.Listener, remoteAddr stri
 				}
 			}
 
+			// Enforce the tunnel's limits before the connection costs anything:
+			// a refused connection should be refused here, not after it has
+			// taken a slot in the pool.
+			if !s.limits.acquire() {
+				s.logger.Warnf("connection limit reached, refusing %s", conn.RemoteAddr())
+				conn.Close()
+				continue
+			}
+			conn = s.limits.wrap(conn)
+
 			select {
 			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
@@ -543,6 +564,7 @@ func (s *TcpMuxTransport) acceptLocalConn(listener net.Listener, remoteAddr stri
 
 			default: // channel is full, discard the connection
 				s.logger.Warnf("local listener channel is full, discarding TCP connection from %s", tcpConn.LocalAddr().String())
+				s.limits.release()
 				conn.Close()
 			}
 
@@ -606,7 +628,10 @@ func (s *TcpMuxTransport) handleSession(session *smux.Session) {
 
 			// Handle data exchange between connections
 			go func() {
-				handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, incomingConn.conn, stream, s.logger, s.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+				// Free the connection slot once the transfer ends, or the
+				// limit would fill up permanently.
+				defer s.limits.release()
+				handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, s.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 				atomic.AddInt32(&s.streamCounter, -1)
 				<-counter // read signal from the channel
 			}()

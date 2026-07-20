@@ -101,8 +101,10 @@
     <div class="foot">TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
   </div>
 <script>
-  // Apply the theme chosen on the dashboard (shared via localStorage).
-  (function(){ const s=localStorage.getItem('bp_accent'); if(s) document.documentElement.style.setProperty('--accent-rgb',s); })();
+  // The panel has a single fixed theme, so nothing is read back from storage.
+  // Older builds let the accent be changed and saved it here; clear it so an
+  // upgraded install does not keep a colour the panel no longer offers.
+  try{ localStorage.removeItem('bp_accent'); }catch(e){}
   function togglePw(){
     const i=document.getElementById('pw'), t=document.getElementById('toggle'), e=document.getElementById('eye');
     const show=i.type==='password';

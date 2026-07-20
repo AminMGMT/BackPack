@@ -2,6 +2,11 @@ package cmd
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/backpack/backpack/internal/metrics"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/client"
@@ -15,6 +20,30 @@ import (
 var (
 	logger = utils.NewLogger("info")
 )
+
+// tunnelNameFromPath derives a tunnel's name from its config path, which is
+// how the rest of the tool identifies it.
+func tunnelNameFromPath(configPath string) string {
+	base := filepath.Base(configPath)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// startMetrics records what the tunnel carries so the CLI can show it later.
+// It is best-effort: a tunnel must never fail because diagnostics could not be
+// written.
+func startMetrics(ctx context.Context, configPath, transport, role string) {
+	name := tunnelNameFromPath(configPath)
+	if name == "" {
+		return
+	}
+	c := metrics.NewCollector(filepath.Dir(configPath), name, transport, role, nil, nil)
+	go func() {
+		done := make(chan struct{})
+		go func() { <-ctx.Done(); close(done) }()
+		_ = c.Write() // an immediate first reading, so the file exists right away
+		c.Run(done, 30*time.Second)
+	}()
+}
 
 func Run(configPath string, ctx context.Context) {
 	// Load and parse the configuration file
@@ -43,6 +72,8 @@ func Run(configPath string, ctx context.Context) {
 			ApplyTCPTuning()
 		}
 
+		startMetrics(ctx, configPath, string(cfg.Server.Transport), "server")
+
 		srv := server.NewServer(&cfg.Server, ctx) // server
 		go srv.Start()
 
@@ -55,6 +86,8 @@ func Run(configPath string, ctx context.Context) {
 		if !cfg.Client.SkipOptz {
 			ApplyTCPTuning()
 		}
+
+		startMetrics(ctx, configPath, string(cfg.Client.Transport), "client")
 
 		clnt := client.NewClient(&cfg.Client, ctx) // client
 		go clnt.Start()

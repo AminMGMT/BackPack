@@ -153,16 +153,6 @@ func ChooseOpt(title string, opts []Option) int {
 	return readChoice(len(opts))
 }
 
-// Choose presents a numbered list and returns the 0-based selected index,
-// or -1 if the user entered 0 (back/cancel).
-func Choose(title string, options []string) int {
-	opts := make([]Option, len(options))
-	for i, o := range options {
-		opts[i] = Option{Title: o}
-	}
-	return ChooseOpt(title, opts)
-}
-
 // readChoice reads a 1..n selection (0 = back → -1).
 func readChoice(n int) int {
 	for {

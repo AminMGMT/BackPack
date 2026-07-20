@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -44,6 +45,17 @@ func (f *CustomFormatter) colorize(level logrus.Level, text string) string {
 }
 
 func NewLogger(logLevel string) *logrus.Logger {
+	return NewLoggerWithFormat(logLevel, "")
+}
+
+// NewLoggerWithFormat builds a logger in either the human-readable format or
+// JSON.
+//
+// JSON exists for anyone shipping logs somewhere that parses them — journald's
+// structured fields, a log collector, a script. The default stays the coloured
+// text format, because the usual way these logs are read is a person running
+// journalctl on their own server, and JSON is worse for that.
+func NewLoggerWithFormat(logLevel, format string) *logrus.Logger {
 	log := logrus.New()
 
 	// Select log level
@@ -54,7 +66,13 @@ func NewLogger(logLevel string) *logrus.Logger {
 
 	log.SetLevel(parseLevel)
 
-	log.SetFormatter(&CustomFormatter{})
+	if strings.EqualFold(strings.TrimSpace(format), "json") {
+		log.SetFormatter(&logrus.JSONFormatter{
+			TimestampFormat: time.RFC3339,
+		})
+	} else {
+		log.SetFormatter(&CustomFormatter{})
+	}
 
 	return log
 }

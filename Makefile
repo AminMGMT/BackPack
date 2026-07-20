@@ -34,7 +34,13 @@ release: version release-linux
 	mkdir -p release
 	cp dist/backpack-linux-amd64 dist/backpack && tar -czf release/backpack_linux_amd64.tar.gz -C dist backpack && rm dist/backpack
 	cp dist/backpack-linux-arm64 dist/backpack && tar -czf release/backpack_linux_arm64.tar.gz -C dist backpack && rm dist/backpack
+	@# A checksum file published beside the assets is what lets the installer and
+	@# the updater prove that a mirror handed them the real binary. Users on
+	@# restricted networks fetch these through third-party proxies, so this is
+	@# the only integrity check they get.
+	cd release && (sha256sum backpack_linux_*.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 backpack_linux_*.tar.gz > SHA256SUMS)
 	@echo "Release assets ready in ./release"
+	@cat release/SHA256SUMS
 
 install: build
 	install -m 0755 $(BIN) $(BIN_PATH)

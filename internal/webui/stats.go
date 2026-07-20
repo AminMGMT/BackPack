@@ -1,10 +1,8 @@
 package webui
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -12,12 +10,10 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/geo"
 	"github.com/backpack/backpack/internal/manage"
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/disk"
-	"github.com/shirou/gopsutil/v4/host"
-	"github.com/shirou/gopsutil/v4/load"
-	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/sysstat"
 	psnet "github.com/shirou/gopsutil/v4/net"
 )
 
@@ -68,8 +64,15 @@ type TunnelInfo struct {
 	Ping         int    `json:"ping"` // milliseconds, -1 = n/a
 	PeerLocation string `json:"peerLocation"`
 	PeerISP      string `json:"peerISP"`
-	BotRelay     bool   `json:"botRelay"`  // has a hidden port used for the Telegram relay
-	Country      string `json:"country"`   // user-chosen ISO country code (label)
+	BotRelay     bool   `json:"botRelay"` // has a hidden port used for the Telegram relay
+	Country      string `json:"country"`  // user-chosen ISO country code (label)
+	// PeerCountry is the ISO code detected from the peer's address, used for
+	// the flag. It is separate from Country so a label the user set by hand is
+	// never silently overwritten by a lookup.
+	PeerCountry string `json:"peerCountry"`
+	// TunnelPort is the port clients dial, pulled out of the bind address
+	// because ":1231" is what matters and "0.0.0.0:1231" is noise.
+	TunnelPort string `json:"tunnelPort"`
 }
 
 // splitBotRelay removes the internal SOCKS relay mapping from the visible ports
@@ -107,35 +110,24 @@ var (
 func GatherSystem() SystemStats {
 	var s SystemStats
 
-	if info, err := host.Info(); err == nil {
-		s.Hostname = info.Hostname
-		s.OS = strings.Title(info.Platform) + " " + info.PlatformVersion
-		s.Uptime = humanDuration(time.Duration(info.Uptime) * time.Second)
-	}
+	// Shared with the Telegram bot, so an alert and the dashboard can never
+	// disagree about the same instant.
+	m := sysstat.Get()
 
-	if pct, err := cpu.Percent(0, false); err == nil && len(pct) > 0 {
-		s.CPUPercent = round1(pct[0])
-	}
-	s.CPUCores, _ = cpu.Counts(true)
-	if l, err := load.Avg(); err == nil {
-		s.Load = fmt.Sprintf("%.2f, %.2f, %.2f", l.Load1, l.Load5, l.Load15)
-	}
+	s.Hostname, s.OS = m.Hostname, m.OS
+	s.Uptime = sysstat.HumanDuration(m.Uptime)
 
-	if vm, err := mem.VirtualMemory(); err == nil {
-		s.MemUsed = humanBytes(vm.Used)
-		s.MemTotal = humanBytes(vm.Total)
-		s.MemPercent = round1(vm.UsedPercent)
-	}
-	if sw, err := mem.SwapMemory(); err == nil {
-		s.SwapUsed = humanBytes(sw.Used)
-		s.SwapTotal = humanBytes(sw.Total)
-		s.SwapPercent = round1(sw.UsedPercent)
-	}
-	if du, err := disk.Usage("/"); err == nil {
-		s.DiskUsed = humanBytes(du.Used)
-		s.DiskTotal = humanBytes(du.Total)
-		s.DiskPercent = round1(du.UsedPercent)
-	}
+	s.CPUPercent, s.CPUCores = m.CPUPercent, m.CPUCores
+	s.Load = m.LoadString()
+
+	s.MemUsed, s.MemTotal = sysstat.HumanBytes(m.MemUsed), sysstat.HumanBytes(m.MemTotal)
+	s.MemPercent = m.MemPercent
+
+	s.SwapUsed, s.SwapTotal = sysstat.HumanBytes(m.SwapUsed), sysstat.HumanBytes(m.SwapTotal)
+	s.SwapPercent = m.SwapPercent
+
+	s.DiskUsed, s.DiskTotal = sysstat.HumanBytes(m.DiskUsed), sysstat.HumanBytes(m.DiskTotal)
+	s.DiskPercent = m.DiskPercent
 
 	fillNetwork(&s)
 
@@ -145,7 +137,7 @@ func GatherSystem() SystemStats {
 		ipv6Cache = manage.PublicIPv6()
 	})
 	s.IPv4, s.IPv6 = ipv4Cache, ipv6Cache
-	if g := lookupGeo(ipv4Cache); g != nil {
+	if g := geo.Lookup(ipv4Cache); g != nil {
 		s.Location = strings.TrimSpace(g.City + ", " + g.Country)
 		s.ISP = g.ISP
 	}
@@ -167,8 +159,8 @@ func fillNetwork(s *SystemStats) {
 		return
 	}
 	cur := netSample{sent: counters[0].BytesSent, recv: counters[0].BytesRecv, at: time.Now()}
-	s.TotalSent = humanBytes(cur.sent)
-	s.TotalRecv = humanBytes(cur.recv)
+	s.TotalSent = sysstat.HumanBytes(cur.sent)
+	s.TotalRecv = sysstat.HumanBytes(cur.recv)
 
 	netMu.Lock()
 	prev := lastNet
@@ -178,8 +170,8 @@ func fillNetwork(s *SystemStats) {
 	if !prev.at.IsZero() {
 		secs := cur.at.Sub(prev.at).Seconds()
 		if secs > 0 {
-			s.UpSpeed = humanBytes(uint64(float64(cur.sent-prev.sent)/secs)) + "/s"
-			s.DownSpeed = humanBytes(uint64(float64(cur.recv-prev.recv)/secs)) + "/s"
+			s.UpSpeed = sysstat.HumanBytes(uint64(float64(cur.sent-prev.sent)/secs)) + "/s"
+			s.DownSpeed = sysstat.HumanBytes(uint64(float64(cur.recv-prev.recv)/secs)) + "/s"
 		}
 	}
 	if s.UpSpeed == "" {
@@ -198,6 +190,12 @@ func GatherTunnels() []TunnelInfo {
 	tunnels := manage.List()
 	out := make([]TunnelInfo, len(tunnels))
 
+	// One shared answer for "is it up", from the same code the watchdog and the
+	// health check use. Working it out here separately is what made KCP tunnels
+	// show as offline: the panel looked for peers in the TCP socket table, and a
+	// datagram listener has none.
+	health := manage.AllHealth()
+
 	var wg sync.WaitGroup
 	for i, t := range tunnels {
 		wg.Add(1)
@@ -214,14 +212,21 @@ func GatherTunnels() []TunnelInfo {
 				Country:   manage.TunnelCountry(t.Name),
 				Ping:      -1,
 			}
-			active := manage.IsActive(t.Service)
-
 			if t.Role == "server" {
 				// Server (e.g. the Iran node): we can't ping our own bind_addr,
 				// but we can detect the connected client(s) — the kharej peers
 				// dialing in — and measure/geo-locate them. This gives the Iran
 				// web panel real per-tunnel health + latency to each kharej.
 				peers := serverPeers(t.Addr)
+				// A datagram listener has no peers in the socket table — the
+				// kernel genuinely does not know. The transport does, and writes
+				// it to the metrics file, so fall back to that rather than
+				// showing a working tunnel with no ping and no location.
+				if len(peers) == 0 {
+					if ip := peerFromMetrics(t.Name); ip != "" {
+						peers = []peerConn{{IP: ip, RTT: -1}}
+					}
+				}
 				if len(peers) > 0 {
 					p := peers[0]
 					// Prefer the kernel-measured RTT of the live tunnel socket
@@ -230,19 +235,13 @@ func GatherTunnels() []TunnelInfo {
 					if info.Ping < 0 {
 						info.Ping = icmpPing(p.IP)
 					}
-					if g := lookupGeo(p.IP); g != nil {
+					if g := geo.Lookup(p.IP); g != nil {
 						info.PeerLocation = strings.TrimSpace(g.City + ", " + g.Country)
 						info.PeerISP = g.ISP
+						info.PeerCountry = g.Code
 					}
 				}
-				switch {
-				case !active:
-					info.State = "stopped"
-				case len(peers) == 0:
-					info.State = "offline" // up, but no client connected
-				default:
-					info.State = "online"
-				}
+				info.State = health[t.Name].State
 			} else {
 				// Client (e.g. the kharej node): ping the remote server directly.
 				h, port := splitHostPort(t.Addr)
@@ -250,19 +249,18 @@ func GatherTunnels() []TunnelInfo {
 				if pingable {
 					info.Ping = tcpPing(h, port)
 					if ip := resolveIP(h); ip != "" {
-						if g := lookupGeo(ip); g != nil {
+						if g := geo.Lookup(ip); g != nil {
 							info.PeerLocation = strings.TrimSpace(g.City + ", " + g.Country)
 							info.PeerISP = g.ISP
+							info.PeerCountry = g.Code
 						}
 					}
 				}
-				switch {
-				case !active:
-					info.State = "stopped"
-				case pingable && info.Ping < 0:
-					info.State = "offline" // active locally but peer unreachable
-				default:
-					info.State = "online"
+				info.State = health[t.Name].State
+				// A client whose peer does not answer a probe is offline even
+				// if the socket table still lists the connection.
+				if info.State == "online" && pingable && info.Ping < 0 {
+					info.State = "offline"
 				}
 			}
 			out[i] = info
@@ -431,135 +429,20 @@ func splitHostPort(addr string) (string, string) {
 
 // --- geo lookup with cache --------------------------------------------------
 
-type geoInfo struct {
-	Status  string `json:"status"`
-	Country string `json:"country"`
-	City    string `json:"city"`
-	ISP     string `json:"isp"`
-}
-
-type geoEntry struct {
-	info *geoInfo
-	at   time.Time
-}
-
-var (
-	geoCache = map[string]geoEntry{}
-	geoMu    sync.Mutex
-)
-
-// geoProviders is an ordered list of lookup functions. The first that succeeds
-// wins. Multiple providers are tried because any single one (e.g. ip-api.com)
-// may be blocked from some networks such as Iran.
-var geoProviders = []func(string) *geoInfo{geoFromIPApi, geoFromIpwho, geoFromIpSb}
-
-func lookupGeo(ip string) *geoInfo {
-	if ip == "" || ip == "-" {
-		return nil
+// peerFromMetrics reads the connected peer's IP from a tunnel's metrics file.
+//
+// Only the datagram transports need this: for everything else the socket table
+// is authoritative and fresher. The address is written by the engine when the
+// control channel is established and cleared when it drops, so an empty result
+// means "not connected" rather than "unknown".
+func peerFromMetrics(name string) string {
+	snap, err := metrics.Read(app.ConfigDir, name)
+	if err != nil || snap.Peer == "" {
+		return ""
 	}
-	geoMu.Lock()
-	if e, ok := geoCache[ip]; ok && time.Since(e.at) < 6*time.Hour {
-		geoMu.Unlock()
-		return e.info
-	}
-	geoMu.Unlock()
-
-	for _, provider := range geoProviders {
-		if g := provider(ip); g != nil && (g.Country != "" || g.ISP != "") {
-			geoMu.Lock()
-			geoCache[ip] = geoEntry{info: g, at: time.Now()}
-			geoMu.Unlock()
-			return g
-		}
-	}
-	return nil
-}
-
-func geoGet(url string, out any) bool {
-	client := &http.Client{Timeout: 6 * time.Second}
-	resp, err := client.Get(url)
+	host, _, err := net.SplitHostPort(snap.Peer)
 	if err != nil {
-		return false
+		return snap.Peer
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	return json.NewDecoder(resp.Body).Decode(out) == nil
-}
-
-// geoFromIPApi — ip-api.com (HTTP, no key).
-func geoFromIPApi(ip string) *geoInfo {
-	var g geoInfo
-	if geoGet("http://ip-api.com/json/"+ip+"?fields=status,country,city,isp", &g) && g.Status == "success" {
-		return &g
-	}
-	return nil
-}
-
-// geoFromIpwho — ipwho.is (HTTPS, no key).
-func geoFromIpwho(ip string) *geoInfo {
-	var r struct {
-		Success    bool   `json:"success"`
-		Country    string `json:"country"`
-		City       string `json:"city"`
-		Connection struct {
-			ISP string `json:"isp"`
-			Org string `json:"org"`
-		} `json:"connection"`
-	}
-	if geoGet("https://ipwho.is/"+ip, &r) && r.Success {
-		isp := r.Connection.ISP
-		if isp == "" {
-			isp = r.Connection.Org
-		}
-		return &geoInfo{Country: r.Country, City: r.City, ISP: isp}
-	}
-	return nil
-}
-
-// geoFromIpSb — api.ip.sb (HTTPS, no key).
-func geoFromIpSb(ip string) *geoInfo {
-	var r struct {
-		Country      string `json:"country"`
-		City         string `json:"city"`
-		ISP          string `json:"isp"`
-		Organization string `json:"organization"`
-	}
-	if geoGet("https://api.ip.sb/geoip/"+ip, &r) && r.Country != "" {
-		isp := r.ISP
-		if isp == "" {
-			isp = r.Organization
-		}
-		return &geoInfo{Country: r.Country, City: r.City, ISP: isp}
-	}
-	return nil
-}
-
-func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }
-
-func humanBytes(b uint64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := uint64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
-}
-
-func humanDuration(d time.Duration) string {
-	days := int(d.Hours()) / 24
-	hours := int(d.Hours()) % 24
-	mins := int(d.Minutes()) % 60
-	if days > 0 {
-		return fmt.Sprintf("%dd %dh %dm", days, hours, mins)
-	}
-	if hours > 0 {
-		return fmt.Sprintf("%dh %dm", hours, mins)
-	}
-	return fmt.Sprintf("%dm", mins)
+	return host
 }
