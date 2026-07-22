@@ -20,6 +20,7 @@ import (
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/socks"
 	"github.com/backpack/backpack/internal/telegram"
+	"github.com/backpack/backpack/internal/tunhist"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -48,6 +49,8 @@ func Run() {
 		{"watchdog", manage.RunWatchdog},
 		{"telegram bot", telegram.RunBot},
 		{"alerts", telegram.RunAlerts},
+		{"history sampler", tunhist.Run},
+		{"auto-backup", manage.RunAutoBackup},
 	}
 	for _, job := range jobs {
 		wg.Add(1)

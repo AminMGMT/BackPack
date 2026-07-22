@@ -2,6 +2,79 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.5.5 — 2026-07-23
+
+A monitoring release: the web panel grows from a live snapshot into something
+that remembers, and two bugs that made a KCP tunnel look broken are fixed.
+
+### Fixed
+- **Real client IP over KCP dropped every forwarded connection.** With the
+  real-client-IP option on, the server prepends a PROXY protocol v2 header to
+  each connection — and to build it, the code cast the *outbound* tunnel
+  connection to a TCP address. On the datagram transports that connection is a
+  UDP socket, so the cast failed, the header was never written, and the
+  connection was closed before a byte moved. The tunnel connected, the control
+  channel came up, and then nothing crossed it — the log filled with
+  `destination connection address is not a TCP address`. The header now takes
+  its destination from the forwarded listener the client actually connected to,
+  which is a TCP address on every transport, so KCP (and raw UDP) carry the
+  real client IP like the rest. There is an end-to-end test exercising the
+  PROXY header over every transport that supports it, which is the coverage
+  that was missing when the bug shipped.
+- **KCP and UDP client tunnels showed as offline in the panel, with no ping.**
+  The panel probed a client tunnel by opening a TCP connection to the server's
+  port. A KCP or UDP server listens on a *UDP* port, so that probe always
+  failed — and the panel then marked a working tunnel offline and showed no
+  latency. The datagram transports are now judged by the same socket check the
+  watchdog uses (never by a TCP probe), and their latency comes from a
+  best-effort ICMP ping that can be blank without ever implying the tunnel is
+  down.
+
+### Added
+- **The panel remembers now.** A per-tunnel **sparkline** shows the last few
+  minutes of throughput on each card, and **Details** carries the longer view:
+  a 24-hour speed chart, per-day totals for the week, and an **uptime
+  percentage** for the last day and week. The history is sampled every five
+  minutes by the monitoring service and kept for a month, so it survives a
+  panel restart — the sparkline answers "what is happening now", this answers
+  "what happened this week".
+- **Health Check in the panel** (the bell-and-graph button): the same screen as
+  the CLI's Health Check — server tuning, the monitor service, the panel, and
+  every tunnel — with a ✓ / ! / ✗ and a plain-language fix per item, read-only.
+- **Link Test in the panel** (**Details → Link Test**): measures latency, jitter
+  and packet loss to the server over TCP and recommends a transport, the same
+  as the CLI. It runs on a client tunnel, where there is a server to measure.
+- **Alerts view** (the bell): what the monitoring service has fired — the
+  conditions active right now and the recent messages, the same source as the
+  Telegram alerts. A dot on the bell marks a live alert. Alerts are now recorded
+  even when the Telegram bot is not configured, and the watchdog writes a line
+  here every time it restarts a dropped tunnel.
+- **Fuller tunnel Details.** Traffic in and out, uptime, performance preset,
+  per-tunnel limits, the certificate (self-signed or Let's Encrypt, with its
+  expiry), PROXY protocol, and the failover/backup addresses — all read from
+  the tunnel's own config and metrics.
+- **The panel warns when the monitor is down**, and shows a notice when a newer
+  release is out — both from the background check, so nothing on the display
+  path waits on the network.
+- **Prometheus metrics** at `/metrics` (system, per-tunnel traffic and state,
+  and the KCP link-quality counters), reachable with a read-only access token
+  minted under **Settings → Remote access** — for anyone running Grafana across
+  several servers.
+- **Weekly automatic backup**, taken by the monitoring service into the standard
+  backups folder and pruned like a manual one — **Settings → Backup**.
+- **Restore points are listed in the panel** (**Settings**), read-only; a
+  rollback stays a CLI decision because it replaces the running binary.
+- **Login hardening.** Five failed logins from one address earn a ten-minute
+  lockout; an optional **two-factor step** sends a code through the Telegram bot
+  after the password; an optional **login alert** messages you on every sign-in
+  with the address; and **Settings** lists signed-in devices with a per-device
+  revoke and "sign out everywhere".
+- **The panel is installable as an app** (a web manifest and icon), so it can be
+  added to a phone's home screen — the usual way this dashboard gets checked.
+- **Release channel and log tools in the panel**: switch stable/beta under
+  **Settings → Update**, and filter the log drawer with ERROR/WARN lines
+  highlighted.
+
 ## v1.5.0 — 2026-07-18
 
 ### Added

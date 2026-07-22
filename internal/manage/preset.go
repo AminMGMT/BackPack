@@ -175,3 +175,8 @@ func PresetLabel(name string) string {
 	}
 	return presetLabel(s.Preset)
 }
+
+// PresetValueLabel maps a raw preset config value to its display name
+// ("turbo" → "Turbo", "" → "Custom"), for callers that already hold the
+// decoded config and should not re-read it from disk.
+func PresetValueLabel(value string) string { return presetLabel(value) }

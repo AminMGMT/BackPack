@@ -11,7 +11,7 @@ import (
 // auth behave as they will in the browser.
 func TestSettingsEndpointsRespond(t *testing.T) {
 	srv := &server{sessions: newSessionStore()}
-	tok := srv.sessions.create()
+	tok := srv.sessions.create("127.0.0.1")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))

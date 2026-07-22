@@ -17,6 +17,20 @@ import (
 type Config struct {
 	Password string `json:"password"` // 8-digit login password
 	Port     int    `json:"port"`
+
+	// RemoteToken, when set, grants read-only API access (stats, tunnels,
+	// alerts, Prometheus metrics) with `Authorization: Bearer <token>` — for
+	// a peer panel or a metrics scraper. Empty means no remote access.
+	RemoteToken string `json:"remote_token,omitempty"`
+
+	// TwoFA asks for a one-time code, sent through the Telegram bot, after
+	// the password. It can only be enabled while the bot is configured.
+	// If the bot cannot deliver codes, disable it from the CLI config file.
+	TwoFA bool `json:"two_fa,omitempty"`
+
+	// LoginNotify sends a Telegram message on every successful panel login —
+	// the cheap way to notice a password in the wrong hands.
+	LoginNotify bool `json:"login_notify,omitempty"`
 }
 
 // Load reads the saved config, filling defaults for missing fields.

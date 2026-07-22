@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/backpack/backpack/internal/alerthist"
 )
 
 // Watchdog tuning.
@@ -58,6 +60,10 @@ func RunWatchdog(ctx context.Context) {
 				if fails[t.Name] >= wdThreshold && time.Since(lastRestart[t.Name]) > wdCooldown {
 					RestartService(t.Service)
 					lastRestart[t.Name] = time.Now()
+					// On the record: "why did my tunnel reset overnight" should
+					// be answerable from the panel's alert view.
+					alerthist.RecordEvent("🔁 Watchdog restarted tunnel " + t.Name +
+						" — it was running but not connected")
 					fails[t.Name] = 0
 				}
 			}

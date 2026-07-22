@@ -330,6 +330,17 @@ func SendStatusNow() error {
 	return explainSendFailure(c, send(c, c.AdminID, StatusText()))
 }
 
+// SendToAdmin delivers one message to the configured admin chat. Used by the
+// web panel for login codes; the relay handling is the same as every other
+// message the bot sends.
+func SendToAdmin(text string) error {
+	c := Load()
+	if c.Token == "" || c.AdminID == "" {
+		return fmt.Errorf("telegram bot is not configured")
+	}
+	return explainSendFailure(c, send(c, c.AdminID, text))
+}
+
 // SendTest sends a one-off confirmation message.
 //
 // It retries briefly on the transport errors a not-yet-ready relay produces.

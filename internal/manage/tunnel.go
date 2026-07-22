@@ -51,6 +51,15 @@ func List() []Tunnel {
 	return tunnels
 }
 
+// LoadTunnelConfig reads a tunnel's full config file. Callers that need more
+// than the summary List gives — preset, limits, certificate, fallbacks — read
+// it through this rather than parsing the TOML themselves.
+func LoadTunnelConfig(name string) (config.Config, error) {
+	var cfg config.Config
+	_, err := toml.DecodeFile(app.ConfigPath(name), &cfg)
+	return cfg, err
+}
+
 // Delete removes a tunnel: stops/disables the service, deletes the unit,
 // config, any per-tunnel refresh script, and reloads systemd.
 func Delete(name string) error {

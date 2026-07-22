@@ -1,8 +1,6 @@
 package manage
 
 import (
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -353,26 +351,16 @@ func certCheck(group, path string) Check {
 		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
 			Detail: "not configured", Fix: "switch the transport again to auto-generate one"}
 	}
-	data, err := os.ReadFile(path)
+	notAfter, err := CertExpiry(path)
 	if err != nil {
 		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
-			Detail: "unreadable: " + path, Fix: "regenerate or point to a valid certificate"}
+			Detail: err.Error(), Fix: "regenerate or point to a valid certificate"}
 	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
-			Detail: "not a valid PEM file", Fix: "regenerate the certificate"}
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
-			Detail: "unparsable", Fix: "regenerate the certificate"}
-	}
-	left := time.Until(cert.NotAfter)
+	left := time.Until(notAfter)
 	switch {
 	case left <= 0:
 		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
-			Detail: "expired " + cert.NotAfter.Format("2006-01-02"),
+			Detail: "expired " + notAfter.Format("2006-01-02"),
 			Fix:    "regenerate it (switch the transport again) or renew your own"}
 	case left < 21*24*time.Hour:
 		return Check{Group: group, Name: "TLS certificate", Level: CheckWarn,
@@ -380,7 +368,7 @@ func certCheck(group, path string) Check {
 			Fix:    "renew it soon"}
 	default:
 		return Check{Group: group, Name: "TLS certificate", Level: CheckOK,
-			Detail: "valid until " + cert.NotAfter.Format("2006-01-02")}
+			Detail: "valid until " + notAfter.Format("2006-01-02")}
 	}
 }
 

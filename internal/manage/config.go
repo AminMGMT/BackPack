@@ -140,6 +140,10 @@ func isKCP(t string) bool {
 	return t == "kcp"
 }
 
+// IsDatagram reports whether a transport carries datagrams (UDP/KCP), for
+// callers outside the package — a TCP probe against one is meaningless.
+func IsDatagram(t string) bool { return isDatagram(t) }
+
 // isDatagram reports whether a transport is carried in UDP datagrams. Such a
 // tunnel never shows up in the TCP listen table and cannot be probed with a
 // TCP connect, so every check that assumes TCP has to skip it.

@@ -1,0 +1,84 @@
+name: CI
+
+# Every push and pull request is built and tested. The end-to-end suite starts
+# real tunnels and moves real traffic, so a change that breaks a transport is
+# caught here rather than on somebody's server.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l . | grep -v '^Sorce/' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        # The e2e tests bind loopback ports and wait on real handshakes, so
+        # they need more than the default 10 minute budget on a shared runner.
+        run: go test ./... -timeout 20m
+
+      - name: Test with the race detector
+        # Enforced. The transports are heavily concurrent and a data race there
+        # corrupts traffic rather than crashing loudly, so this must stay clean.
+        run: go test ./... -race -timeout 20m
+
+  build:
+    name: Cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build both architectures
+        run: make release
+
+      - name: Check the version is in step
+        # VERSION is what the updater reads to detect a new release, so it must
+        # match the version compiled into the binary.
+        run: |
+          embedded="$(grep -oE 'Version = "v[0-9.]+"' internal/app/app.go | grep -oE 'v[0-9.]+')"
+          declared="$(tr -d ' \n' < VERSION)"
+          echo "embedded=$embedded declared=$declared"
+          if [ "$embedded" != "$declared" ]; then
+            echo "VERSION ($declared) does not match internal/app/app.go ($embedded)."
+            echo "Run: make version"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            release/backpack_linux_amd64.tar.gz
+            release/backpack_linux_arm64.tar.gz
+            release/SHA256SUMS
+          retention-days: 14

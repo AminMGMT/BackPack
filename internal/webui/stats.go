@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/geo"
 	"github.com/backpack/backpack/internal/manage"
@@ -51,6 +52,17 @@ type SystemStats struct {
 
 	TunnelsTotal   int `json:"tunnelsTotal"`
 	TunnelsRunning int `json:"tunnelsRunning"`
+
+	// MonitorRunning reports the backpack-monitor service — the watchdog, the
+	// Telegram bot and the alerts live there, not in this panel. When it is
+	// down, dropped tunnels are not restarted and no alert fires, and nothing
+	// else visibly breaks — which is exactly why the panel must say so.
+	MonitorRunning bool `json:"monitorRunning"`
+
+	// UpdateTag is the newer release the cached background check knows about,
+	// empty when this version is current. Same source as the CLI's notice and
+	// the Telegram announcement, so the three can never disagree.
+	UpdateTag string `json:"updateTag,omitempty"`
 }
 
 // TunnelInfo is one row for /api/tunnels.
@@ -73,6 +85,41 @@ type TunnelInfo struct {
 	// TunnelPort is the port clients dial, pulled out of the bind address
 	// because ":1231" is what matters and "0.0.0.0:1231" is noise.
 	TunnelPort string `json:"tunnelPort"`
+
+	// From the tunnel's metrics snapshot (empty when none has been written yet).
+	Uptime   string `json:"uptime,omitempty"`
+	BytesIn  string `json:"bytesIn,omitempty"`
+	BytesOut string `json:"bytesOut,omitempty"`
+	// KCP link-quality counters; nil on every other transport.
+	KCP *metrics.KCPStats `json:"kcp,omitempty"`
+	// KCPLossPercent is derived from the counters above: how much of the sent
+	// traffic needed resending — the honest answer to "is this link lossy?".
+	KCPLossPercent float64 `json:"kcpLossPercent,omitempty"`
+
+	// From the tunnel's own config.
+	Preset         string   `json:"preset,omitempty"`         // display label: Balance / Turbo / Aggressive / Custom
+	MaxConnections int      `json:"maxConnections,omitempty"` // 0 = unlimited
+	BandwidthMbps  int      `json:"bandwidthMbps,omitempty"`  // 0 = unlimited
+	ProxyProtocol  bool     `json:"proxyProtocol,omitempty"`
+	LoadBalance    bool     `json:"loadBalance,omitempty"`
+	FallbackAddrs  []string `json:"fallbackAddrs,omitempty"`
+	// CertType is "letsencrypt" or "self-signed", only for wss/wssmux servers.
+	CertDomain string `json:"certDomain,omitempty"`
+	CertType   string `json:"certType,omitempty"`
+	// CertExpiry is the NotAfter date of the certificate on disk, when it can
+	// be read. ACME certificates renew themselves, so no expiry is shown.
+	CertExpiry string `json:"certExpiry,omitempty"`
+
+	// Rates is the recent transfer speed of this tunnel, oldest first, for the
+	// dashboard's sparkline. Derived from successive metrics snapshots.
+	Rates []RatePoint `json:"rates,omitempty"`
+}
+
+// RatePoint is one sparkline sample: bytes per second at a moment in time.
+type RatePoint struct {
+	T   int64   `json:"t"`   // unix seconds
+	In  float64 `json:"in"`  // bytes/s received over the tunnel
+	Out float64 `json:"out"` // bytes/s sent over the tunnel
 }
 
 // splitBotRelay removes the internal SOCKS relay mapping from the visible ports
@@ -149,7 +196,34 @@ func GatherSystem() SystemStats {
 			s.TunnelsRunning++
 		}
 	}
+
+	s.MonitorRunning = manage.MonitorRunning()
+
+	// Refresh in the background so the stats endpoint never waits on GitHub —
+	// and at most once per interval, not once per poll: this endpoint is hit
+	// every few seconds and does not need a goroutine each time.
+	kickUpdateCheck()
+	if tag, ok := manage.UpdateAvailable(); ok {
+		s.UpdateTag = tag
+	}
 	return s
+}
+
+var (
+	updKickMu   sync.Mutex
+	updKickedAt time.Time
+)
+
+// kickUpdateCheck starts a background staleness check, but no more than once
+// every 10 minutes across all polls.
+func kickUpdateCheck() {
+	updKickMu.Lock()
+	defer updKickMu.Unlock()
+	if time.Since(updKickedAt) < 10*time.Minute {
+		return
+	}
+	updKickedAt = time.Now()
+	go manage.RefreshUpdateCheckIfStale(6 * time.Hour)
 }
 
 // fillNetwork computes cumulative traffic and up/down speed since the last call.
@@ -201,6 +275,8 @@ func GatherTunnels() []TunnelInfo {
 		wg.Add(1)
 		go func(i int, t manage.Tunnel) {
 			defer wg.Done()
+			// One read serves both the peer fallback and the traffic fields.
+			snap, snapErr := metrics.Read(app.ConfigDir, t.Name)
 			ports, bot := splitBotRelay(t.Ports)
 			info := TunnelInfo{
 				Name:      t.Name,
@@ -222,8 +298,8 @@ func GatherTunnels() []TunnelInfo {
 				// kernel genuinely does not know. The transport does, and writes
 				// it to the metrics file, so fall back to that rather than
 				// showing a working tunnel with no ping and no location.
-				if len(peers) == 0 {
-					if ip := peerFromMetrics(t.Name); ip != "" {
+				if len(peers) == 0 && snapErr == nil {
+					if ip := peerHost(snap.Peer); ip != "" {
 						peers = []peerConn{{IP: ip, RTT: -1}}
 					}
 				}
@@ -243,12 +319,27 @@ func GatherTunnels() []TunnelInfo {
 				}
 				info.State = health[t.Name].State
 			} else {
-				// Client (e.g. the kharej node): ping the remote server directly.
+				// Client (e.g. the kharej node): measure and geo-locate the
+				// remote server.
 				h, port := splitHostPort(t.Addr)
-				pingable := h != "" && h != "0.0.0.0" && h != "::" && h != "[::]"
-				if pingable {
-					info.Ping = tcpPing(h, port)
-					if ip := resolveIP(h); ip != "" {
+				resolvable := h != "" && h != "0.0.0.0" && h != "::" && h != "[::]"
+				datagram := manage.IsDatagram(t.Transport)
+				if resolvable {
+					ip := resolveIP(h)
+					// A TCP probe is only meaningful for the TCP-based transports.
+					// KCP and UDP listen on a UDP port, so a TCP connect there
+					// always fails — using its result for ping (or worse, for
+					// liveness) reports a working datagram tunnel as dead, with no
+					// ping. ICMP is the only probe left for those, and it is
+					// best-effort: many routes drop it while carrying the tunnel.
+					if datagram {
+						if ip != "" {
+							info.Ping = icmpPing(ip)
+						}
+					} else {
+						info.Ping = tcpPing(h, port)
+					}
+					if ip != "" {
 						if g := geo.Lookup(ip); g != nil {
 							info.PeerLocation = strings.TrimSpace(g.City + ", " + g.Country)
 							info.PeerISP = g.ISP
@@ -257,12 +348,24 @@ func GatherTunnels() []TunnelInfo {
 					}
 				}
 				info.State = health[t.Name].State
-				// A client whose peer does not answer a probe is offline even
-				// if the socket table still lists the connection.
-				if info.State == "online" && pingable && info.Ping < 0 {
+				// A failed TCP probe is evidence the tunnel is down; a failed
+				// ICMP one is not (it may simply be filtered), so a datagram
+				// tunnel's liveness rests on the socket check in AllHealth alone,
+				// never on ping.
+				if info.State == "online" && resolvable && !datagram && info.Ping < 0 {
 					info.State = "offline"
 				}
 			}
+			if snapErr == nil {
+				fillMetrics(&info, snap)
+			}
+			// The snapshot's uptime describes the last run; on a stopped tunnel
+			// that is history, not state. The traffic totals stay — they are
+			// cumulative and survive restarts by design.
+			if info.State == "stopped" {
+				info.Uptime = ""
+			}
+			fillConfig(&info, t)
 			out[i] = info
 		}(i, t)
 	}
@@ -427,22 +530,112 @@ func splitHostPort(addr string) (string, string) {
 	return addr, ""
 }
 
+// --- transfer-rate history ---------------------------------------------------
+
+// rateKeep is how many sparkline points are kept per tunnel. Snapshots are
+// written every few seconds, so this covers roughly the last few minutes —
+// enough to see a stall or a spike, which is what a sparkline is for.
+const rateKeep = 48
+
+// rateTracker derives bytes-per-second from successive metrics snapshots.
+//
+// It keys on the snapshot's own Taken time, not on when we happened to poll:
+// two browsers polling at once see the same snapshot, and a rate computed
+// between identical readings would be a meaningless zero.
+type rateTracker struct {
+	mu   sync.Mutex
+	last map[string]metrics.Snapshot
+	hist map[string][]RatePoint
+}
+
+var rates = &rateTracker{last: map[string]metrics.Snapshot{}, hist: map[string][]RatePoint{}}
+
+// sample records one snapshot and returns the current history, oldest first.
+func (r *rateTracker) sample(name string, snap metrics.Snapshot) []RatePoint {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	prev, ok := r.last[name]
+	if !ok || !snap.Taken.Equal(prev.Taken) {
+		if ok {
+			secs := snap.Taken.Sub(prev.Taken).Seconds()
+			// A counter that went backwards means the totals file was reset
+			// (e.g. a restore); skip the point rather than plotting nonsense.
+			if secs > 0 && snap.BytesIn >= prev.BytesIn && snap.BytesOut >= prev.BytesOut {
+				h := append(r.hist[name], RatePoint{
+					T:   snap.Taken.Unix(),
+					In:  float64(snap.BytesIn-prev.BytesIn) / secs,
+					Out: float64(snap.BytesOut-prev.BytesOut) / secs,
+				})
+				if len(h) > rateKeep {
+					h = h[len(h)-rateKeep:]
+				}
+				r.hist[name] = h
+			}
+		}
+		r.last[name] = snap
+	}
+	return append([]RatePoint(nil), r.hist[name]...)
+}
+
+// fillMetrics copies traffic and link-quality numbers from the tunnel's
+// metrics snapshot. A tunnel that has never run has no snapshot; that is not
+// an error, the fields just stay empty.
+func fillMetrics(info *TunnelInfo, snap metrics.Snapshot) {
+	info.Uptime = snap.Uptime
+	info.BytesIn = sysstat.HumanBytes(snap.BytesIn)
+	info.BytesOut = sysstat.HumanBytes(snap.BytesOut)
+	info.Rates = rates.sample(info.Name, snap)
+	if snap.KCP != nil {
+		info.KCP = snap.KCP
+		info.KCPLossPercent = snap.KCP.LossPercent()
+	}
+}
+
+// fillConfig copies the monitoring-relevant parts of the tunnel's own config:
+// preset, limits, PROXY protocol, failover addresses and the certificate.
+func fillConfig(info *TunnelInfo, t manage.Tunnel) {
+	cfg, err := manage.LoadTunnelConfig(t.Name)
+	if err != nil {
+		return
+	}
+	if t.Role == "server" {
+		sc := cfg.Server
+		info.Preset = manage.PresetValueLabel(sc.Preset)
+		info.MaxConnections = sc.MaxConnections
+		info.BandwidthMbps = sc.BandwidthMbps
+		info.ProxyProtocol = sc.ProxyProtocol
+		if sc.Transport == config.WSS || sc.Transport == config.WSSMUX {
+			if sc.ACMEDomain != "" {
+				info.CertType, info.CertDomain = "letsencrypt", sc.ACMEDomain
+			} else {
+				info.CertType = "self-signed"
+				if exp, err := manage.CertExpiry(sc.TLSCertFile); err == nil {
+					info.CertExpiry = exp.Format("2006-01-02")
+				}
+			}
+		}
+	} else {
+		cc := cfg.Client
+		info.Preset = manage.PresetValueLabel(cc.Preset)
+		info.LoadBalance = cc.LoadBalance
+		info.FallbackAddrs = cc.FallbackAddrs
+	}
+}
+
 // --- geo lookup with cache --------------------------------------------------
 
-// peerFromMetrics reads the connected peer's IP from a tunnel's metrics file.
-//
-// Only the datagram transports need this: for everything else the socket table
-// is authoritative and fresher. The address is written by the engine when the
-// control channel is established and cleared when it drops, so an empty result
-// means "not connected" rather than "unknown".
-func peerFromMetrics(name string) string {
-	snap, err := metrics.Read(app.ConfigDir, name)
-	if err != nil || snap.Peer == "" {
+// peerHost extracts the host from a snapshot's peer address ("" when there is
+// none). Only the datagram transports report a peer this way: for everything
+// else the socket table is authoritative and fresher. The address is written by
+// the engine when the control channel is established and cleared when it drops,
+// so an empty result means "not connected" rather than "unknown".
+func peerHost(peer string) string {
+	if peer == "" {
 		return ""
 	}
-	host, _, err := net.SplitHostPort(snap.Peer)
+	host, _, err := net.SplitHostPort(peer)
 	if err != nil {
-		return snap.Peer
+		return peer
 	}
 	return host
 }

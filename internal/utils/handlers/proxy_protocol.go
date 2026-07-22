@@ -8,12 +8,20 @@ import (
 )
 
 func WriteProxyProtocol(from, to net.Conn) error {
-	// Add Proxy Protocol v2 header to the connection
+	// Add Proxy Protocol v2 header to the connection.
+	//
+	// src is the real client; dst is the address that client connected to —
+	// the tunnel's own forwarded listener, i.e. from.LocalAddr(). It is NOT
+	// to.RemoteAddr(): that is the next hop across the tunnel, which is both
+	// the wrong thing to advertise and, on the datagram transports (KCP/UDP),
+	// a *net.UDPAddr — the cast failed, WriteProxyProtocol returned an error,
+	// and every forwarded connection over KCP was dropped before a byte moved.
+	// from.LocalAddr() is the accepted listener socket, always a TCP address.
 	srcAddr, ok := from.RemoteAddr().(*net.TCPAddr)
 	if !ok {
 		return fmt.Errorf("source connection address is not a TCP address")
 	}
-	dstAddr, ok := to.RemoteAddr().(*net.TCPAddr)
+	dstAddr, ok := from.LocalAddr().(*net.TCPAddr)
 	if !ok {
 		return fmt.Errorf("destination connection address is not a TCP address")
 	}

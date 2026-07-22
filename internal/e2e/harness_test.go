@@ -151,6 +151,9 @@ type tunnelOptions struct {
 	FallbackAddrs []string
 	// Token overrides the shared secret on both sides.
 	Token string
+	// ProxyProtocol prepends a PROXY protocol v2 header to each forwarded
+	// connection, carrying the real client's address to the backend.
+	ProxyProtocol bool
 }
 
 // startTunnel brings up a server and a client on the given transport, forwarding
@@ -166,6 +169,7 @@ func startTunnel(t *testing.T, transport string, backend *echoBackend, opts tunn
 	}
 
 	srvCfg := baseServerConfig(transport, tunnelPort, entryPort, backend.addr, token)
+	srvCfg.ProxyProtocol = opts.ProxyProtocol
 	remote := opts.ClientRemote
 	if remote == "" {
 		remote = fmt.Sprintf("127.0.0.1:%d", tunnelPort)

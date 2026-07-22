@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0b">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Backpack · Dashboard</title>
 <style>
   :root{
@@ -150,6 +156,25 @@
   .wal .waddr{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);word-break:break-all;padding-right:52px}
   .wal .tip{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;color:var(--red-soft)}
 
+  /* ---------- monitor warning ---------- */
+  /* Amber, because amber already means "down" on this page. Shown only while
+     backpack-monitor is not running — the one failure that is otherwise
+     invisible: no watchdog restarts, no alerts, nothing visibly broken. */
+  .warnbar{display:flex;align-items:center;gap:10px;padding:12px 16px;margin-bottom:16px;
+    border-radius:14px;font-size:12.5px;font-weight:600;color:var(--amber);
+    background:rgba(255,159,10,.1);border:1px solid rgba(255,159,10,.3);
+    animation:rise .6s cubic-bezier(.16,1,.3,1) both}
+  .warnbar .ic{width:16px;height:16px;flex:none}
+  .warnbar code{font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:11.5px;
+    padding:1px 6px;border-radius:6px;background:rgba(255,159,10,.14)}
+
+  /* Update notice: same accent the CLI uses to mark its Update entry. */
+  .updpill{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 14px;
+    border-radius:12px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.22s;
+    background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.32);color:var(--red-soft)}
+  .updpill:hover{background:rgba(var(--accent-rgb),.24);transform:translateY(-1px)}
+  .updpill .ic{width:15px;height:15px}
+
   /* ---------- meters ---------- */
   .grid-meters{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}
   .meter{
@@ -221,10 +246,49 @@
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .r.full{grid-column:1/-1}
   .ping.good{color:var(--green)} .ping.mid{color:var(--amber)} .ping.bad{color:var(--red)}
-  .logbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;
+  .cardbtns{display:flex;gap:8px}
+  .logbtn{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;min-height:44px;
     border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;
     background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
   .logbtn:hover{background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35);color:var(--red-soft)}
+
+  /* Details modal: the numbers worth a look but not worth card space —
+     the cards stay cut back to what you actually read. */
+  .dl{display:grid;grid-template-columns:1fr 1fr;gap:12px 14px;margin-bottom:6px}
+  .dsec{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
+    margin:14px 0 10px;padding-top:14px;border-top:1px solid var(--stroke)}
+
+  /* Sparkline: download carries the accent, upload stays quiet — identity by
+     position and label, never by hue alone (the ↓/↑ labels sit right beside). */
+  .spark{margin-top:4px}
+  .spark svg{width:100%;height:34px;display:block}
+  .spark .sl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);
+    margin-top:3px;font-variant-numeric:tabular-nums}
+  .spark .sl b{color:var(--txt);font-weight:600}
+  .sparkbig svg{height:72px}
+
+  /* Health check list */
+  .hc-item{display:flex;align-items:baseline;gap:9px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .hc-item:last-child{border-bottom:none}
+  .hc-mark{flex:none;width:16px;text-align:center;font-weight:700;font-size:13px}
+  .hc-mark.ok{color:var(--txt)} .hc-mark.warn{color:var(--amber)}
+  .hc-mark.fail{color:var(--red-soft)} .hc-mark.info{color:var(--muted)}
+  .hc-name{font-size:12.5px;font-weight:600;flex:none}
+  .hc-detail{font-size:12px;color:var(--muted);flex:1;min-width:0;overflow-wrap:anywhere}
+  .hc-fix{font-size:11.5px;color:var(--amber);margin:2px 0 0 25px}
+
+  /* Alerts view */
+  .al-active{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .al-chip{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:8px;color:var(--amber);
+    background:rgba(255,159,10,.12);border:1px solid rgba(255,159,10,.3)}
+  .al-ev{padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .al-ev:last-child{border-bottom:none}
+  .al-ev .t{font-size:10.5px;color:var(--muted2);font-variant-numeric:tabular-nums}
+  .al-ev .m{font-size:12.5px;color:var(--txt);margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
+
+  .iconbtn{position:relative}
+  .iconbtn .notif{position:absolute;top:9px;right:9px;width:8px;height:8px;border-radius:50%;
+    background:var(--amber);box-shadow:0 0 8px rgba(255,159,10,.7)}
 
   /* ---------- log drawer ---------- */
   .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);z-index:40;
@@ -245,6 +309,11 @@
   .logbox{flex:1;overflow:auto;padding:16px 22px;margin:0;
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;line-height:1.7;
     color:#c7c7cc;white-space:pre-wrap;word-break:break-word}
+  .logbox .lg-err{color:var(--red-soft);font-weight:600}
+  .logbox .lg-warn{color:var(--amber)}
+  .logfilter{width:130px;padding:9px 12px;font-size:12.5px;color:var(--txt);
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);border-radius:10px;outline:none}
+  .logfilter:focus{border-color:var(--red)}
   .logbox::-webkit-scrollbar{width:8px}.logbox::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:8px}
 
   .empty{text-align:center;color:var(--muted);padding:50px 0;font-size:14px}
@@ -272,11 +341,29 @@
       <div class="hm">ISP<b id="isp">—</b></div>
     </div>
     <div class="spacer"></div>
+    <button class="updpill" id="updpill" style="display:none" onclick="openSettings();checkUpdate()"
+            title="A newer release is available — open Settings to install it">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+      <span id="updtag"></span>
+    </button>
+    <button class="iconbtn" onclick="openAlerts()" aria-label="Alerts" title="Alerts">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
+      <span class="notif" id="alnotif" style="display:none"></span>
+    </button>
+    <button class="iconbtn" onclick="openHealth()" aria-label="Health check" title="Health check">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    </button>
     <button class="iconbtn" onclick="openSettings()" aria-label="Settings">
       <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     </button>
 
   </header>
+
+  <div class="warnbar" id="warnbar" style="display:none" role="alert">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+    <span>The monitoring service is down — dropped tunnels will not be restarted and no alert will fire.
+    Open <code>sudo backpack</code> on this server to reinstall it.</span>
+  </div>
 
   <div class="grid-meters">
     <div class="meter"><div class="ring" id="ring-cpu"></div>
@@ -320,6 +407,14 @@
         <span class="umsg" id="umsg">Check GitHub for the latest version.</span>
         <button class="btn-sm" id="ubtn" onclick="checkUpdate()">Check</button>
       </div>
+      <div class="upd" style="margin-top:10px">
+        <label for="chsel" style="margin:0;flex:none">Channel</label>
+        <select id="chsel" class="sel" style="margin:0;flex:1" onchange="saveChannel()">
+          <option value="stable">Stable — finished releases only (recommended)</option>
+          <option value="beta">Beta — also installs pre-releases</option>
+        </select>
+      </div>
+      <div class="msg" id="chmsg"></div>
     </div>
     <div class="divider"></div>
 
@@ -344,6 +439,8 @@
         <input id="bfile" type="file" accept=".gz,.tar.gz,application/gzip"
                style="display:none" onchange="importBackup(this)">
       </div>
+      <label class="tg" style="margin-top:10px"><input type="checkbox" id="abk" onchange="saveAutoBackup()">
+        Weekly automatic backup on this server</label>
       <div class="msg" id="bkmsg"></div>
     </div>
     <div class="divider"></div>
@@ -382,6 +479,40 @@
         <button class="btn-sm" id="tgtestbtn" onclick="testTelegram()">Send test</button>
         <button class="btn-sm" id="tgsavebtn" onclick="saveTelegram()">Save</button>
       </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Security</h4>
+      <label class="tg" style="margin-bottom:8px"><input type="checkbox" id="tfa" onchange="saveSecurity()">
+        Two-factor login — a code through the Telegram bot after the password</label>
+      <label class="tg" style="margin-bottom:8px"><input type="checkbox" id="lnotif" onchange="saveSecurity()">
+        Message me on every panel login</label>
+      <div class="msg" id="tfamsg"></div>
+      <p style="margin:10px 0 6px">Signed-in devices</p>
+      <div id="seslist" class="msg">Loading…</div>
+      <button class="btn-sm" onclick="revokeOthers()" style="margin-top:6px">Sign out other devices</button>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Remote access</h4>
+      <p style="margin-bottom:10px">A read-only token for a peer panel or a Prometheus scraper
+      (<code style="margin:0">/metrics</code>). It can look, never change.</p>
+      <div class="msg" id="rtok" style="word-break:break-all;font-family:ui-monospace,Menlo,monospace;font-size:11px"></div>
+      <div class="upd">
+        <span class="umsg" id="rtmsg"></span>
+        <button class="btn-sm" onclick="remoteToken('generate')">Generate</button>
+        <button class="btn-sm" onclick="remoteToken('revoke')">Revoke</button>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="setrow">
+      <h4>Restore points</h4>
+      <p style="margin-bottom:10px">Saved by every update. Rolling back replaces the running binary,
+      so it stays a CLI decision: <code style="margin:0">sudo backpack → Update → Restore points</code>.</p>
+      <div id="rplist" class="msg">Loading…</div>
     </div>
     <div class="divider"></div>
 
@@ -445,11 +576,49 @@
   </div>
 </div>
 
+<div class="modal" id="details" onclick="if(event.target===this)closeDetails()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="dettitle">
+    <h3 id="dettitle">Details</h3>
+    <p>Traffic, configuration and link quality.</p>
+    <div id="detbody"></div>
+    <div id="histwrap"></div>
+    <div id="ltwrap"></div>
+    <div class="actions" style="margin-top:14px">
+      <button class="btn-ghost" onclick="closeDetails()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="health" onclick="if(event.target===this)closeHealth()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="hctitle" style="width:min(92vw,460px)">
+    <h3 id="hctitle">Health Check</h3>
+    <p>The same checks as the CLI's Health Check screen.</p>
+    <div id="hcbody">Running checks…</div>
+    <div class="actions" style="margin-top:14px">
+      <button class="btn-sm" onclick="loadHealth()">Run again</button>
+      <button class="btn-ghost" onclick="closeHealth()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="alerts" onclick="if(event.target===this)closeAlerts()">
+  <div class="box" role="dialog" aria-modal="true" aria-labelledby="altitle" style="width:min(92vw,460px)">
+    <h3 id="altitle">Alerts</h3>
+    <p>What the monitoring service has fired — same source as the Telegram messages.</p>
+    <div id="albody">Loading…</div>
+    <div class="actions" style="margin-top:14px">
+      <button class="btn-ghost" onclick="closeAlerts()">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="scrim" id="scrim" onclick="closeLogs()"></div>
 <div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="logtitle">
   <div class="dh"><span class="grip"></span>
     <svg class="ic" viewBox="0 0 24 24" style="color:var(--red-soft)"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>
     <h3 id="logtitle">Logs</h3>
+    <input id="logfilter" class="logfilter" type="search" placeholder="Filter…"
+           aria-label="Filter log lines" oninput="renderLog()">
     <button class="close" onclick="closeLogs()" aria-label="Close logs">
       <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
@@ -463,6 +632,7 @@ const $=id=>document.getElementById(id);
 const ICON={
   logs:'<svg class="ic" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>',
   bot:'<svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V5M9 3h6M9 13h.01M15 13h.01M8 19v2M16 19v2"/></svg>',
+  info:'<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
 };
 const COUNTRIES=[
   ['','—'],['DE','Germany'],['NL','Netherlands'],['FR','France'],['GB','United Kingdom'],
@@ -528,6 +698,11 @@ async function loadStats(){
     $('tin').textContent=s.totalRecv; $('tout').textContent=s.totalSent;
     $('load').textContent=s.load||'—';
     $('tun-count').textContent=s.tunnelsRunning+' / '+s.tunnelsTotal;
+    // Only speak when something is wrong or actionable: the monitor being down,
+    // or a newer release waiting.
+    $('warnbar').style.display = s.monitorRunning===false ? 'flex' : 'none';
+    $('updpill').style.display = s.updateTag ? '' : 'none';
+    if(s.updateTag) setText($('updtag'), s.updateTag+' available');
   }catch(e){}
 }
 
@@ -556,9 +731,14 @@ function buildCard(t){
       <div class="r"><div class="k">${t.role==='server'?'Tunnel Port':'Server'}</div><div class="v addr"></div></div>
       <div class="r"><div class="k">Ping</div><div class="v ping"></div></div>
       <div class="r full"><div class="k">${t.role==='server'?'Forwarded Ports':'Remote'}</div><div class="v ports"></div></div>
+      <div class="r full trafrow" style="display:none"><div class="k">Traffic ↓ / ↑</div><div class="v traffic"></div>
+        <div class="spark" style="display:none"></div></div>
       <div class="r full peerrow" style="display:none"><div class="k">Peer</div><div class="v peer"></div></div>
     </div>
-    <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} Logs</button>`;
+    <div class="cardbtns">
+      <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} Logs</button>
+      <button class="logbtn" onclick="openDetails('${n}')" aria-label="View details for ${n}">${ICON.info} Details</button>
+    </div>`;
   return el;
 }
 function updateCard(el,t){
@@ -587,12 +767,52 @@ function updateCard(el,t){
   setText(el.querySelector('.addr'), t.role==='server' ? (t.tunnelPort||'—') : (t.addr||'—'));
   setText(el.querySelector('.ports'),t.ports||t.addr||'—');
 
+  // Traffic comes from the tunnel's own metrics snapshot; a tunnel that has
+  // never run has none, and the row stays hidden rather than showing a
+  // misleading zero. Uptime and the rest live in Details — the card keeps to
+  // what you actually read at a glance.
+  const traf=t.bytesIn?t.bytesIn+' / '+t.bytesOut:'';
+  const tr=el.querySelector('.trafrow');
+  tr.style.display=traf?'':'none';
+  setText(tr.querySelector('.traffic'),traf);
+  // The sparkline only appears once there are two points to join, and not on
+  // a stopped tunnel, where the history is the past pretending to be present.
+  const sp=tr.querySelector('.spark');
+  const hasSpark=st!=='stopped'&&t.rates&&t.rates.length>1;
+  const sig=hasSpark?t.rates.length+':'+t.rates[t.rates.length-1].t:'';
+  sp.style.display=hasSpark?'':'none';
+  if(sp.dataset.sig!==sig){ sp.dataset.sig=sig; sp.innerHTML=hasSpark?sparkSVG(t.rates,34):''; }
+
   const peerTxt=[t.peerLocation,t.peerISP].filter(Boolean).join(' · ');
   const pr=el.querySelector('.peerrow');
   pr.style.display=peerTxt?'':'none';
   setText(pr.querySelector('.peer'),peerTxt);
 }
 function setText(node,v){ if(node&&node.textContent!==v) node.textContent=v; }
+
+function humanBytes(n){
+  const u=['B','KB','MB','GB','TB']; let i=0;
+  while(n>=1024&&i<u.length-1){ n/=1024; i++; }
+  return (n<10&&i>0?n.toFixed(1):Math.round(n))+' '+u[i];
+}
+// sparkSVG draws the rate history: download carries the accent, upload the
+// quiet grey. Identity comes from the ↓/↑ labels under the chart, and the
+// current values are printed rather than hover-only, so nothing is color-alone.
+function sparkSVG(rates,h){
+  if(!rates||rates.length<2) return '';
+  const w=300, max=Math.max(1,...rates.flatMap(p=>[p.in,p.out]));
+  const x=i=>1+i/(rates.length-1)*(w-2);
+  const y=v=>h-2-(v/max)*(h-6);
+  const line=k=>rates.map((p,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(p[k]).toFixed(1)).join(' ');
+  const last=rates[rates.length-1];
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+       aria-label="Speed: down ${humanBytes(last.in)}/s, up ${humanBytes(last.out)}/s">
+     <path d="${line('out')}" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5" stroke-linejoin="round"/>
+     <path d="${line('in')}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+   </svg>
+   <div class="sl"><span>↓ <b>${humanBytes(last.in)}/s</b> · ↑ <b>${humanBytes(last.out)}/s</b></span>
+   <span>last ${Math.round((last.t-rates[0].t)/60)} min</span></div>`;
+}
 
 async function loadTunnels(){
   try{
@@ -607,21 +827,42 @@ async function loadTunnels(){
       if(!el){ el=buildCard(t); box.appendChild(el); cardMap[t.name]=el; }
       updateCard(el,t);
     });
+    // Keep an open details modal live rather than frozen at open time.
+    if(detName){
+      const t=list.find(x=>x.name===detName);
+      if(t) $('detbody').innerHTML=renderDetails(t);
+    }
   }catch(e){}
 }
 
-let logTimer=null, logName=null;
+let logTimer=null, logName=null, logRaw='';
 async function fetchLog(){
   if(!logName)return;
   try{
-    const txt=await (await fetch('/api/logs?name='+encodeURIComponent(logName))).text();
-    const box=$('logbox'); const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-40;
-    box.textContent=txt;
-    if(atBottom) box.scrollTop=box.scrollHeight;
+    logRaw=await (await fetch('/api/logs?name='+encodeURIComponent(logName))).text();
+    renderLog();
   }catch(e){}
 }
+// renderLog applies the filter and colors the lines that matter. The text is
+// escaped first — journal lines carry whatever the tunnel logged.
+function renderLog(){
+  const box=$('logbox'); if(!box) return;
+  const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-40;
+  const q=($('logfilter').value||'').toLowerCase();
+  let lines=logRaw.split('\n');
+  if(q) lines=lines.filter(l=>l.toLowerCase().includes(q));
+  const html=lines.map(l=>{
+    const e=esc(l), low=l.toLowerCase();
+    if(/\b(error|fatal|panic|failed)\b/.test(low)) return '<span class="lg-err">'+e+'</span>';
+    if(/\b(warn|warning)\b/.test(low)) return '<span class="lg-warn">'+e+'</span>';
+    return e;
+  }).join('\n');
+  box.innerHTML=html||(q?'No lines match "'+esc(q)+'".':'');
+  if(atBottom) box.scrollTop=box.scrollHeight;
+}
 function openLogs(name){
-  logName=name; $('logtitle').textContent='Logs · '+name; $('logbox').textContent='Loading…';
+  logName=name; logRaw=''; $('logtitle').textContent='Logs · '+name; $('logbox').textContent='Loading…';
+  $('logfilter').value='';
   $('scrim').classList.add('on'); $('drawer').classList.add('on');
   fetchLog(); clearInterval(logTimer); logTimer=setInterval(fetchLog,2000);
   setTimeout(()=>{const b=$('logbox');b.scrollTop=b.scrollHeight;b.focus();},300);
@@ -629,6 +870,331 @@ function openLogs(name){
 function closeLogs(){
   $('scrim').classList.remove('on'); $('drawer').classList.remove('on');
   clearInterval(logTimer); logName=null;
+}
+
+// ---- per-tunnel details ----
+// Everything worth a look but not worth card space: traffic, preset, limits,
+// certificate, failover and — for KCP — the link-quality counters that answer
+// "is this transport earning its overhead on my route?".
+let detName=null;
+function dRow(k,v,full){ return v?`<div class="r${full?' full':''}"><div class="k">${k}</div><div class="v" style="white-space:normal">${esc(String(v))}</div></div>`:''; }
+function dSec(label){ return `<div class="dsec">${label}</div>`; }
+function renderDetails(t){
+  let h='';
+  if(t.state!=='stopped'&&t.rates&&t.rates.length>1){
+    h+='<div class="spark sparkbig">'+sparkSVG(t.rates,72)+'</div>'+dSec('Overview');
+  }
+  h+='<div class="dl">';
+  h+=dRow('State',STATE_LABEL[t.state]||t.state);
+  h+=dRow('Tunnel Uptime',t.uptime);
+  h+=dRow('Traffic In',t.bytesIn);
+  h+=dRow('Traffic Out',t.bytesOut);
+  h+=dRow('Preset',t.preset);
+  h+=dRow('Transport',(t.transport||'').toUpperCase());
+  h+='</div>';
+
+  const lim=[];
+  if(t.maxConnections) lim.push(t.maxConnections+' connections');
+  if(t.bandwidthMbps) lim.push(t.bandwidthMbps+' Mbit/s');
+  if(lim.length||t.proxyProtocol){
+    h+=dSec('Limits & forwarding')+'<div class="dl">';
+    h+=dRow('Limits',lim.join(' · ')||'');
+    h+=dRow('Real client IP',t.proxyProtocol?'On (PROXY protocol v2)':'');
+    h+='</div>';
+  }
+
+  if(t.certType){
+    h+=dSec('Certificate')+'<div class="dl">';
+    h+=dRow('Type',t.certType==='letsencrypt'?"Let's Encrypt":'Self-signed');
+    h+=dRow('Domain',t.certDomain);
+    h+=dRow('Expires',t.certExpiry);
+    h+='</div>';
+  }
+
+  if(t.fallbackAddrs&&t.fallbackAddrs.length){
+    h+=dSec('Failover')+'<div class="dl">';
+    h+=dRow('Backup addresses',t.fallbackAddrs.join(', '),true);
+    h+=dRow('Load balancing',t.loadBalance?'On — data spread over all addresses':'Off — backups are spares');
+    h+='</div>';
+  }
+
+  if(t.kcp){
+    const k=t.kcp;
+    h+=dSec('KCP link quality')+'<div class="dl">';
+    h+=dRow('Packets in / out',fmtNum(k.packets_in)+' / '+fmtNum(k.packets_out));
+    h+=dRow('Repaired by FEC',fmtNum(k.fec_recovered));
+    h+=dRow('Retransmitted',fmtNum(k.retransmitted));
+    h+=dRow('Lost',fmtNum(k.lost));
+    h+=dRow('Duplicated',fmtNum(k.duplicated));
+    h+=dRow('Loss',(t.kcpLossPercent||0).toFixed(1)+'%');
+    h+='</div>';
+  }
+  return h;
+}
+function fmtNum(n){ return (n||0).toLocaleString('en-US'); }
+function openDetails(name){
+  detName=name;
+  const t=lastTunnels.find(x=>x.name===name);
+  if(!t) return;
+  $('dettitle').textContent=name+' · Details';
+  $('detbody').innerHTML=renderDetails(t);
+  loadHistory(name);
+  renderLinkTestBox(t);
+  $('details').classList.add('on');
+}
+
+// ---- long-term history ----
+// Sampled by the monitor service every 5 minutes; this renders the day's
+// speed, the week's totals per day, and the uptime those samples add up to.
+async function loadHistory(name){
+  const box=$('histwrap'); box.innerHTML='';
+  let h;
+  try{ h=await (await fetch('/api/history?name='+encodeURIComponent(name))).json(); }
+  catch(e){ return; }
+  if(h.collecting){
+    box.innerHTML=dSec('History')+
+      '<div class="msg">Being collected by the monitoring service — the first charts appear within the hour.</div>';
+    return;
+  }
+  let out='';
+  if(h.series&&h.series.length>1){
+    out+=dSec('Last 24 hours')+'<div class="spark sparkbig">'+sparkSVG(h.series,72)+'</div>';
+  }
+  if(h.days&&h.days.length){
+    out+=dSec('Per day — ↓ down · ↑ up')+dayBars(h.days);
+  }
+  const up=[];
+  if(h.uptime24h>=0) up.push('24h: <b>'+h.uptime24h.toFixed(1)+'%</b>');
+  if(h.uptime7d>=0) up.push('7 days: <b>'+h.uptime7d.toFixed(1)+'%</b>');
+  if(up.length) out+=dSec('Uptime')+'<div class="msg" style="color:var(--txt)">'+up.join(' · ')+'</div>';
+  box.innerHTML=out;
+}
+// dayBars draws one thin pair of bars per day: download in the accent,
+// upload in the quiet grey — same identity scheme as the sparkline.
+function dayBars(days){
+  const w=300,hh=86,top=6,lbl=14,bh=hh-top-lbl;
+  const max=Math.max(1,...days.map(d=>Math.max(d.in,d.out)));
+  const band=w/days.length;
+  let bars='';
+  days.forEach((d,i)=>{
+    const x=i*band, bw=Math.min(13,(band-8)/2);
+    const ih=Math.max(2,d.in/max*bh), oh=Math.max(2,d.out/max*bh);
+    const title=d.label+': ↓ '+humanBytes(d.in)+' · ↑ '+humanBytes(d.out);
+    bars+='<g><title>'+esc(title)+'</title>'+
+      '<rect x="'+(x+band/2-bw-1).toFixed(1)+'" y="'+(top+bh-ih).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+ih.toFixed(1)+'" rx="2" fill="var(--accent)"/>'+
+      '<rect x="'+(x+band/2+1).toFixed(1)+'" y="'+(top+bh-oh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+oh.toFixed(1)+'" rx="2" fill="rgba(255,255,255,.35)"/>'+
+      '<text x="'+(x+band/2).toFixed(1)+'" y="'+(hh-2)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+esc(d.label.split(' ')[1]||d.label)+'</text></g>';
+  });
+  return '<svg viewBox="0 0 '+w+' '+hh+'" style="width:100%;height:'+hh+'px;display:block">'+bars+'</svg>';
+}
+function closeDetails(){ $('details').classList.remove('on'); detName=null; }
+
+// ---- link test ----
+// Lives outside detbody: the details modal re-renders on every poll to stay
+// live, and a running test's progress must not be wiped by that.
+function renderLinkTestBox(t){
+  const box=$('ltwrap');
+  // Measured from the side that dials out; a TCP probe can't see a UDP port.
+  if(t.role!=='client'||['udp','kcp'].includes(t.transport)){ box.innerHTML=''; return; }
+  box.innerHTML=dSec('Link Test')+
+    '<div class="upd"><span class="umsg" id="ltmsg">Latency, jitter and loss to '+esc(t.addr)+
+    ', with a transport recommendation.</span>'+
+    '<button class="btn-sm" id="ltbtn" onclick="startLinkTest(\''+esc(t.name)+'\')">Run — ~10s</button></div>'+
+    '<div id="ltres"></div>';
+}
+let ltPoll=null;
+async function startLinkTest(name){
+  const m=$('ltmsg'), b=$('ltbtn');
+  b.disabled=true; m.textContent='Testing the link — about 10 seconds…'; $('ltres').innerHTML='';
+  try{
+    const r=await fetch('/api/linktest?name='+encodeURIComponent(name),{method:'POST'});
+    if(!r.ok){ m.textContent=await r.text(); b.disabled=false; return; }
+  }catch(e){ m.textContent='Could not start the test.'; b.disabled=false; return; }
+  clearInterval(ltPoll);
+  ltPoll=setInterval(async()=>{
+    let s;
+    try{ s=await (await fetch('/api/linktest')).json(); }catch(e){ return; }
+    if(s.running) return;
+    clearInterval(ltPoll);
+    if(b) b.disabled=false;
+    const q=s.result;
+    if(!q||q.name!==name){ if(m) m.textContent='The test did not finish.'; return; }
+    if(m) m.textContent='Done.';
+    renderLinkTestResult(q);
+  },2000);
+}
+function renderLinkTestResult(q){
+  const box=$('ltres'); if(!box) return;
+  if(q.error){ box.innerHTML='<div class="dl">'+dRow('Result',q.error,true)+'</div>'; return; }
+  let h='<div class="dl">';
+  h+=dRow('Probes',q.sent+' sent, '+q.received+' answered');
+  if(q.received>0){
+    h+=dRow('Latency',q.avgMs+' ms avg ('+q.minMs+'–'+q.maxMs+' ms)');
+    h+=dRow('Jitter','±'+q.jitterMs+' ms');
+    h+=dRow('Loss',q.lossPct.toFixed(1)+'%');
+  }else{
+    h+=dRow('Result','Nothing answered — the server is down, on another port, or the port is blocked.',true);
+  }
+  if(q.recLabel){
+    h+=dRow('Recommended',q.recLabel,true);
+    if(q.recWhy&&q.recWhy.length) h+=dRow('Why',q.recWhy.join(' '),true);
+    if(q.caveats&&q.caveats.length) h+=dRow('Caveats',q.caveats.join(' '),true);
+  }
+  box.innerHTML=h+'</div>';
+}
+
+// ---- health check ----
+const HC_MARK={ok:'✓',warn:'!',fail:'✗',info:'i'};
+function openHealth(){ $('health').classList.add('on'); loadHealth(); }
+function closeHealth(){ $('health').classList.remove('on'); }
+async function loadHealth(){
+  const box=$('hcbody'); box.textContent='Running checks — this takes a few seconds…';
+  let checks;
+  try{ checks=await (await fetch('/api/health')).json(); }
+  catch(e){ box.textContent='Could not run the checks.'; return; }
+  let h='', group='';
+  checks.forEach(c=>{
+    if(c.group!==group){ group=c.group; h+='<div class="dsec">'+esc(group)+'</div>'; }
+    h+='<div class="hc-item"><span class="hc-mark '+c.level+'">'+(HC_MARK[c.level]||'·')+'</span>'+
+       '<span class="hc-name">'+esc(c.name)+'</span>'+
+       '<span class="hc-detail">'+esc(c.detail)+'</span></div>';
+    if(c.fix) h+='<div class="hc-fix">→ '+esc(c.fix)+'</div>';
+  });
+  box.innerHTML=h||'No checks returned.';
+}
+
+// ---- alerts ----
+let alTimer=null;
+function openAlerts(){ $('alerts').classList.add('on'); loadAlerts();
+  clearInterval(alTimer); alTimer=setInterval(loadAlerts,10000); }
+function closeAlerts(){ $('alerts').classList.remove('on'); clearInterval(alTimer); }
+async function loadAlerts(){
+  const box=$('albody');
+  let st;
+  try{ st=await (await fetch('/api/alerts')).json(); }
+  catch(e){ box.textContent='Could not load alerts.'; return; }
+  let h='';
+  if(st.active&&st.active.length){
+    h+='<div class="dsec">Active now</div><div class="al-active">'+
+       st.active.map(a=>'<span class="al-chip">'+esc(a)+'</span>').join('')+'</div>';
+  }
+  const ev=(st.events||[]).slice().reverse();
+  if(ev.length){
+    h+='<div class="dsec">Recent</div>'+ev.map(e=>
+      '<div class="al-ev"><div class="t">'+new Date(e.time).toLocaleString()+'</div>'+
+      '<div class="m">'+esc((e.message||'').replace(/\*/g,''))+'</div></div>').join('');
+  }
+  if(!h) h='Nothing has fired yet. Alerts are watched by the monitoring service; '+
+           'thresholds live under Settings → Telegram bot.';
+  box.innerHTML=h;
+  $('alnotif').style.display=(st.active&&st.active.length)?'':'none';
+}
+// ---- settings: security / remote access / restore points ----
+async function loadSecurity(){
+  try{
+    const s=await (await fetch('/api/security')).json();
+    $('tfa').checked=!!s.twoFA; $('lnotif').checked=!!s.loginNotify;
+    $('tfa').disabled=!s.telegramReady&&!s.twoFA;
+    $('lnotif').disabled=!s.telegramReady&&!s.loginNotify;
+    $('tfamsg').textContent=s.telegramReady?'' :
+      'Needs the Telegram bot — it is what delivers the messages.';
+  }catch(e){}
+  loadSessions();
+}
+async function saveSecurity(){
+  const m=$('tfamsg');
+  try{
+    const body=new URLSearchParams({twoFA:$('tfa').checked?'1':'0',loginNotify:$('lnotif').checked?'1':'0'});
+    const r=await fetch('/api/security',{method:'POST',body});
+    if(!r.ok){ m.textContent=await r.text(); loadSecurity(); return; }
+    m.textContent='Saved.';
+  }catch(e){ m.textContent='Could not save.'; }
+}
+function renderSessions(list){
+  $('seslist').innerHTML=(list||[]).map(s=>
+    '<div class="al-ev" style="display:flex;align-items:center;gap:10px">'+
+    '<div style="flex:1"><div class="t">'+esc(s.created)+(s.current?' · this device':'')+'</div>'+
+    '<div class="m">'+esc(s.ip||'?')+'</div></div>'+
+    (s.current?'':'<button class="btn-sm" onclick="revokeSession(\''+esc(s.id)+'\')">Revoke</button>')+
+    '</div>').join('')||'No sessions.';
+}
+async function loadSessions(){
+  try{ renderSessions(await (await fetch('/api/sessions')).json()); }
+  catch(e){ $('seslist').textContent='Could not load.'; }
+}
+async function revokeSession(id){
+  try{
+    const body=new URLSearchParams({action:'revoke',id});
+    renderSessions(await (await fetch('/api/sessions',{method:'POST',body})).json());
+  }catch(e){}
+}
+async function revokeOthers(){
+  if(!confirm('Sign out every other device?')) return;
+  try{
+    const body=new URLSearchParams({action:'others'});
+    renderSessions(await (await fetch('/api/sessions',{method:'POST',body})).json());
+  }catch(e){}
+}
+async function loadAutoBackup(){
+  try{ $('abk').checked=!!(await (await fetch('/api/autobackup')).json()).enabled; }catch(e){}
+}
+async function saveAutoBackup(){
+  const m=$('bkmsg'); m.className='msg';
+  try{
+    const body=new URLSearchParams({enabled:$('abk').checked?'1':'0'});
+    const r=await fetch('/api/autobackup',{method:'POST',body});
+    if(!r.ok){ m.textContent=await r.text(); loadAutoBackup(); return; }
+    m.textContent=$('abk').checked
+      ? 'On — the monitoring service saves one archive a week (newest 10 kept).' : 'Off.';
+  }catch(e){ m.textContent='Could not save.'; }
+}
+async function loadRemoteToken(){
+  try{
+    const t=await (await fetch('/api/remotetoken')).json();
+    $('rtok').textContent=t.token||'';
+    $('rtmsg').textContent=t.token?'Treat it like a password.':'No token — remote access is off.';
+  }catch(e){}
+}
+async function remoteToken(action){
+  if(action==='revoke'&&!confirm('Revoke the token? Every peer and scraper using it loses access.')) return;
+  try{
+    const body=new URLSearchParams({action});
+    const t=await (await fetch('/api/remotetoken',{method:'POST',body})).json();
+    $('rtok').textContent=t.token||'';
+    $('rtmsg').textContent=t.token?'Generated — copy it to the other side.':'Revoked.';
+  }catch(e){ $('rtmsg').textContent='Failed.'; }
+}
+async function loadChannel(){
+  try{ $('chsel').value=(await (await fetch('/api/channel')).json()).channel||'stable'; }catch(e){}
+}
+async function saveChannel(){
+  const m=$('chmsg');
+  try{
+    const body=new URLSearchParams({channel:$('chsel').value});
+    const r=await fetch('/api/channel',{method:'POST',body});
+    if(!r.ok){ m.textContent=await r.text(); loadChannel(); return; }
+    m.textContent=$('chsel').value==='beta'
+      ? 'Beta — this server now tries pre-releases first.' : 'Stable.';
+  }catch(e){ m.textContent='Could not save.'; }
+}
+async function loadRestorePoints(){
+  const box=$('rplist');
+  try{
+    const list=await (await fetch('/api/restorepoints')).json()||[];
+    if(!list.length){ box.textContent='None yet — one is saved before every update.'; return; }
+    box.innerHTML=list.map(p=>
+      '<div class="al-ev"><div class="t">'+esc(p.stamp)+' · '+esc(p.reason||'')+'</div>'+
+      '<div class="m">'+esc(p.version||'?')+' — '+(p.tunnels&&p.tunnels.length?esc(p.tunnels.join(', ')):'no tunnels')+'</div></div>'
+    ).join('');
+  }catch(e){ box.textContent='Could not load.'; }
+}
+
+// A light background poll keeps the bell's dot honest without opening the modal.
+async function pollAlertBadge(){
+  try{
+    const st=await (await fetch('/api/alerts')).json();
+    $('alnotif').style.display=(st.active&&st.active.length)?'':'none';
+  }catch(e){}
 }
 // ---- update ----
 async function checkUpdate(){
@@ -795,7 +1361,9 @@ function openSettings(){
   $('pport').value=location.port||'80'; $('ppmsg').textContent='The panel restarts on the new port.'; $('ppbtn').disabled=false;
   $('bkmsg').textContent=''; $('bkmsg').className='msg';
   $('tgmsg').textContent=''; $('tgtoken').value='';
-  loadTelegram();
+  $('tfamsg').textContent=''; $('rtmsg').textContent='';
+  $('chmsg').textContent='';
+  loadTelegram(); loadSecurity(); loadRemoteToken(); loadRestorePoints(); loadChannel(); loadAutoBackup();
   $('settings').classList.add('on'); setTimeout(()=>$('np').focus(),200);
 }
 function closeSettings(){ $('settings').classList.remove('on'); }
@@ -812,12 +1380,13 @@ async function savePassword(){
   }catch(e){ msg.className='msg err'; msg.textContent='Network error.'; }
 }
 
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeSupport();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeSupport();closeDetails();closeHealth();closeAlerts();}});
 
 ['ring-cpu','ring-mem','ring-disk','ring-swap'].forEach(id=>makeRing($(id),0));
-loadStats(); loadTunnels();
+loadStats(); loadTunnels(); pollAlertBadge();
 setInterval(loadStats,4000);
 setInterval(loadTunnels,6000);
+setInterval(pollAlertBadge,30000);
 </script>
 </body>
 </html>

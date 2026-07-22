@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/backpack/backpack/internal/alerthist"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/sysstat"
@@ -172,17 +173,33 @@ func RunAlerts(ctx context.Context) {
 			go manage.RefreshUpdateCheckIfStale(releaseCheckEvery)
 		}
 
-		if c.Token == "" || c.AdminID == "" || !alerts.Enabled {
-			// Not configured or switched off; check back shortly in case it is
-			// turned on without restarting the process.
+		if !alerts.Enabled {
+			// Switched off; check back shortly in case it is turned on without
+			// restarting the process.
 			if !sleepCtx2(ctx, 30*time.Second) {
 				return
 			}
 			continue
 		}
 
-		for _, msg := range w.check(alerts) {
-			send(c, c.AdminID, msg)
+		// The checks run whether or not the bot is configured: the web panel
+		// reads the recorded history, and it should not need a Telegram token
+		// to know the disk filled up. Only the sending needs the bot.
+		configured := c.Token != "" && c.AdminID != ""
+		if !configured {
+			// The release announcement marks itself "already announced" when
+			// collected; without a bot to receive it, that would consume the
+			// notice silently.
+			alerts.NewRelease = false
+		}
+
+		tunnels := tunnelStates()
+		msgs := w.checkAt(alerts, sysstat.Get(), tunnels, time.Now())
+		alerthist.Record(msgs, w.activeConditions(tunnels))
+		if configured {
+			for _, msg := range msgs {
+				send(c, c.AdminID, msg)
+			}
 		}
 
 		if !sleepCtx2(ctx, time.Duration(alerts.CheckSeconds)*time.Second) {
@@ -191,14 +208,36 @@ func RunAlerts(ctx context.Context) {
 	}
 }
 
-// check runs one pass and returns the messages that should be sent.
-// It is separated from the sending and the sleeping so it can be tested
-// directly, which is the only way to prove the hysteresis actually holds.
-func (w *watcher) check(a AlertConfig) []string {
-	return w.checkAt(a, sysstat.Get(), tunnelStates(), time.Now())
+// activeConditions summarises everything currently firing, for the panel's
+// alert view. It reads the same state the hysteresis uses, so the panel and
+// the bot can never disagree about whether an alert is live.
+func (w *watcher) activeConditions(tunnels map[string]bool) []string {
+	var out []string
+	for _, c := range []struct{ key, label string }{
+		{"cpu", "Processor above threshold"},
+		{"mem", "Memory above threshold"},
+		{"disk", "Disk above threshold"},
+	} {
+		if st := w.states[c.key]; st != nil && st.firing {
+			out = append(out, c.label)
+		}
+	}
+	names := make([]string, 0, len(tunnels))
+	for name := range tunnels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !tunnels[name] {
+			out = append(out, "Tunnel "+name+" down")
+		}
+	}
+	return out
 }
 
-// checkAt is check with the readings and the clock injected.
+// checkAt runs one pass with the readings and the clock injected. It is
+// separated from the sending and the sleeping so it can be tested directly,
+// which is the only way to prove the hysteresis actually holds.
 func (w *watcher) checkAt(a AlertConfig, s sysstat.Snapshot, tunnels map[string]bool, now time.Time) []string {
 	var msgs []string
 	cooldown := time.Duration(a.CooldownMinutes) * time.Minute

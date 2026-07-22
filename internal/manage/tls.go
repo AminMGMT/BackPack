@@ -92,3 +92,22 @@ func validCertPair(cert, key string) error {
 	}
 	return nil
 }
+
+// CertExpiry reads a PEM certificate and returns its NotAfter time. It is the
+// one place certificate files are parsed, shared by the health screen and the
+// web panel so the two can never disagree about the same file.
+func CertExpiry(path string) (time.Time, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return time.Time{}, fmt.Errorf("%s: not a valid PEM file", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s: unparsable certificate", path)
+	}
+	return cert.NotAfter, nil
+}

@@ -2,12 +2,14 @@ package webui
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,26 +27,35 @@ var dashboardHTML []byte
 
 const sessionCookie = "backpack_session"
 
+// sessionInfo is what the panel remembers about one signed-in browser — the
+// address and age make the Settings session list meaningful, and the token
+// itself is never shown again.
+type sessionInfo struct {
+	expires time.Time
+	created time.Time
+	ip      string
+}
+
 type sessionStore struct {
 	mu       sync.Mutex
-	sessions map[string]time.Time
+	sessions map[string]*sessionInfo
 }
 
 func newSessionStore() *sessionStore {
-	return &sessionStore{sessions: map[string]time.Time{}}
+	return &sessionStore{sessions: map[string]*sessionInfo{}}
 }
 
-func (s *sessionStore) create() string {
+func (s *sessionStore) create(ip string) string {
 	tok := randomHex(24)
 	s.mu.Lock()
 	// Purge expired sessions so the map can't grow without bound over time.
 	now := time.Now()
-	for t, exp := range s.sessions {
-		if now.After(exp) {
+	for t, si := range s.sessions {
+		if now.After(si.expires) {
 			delete(s.sessions, t)
 		}
 	}
-	s.sessions[tok] = now.Add(12 * time.Hour)
+	s.sessions[tok] = &sessionInfo{expires: now.Add(12 * time.Hour), created: now, ip: ip}
 	s.mu.Unlock()
 	return tok
 }
@@ -52,15 +63,75 @@ func (s *sessionStore) create() string {
 func (s *sessionStore) valid(tok string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.sessions[tok]
+	si, ok := s.sessions[tok]
 	if !ok {
 		return false
 	}
-	if time.Now().After(exp) {
+	if time.Now().After(si.expires) {
 		delete(s.sessions, tok)
 		return false
 	}
 	return true
+}
+
+// sessionID is the public name of a session: a hash prefix, so the list can
+// identify one without ever handing out something that logs somebody in.
+func sessionID(tok string) string {
+	sum := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(sum[:6])
+}
+
+// SessionEntry is one row of the Settings session list.
+type SessionEntry struct {
+	ID      string `json:"id"`
+	IP      string `json:"ip"`
+	Created string `json:"created"`
+	Current bool   `json:"current"`
+}
+
+// list returns every live session, newest first, marking the caller's own.
+func (s *sessionStore) list(currentTok string) []SessionEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	var out []SessionEntry
+	for tok, si := range s.sessions {
+		if now.After(si.expires) {
+			continue
+		}
+		out = append(out, SessionEntry{
+			ID:      sessionID(tok),
+			IP:      si.ip,
+			Created: si.created.Format("2006-01-02 15:04"),
+			Current: tok == currentTok,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created > out[j].Created })
+	return out
+}
+
+// revokeID ends the session with the given public id. Revoking your own works
+// too — it is just signing out the long way around.
+func (s *sessionStore) revokeID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tok := range s.sessions {
+		if sessionID(tok) == id {
+			delete(s.sessions, tok)
+			return
+		}
+	}
+}
+
+// revokeOthers ends every session except the caller's.
+func (s *sessionStore) revokeOthers(currentTok string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tok := range s.sessions {
+		if tok != currentTok {
+			delete(s.sessions, tok)
+		}
+	}
 }
 
 func (s *sessionStore) destroy(tok string) {
@@ -72,7 +143,7 @@ func (s *sessionStore) destroy(tok string) {
 // clear invalidates every session (used after a password change).
 func (s *sessionStore) clear() {
 	s.mu.Lock()
-	s.sessions = map[string]time.Time{}
+	s.sessions = map[string]*sessionInfo{}
 	s.mu.Unlock()
 }
 
@@ -110,10 +181,14 @@ func Serve() error {
 	// here are panel-scoped (password, port, self-update).
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
+	mux.HandleFunc("/login2fa", srv.handleLogin2FA)
 	mux.HandleFunc("/logout", srv.handleLogout)
 	mux.HandleFunc("/", srv.requireAuth(srv.handleDashboard))
-	mux.HandleFunc("/api/stats", srv.requireAuth(srv.handleStats))
-	mux.HandleFunc("/api/tunnels", srv.requireAuth(srv.handleTunnels))
+	// Read-only endpoints also accept the remote access token, so a peer panel
+	// or a Prometheus scraper can watch without holding a browser session.
+	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
+	mux.HandleFunc("/api/tunnels", srv.requireReadAuth(srv.handleTunnels))
+	mux.HandleFunc("/metrics", srv.requireReadAuth(srv.handlePrometheus))
 	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
@@ -124,6 +199,20 @@ func Serve() error {
 	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))
 	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
 	mux.HandleFunc("/api/relays", srv.requireAuth(srv.handleRelayOptions))
+	mux.HandleFunc("/api/health", srv.requireAuth(srv.handleHealth))
+	mux.HandleFunc("/api/alerts", srv.requireReadAuth(srv.handleAlerts))
+	mux.HandleFunc("/api/linktest", srv.requireAuth(srv.handleLinkTest))
+	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
+	mux.HandleFunc("/api/remotetoken", srv.requireAuth(srv.handleRemoteToken))
+	mux.HandleFunc("/api/security", srv.requireAuth(srv.handleSecurity))
+	mux.HandleFunc("/api/sessions", srv.requireAuth(srv.handleSessions))
+	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
+	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
+	mux.HandleFunc("/api/channel", srv.requireAuth(srv.handleChannel))
+	// The manifest and icon are what let the panel install as an app; the
+	// browser fetches them before any login, so they carry no data and no auth.
+	mux.HandleFunc("/manifest.json", handleManifest)
+	mux.HandleFunc("/icon.svg", handleIcon)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
@@ -152,13 +241,51 @@ func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireReadAuth accepts either a panel session or the remote access token.
+// Only read-only endpoints go through this: the token can look, never change.
+func (s *server) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.valid(c.Value) {
+			next(w, r)
+			return
+		}
+		token := Load().RemoteToken
+		if token != "" {
+			given := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(given), []byte(token)) == 1 {
+				next(w, r)
+				return
+			}
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}
+}
+
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
+		ip := clientIP(r)
+		if blocked, left := limiter.blocked(ip); blocked {
+			http.Error(w, fmt.Sprintf("too many failed attempts — try again in %d minutes",
+				int(left.Minutes())+1), http.StatusTooManyRequests)
+			return
+		}
 		r.ParseForm()
 		given := r.FormValue("password")
 		// Constant-time comparison + small delay to slow brute force.
 		if subtle.ConstantTimeCompare([]byte(given), []byte(s.password())) == 1 {
-			tok := s.sessions.create()
+			limiter.reset(ip)
+			// With two-factor on, the password alone is only half the login.
+			if Load().TwoFA && telegramReady() {
+				if s.startTwoFA(w) {
+					return
+				}
+				http.Error(w, "could not send the login code through Telegram — "+
+					"check the bot from the CLI, or disable two_fa in the panel config file",
+					http.StatusBadGateway)
+				return
+			}
+			tok := s.sessions.create(ip)
+			notifyLogin(r)
 			http.SetCookie(w, &http.Cookie{
 				Name:     sessionCookie,
 				Value:    tok,
@@ -170,6 +297,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
+		limiter.fail(ip)
 		time.Sleep(1 * time.Second)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
