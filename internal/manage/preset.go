@@ -7,11 +7,13 @@ package manage
 // settings. The same three presets apply to every transport, so the answer to
 // "how hard should this tunnel push?" is the same question everywhere.
 //
-// Backwards compatibility note: PresetTurbo reproduces the exact values that
-// the old "Best Performance" preset wrote, so a config created by an earlier
-// version is byte-for-byte a Turbo config. Upgrading never changes a running
-// tunnel's behaviour, and a config with no preset field at all keeps whatever
-// values it already has on disk.
+// Upgrade note: a preset is applied once, when a tunnel is created or when the
+// operator picks "Change performance preset". The numbers are written into the
+// tunnel's config file, and an update replaces only the binary — it never
+// rewrites a config. So changing the values here cannot disturb a tunnel that
+// already exists: it keeps the numbers on its disk until somebody deliberately
+// re-applies a preset. New tunnels get the current values, and a config with no
+// preset field at all is left exactly as it is.
 const (
 	PresetBalance    = "balance"
 	PresetTurbo      = "turbo"
@@ -68,17 +70,19 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 		s.ConnectionPool = 4
 		// A steady pool keeps idle CPU low, which is the whole point of Balance.
 		s.AggressivePool = false
+		// Sizes the datagram socket only; TCP is auto-tuned by the kernel.
 		s.SoRcvBuf = 4 * 1024 * 1024
 		s.SoSndBuf = 4 * 1024 * 1024
 		s.MuxCon = 4
 		s.MuxVersion = 2
 		s.MuxFrameSize = 32768
-		s.MuxRecvBuffer = 2097152
-		s.MuxStreamBuffer = 65536
+		// 256 KB per stream ≈ 20 Mbit/s for one connection at 100 ms — modest
+		// on purpose, but four times what 64 KB allowed. Worst-case memory is
+		// MuxCon × MuxRecvBuffer = 4 × 4 MB.
+		s.MuxRecvBuffer = 4 * 1024 * 1024
+		s.MuxStreamBuffer = 256 * 1024
 
 	case PresetTurbo:
-		// These are the historical "Best Performance" values, kept identical so
-		// existing tunnels are unaffected by the rename. Do not tune them.
 		s.KeepAlive = 75
 		s.Heartbeat = 40
 		s.ChannelSize = 4096
@@ -86,16 +90,19 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 		// AggressivePool stays OFF here: it keeps the pool topped up in a tight
 		// loop and noticeably raises idle CPU. A normal pool is plenty.
 		s.AggressivePool = false
-		// Large per-socket buffers keep the pipe full on high-latency
-		// Iran to abroad links (bandwidth-delay product), boosting throughput.
-		// The kernel ceilings are raised to match by the Optimize step.
+		// Sizes the datagram socket only; TCP is auto-tuned by the kernel.
 		s.SoRcvBuf = 8 * 1024 * 1024
 		s.SoSndBuf = 8 * 1024 * 1024
 		s.MuxCon = 8
 		s.MuxVersion = 2
 		s.MuxFrameSize = 32768
-		s.MuxRecvBuffer = 4194304
-		s.MuxStreamBuffer = 65536
+		// 2 MB per stream ≈ 160 Mbit/s for a single connection at 100 ms RTT.
+		// This is the number that decides how fast one download feels, and the
+		// old 64 KB capped it at about 5 Mbit/s on that same path — the mux
+		// transports were being throttled by their own flow control long before
+		// the link ran out. Worst-case memory is MuxCon × MuxRecvBuffer = 8 × 16 MB.
+		s.MuxRecvBuffer = 16 * 1024 * 1024
+		s.MuxStreamBuffer = 2 * 1024 * 1024
 
 	case PresetAggressive:
 		s.KeepAlive = 60
@@ -105,13 +112,19 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 		// Refills the pool in a tight loop: lowest possible connect latency at
 		// the cost of real idle CPU. Only worth it on a server with cores spare.
 		s.AggressivePool = true
+		// Sizes the datagram socket only; TCP is auto-tuned by the kernel.
 		s.SoRcvBuf = 16 * 1024 * 1024
 		s.SoSndBuf = 16 * 1024 * 1024
 		s.MuxCon = 16
 		s.MuxVersion = 2
 		s.MuxFrameSize = 65535
-		s.MuxRecvBuffer = 8388608
-		s.MuxStreamBuffer = 131072
+		// 8 MB per stream ≈ 640 Mbit/s for a single connection at 100 ms RTT,
+		// which is what "maximum throughput" has to mean on this route. The
+		// memory is a ceiling on data actually in flight, not an allocation,
+		// but the worst case is real: MuxCon × MuxRecvBuffer = 16 × 32 MB, so
+		// this preset wants a server with RAM to spare — as it says it does.
+		s.MuxRecvBuffer = 32 * 1024 * 1024
+		s.MuxStreamBuffer = 8 * 1024 * 1024
 	}
 
 	applyKCPPreset(s, preset)
@@ -129,41 +142,55 @@ func applyKCPPreset(s *TunnelSpec, preset string) {
 	case PresetBalance:
 		// Standard-interval ARQ with congestion control left on: gentlest on
 		// CPU and the friendliest to a shared link.
-		s.KCPInterval = 40
+		s.KCPInterval = 30
 		s.KCPResend = 2
-		s.KCPNoDelay = 0
+		s.KCPNoDelay = 1
 		s.KCPNoCongestion = 1
-		s.KCPSndWnd = 256
-		s.KCPRcvWnd = 512
+		// The window is the throughput ceiling: window × MTU / RTT. At 1350 MTU
+		// and 100 ms, 1024 packets is about 110 Mbit/s — plenty for the preset
+		// that exists to be light, and four times what 256 allowed.
+		s.KCPSndWnd = 1024
+		s.KCPRcvWnd = 1024
 		s.KCPAckNoDelay = false
 		// No FEC: parity packets cost bandwidth on a clean link.
 		s.KCPDataShards = 0
 		s.KCPParityShards = 0
 
 	case PresetTurbo:
-		s.KCPInterval = 20
+		// A 10 ms tick flushes four times as often as the old 40 ms one, which
+		// is what turns a full window into steady throughput instead of bursts.
+		s.KCPInterval = 10
 		s.KCPResend = 2
 		s.KCPNoDelay = 1
 		s.KCPNoCongestion = 1
-		s.KCPSndWnd = 1024
-		s.KCPRcvWnd = 1024
+		// 2048 × 1350 / 100 ms ≈ 220 Mbit/s. The old 1024 halved that.
+		s.KCPSndWnd = 2048
+		s.KCPRcvWnd = 2048
 		s.KCPAckNoDelay = true
-		// 10 data + 3 parity recovers up to 3 lost packets in every 13 without
-		// waiting for a retransmit — the single biggest win on a lossy path.
+		// 10 data + 2 parity repairs up to 2 lost packets in every 12 without
+		// waiting for a retransmit. It was 10:3, which spends 30% of the link
+		// on parity; 20% keeps most of the benefit and gives the rest back as
+		// throughput, which is what this preset is for.
 		s.KCPDataShards = 10
-		s.KCPParityShards = 3
+		s.KCPParityShards = 2
 
 	case PresetAggressive:
 		s.KCPInterval = 10
 		s.KCPResend = 2
 		s.KCPNoDelay = 1
 		s.KCPNoCongestion = 1
-		s.KCPSndWnd = 2048
-		s.KCPRcvWnd = 2048
+		// 8192 × 1350 / 100 ms ≈ 880 Mbit/s: enough window that the link, not
+		// the protocol, is what runs out first. Costs about 11 MB of send and
+		// receive buffer per session, which is the trade this preset exists to
+		// make.
+		s.KCPSndWnd = 8192
+		s.KCPRcvWnd = 8192
 		s.KCPAckNoDelay = true
-		// Heavier parity: survives worse loss, at the cost of ~40% more packets.
+		// 10:3 rather than 10:4 — 40% parity is a lot of link to spend on a
+		// preset whose whole promise is throughput. Where the route is bad
+		// enough to need more, Link Test says so.
 		s.KCPDataShards = 10
-		s.KCPParityShards = 4
+		s.KCPParityShards = 3
 	}
 }
 
