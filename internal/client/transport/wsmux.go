@@ -195,6 +195,7 @@ func (c *WsMuxTransport) poolMaintainer() {
 	defer tickerLoad.Stop()
 
 	newPoolSize := c.config.ConnPoolSize // intial value
+	var load poolLoad                    // throughput signal, see poolload.go
 	var poolConnectionsSum int32 = 0
 
 	for {
@@ -215,9 +216,15 @@ func (c *WsMuxTransport) poolMaintainer() {
 			poolConnectionsAvg := (int(atomic.LoadInt32(&poolConnectionsSum)) + 9) / 10 // +9 for ceil-like logic
 			atomic.StoreInt32(&poolConnectionsSum, 0)                                   // Reset
 
+			// Throughput carried since the previous tick. A pool whose
+			// connections are each working hard should grow even when nobody
+			// is asking for new ones — see poolload.go.
+			mbps := load.mbps()
+
 			// Dynamically adjust the pool size based on current connections
-			if (loadConnections + a) > poolConnectionsAvg*b {
-				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections)
+			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrow(newPoolSize, c.config.ConnPoolSize)) ||
+				load.wantsMore(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize) {
+				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections, mbps)
 				newPoolSize++
 
 				// Add a new connection to the pool
