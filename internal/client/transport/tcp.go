@@ -133,6 +133,10 @@ func (c *TcpTransport) Restart() {
 func (c *TcpTransport) channelDialer() {
 	c.logger.Info("attempting to establish a new control channel connection...")
 
+	// One backoff for this reconnect loop: retries start at the configured
+	// interval and stretch as the outage persists, instead of a fixed drumbeat.
+	bo := newBackoff(c.config.RetryInterval)
+
 	for {
 		select {
 		case <-c.state.Ctx().Done():
@@ -147,7 +151,7 @@ func (c *TcpTransport) channelDialer() {
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
@@ -158,7 +162,7 @@ func (c *TcpTransport) channelDialer() {
 			if err != nil {
 				c.logger.Errorf("channel dialer: stealth handshake failed: %v", err)
 				rawConn.Close()
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
@@ -186,7 +190,7 @@ func (c *TcpTransport) channelDialer() {
 					c.logger.Errorf("failed to receive control channel response: %v", err)
 				}
 				tunnelTCPConn.Close() // Close connection on error or timeout
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 			// Resetting the deadline (removes any existing deadline)
@@ -205,7 +209,7 @@ func (c *TcpTransport) channelDialer() {
 			} else {
 				c.logger.Errorf("invalid token received (does not match the server's token). Retrying...")
 				tunnelTCPConn.Close() // Close connection if the token is invalid
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 		}
@@ -407,6 +411,9 @@ func (c *TcpTransport) tunnelDialer() {
 }
 
 func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port int) {
+	// Pick a healthy backend when several are configured; a single backend is
+	// returned unchanged, so ordinary tunnels are untouched.
+	resolvedAddr = backends.pick(resolvedAddr)
 	var sendBuf, recvBuf int
 
 	if strings.Contains(resolvedAddr, "127.0.0.1") {

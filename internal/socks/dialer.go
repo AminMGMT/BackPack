@@ -28,32 +28,41 @@ func Dial(proxyAddr, user, pass, targetHost string, targetPort int) (net.Conn, e
 func negotiate(conn net.Conn, user, pass, host string, port int) error {
 	conn.SetDeadline(time.Now().Add(20 * time.Second))
 
-	// Greeting: offer username/password auth.
-	if _, err := conn.Write([]byte{ver5, 0x01, authUP}); err != nil {
+	// With no credentials, offer no-auth; otherwise offer username/password.
+	// A proxy that binds loopback behind an authenticated tunnel takes no-auth,
+	// so the same client dials both.
+	noAuth := user == "" && pass == ""
+	want := byte(authUP)
+	if noAuth {
+		want = authNone
+	}
+	if _, err := conn.Write([]byte{ver5, 0x01, want}); err != nil {
 		return err
 	}
 	resp := make([]byte, 2)
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		return err
 	}
-	if resp[0] != ver5 || resp[1] != authUP {
-		return fmt.Errorf("socks5: proxy rejected username/password auth")
+	if resp[0] != ver5 || resp[1] != want {
+		return fmt.Errorf("socks5: proxy rejected the offered auth method")
 	}
 
-	// Auth.
-	auth := []byte{0x01, byte(len(user))}
-	auth = append(auth, user...)
-	auth = append(auth, byte(len(pass)))
-	auth = append(auth, pass...)
-	if _, err := conn.Write(auth); err != nil {
-		return err
-	}
-	ar := make([]byte, 2)
-	if _, err := io.ReadFull(conn, ar); err != nil {
-		return err
-	}
-	if ar[1] != 0x00 {
-		return fmt.Errorf("socks5: authentication failed")
+	if !noAuth {
+		// Username/password sub-negotiation.
+		auth := []byte{0x01, byte(len(user))}
+		auth = append(auth, user...)
+		auth = append(auth, byte(len(pass)))
+		auth = append(auth, pass...)
+		if _, err := conn.Write(auth); err != nil {
+			return err
+		}
+		ar := make([]byte, 2)
+		if _, err := io.ReadFull(conn, ar); err != nil {
+			return err
+		}
+		if ar[1] != 0x00 {
+			return fmt.Errorf("socks5: authentication failed")
+		}
 	}
 
 	// CONNECT request (domain address type).

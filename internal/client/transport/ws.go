@@ -121,6 +121,11 @@ func (c *WsTransport) Restart() {
 func (c *WsTransport) channelDialer() {
 	c.logger.Info("attempting to establish a new websocket control channel connection")
 
+	// One backoff for this reconnect loop (see backoff.go): fixed-interval
+	// retries become exponential, so a sustained outage is probed a few times a
+	// minute rather than every second.
+	bo := newBackoff(c.config.RetryInterval)
+
 	for {
 		select {
 		case <-c.state.Ctx().Done():
@@ -134,7 +139,7 @@ func (c *WsTransport) channelDialer() {
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 			c.state.SetWSConn(tunnelWSConn)
@@ -342,6 +347,8 @@ func (c *WsTransport) tunnelDialer() {
 }
 
 func (c *WsTransport) localDialer(tunnelCon *websocket.Conn, remoteAddr string, port int) {
+	// Pick a healthy backend when several are configured (single = unchanged).
+	remoteAddr = backends.pick(remoteAddr)
 	var sendBuf, recvBuf int
 
 	if strings.Contains(remoteAddr, "127.0.0.1") {

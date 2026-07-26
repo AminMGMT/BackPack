@@ -134,6 +134,11 @@ func (c *WsMuxTransport) Restart() {
 func (c *WsMuxTransport) channelDialer() {
 	c.logger.Infof("attempting to establish a new %s control channel connection", c.config.Mode)
 
+	// One backoff for this reconnect loop (see backoff.go): fixed-interval
+	// retries become exponential, so a sustained outage is probed a few times a
+	// minute rather than every second.
+	bo := newBackoff(c.config.RetryInterval)
+
 	for {
 		select {
 		case <-c.state.Ctx().Done():
@@ -148,7 +153,7 @@ func (c *WsMuxTransport) channelDialer() {
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 			c.state.SetWSConn(tunnelWSConn)
@@ -360,6 +365,8 @@ func (c *WsMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 		stream.Close()
 		return
 	}
+	// Pick a healthy backend when several are configured (single = unchanged).
+	resolvedAddr = backends.pick(resolvedAddr)
 
 	var sendBuf, recvBuf int
 

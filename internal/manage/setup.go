@@ -342,6 +342,8 @@ func SetupServer() {
 	tui.Warn("forwards it to its own 127.0.0.1:443 — so your panel must listen")
 	tui.Warn("on that exact port there.")
 	tui.Warn("If the service is elsewhere, say so: 443=127.0.0.1:2096")
+	tui.Warn("Several backends for one port: 443=127.0.0.1:2096|127.0.0.1:2097")
+	tui.Warn("(separated by |, checked continuously, balanced over the live ones)")
 	fmt.Println()
 
 	portsRaw := tui.Prompt("Exposed ports (comma separated, e.g. 443,8080 or 443=1.1.1.1:443): ")
@@ -490,11 +492,22 @@ func showForwardTargets(ports []string) {
 			// its own loopback.
 			dest = "127.0.0.1:" + exposed
 		} else {
-			dest = strings.TrimSpace(dest)
-			// A destination given as just a port means loopback there too.
-			if !strings.Contains(dest, ":") {
-				dest = "127.0.0.1:" + dest
+			// A destination may name several backends separated by "|", so
+			// resolve each one; otherwise a list would be shown as a single
+			// nonsense address.
+			var parts []string
+			for _, d := range strings.Split(strings.TrimSpace(dest), "|") {
+				d = strings.TrimSpace(d)
+				if d == "" {
+					continue
+				}
+				// A destination given as just a port means loopback there too.
+				if !strings.Contains(d, ":") {
+					d = "127.0.0.1:" + d
+				}
+				parts = append(parts, d)
 			}
+			dest = strings.Join(parts, "  |  ")
 		}
 		targets = append(targets, target{exposed, dest})
 	}

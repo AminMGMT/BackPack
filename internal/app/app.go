@@ -54,6 +54,10 @@ const (
 	// monitoring must not stop just because the panel is stopped.
 	MonitorService = "backpack-monitor.service"
 
+	// ProxyService is the systemd unit for the optional built-in SOCKS5/HTTP
+	// proxy, so a node can be its own backend instead of running a separate one.
+	ProxyService = "backpack-proxy.service"
+
 	// SocksInternalPort is the localhost port the built-in SOCKS5 proxy listens
 	// on. It is reachable from a peer only when exposed over a tunnel.
 	SocksInternalPort = 1080

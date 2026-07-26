@@ -7,6 +7,32 @@ import (
 )
 
 func ResolveRemoteAddr(remoteAddr string) (int, string, error) {
+	// A pipe list names several backends for health-checked load balancing
+	// ("8443|127.0.0.1:8444"). Resolve each to a full host:port (so bare ports
+	// still default to localhost) and pass the rebuilt list through for the pool
+	// to split; the reported port is the first backend's, for metrics and logs.
+	//
+	// A pipe, not a comma: commas already separate whole port entries.
+	if strings.Contains(remoteAddr, "|") {
+		var resolved []string
+		var firstPort int
+		for i, part := range strings.Split(remoteAddr, "|") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			p, full, err := ResolveRemoteAddr(part)
+			if err != nil {
+				return 0, "", err
+			}
+			if i == 0 {
+				firstPort = p
+			}
+			resolved = append(resolved, full)
+		}
+		return firstPort, strings.Join(resolved, "|"), nil
+	}
+
 	// Split the address into host and port
 	parts := strings.Split(remoteAddr, ":")
 	var port int

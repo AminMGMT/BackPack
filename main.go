@@ -11,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/cmd"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/menu"
 	"github.com/backpack/backpack/internal/monitor"
@@ -36,6 +37,7 @@ func main() {
 	tgReport := flag.Bool("telegram-report", false, "send a Telegram status report and exit (used by the scheduled job)")
 	webPanel := flag.Bool("webui", false, "run the web panel (used by the backpack-webui service)")
 	monitorMode := flag.Bool("monitor", false, "run the watchdog, Telegram bot and alerts (used by the backpack-monitor service)")
+	proxyMode := flag.Bool("proxy", false, "run the built-in SOCKS5/HTTP proxy (used by the backpack-proxy service)")
 	flag.Parse()
 
 	switch {
@@ -60,6 +62,9 @@ func main() {
 	case *monitorMode:
 		monitor.Run()
 		return
+	case *proxyMode:
+		runProxy()
+		return
 	}
 
 	// No config file -> interactive menu.
@@ -69,6 +74,19 @@ func main() {
 	}
 
 	runEngine(*configPath)
+}
+
+// runProxy runs the built-in proxy until a termination signal arrives. The
+// proxy is a plain loopback service; the tunnel forwards to it like any backend.
+func runProxy() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go localproxy.Run(ctx)
+	<-sigChan
+	cancel()
+	logger.Info("backpack proxy stopped")
 }
 
 // runEngine starts a single tunnel from a TOML config and blocks until a

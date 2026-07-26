@@ -136,6 +136,11 @@ func (c *TcpMuxTransport) Restart() {
 func (c *TcpMuxTransport) channelDialer() {
 	c.logger.Info("attempting to establish a new tcpmux control channel connection...")
 
+	// One backoff for this reconnect loop (see backoff.go): fixed-interval
+	// retries become exponential, so a sustained outage is probed a few times a
+	// minute rather than every second.
+	bo := newBackoff(c.config.RetryInterval)
+
 	for {
 		select {
 		case <-c.state.Ctx().Done():
@@ -149,7 +154,7 @@ func (c *TcpMuxTransport) channelDialer() {
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
@@ -176,7 +181,7 @@ func (c *TcpMuxTransport) channelDialer() {
 					c.logger.Errorf("failed to receive control channel response: %v", err)
 				}
 				tunnelConn.Close() // Close connection on error or timeout
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 			// Resetting the deadline (removes any existing deadline)
@@ -195,7 +200,7 @@ func (c *TcpMuxTransport) channelDialer() {
 			} else {
 				c.logger.Errorf("invalid token received (does not match the server's token). Retrying...")
 				tunnelConn.Close() // Close connection if the token is invalid
-				time.Sleep(c.config.RetryInterval)
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 		}
@@ -393,6 +398,8 @@ func (c *TcpMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 		stream.Close()
 		return
 	}
+	// Pick a healthy backend when several are configured (single = unchanged).
+	resolvedAddr = backends.pick(resolvedAddr)
 
 	var sendBuf, recvBuf int
 
