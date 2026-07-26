@@ -56,6 +56,15 @@ func Run() {
 		wg.Add(1)
 		go func(name string, fn func(context.Context)) {
 			defer wg.Done()
+			// A panic in any one job would otherwise take the whole process
+			// down — including the watchdog, so tunnels would stop being
+			// restarted because an unrelated job hit a bug. Contain it: the
+			// failed job stops and says so, everything else keeps running.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("%s panicked and was stopped; the other monitor jobs keep running: %v", name, r)
+				}
+			}()
 			fn(ctx)
 			logger.Infof("%s stopped", name)
 		}(job.name, job.fn)

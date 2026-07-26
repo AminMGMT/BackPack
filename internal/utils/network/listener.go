@@ -23,8 +23,9 @@ func ListenWithBuffers(network, address string, rcvBufSize, sndBufSize, mss int,
 				return err
 			}
 
-			// Set SO_RCVBUF
-			if rcvBufSize > 0 {
+			// Set SO_RCVBUF — off by default so the kernel keeps auto-tuning
+			// the window. See PinTCPBuffers.
+			if PinTCPBuffers && rcvBufSize > 0 {
 				err = s.Control(func(fd uintptr) {
 					if err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, rcvBufSize); err != nil {
 						err = fmt.Errorf("failed to set SO_RCVBUF: %v", err)
@@ -36,13 +37,19 @@ func ListenWithBuffers(network, address string, rcvBufSize, sndBufSize, mss int,
 			}
 
 			// Set SO_SNDBUF
-			if sndBufSize > 0 {
+			if PinTCPBuffers && sndBufSize > 0 {
 				err = s.Control(func(fd uintptr) {
 					if err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, sndBufSize); err != nil {
 						err = fmt.Errorf("failed to set SO_SNDBUF: %v", err)
 					}
 				})
 			}
+			if err != nil {
+				return err
+			}
+
+			// BBR per socket, whatever the system default is. Best effort.
+			_ = s.Control(func(fd uintptr) { setCongestion(fd, TCPCongestion) })
 
 			// Set MSS (Maximum Segment Size)
 			if mss > 0 {

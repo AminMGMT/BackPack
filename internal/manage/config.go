@@ -104,6 +104,10 @@ func (s TunnelSpec) writeTuning(p func(string, ...any)) {
 	if s.MSS > 0 {
 		p("mss = %d\n", s.MSS)
 	}
+	// The socket buffers size the datagram transports' UDP socket. They are no
+	// longer pinned on TCP sockets: doing that stops the kernel auto-tuning the
+	// window and caps throughput badly on a fast link. Set so_pin_tcp = true to
+	// get the old behaviour back.
 	if s.SoRcvBuf > 0 {
 		p("so_rcvbuf = %d\n", s.SoRcvBuf)
 	}

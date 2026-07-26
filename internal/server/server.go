@@ -9,6 +9,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/server/transport"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
 
 	"github.com/sirupsen/logrus"
 )
@@ -28,6 +29,8 @@ type Server struct {
 
 func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 	ctx, cancel := context.WithCancel(parentCtx)
+	// One process runs one tunnel, so the socket tuning is process-wide.
+	network.PinTCPBuffers = cfg.SOPinTCP
 	return &Server{
 		config: cfg,
 		ctx:    ctx,

@@ -99,6 +99,12 @@ type ServerConfig struct {
 	MSS           int    `toml:"mss"`
 	SO_RCVBUF     int    `toml:"so_rcvbuf"`
 	SO_SNDBUF     int    `toml:"so_sndbuf"`
+	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
+	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
+	// the window, which costs a large multiple of the throughput on a fast
+	// uplink. The datagram transports set their own buffers regardless.
+	SOPinTCP bool `toml:"so_pin_tcp"`
+
 	ProxyProtocol bool   `toml:"proxy_protocol"`
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
 	MaxConnections int `toml:"max_connections"`
@@ -140,6 +146,12 @@ type ClientConfig struct {
 	MSS              int           `toml:"mss"`
 	SO_RCVBUF        int           `toml:"so_rcvbuf"`
 	SO_SNDBUF        int           `toml:"so_sndbuf"`
+	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
+	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
+	// the window, which costs a large multiple of the throughput on a fast
+	// uplink. The datagram transports set their own buffers regardless.
+	SOPinTCP bool `toml:"so_pin_tcp"`
+
 	Preset           string        `toml:"preset"`
 	// LoadBalance spreads the pool's data connections over every configured
 	// address instead of putting them all on the live one. All the addresses

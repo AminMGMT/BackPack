@@ -71,7 +71,7 @@ func attemptTcpDialer(
 				return err
 			}
 
-			if SO_RCVBUF > 0 {
+			if PinTCPBuffers && SO_RCVBUF > 0 {
 				err = s.Control(func(fd uintptr) {
 					if err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, SO_RCVBUF); err != nil {
 						err = fmt.Errorf("failed to set SO_RCVBUF: %v", err)
@@ -82,13 +82,20 @@ func attemptTcpDialer(
 				return err
 			}
 
-			if SO_SNDBUF > 0 {
+			if PinTCPBuffers && SO_SNDBUF > 0 {
 				err = s.Control(func(fd uintptr) {
 					if err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, SO_SNDBUF); err != nil {
 						err = fmt.Errorf("failed to set SO_SNDBUF: %v", err)
 					}
 				})
 			}
+			if err != nil {
+				return err
+			}
+
+			// BBR per socket, so the tunnel gets it even where the system
+			// default is not BBR. Best effort — see setCongestion.
+			_ = s.Control(func(fd uintptr) { setCongestion(fd, TCPCongestion) })
 
 			// Set MSS (Maximum Segment Size)
 			if mss > 0 {
