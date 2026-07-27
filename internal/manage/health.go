@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/metrics"
 )
 
 // Health describes how a single tunnel is doing right now.
@@ -61,15 +62,24 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 		h.State, h.Detail = "stopped", "service is not running"
 	default:
 		h.Connected = tunnelHealthy(t, pairs)
+		// tunnelHealthy answers the watchdog's question — "is this worth
+		// restarting?" — and for a datagram server it deliberately says yes
+		// always, because restarting something whose peer cannot be observed
+		// would mean restarting it forever.
+		//
+		// That is the right answer for the watchdog and the wrong one here. It
+		// left a KCP or UDP server showing green after its client had been
+		// stopped: the peer and the ping both vanished, because those come from
+		// somewhere that knew the truth, while the light stayed on because this
+		// did not. The transport does know, and writes it down — so ask that.
+		if isDatagram(t.Transport) && t.Role == "server" {
+			if connected, known := datagramServerPeer(app.ConfigDir, t.Name); known {
+				h.Connected = connected
+			}
+		}
 		if h.Connected {
 			h.State = "online"
-			if isDatagram(t.Transport) && t.Role == "server" {
-				// Be straight about what was actually verified: a UDP listener
-				// keeps no record of its peers, so "running" is all we know.
-				h.Detail = "running — a UDP listener cannot report its peers"
-			} else {
-				h.Detail = "peer connected"
-			}
+			h.Detail = "peer connected"
 		} else {
 			h.State = "offline"
 			if t.Role == "server" {
@@ -80,6 +90,34 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 		}
 	}
 	return h
+}
+
+// datagramPeerWindow is how long a snapshot's peer field stays meaningful. The
+// transport rewrites the file every 30 seconds, so anything much older than a
+// few intervals says nothing about now.
+const datagramPeerWindow = 90 * time.Second
+
+// datagramServerPeer reports whether a datagram server currently has a peer,
+// and whether that could be determined at all.
+//
+// A UDP listener is one unconnected socket and keeps no record of who is
+// talking to it, so the kernel cannot answer this — which is why it used to go
+// unanswered. The transport can, and records the peer in the tunnel's metrics
+// snapshot, clearing it when the control channel drops.
+//
+// Not knowing is reported separately from knowing there is nobody there. A
+// tunnel that has only just started has not written a snapshot yet, and calling
+// that "no peer" would show every freshly started tunnel as down for its first
+// half minute.
+func datagramServerPeer(dir, name string) (connected, known bool) {
+	snap, err := metrics.Read(dir, name)
+	if err != nil {
+		return false, false // no snapshot yet
+	}
+	if time.Since(snap.Taken) > datagramPeerWindow {
+		return false, false // too old to mean anything either way
+	}
+	return snap.Peer != "", true
 }
 
 // WaitServiceActive waits up to timeout for a service to report active,
