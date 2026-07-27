@@ -90,22 +90,22 @@ type ServerConfig struct {
 	// ACMEDomain switches wss/wssmux to a Let's Encrypt certificate for this
 	// domain instead of the generated self-signed one. The domain must resolve
 	// to this server. Empty keeps the self-signed certificate.
-	ACMEDomain    string `toml:"acme_domain"`
-	ACMEEmail     string `toml:"acme_email"`
-	Heartbeat     int    `toml:"heartbeat"`
-	MuxCon        int    `toml:"mux_con"`
-	AcceptUDP     bool   `toml:"accept_udp"`
-	SkipOptz      bool   `toml:"skip_optz"`
-	MSS           int    `toml:"mss"`
-	SO_RCVBUF     int    `toml:"so_rcvbuf"`
-	SO_SNDBUF     int    `toml:"so_sndbuf"`
+	ACMEDomain string `toml:"acme_domain"`
+	ACMEEmail  string `toml:"acme_email"`
+	Heartbeat  int    `toml:"heartbeat"`
+	MuxCon     int    `toml:"mux_con"`
+	AcceptUDP  bool   `toml:"accept_udp"`
+	SkipOptz   bool   `toml:"skip_optz"`
+	MSS        int    `toml:"mss"`
+	SO_RCVBUF  int    `toml:"so_rcvbuf"`
+	SO_SNDBUF  int    `toml:"so_sndbuf"`
 	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
 	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
 	// the window, which costs a large multiple of the throughput on a fast
 	// uplink. The datagram transports set their own buffers regardless.
 	SOPinTCP bool `toml:"so_pin_tcp"`
 
-	ProxyProtocol bool   `toml:"proxy_protocol"`
+	ProxyProtocol bool `toml:"proxy_protocol"`
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
 	MaxConnections int `toml:"max_connections"`
 	// BandwidthMbps caps total tunnel throughput in Mbit/s (0 = unlimited).
@@ -152,7 +152,7 @@ type ClientConfig struct {
 	// uplink. The datagram transports set their own buffers regardless.
 	SOPinTCP bool `toml:"so_pin_tcp"`
 
-	Preset           string        `toml:"preset"`
+	Preset string `toml:"preset"`
 	// LoadBalance spreads the pool's data connections over every configured
 	// address instead of putting them all on the live one. All the addresses
 	// must reach the SAME server, since the control channel — and therefore

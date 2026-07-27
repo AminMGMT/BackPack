@@ -22,6 +22,19 @@ import (
 	"github.com/xtaci/smux"
 )
 
+// kcpGen is the state of a single run of the transport: the context that ends
+// when the run does, and the channels its goroutines pass work over. Restart
+// builds a fresh set for the next run, so carrying them here keeps a goroutine
+// that outlives its run from reaching into the run that replaced it.
+type kcpGen struct {
+	ctx              context.Context
+	tunnelChannel    chan *smux.Session
+	handshakeChannel chan net.Conn
+	localChannel     chan LocalTCPConn
+	reqNewConnChan   chan struct{}
+	usageMonitor     *web.Usage
+}
+
 // KcpTransport is the server side of the KCP transport: a reliable,
 // retransmitting protocol carried inside UDP datagrams, with SMUX layered on
 // top so many streams share one session.
@@ -131,14 +144,27 @@ func NewKcpServer(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 }
 
 func (s *KcpTransport) Start() {
+	// The state of this run. Restart replaces these fields for the next
+	// one, so they are read once here and carried from goroutine to
+	// goroutine; a goroutine that outlives its run keeps what it started
+	// with instead of reading whatever the next run has installed.
+	g := &kcpGen{
+		ctx:              s.ctx,
+		tunnelChannel:    s.tunnelChannel,
+		handshakeChannel: s.handshakeChannel,
+		localChannel:     s.localChannel,
+		reqNewConnChan:   s.reqNewConnChan,
+		usageMonitor:     s.usageMonitor,
+	}
+
 	if s.config.WebPort > 0 {
-		go s.usageMonitor.Monitor()
+		go g.usageMonitor.Monitor()
 	}
 	s.config.TunnelStatus = "Disconnected (KCP)"
 
-	go s.tunnelListener()
+	go s.tunnelListener(g)
 
-	s.channelHandshake()
+	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (KCP)"
@@ -148,13 +174,13 @@ func (s *KcpTransport) Start() {
 			numCPU = 4 // Max allowed handler is 4
 		}
 
-		go s.parsePortMappings()
-		go s.channelHandler()
+		go s.parsePortMappings(g)
+		go s.channelHandler(g)
 
 		s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 		for i := 0; i < numCPU; i++ {
-			go s.handleLoop()
+			go s.handleLoop(g)
 		}
 	}
 }
@@ -196,8 +222,10 @@ func (s *KcpTransport) Restart() {
 	metrics.ClearPeer()
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
-	s.streamCounter = 0
-	s.sessionCounter = 0
+	// Stored atomically, like every other access: the goroutines of the run
+	// being replaced may still be counting while this resets them.
+	atomic.StoreInt32(&s.streamCounter, 0)
+	atomic.StoreInt32(&s.sessionCounter, 0)
 
 	s.logger.SetLevel(level)
 
@@ -206,12 +234,12 @@ func (s *KcpTransport) Restart() {
 
 // channelHandshake waits for a session that has already proved it holds the
 // token and asked to be the control channel.
-func (s *KcpTransport) channelHandshake() {
+func (s *KcpTransport) channelHandshake(g *kcpGen) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
-		case conn := <-s.handshakeChannel:
+		case conn := <-g.handshakeChannel:
 			s.controlChannel.Set(conn)
 			// A KCP listener is one unconnected socket, so the socket table can
 			// never say who is on the other end. Recording it here is what lets
@@ -224,7 +252,7 @@ func (s *KcpTransport) channelHandshake() {
 	}
 }
 
-func (s *KcpTransport) channelHandler() {
+func (s *KcpTransport) channelHandler(g *kcpGen) {
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -244,11 +272,11 @@ func (s *KcpTransport) channelHandler() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
 			return
 
-		case <-s.reqNewConnChan:
+		case <-g.reqNewConnChan:
 			if err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan); err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -278,7 +306,7 @@ func (s *KcpTransport) channelHandler() {
 	}
 }
 
-func (s *KcpTransport) tunnelListener() {
+func (s *KcpTransport) tunnelListener(g *kcpGen) {
 	listener, err := network.KCPListen(s.config.BindAddr, s.config.Token, s.kcpSettings)
 	if err != nil {
 		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
@@ -295,15 +323,15 @@ func (s *KcpTransport) tunnelListener() {
 			listener.Addr().String())
 	}
 
-	go s.acceptTunnelConn(listener)
+	go s.acceptTunnelConn(g, listener)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *KcpTransport) acceptTunnelConn(listener *kcp.Listener) {
+func (s *KcpTransport) acceptTunnelConn(g *kcpGen, listener *kcp.Listener) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		default:
 			s.logger.Debugf("waiting for accept incoming tunnel connection on %s", listener.Addr().String())
@@ -332,7 +360,7 @@ func (s *KcpTransport) acceptTunnelConn(listener *kcp.Listener) {
 			// Every session announces what it is, and the announcement is read
 			// off the accept path so that a peer which never sends one cannot
 			// stall the sessions queued behind it.
-			go s.acceptSession(session)
+			go s.acceptSession(g, session)
 		}
 	}
 }
@@ -346,7 +374,7 @@ func (s *KcpTransport) acceptTunnelConn(listener *kcp.Listener) {
 // into the control-channel handshake — which expects a different signal — made
 // the server reject them forever while it waited for a control channel that
 // the client had no reason to re-open.
-func (s *KcpTransport) acceptSession(session *kcp.UDPSession) {
+func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 	if err := session.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		session.Close()
 		return
@@ -377,7 +405,7 @@ func (s *KcpTransport) acceptSession(session *kcp.UDPSession) {
 		// The control channel carries small, latency-critical signals.
 		session.SetACKNoDelay(true)
 		select {
-		case s.handshakeChannel <- session: // ok
+		case g.handshakeChannel <- session: // ok
 		default:
 			s.logger.Warnf("control channel handshake already in progress, discarding duplicate")
 			session.Close()
@@ -398,7 +426,7 @@ func (s *KcpTransport) acceptSession(session *kcp.UDPSession) {
 			return
 		}
 		select {
-		case s.tunnelChannel <- muxSession: // ok
+		case g.tunnelChannel <- muxSession: // ok
 		default:
 			s.logger.Warnf("tunnel listener channel is full, discarding KCP session from %s", session.RemoteAddr())
 			muxSession.Close()
@@ -410,7 +438,7 @@ func (s *KcpTransport) acceptSession(session *kcp.UDPSession) {
 	}
 }
 
-func (s *KcpTransport) parsePortMappings() {
+func (s *KcpTransport) parsePortMappings(g *kcpGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
 
@@ -439,7 +467,7 @@ func (s *KcpTransport) parsePortMappings() {
 
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, strconv.Itoa(port))
+					go s.localListener(g, localAddr, strconv.Itoa(port))
 					time.Sleep(1 * time.Millisecond) // for wide port ranges
 				}
 				continue
@@ -472,7 +500,7 @@ func (s *KcpTransport) parsePortMappings() {
 
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, remoteAddr)
+					go s.localListener(g, localAddr, remoteAddr)
 					time.Sleep(1 * time.Millisecond) // for wide port ranges
 				}
 				continue
@@ -488,11 +516,11 @@ func (s *KcpTransport) parsePortMappings() {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
 
-		go s.localListener(localAddr, remoteAddr)
+		go s.localListener(g, localAddr, remoteAddr)
 	}
 }
 
-func (s *KcpTransport) localListener(localAddr string, remoteAddr string) {
+func (s *KcpTransport) localListener(g *kcpGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
@@ -503,15 +531,15 @@ func (s *KcpTransport) localListener(localAddr string, remoteAddr string) {
 
 	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
 
-	go s.acceptLocalConn(listener, remoteAddr)
+	go s.acceptLocalConn(g, listener, remoteAddr)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *KcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string) {
+func (s *KcpTransport) acceptLocalConn(g *kcpGen, listener net.Listener, remoteAddr string) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
 		default:
@@ -545,7 +573,7 @@ func (s *KcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 			conn = s.limits.wrap(conn)
 
 			select {
-			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
 
 				atomic.AddInt32(&s.streamCounter, 1)
@@ -554,7 +582,7 @@ func (s *KcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 					s.logger.Tracef("stream counter: %v, session counter: %v", atomic.LoadInt32(&s.streamCounter), atomic.LoadInt32(&s.sessionCounter))
 
 					select { // Attempt to request a new connection
-					case s.reqNewConnChan <- struct{}{}:
+					case g.reqNewConnChan <- struct{}{}:
 					default:
 						s.logger.Warn("failed to request new connection. channel is full")
 					}
@@ -569,21 +597,21 @@ func (s *KcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 	}
 }
 
-func (s *KcpTransport) handleLoop() {
+func (s *KcpTransport) handleLoop(g *kcpGen) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
-		case session := <-s.tunnelChannel:
+		case session := <-g.tunnelChannel:
 			atomic.AddInt32(&s.sessionCounter, 1)
 
-			go s.handleSession(session)
+			go s.handleSession(g, session)
 		}
 	}
 }
 
-func (s *KcpTransport) handleSession(session *smux.Session) {
+func (s *KcpTransport) handleSession(g *kcpGen, session *smux.Session) {
 	counter := make(chan struct{}, s.config.MuxCon)
 	defer session.Close()
 	defer close(counter)
@@ -593,10 +621,10 @@ func (s *KcpTransport) handleSession(session *smux.Session) {
 		counter <- struct{}{}
 
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
-		case incomingConn := <-s.localChannel:
+		case incomingConn := <-g.localChannel:
 			if time.Now().UnixMilli()-incomingConn.timeCreated > 3000 { // 3000ms
 				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-incomingConn.timeCreated)
 				incomingConn.conn.Close()
@@ -608,7 +636,7 @@ func (s *KcpTransport) handleSession(session *smux.Session) {
 
 			stream, err := session.OpenStream()
 			if err != nil {
-				s.handleSessionError(&incomingConn, err)
+				s.handleSessionError(g, &incomingConn, err)
 				return
 			}
 
@@ -616,7 +644,7 @@ func (s *KcpTransport) handleSession(session *smux.Session) {
 			if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)
 				// Put local connection back to local channel
-				s.localChannel <- incomingConn
+				g.localChannel <- incomingConn
 				continue
 			}
 
@@ -625,7 +653,7 @@ func (s *KcpTransport) handleSession(session *smux.Session) {
 				// Free the connection slot once the transfer ends, or the
 				// limit would fill up permanently.
 				defer s.limits.release()
-				handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, s.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 				atomic.AddInt32(&s.streamCounter, -1)
 				<-counter // read signal from the channel
 			}()
@@ -633,16 +661,16 @@ func (s *KcpTransport) handleSession(session *smux.Session) {
 	}
 }
 
-func (s *KcpTransport) handleSessionError(incomingConn *LocalTCPConn, err error) {
+func (s *KcpTransport) handleSessionError(g *kcpGen, incomingConn *LocalTCPConn, err error) {
 	s.logger.Tracef("failed to handle session: %v", err)
 
 	atomic.AddInt32(&s.sessionCounter, -1)
 
 	// Put local connection back to local channel
-	s.localChannel <- *incomingConn
+	g.localChannel <- *incomingConn
 
 	select {
-	case s.reqNewConnChan <- struct{}{}:
+	case g.reqNewConnChan <- struct{}{}:
 	default:
 		s.logger.Warn("request new connection channel is full")
 	}

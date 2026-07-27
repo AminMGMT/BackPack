@@ -19,6 +19,18 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// tcpGen is the state of a single run of the transport: the context that ends
+// when the run does, and the channels its goroutines pass work over. Restart
+// builds a fresh set for the next run, so carrying them here keeps a goroutine
+// that outlives its run from reaching into the run that replaced it.
+type tcpGen struct {
+	ctx            context.Context
+	tunnelChannel  chan net.Conn
+	localChannel   chan LocalTCPConn
+	reqNewConnChan chan struct{}
+	usageMonitor   *web.Usage
+}
+
 type TcpTransport struct {
 	config         *TcpConfig
 	parentctx      context.Context
@@ -84,15 +96,27 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 }
 
 func (s *TcpTransport) Start() {
+	// The state of this run. Restart replaces these fields for the next
+	// one, so they are read once here and carried from goroutine to
+	// goroutine; a goroutine that outlives its run keeps what it started
+	// with instead of reading whatever the next run has installed.
+	g := &tcpGen{
+		ctx:            s.ctx,
+		tunnelChannel:  s.tunnelChannel,
+		localChannel:   s.localChannel,
+		reqNewConnChan: s.reqNewConnChan,
+		usageMonitor:   s.usageMonitor,
+	}
+
 	s.config.TunnelStatus = "Disconnected (TCP)"
 
 	if s.config.WebPort > 0 {
-		go s.usageMonitor.Monitor()
+		go g.usageMonitor.Monitor()
 	}
 
-	go s.tunnelListener()
+	go s.tunnelListener(g)
 
-	s.channelHandshake()
+	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (TCP)"
@@ -102,13 +126,13 @@ func (s *TcpTransport) Start() {
 			numCPU = 4 // Max allowed handler is 4
 		}
 
-		go s.parsePortMappings()
-		go s.channelHandler()
+		go s.parsePortMappings(g)
+		go s.channelHandler(g)
 
 		s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 		for i := 0; i < numCPU; i++ {
-			go s.handleLoop()
+			go s.handleLoop(g)
 		}
 	}
 }
@@ -154,12 +178,12 @@ func (s *TcpTransport) Restart() {
 	go s.Start()
 }
 
-func (s *TcpTransport) channelHandshake() {
+func (s *TcpTransport) channelHandshake(g *tcpGen) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
-		case conn := <-s.tunnelChannel:
+		case conn := <-g.tunnelChannel:
 			// Set a read deadline for the token response
 			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				s.logger.Errorf("failed to set read deadline: %v", err)
@@ -206,7 +230,7 @@ func (s *TcpTransport) channelHandshake() {
 	}
 }
 
-func (s *TcpTransport) channelHandler() {
+func (s *TcpTransport) channelHandler(g *tcpGen) {
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -216,7 +240,7 @@ func (s *TcpTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-g.ctx.Done():
 				return
 			default:
 				message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
@@ -243,11 +267,11 @@ func (s *TcpTransport) channelHandler() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
 			return
 
-		case <-s.reqNewConnChan:
+		case <-g.reqNewConnChan:
 			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
@@ -284,7 +308,7 @@ func (s *TcpTransport) channelHandler() {
 	}
 }
 
-func (s *TcpTransport) tunnelListener() {
+func (s *TcpTransport) tunnelListener(g *tcpGen) {
 	listener, err := network.ListenWithBuffers(
 		"tcp",
 		s.config.BindAddr,
@@ -303,15 +327,15 @@ func (s *TcpTransport) tunnelListener() {
 
 	s.logger.Infof("server started successfully, listening on address: %s", listener.Addr().String())
 
-	go s.acceptTunnelConn(listener)
+	go s.acceptTunnelConn(g, listener)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
+func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		default:
 			s.logger.Debugf("waiting for accept incoming tunnel connection on %s", listener.Addr().String())
@@ -375,28 +399,28 @@ func (s *TcpTransport) acceptTunnelConn(listener net.Listener) {
 						raw.Close()
 						return
 					}
-					s.deliverTunnelConn(wrapped)
+					s.deliverTunnelConn(g, wrapped)
 				}(conn)
 				continue
 			}
 
-			s.deliverTunnelConn(conn)
+			s.deliverTunnelConn(g, conn)
 		}
 	}
 }
 
 // deliverTunnelConn hands an accepted (and, in stealth mode, already
 // Noise-wrapped) connection to the pool, dropping it if the pool is full.
-func (s *TcpTransport) deliverTunnelConn(conn net.Conn) {
+func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
 	select {
-	case s.tunnelChannel <- conn:
+	case g.tunnelChannel <- conn:
 	default: // The channel is full, do nothing
 		s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
 		conn.Close()
 	}
 }
 
-func (s *TcpTransport) parsePortMappings() {
+func (s *TcpTransport) parsePortMappings(g *tcpGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
 
@@ -428,8 +452,8 @@ func (s *TcpTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.startListeners(localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
-					time.Sleep(1 * time.Millisecond)                   // for wide port ranges
+					go s.startListeners(g, localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
+					time.Sleep(1 * time.Millisecond)                      // for wide port ranges
 				}
 				continue
 			} else {
@@ -466,7 +490,7 @@ func (s *TcpTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.startListeners(localAddr, remoteAddr)
+					go s.startListeners(g, localAddr, remoteAddr)
 					time.Sleep(1 * time.Millisecond) // for wide port ranges
 				}
 				continue
@@ -483,23 +507,23 @@ func (s *TcpTransport) parsePortMappings() {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
 		// Start listeners for single port
-		go s.startListeners(localAddr, remoteAddr)
+		go s.startListeners(g, localAddr, remoteAddr)
 	}
 }
 
-func (s *TcpTransport) startListeners(localAddr, remoteAddr string) {
+func (s *TcpTransport) startListeners(g *tcpGen, localAddr, remoteAddr string) {
 	// Start TCP listener
-	go s.localListener(localAddr, remoteAddr)
+	go s.localListener(g, localAddr, remoteAddr)
 
 	// Start UDP listener if configured
 	if s.config.AcceptUDP {
-		go s.udpListener(localAddr, remoteAddr)
+		go s.udpListener(g, localAddr, remoteAddr)
 	}
 
 	s.logger.Debugf("Started listening on %s, forwarding to %s", localAddr, remoteAddr)
 }
 
-func (s *TcpTransport) localListener(localAddr string, remoteAddr string) {
+func (s *TcpTransport) localListener(g *tcpGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to listen on %s: %v", localAddr, err)
@@ -510,15 +534,15 @@ func (s *TcpTransport) localListener(localAddr string, remoteAddr string) {
 
 	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
 
-	go s.acceptLocalConn(listener, remoteAddr)
+	go s.acceptLocalConn(g, listener, remoteAddr)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *TcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string) {
+func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteAddr string) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
 		default:
@@ -557,10 +581,10 @@ func (s *TcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 			conn = s.limits.wrap(conn)
 
 			select {
-			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 
 				select {
-				case s.reqNewConnChan <- struct{}{}:
+				case g.reqNewConnChan <- struct{}{}:
 					// Successfully requested a new connection
 				default:
 					// The channel is full, do nothing
@@ -578,12 +602,12 @@ func (s *TcpTransport) acceptLocalConn(listener net.Listener, remoteAddr string)
 	}
 }
 
-func (s *TcpTransport) handleLoop() {
+func (s *TcpTransport) handleLoop(g *tcpGen) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
-		case localConn := <-s.localChannel:
+		case localConn := <-g.localChannel:
 		loop:
 			for {
 				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
@@ -593,10 +617,10 @@ func (s *TcpTransport) handleLoop() {
 				}
 
 				select {
-				case <-s.ctx.Done():
+				case <-g.ctx.Done():
 					return
 
-				case tunnelConn := <-s.tunnelChannel:
+				case tunnelConn := <-g.tunnelChannel:
 					// Send the target addr over the connection
 					if err := utils.SendBinaryTransportString(tunnelConn, localConn.remoteAddr, utils.SG_TCP); err != nil {
 						s.logger.Errorf("%v", err)
@@ -609,7 +633,7 @@ func (s *TcpTransport) handleLoop() {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
 						defer s.limits.release()
-						handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, localConn.conn, metrics.CountedConn(tunnelConn), s.logger, s.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+						handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, localConn.conn, metrics.CountedConn(tunnelConn), s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 					}(localConn, tunnelConn)
 					break loop
 

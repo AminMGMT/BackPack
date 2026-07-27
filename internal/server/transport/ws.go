@@ -21,6 +21,18 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// wsGen is the state of a single run of the transport: the context that ends
+// when the run does, and the channels its goroutines pass work over. Restart
+// builds a fresh set for the next run, so carrying them here keeps a goroutine
+// that outlives its run from reaching into the run that replaced it.
+type wsGen struct {
+	ctx            context.Context
+	tunnelChannel  chan TunnelChannel
+	localChannel   chan LocalTCPConn
+	reqNewConnChan chan struct{}
+	usageMonitor   *web.Usage
+}
+
 type WsTransport struct {
 	config         *WsConfig
 	parentctx      context.Context
@@ -83,14 +95,26 @@ func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 }
 
 func (s *WsTransport) Start() {
+	// The state of this run. Restart replaces these fields for the next
+	// one, so they are read once here and carried from goroutine to
+	// goroutine; a goroutine that outlives its run keeps what it started
+	// with instead of reading whatever the next run has installed.
+	g := &wsGen{
+		ctx:            s.ctx,
+		tunnelChannel:  s.tunnelChannel,
+		localChannel:   s.localChannel,
+		reqNewConnChan: s.reqNewConnChan,
+		usageMonitor:   s.usageMonitor,
+	}
+
 	// for  webui
 	if s.config.WebPort > 0 {
-		go s.usageMonitor.Monitor()
+		go g.usageMonitor.Monitor()
 	}
 
 	s.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", s.config.Mode)
 
-	go s.tunnelListener()
+	go s.tunnelListener(g)
 
 }
 func (s *WsTransport) Restart() {
@@ -134,7 +158,7 @@ func (s *WsTransport) Restart() {
 	go s.Start()
 }
 
-func (s *WsTransport) channelHandler() {
+func (s *WsTransport) channelHandler(g *wsGen) {
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -145,7 +169,7 @@ func (s *WsTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-g.ctx.Done():
 				return
 
 			default:
@@ -165,10 +189,10 @@ func (s *WsTransport) channelHandler() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			_ = s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
 			return
-		case <-s.reqNewConnChan:
+		case <-g.reqNewConnChan:
 			err := s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Chan})
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
@@ -209,7 +233,7 @@ func (s *WsTransport) channelHandler() {
 	}
 }
 
-func (s *WsTransport) tunnelListener() {
+func (s *WsTransport) tunnelListener(g *wsGen) {
 	addr := s.config.BindAddr
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:   16 * 1024,
@@ -260,13 +284,13 @@ func (s *WsTransport) tunnelListener() {
 					numCPU = 4 // Max allowed handler is 4
 				}
 
-				go s.channelHandler()
-				go s.parsePortMappings()
+				go s.channelHandler(g)
+				go s.parsePortMappings(g)
 
 				s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 				for i := 0; i < numCPU; i++ {
-					go s.handleLoop()
+					go s.handleLoop(g)
 				}
 
 				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
@@ -278,8 +302,8 @@ func (s *WsTransport) tunnelListener() {
 					mu:   &sync.Mutex{},
 				}
 				select {
-				case s.tunnelChannel <- wsConn:
-					go s.keepAlive(&wsConn)
+				case g.tunnelChannel <- wsConn:
+					go s.keepAlive(g, &wsConn)
 					s.logger.Debugf("websocket connection accepted from %s", conn.RemoteAddr().String())
 				default:
 					s.logger.Warnf("websocket tunnel channel is full, closing connection from %s", conn.RemoteAddr().String())
@@ -323,7 +347,7 @@ func (s *WsTransport) tunnelListener() {
 		}()
 	}
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 
 	// Gracefully shutdown the server
 	s.logger.Infof("shutting down the webSocket server on %s", addr)
@@ -337,7 +361,7 @@ func (s *WsTransport) tunnelListener() {
 
 }
 
-func (s *WsTransport) parsePortMappings() {
+func (s *WsTransport) parsePortMappings(g *wsGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
 
@@ -369,8 +393,8 @@ func (s *WsTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
-					time.Sleep(1 * time.Millisecond)                  // for wide port ranges
+					go s.localListener(g, localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
+					time.Sleep(1 * time.Millisecond)                     // for wide port ranges
 				}
 				continue
 			} else {
@@ -407,7 +431,7 @@ func (s *WsTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, remoteAddr)
+					go s.localListener(g, localAddr, remoteAddr)
 					time.Sleep(1 * time.Millisecond) // for wide port ranges
 				}
 				continue
@@ -424,11 +448,11 @@ func (s *WsTransport) parsePortMappings() {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
 		// Start listeners for single port
-		go s.localListener(localAddr, remoteAddr)
+		go s.localListener(g, localAddr, remoteAddr)
 	}
 }
 
-func (s *WsTransport) localListener(localAddr string, remoteAddr string) {
+func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr string) {
 	portListener, err := net.Listen("tcp", localAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
@@ -440,15 +464,15 @@ func (s *WsTransport) localListener(localAddr string, remoteAddr string) {
 
 	s.logger.Infof("listener started successfully, listening on address: %s", portListener.Addr().String())
 
-	go s.acceptLocalConn(portListener, remoteAddr)
+	go s.acceptLocalConn(g, portListener, remoteAddr)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *WsTransport) acceptLocalConn(listener net.Listener, remoteAddr string) {
+func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAddr string) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
 		default:
@@ -497,10 +521,10 @@ func (s *WsTransport) acceptLocalConn(listener net.Listener, remoteAddr string) 
 			conn = s.limits.wrap(conn)
 
 			select {
-			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 
 				select {
-				case s.reqNewConnChan <- struct{}{}:
+				case g.reqNewConnChan <- struct{}{}:
 					// Successfully requested a new connection
 				default:
 					// The channel is full, do nothing
@@ -518,12 +542,12 @@ func (s *WsTransport) acceptLocalConn(listener net.Listener, remoteAddr string) 
 	}
 }
 
-func (s *WsTransport) handleLoop() {
+func (s *WsTransport) handleLoop(g *wsGen) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
-		case localConn := <-s.localChannel:
+		case localConn := <-g.localChannel:
 		loop:
 			for {
 				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
@@ -533,9 +557,9 @@ func (s *WsTransport) handleLoop() {
 				}
 
 				select {
-				case <-s.ctx.Done():
+				case <-g.ctx.Done():
 					return
-				case tunnelConnection := <-s.tunnelChannel:
+				case tunnelConnection := <-g.tunnelChannel:
 					close(tunnelConnection.ping)
 					tunnelConnection.mu.Lock()
 					if err := tunnelConnection.conn.WriteMessage(websocket.TextMessage, []byte(localConn.remoteAddr)); err != nil {
@@ -548,7 +572,7 @@ func (s *WsTransport) handleLoop() {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
 						defer s.limits.release()
-						handlers.WSConnectionHandler(s.ctx, tunnelConn.conn, localConn.conn, s.logger, s.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+						handlers.WSConnectionHandler(g.ctx, tunnelConn.conn, localConn.conn, s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 					}(tunnelConnection, localConn)
 					break loop
 				}
@@ -557,14 +581,14 @@ func (s *WsTransport) handleLoop() {
 	}
 }
 
-func (s *WsTransport) keepAlive(conn *TunnelChannel) {
+func (s *WsTransport) keepAlive(g *wsGen, conn *TunnelChannel) {
 	ticker := time.NewTicker(s.config.Heartbeat) // Send periodic pings to the client
 
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			conn.conn.Close()
 			return
 		case <-conn.ping:

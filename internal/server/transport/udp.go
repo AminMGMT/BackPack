@@ -14,6 +14,17 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// udpGen is the state of a single run of the transport: the context that ends
+// when the run does, and the channels its goroutines pass work over. Restart
+// builds a fresh set for the next run, so carrying them here keeps a goroutine
+// that outlives its run from reaching into the run that replaced it.
+type udpGen struct {
+	ctx            context.Context
+	tunnelChannel  chan *TunnelUDPConn
+	reqNewConnChan chan struct{}
+	usageMonitor   *web.Usage
+}
+
 type UdpTransport struct {
 	config            *UdpConfig
 	parentctx         context.Context
@@ -64,13 +75,24 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 	return server
 }
 func (s *UdpTransport) Start() {
+	// The state of this run. Restart replaces these fields for the next
+	// one, so they are read once here and carried from goroutine to
+	// goroutine; a goroutine that outlives its run keeps what it started
+	// with instead of reading whatever the next run has installed.
+	g := &udpGen{
+		ctx:            s.ctx,
+		tunnelChannel:  s.tunnelChannel,
+		reqNewConnChan: s.reqNewConnChan,
+		usageMonitor:   s.usageMonitor,
+	}
+
 	s.config.TunnelStatus = "Disconnected (UDP)"
 
 	if s.config.WebPort > 0 {
-		go s.usageMonitor.Monitor()
+		go g.usageMonitor.Monitor()
 	}
 
-	go s.channelHandshake()
+	go s.channelHandshake(g)
 }
 
 func (s *UdpTransport) Restart() {
@@ -116,7 +138,7 @@ func (s *UdpTransport) Restart() {
 	go s.Start()
 }
 
-func (s *UdpTransport) channelHandshake() {
+func (s *UdpTransport) channelHandshake(g *udpGen) {
 	listener, err := net.Listen("tcp", s.config.BindAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
@@ -130,7 +152,7 @@ func (s *UdpTransport) channelHandshake() {
 loop:
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		default:
 			conn, err := listener.Accept()
@@ -186,14 +208,14 @@ loop:
 		}
 	}
 
-	go s.tunnelListener()
-	go s.parsePortMappings()
-	go s.channelHandler()
+	go s.tunnelListener(g)
+	go s.parsePortMappings(g)
+	go s.channelHandler(g)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *UdpTransport) channelHandler() {
+func (s *UdpTransport) channelHandler(g *udpGen) {
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -203,7 +225,7 @@ func (s *UdpTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-g.ctx.Done():
 				return
 			default:
 				message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
@@ -230,11 +252,11 @@ func (s *UdpTransport) channelHandler() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
 			return
 
-		case <-s.reqNewConnChan:
+		case <-g.reqNewConnChan:
 			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
@@ -271,7 +293,7 @@ func (s *UdpTransport) channelHandler() {
 	}
 }
 
-func (s *UdpTransport) tunnelListener() {
+func (s *UdpTransport) tunnelListener(g *udpGen) {
 	tunnelUDPAddr, err := net.ResolveUDPAddr("udp", s.config.BindAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to resolve tunnel address: %v", err)
@@ -286,18 +308,18 @@ func (s *UdpTransport) tunnelListener() {
 
 	s.logger.Infof("UDP tunnel listener started successfully, listening on address: %s", listener.LocalAddr().String())
 
-	go s.acceptTunnelConn(listener)
+	go s.acceptTunnelConn(g, listener)
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *UdpTransport) acceptTunnelConn(listener *net.UDPConn) {
+func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 	// Buffer for UDP reads
 	buf := make([]byte, 16*1024)
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		default:
 			n, addr, err := listener.ReadFromUDP(buf)
@@ -351,8 +373,8 @@ func (s *UdpTransport) acceptTunnelConn(listener *net.UDPConn) {
 
 			// Send the new tunnel connection to the tunnel channel
 			select {
-			case s.tunnelChannel <- &tunnelConn:
-				go s.keepAlive(&tunnelConn)
+			case g.tunnelChannel <- &tunnelConn:
+				go s.keepAlive(g, &tunnelConn)
 				s.logger.Debugf("accepted tunnel connection from %s", addr.String())
 			default:
 				s.logger.Warn("UDP tunnel channel is full")
@@ -364,7 +386,7 @@ func (s *UdpTransport) acceptTunnelConn(listener *net.UDPConn) {
 	}
 }
 
-func (s *UdpTransport) parsePortMappings() {
+func (s *UdpTransport) parsePortMappings(g *udpGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
 
@@ -396,8 +418,8 @@ func (s *UdpTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
-					time.Sleep(1 * time.Millisecond)                  // for wide port ranges
+					go s.localListener(g, localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
+					time.Sleep(1 * time.Millisecond)                     // for wide port ranges
 				}
 				continue
 			} else {
@@ -434,7 +456,7 @@ func (s *UdpTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, remoteAddr)
+					go s.localListener(g, localAddr, remoteAddr)
 					time.Sleep(1 * time.Millisecond) // for wide port ranges
 				}
 				continue
@@ -451,11 +473,11 @@ func (s *UdpTransport) parsePortMappings() {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
 		// Start listeners for single port
-		go s.localListener(localAddr, remoteAddr)
+		go s.localListener(g, localAddr, remoteAddr)
 	}
 }
 
-func (s *UdpTransport) localListener(localAddr, remoteAddr string) {
+func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 	localUDPAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to resolve local address: %v", err)
@@ -483,12 +505,12 @@ func (s *UdpTransport) localListener(localAddr, remoteAddr string) {
 	udpChan := make(chan *LocalUDPConn, s.config.ChannelSize)
 
 	// handle channel
-	go s.handleLoop(udpChan, &activeConnections, mu)
+	go s.handleLoop(g, udpChan, &activeConnections, mu)
 
 	go func() {
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-g.ctx.Done():
 				return
 			default:
 				n, addr, err := listener.ReadFromUDP(buf)
@@ -540,7 +562,7 @@ func (s *UdpTransport) localListener(localAddr, remoteAddr string) {
 
 					// Request a new TCP connection
 					select {
-					case s.reqNewConnChan <- struct{}{}:
+					case g.reqNewConnChan <- struct{}{}:
 						// Successfully requested a new TCP connection
 					default:
 						// The channel is full, do nothing
@@ -557,14 +579,14 @@ func (s *UdpTransport) localListener(localAddr, remoteAddr string) {
 		}
 	}()
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 
 }
 
-func (s *UdpTransport) handleLoop(udpChan chan *LocalUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
+func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		case localConn := <-udpChan:
 			if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
@@ -575,10 +597,10 @@ func (s *UdpTransport) handleLoop(udpChan chan *LocalUDPConn, activeConnections 
 		loop:
 			for {
 				select {
-				case <-s.ctx.Done():
+				case <-g.ctx.Done():
 					return
 
-				case tunnelConn := <-s.tunnelChannel:
+				case tunnelConn := <-g.tunnelChannel:
 					close(tunnelConn.ping)
 					tunnelConn.mu.Lock()
 
@@ -589,7 +611,7 @@ func (s *UdpTransport) handleLoop(udpChan chan *LocalUDPConn, activeConnections 
 					}
 
 					// Handle data exchange between connections
-					go s.udpCopy(localConn, tunnelConn, activeConnections, mu)
+					go s.udpCopy(g, localConn, tunnelConn, activeConnections, mu)
 
 					s.logger.Debugf("initiate new handler for connection %s with timestamp %d", localConn.addr.String(), localConn.timeCreated)
 					break loop
@@ -599,17 +621,17 @@ func (s *UdpTransport) handleLoop(udpChan chan *LocalUDPConn, activeConnections 
 	}
 }
 
-func (s *UdpTransport) udpCopy(udpLocal *LocalUDPConn, udpTunnel *TunnelUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
+func (s *UdpTransport) udpCopy(g *udpGen, udpLocal *LocalUDPConn, udpTunnel *TunnelUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
 	done := make(chan struct{})
 
 	// Handle data from local to tunnel
 	go func() {
 		defer close(done)
-		s.udpLocalCopy(udpLocal, udpTunnel)
+		s.udpLocalCopy(g, udpLocal, udpTunnel)
 	}()
 
 	// Handle data from tunnel to local
-	s.udpTunnelCopy(udpTunnel, udpLocal)
+	s.udpTunnelCopy(g, udpTunnel, udpLocal)
 
 	// Wait until one of the directions is done (connection closed or idle)
 	<-done
@@ -628,7 +650,7 @@ func (s *UdpTransport) udpCopy(udpLocal *LocalUDPConn, udpTunnel *TunnelUDPConn,
 
 }
 
-func (s *UdpTransport) udpLocalCopy(from *LocalUDPConn, to *TunnelUDPConn) {
+func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn) {
 	inactivityTimeout := 60 * time.Second // Define a 60-second inactivity timeout
 
 	for {
@@ -652,7 +674,7 @@ func (s *UdpTransport) udpLocalCopy(from *LocalUDPConn, to *TunnelUDPConn) {
 			}
 
 			if s.config.Sniffer {
-				s.usageMonitor.AddOrUpdatePort(from.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
+				g.usageMonitor.AddOrUpdatePort(from.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
 
 			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
@@ -664,7 +686,7 @@ func (s *UdpTransport) udpLocalCopy(from *LocalUDPConn, to *TunnelUDPConn) {
 	}
 }
 
-func (s *UdpTransport) udpTunnelCopy(from *TunnelUDPConn, to *LocalUDPConn) {
+func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUDPConn) {
 	inactivityTimeout := 60 * time.Second // Define a 60-second inactivity timeout
 
 	for {
@@ -688,7 +710,7 @@ func (s *UdpTransport) udpTunnelCopy(from *TunnelUDPConn, to *LocalUDPConn) {
 			}
 
 			if s.config.Sniffer {
-				s.usageMonitor.AddOrUpdatePort(to.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
+				g.usageMonitor.AddOrUpdatePort(to.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
 
 			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
@@ -700,14 +722,14 @@ func (s *UdpTransport) udpTunnelCopy(from *TunnelUDPConn, to *LocalUDPConn) {
 	}
 }
 
-func (s *UdpTransport) keepAlive(conn *TunnelUDPConn) {
+func (s *UdpTransport) keepAlive(g *udpGen, conn *TunnelUDPConn) {
 	ticker := time.NewTicker(s.config.Heartbeat) // Send periodic pings to the client
 
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
 		case <-conn.ping:

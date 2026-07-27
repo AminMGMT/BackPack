@@ -14,7 +14,7 @@ import (
 
 const BufferSize = 16 * 1024
 
-func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
+func (s *TcpTransport) udpListener(g *tcpGen, localAddr string, remoteAddr string) {
 	localUDPAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to resolve local address: %v", err)
@@ -42,12 +42,12 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 	mu := &sync.Mutex{}
 
 	// handle channel
-	go s.handleUDPLoop(udpChan, &activeConnections, mu)
+	go s.handleUDPLoop(g, udpChan, &activeConnections, mu)
 
 	go func() {
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-g.ctx.Done():
 				return
 			default:
 				n, addr, err := listener.ReadFromUDP(buf)
@@ -110,7 +110,7 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 					payloadChan <- append([]byte(nil), buf[:n]...) // send a copy of the new payload to the channel
 
 					select {
-					case s.reqNewConnChan <- struct{}{}: // Successfully requested a new tcp connection
+					case g.reqNewConnChan <- struct{}{}: // Successfully requested a new tcp connection
 					default: // The channel is full, do nothing
 						s.logger.Warn("channel is full, cannot request a new connection")
 					}
@@ -122,22 +122,22 @@ func (s *TcpTransport) udpListener(localAddr string, remoteAddr string) {
 		}
 	}()
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *TcpTransport) handleUDPLoop(udpChan chan *LocalAcceptUDPConn, activeConnections *map[string]*LocalAcceptUDPConn, mu *sync.Mutex) {
+func (s *TcpTransport) handleUDPLoop(g *tcpGen, udpChan chan *LocalAcceptUDPConn, activeConnections *map[string]*LocalAcceptUDPConn, mu *sync.Mutex) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		case localConn := <-udpChan:
 		loop:
 			for {
 				select {
-				case <-s.ctx.Done():
+				case <-g.ctx.Done():
 					return
 
-				case tunnelConn := <-s.tunnelChannel:
+				case tunnelConn := <-g.tunnelChannel:
 					// Send the target addr over the connection
 					if err := utils.SendBinaryTransportString(tunnelConn, localConn.remoteAddr, utils.SG_UDP); err != nil {
 						s.logger.Errorf("%v", err)
@@ -146,7 +146,7 @@ func (s *TcpTransport) handleUDPLoop(udpChan chan *LocalAcceptUDPConn, activeCon
 					}
 
 					// Handle data exchange between connections
-					go UDPConnectionHandler(localConn, tunnelConn, s.logger, s.usageMonitor, localConn.listener.LocalAddr().(*net.UDPAddr).Port, s.config.Sniffer, s.rtt, activeConnections, mu)
+					go UDPConnectionHandler(localConn, tunnelConn, s.logger, g.usageMonitor, localConn.listener.LocalAddr().(*net.UDPAddr).Port, s.config.Sniffer, s.rtt, activeConnections, mu)
 
 					s.logger.Debugf("initiate new handler for connection %s with timestamp %d", localConn.clientAddr.String(), localConn.timeCreated)
 					break loop

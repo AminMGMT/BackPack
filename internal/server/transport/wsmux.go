@@ -24,6 +24,18 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// wsMuxGen is the state of a single run of the transport: the context that ends
+// when the run does, and the channels its goroutines pass work over. Restart
+// builds a fresh set for the next run, so carrying them here keeps a goroutine
+// that outlives its run from reaching into the run that replaced it.
+type wsMuxGen struct {
+	ctx            context.Context
+	tunnelChannel  chan *smux.Session
+	localChannel   chan LocalTCPConn
+	reqNewConnChan chan struct{}
+	usageMonitor   *web.Usage
+}
+
 type WsMuxTransport struct {
 	config         *WsMuxConfig
 	smuxConfig     *smux.Config
@@ -104,14 +116,26 @@ func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logr
 }
 
 func (s *WsMuxTransport) Start() {
+	// The state of this run. Restart replaces these fields for the next
+	// one, so they are read once here and carried from goroutine to
+	// goroutine; a goroutine that outlives its run keeps what it started
+	// with instead of reading whatever the next run has installed.
+	g := &wsMuxGen{
+		ctx:            s.ctx,
+		tunnelChannel:  s.tunnelChannel,
+		localChannel:   s.localChannel,
+		reqNewConnChan: s.reqNewConnChan,
+		usageMonitor:   s.usageMonitor,
+	}
+
 	// for  webui
 	if s.config.WebPort > 0 {
-		go s.usageMonitor.Monitor()
+		go g.usageMonitor.Monitor()
 	}
 
 	s.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", s.config.Mode)
 
-	go s.tunnelListener()
+	go s.tunnelListener(g)
 
 }
 
@@ -150,8 +174,10 @@ func (s *WsMuxTransport) Restart() {
 	s.controlChannel.Clear()
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
-	s.streamCounter = 0
-	s.sessionCounter = 0
+	// Stored atomically, like every other access: the goroutines of the run
+	// being replaced may still be counting while this resets them.
+	atomic.StoreInt32(&s.streamCounter, 0)
+	atomic.StoreInt32(&s.sessionCounter, 0)
 
 	// set the log level again
 	s.logger.SetLevel(level)
@@ -159,7 +185,7 @@ func (s *WsMuxTransport) Restart() {
 	go s.Start()
 }
 
-func (s *WsMuxTransport) channelHandler() {
+func (s *WsMuxTransport) channelHandler(g *wsMuxGen) {
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -170,7 +196,7 @@ func (s *WsMuxTransport) channelHandler() {
 	go func() {
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-g.ctx.Done():
 				return
 
 			default:
@@ -190,10 +216,10 @@ func (s *WsMuxTransport) channelHandler() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			_ = s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
 			return
-		case <-s.reqNewConnChan:
+		case <-g.reqNewConnChan:
 			err := s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Chan})
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
@@ -234,7 +260,7 @@ func (s *WsMuxTransport) channelHandler() {
 	}
 }
 
-func (s *WsMuxTransport) tunnelListener() {
+func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 	addr := s.config.BindAddr
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:   16 * 1024,
@@ -286,13 +312,13 @@ func (s *WsMuxTransport) tunnelListener() {
 					numCPU = 4 // Max allowed handler is 4
 				}
 
-				go s.channelHandler()
-				go s.parsePortMappings()
+				go s.channelHandler(g)
+				go s.parsePortMappings(g)
 
 				s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 				for i := 0; i < numCPU; i++ {
-					go s.handleLoop()
+					go s.handleLoop(g)
 				}
 
 				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
@@ -305,7 +331,7 @@ func (s *WsMuxTransport) tunnelListener() {
 					return
 				}
 				select {
-				case s.tunnelChannel <- session: // ok
+				case g.tunnelChannel <- session: // ok
 				default:
 					s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
 					conn.Close()
@@ -346,7 +372,7 @@ func (s *WsMuxTransport) tunnelListener() {
 		}()
 	}
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 
 	// close connection
 	if s.controlChannel.IsSet() {
@@ -360,7 +386,7 @@ func (s *WsMuxTransport) tunnelListener() {
 	}
 }
 
-func (s *WsMuxTransport) parsePortMappings() {
+func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
 
@@ -392,8 +418,8 @@ func (s *WsMuxTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
-					time.Sleep(1 * time.Millisecond)                  // for wide port ranges
+					go s.localListener(g, localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
+					time.Sleep(1 * time.Millisecond)                     // for wide port ranges
 				}
 				continue
 			} else {
@@ -430,7 +456,7 @@ func (s *WsMuxTransport) parsePortMappings() {
 				// Create listeners for all ports in the range
 				for port := startPort; port <= endPort; port++ {
 					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(localAddr, remoteAddr)
+					go s.localListener(g, localAddr, remoteAddr)
 					time.Sleep(1 * time.Millisecond) // for wide port ranges
 				}
 				continue
@@ -447,11 +473,11 @@ func (s *WsMuxTransport) parsePortMappings() {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
 		// Start listeners for single port
-		go s.localListener(localAddr, remoteAddr)
+		go s.localListener(g, localAddr, remoteAddr)
 	}
 }
 
-func (s *WsMuxTransport) localListener(localAddr string, remoteAddr string) {
+func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
 		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
@@ -461,17 +487,17 @@ func (s *WsMuxTransport) localListener(localAddr string, remoteAddr string) {
 	//close local listener after context cancellation
 	defer listener.Close()
 
-	go s.acceptLocalConn(listener, remoteAddr)
+	go s.acceptLocalConn(g, listener, remoteAddr)
 
 	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
 
-	<-s.ctx.Done()
+	<-g.ctx.Done()
 }
 
-func (s *WsMuxTransport) acceptLocalConn(listener net.Listener, remoteAddr string) {
+func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, remoteAddr string) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
 		default:
@@ -519,7 +545,7 @@ func (s *WsMuxTransport) acceptLocalConn(listener net.Listener, remoteAddr strin
 			conn = s.limits.wrap(conn)
 
 			select {
-			case s.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
 
 				// +1 for stream counter
@@ -529,7 +555,7 @@ func (s *WsMuxTransport) acceptLocalConn(listener net.Listener, remoteAddr strin
 					s.logger.Tracef("stream counter: %v, session counter: %v", atomic.LoadInt32(&s.streamCounter), atomic.LoadInt32(&s.sessionCounter))
 					// Attempt to request a new connection
 					select {
-					case s.reqNewConnChan <- struct{}{}:
+					case g.reqNewConnChan <- struct{}{}:
 					default:
 						s.logger.Warn("failed to request new connection. channel is full")
 					}
@@ -545,22 +571,22 @@ func (s *WsMuxTransport) acceptLocalConn(listener net.Listener, remoteAddr strin
 
 }
 
-func (s *WsMuxTransport) handleLoop() {
+func (s *WsMuxTransport) handleLoop(g *wsMuxGen) {
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
-		case session := <-s.tunnelChannel:
+		case session := <-g.tunnelChannel:
 			// +1 for session counter
 			atomic.AddInt32(&s.sessionCounter, 1)
 
-			go s.handleSession(session)
+			go s.handleSession(g, session)
 		}
 	}
 }
 
-func (s *WsMuxTransport) handleSession(session *smux.Session) {
+func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
 	counter := make(chan struct{}, s.config.MuxCon)
 	defer session.Close()
 	defer close(counter)
@@ -570,10 +596,10 @@ func (s *WsMuxTransport) handleSession(session *smux.Session) {
 		counter <- struct{}{}
 
 		select {
-		case <-s.ctx.Done():
+		case <-g.ctx.Done():
 			return
 
-		case incomingConn := <-s.localChannel:
+		case incomingConn := <-g.localChannel:
 			if time.Now().UnixMilli()-incomingConn.timeCreated > 3000 { // 3000ms
 				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-incomingConn.timeCreated)
 				incomingConn.conn.Close()
@@ -586,7 +612,7 @@ func (s *WsMuxTransport) handleSession(session *smux.Session) {
 
 			stream, err := session.OpenStream()
 			if err != nil {
-				s.handleSessionError(&incomingConn, err)
+				s.handleSessionError(g, &incomingConn, err)
 				return
 			}
 
@@ -594,7 +620,7 @@ func (s *WsMuxTransport) handleSession(session *smux.Session) {
 			if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)
 				// Put local connection back to local channel
-				s.localChannel <- incomingConn
+				g.localChannel <- incomingConn
 				continue
 			}
 
@@ -603,7 +629,7 @@ func (s *WsMuxTransport) handleSession(session *smux.Session) {
 				// Free the connection slot once the transfer ends, or the
 				// limit would fill up permanently.
 				defer s.limits.release()
-				handlers.TCPConnectionHandler(s.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, s.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 				atomic.AddInt32(&s.streamCounter, -1)
 				<-counter // read signal from the channel
 			}()
@@ -611,18 +637,18 @@ func (s *WsMuxTransport) handleSession(session *smux.Session) {
 	}
 }
 
-func (s *WsMuxTransport) handleSessionError(incomingConn *LocalTCPConn, err error) {
+func (s *WsMuxTransport) handleSessionError(g *wsMuxGen, incomingConn *LocalTCPConn, err error) {
 	s.logger.Tracef("failed to handle session: %v", err)
 
 	// decrease session value
 	atomic.AddInt32(&s.sessionCounter, -1)
 
 	// Put local connection back to local channel
-	s.localChannel <- *incomingConn
+	g.localChannel <- *incomingConn
 
 	// Attempt to request a new connection
 	select {
-	case s.reqNewConnChan <- struct{}{}:
+	case g.reqNewConnChan <- struct{}{}:
 	default:
 		s.logger.Warn("request new connection channel is full")
 	}
