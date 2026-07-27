@@ -9,7 +9,7 @@ import (
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.5.5"
+	Version = "v1.6.0"
 
 	// RepoOwner/RepoName identify the GitHub repository used by the installer
 	// and the release-based updater.

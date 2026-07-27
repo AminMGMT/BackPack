@@ -2,6 +2,98 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.6.0 — 2026-07-27
+
+A release about being told the truth. The panel now says what it actually
+knows — which language you read in, whether BBR is really in effect, what the
+connection pool is doing and why — and four things that quietly lied or quietly
+span are fixed.
+
+### Fixed
+- **A datagram tunnel stayed green after its client was stopped.** Stopping a
+  KCP or UDP tunnel from the far end left the Iran panel showing it online,
+  while the peer address and the ping both disappeared — the two halves of the
+  same card disagreeing. They came from different places: the peer is written
+  by the transport, which knew, and the state came from the socket table, which
+  cannot know. A UDP listener is one unconnected socket that keeps no record of
+  who is talking to it, so the check answered "do not restart this" and the
+  panel read it as "a peer is connected". Those are two different questions and
+  now have two different answers: the watchdog keeps its own, and the panel
+  reads the peer the transport records. Not knowing is still kept distinct from
+  knowing nobody is there, so a tunnel that has only just started is not shown
+  as down before it has written anything.
+- **The reconnect loop could spin without pausing.** Two of the control-channel
+  dialer's error paths — the token write and the read deadline after it —
+  returned to the top of the loop without waiting. Both sit *after* a
+  successful dial, so they were reached exactly when a server accepts a
+  connection and then drops it: a route filtered mid-handshake, a stateful
+  firewall closing a half-open connection, a tunnel service restarting on the
+  other side. In that state the client redialled as fast as the kernel would
+  open sockets — pegged CPU, a flood of connections that looks like a scan, and
+  a log filling at the same rate. Every retry now backs off, and a test walks
+  all six transports to keep it that way.
+- **The bot's own relay was listed among your forwarded ports.** The mapping the
+  Telegram bot adds for itself appeared in the panel as
+  `127.0.0.1:28583=api.telegram.org:443`, reading like something you had
+  configured and could tidy away — and tidying it away stopped the bot for a
+  reason that looked unrelated to the bot. The panel had its own idea of what a
+  relay mapping looks like, and it knew only the oldest of the three shapes.
+  There is one definition now, and the relay has its own small section showing
+  just the port.
+- **Data races in the restart path of every server transport.** Restart rebuilt
+  a run's context and channels while goroutines from the previous run were
+  still reading those same fields. Each run now carries its own state from the
+  moment it starts, so a goroutine that outlives its run keeps what it began
+  with instead of reaching into the run that replaced it. The race detector is
+  clean across the suite.
+- The header menu opened *behind* the tunnel cards. Its z-index was never the
+  problem — the header makes its own stacking context, so the number only ever
+  ranked things inside it.
+
+### Added
+- **Persian, throughout.** The panel and the Telegram bot can both be read in
+  Persian, chosen separately: the person reading the bot is not always the
+  person reading the panel. Choosing Persian flips the layout right to left,
+  and Latin runs — addresses, ports, tokens, log lines — are pinned
+  left-to-right inside it, because `127.0.0.1:8080` reordered on screen is
+  worse than untranslated text. Anything not yet translated falls back to
+  English rather than to a blank. Nothing is downloaded: the panel uses the
+  reader's own system fonts, so it looks the same on a server with no internet.
+- **The panel says whether BBR actually took effect.** Every socket asks the
+  kernel for BBR and ignores the answer, because a kernel without it should not
+  cost anyone a connection — but that means the request can quietly do nothing,
+  on a tunnel whose presets were tuned expecting it. The answer is read back and
+  shown, and says plainly when the kernel does not have it.
+- **What the connection pool is doing.** The pool is allowed to grow past the
+  size configured for it, which from outside is indistinguishable from a leak.
+  The details panel now shows the live count against the configured one, and the
+  throughput that grew it.
+- **A visible notice when a release is out**, with the version you are on, and
+  the fact that updating replaces only the binary — tunnels and configs are
+  kept. The Telegram bot announces it too, once per version.
+- The built-in proxy appears in the panel when it is enabled, and says so when
+  it is enabled but not running — a tunnel forwarding a port to a dead proxy
+  looks healthy from every other angle while refusing every connection.
+
+### Changed
+- **The header carries three facts instead of six**, and the row of unlabelled
+  icons became one labelled menu. OS, location and ISP moved into it: they are
+  read once when a server is set up and essentially never again.
+- **Settings is five collapsed groups instead of eight flat sections**, one open
+  at a time. The panel port and the panel password are one group now — both
+  answer "how do I get into this panel" and used to sit at opposite ends of the
+  list — and restore points moved under Update, which is what makes them.
+- **The panel is responsive.** It had no breakpoints at all; on a phone the menu
+  is now a sheet across the top rather than a dropdown opening below the fold.
+- **The plain TCP transport relays without copying through user space** where it
+  can — between two ordinary sockets the kernel moves the bytes itself. Traffic
+  is still counted while it flows rather than at the end, and a bandwidth cap
+  keeps the old path, because a capped connection has to be paced.
+
+### Notes
+Nothing in this release changes a config file, the wire protocol, or the
+behaviour of a tunnel that already exists. Updating replaces the binary.
+
 ## v1.5.5 — 2026-07-23
 
 A monitoring release: the web panel grows from a live snapshot into something
