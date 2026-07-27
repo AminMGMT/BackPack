@@ -485,3 +485,41 @@ func TestLoginPageFollowsTheStoredLanguage(t *testing.T) {
 		t.Error("the password field is not kept left-to-right")
 	}
 }
+
+// The menu floats over the tunnel cards, so it needs a surface of its own.
+//
+// It was originally given --card, which is what every panel in the page uses.
+// That is right for something sitting in the page and wrong for something over
+// it: at rgba(255,255,255,.045) the cards behind showed straight through the
+// labels. A blur does not rescue it either — blurring bright content leaves it
+// bright. Reaching for --card here is the natural mistake, so it is pinned.
+func TestMenuHasItsOwnOpaqueSurface(t *testing.T) {
+	body := string(dashboardHTML)
+
+	menu := between(body, ".menu{position:absolute", "}")
+	if menu == "" {
+		t.Fatal("the menu rule could not be found")
+	}
+	if strings.Contains(menu, "background:var(--card)") {
+		t.Error("the menu uses the page's translucent panel colour; text behind it shows through")
+	}
+
+	// Whatever it does use has to be substantially opaque.
+	m := regexp.MustCompile(`background:rgba\(\d+,\s*\d+,\s*\d+,\s*\.(\d+)\)`).FindStringSubmatch(menu)
+	if m == nil {
+		t.Fatalf("could not read the menu background out of %q", menu)
+	}
+	// ".97" -> 97, ".9" -> 90
+	alpha := m[1]
+	if len(alpha) == 1 {
+		alpha += "0"
+	}
+	if alpha < "85" {
+		t.Errorf("the menu background is %s%% opaque; the cards behind it will still read through", alpha)
+	}
+
+	// The blur is still worth keeping for the edges.
+	if !strings.Contains(menu, "backdrop-filter:blur(") {
+		t.Error("the menu lost its backdrop blur")
+	}
+}
