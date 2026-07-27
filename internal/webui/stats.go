@@ -12,6 +12,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/geo"
+	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/sysstat"
@@ -60,10 +61,27 @@ type SystemStats struct {
 	// else visibly breaks — which is exactly why the panel must say so.
 	MonitorRunning bool `json:"monitorRunning"`
 
+	// Version is what is running here, so the update notice can say what it is
+	// asking the operator to move away from rather than only where to.
+	Version string `json:"version,omitempty"`
+
 	// UpdateTag is the newer release the cached background check knows about,
 	// empty when this version is current. Same source as the CLI's notice and
 	// the Telegram announcement, so the three can never disagree.
 	UpdateTag string `json:"updateTag,omitempty"`
+
+	// The built-in proxy, when the operator has turned it on. It is off by
+	// default, so all of this stays empty and the panel shows nothing.
+	//
+	// ProxyEnabled and ProxyRunning are deliberately separate. The proxy is a
+	// service of its own, and a tunnel can be forwarding a port to it while it
+	// is dead: the tunnel is up, the panel is green, and every connection
+	// through that port is refused at the far end. Only the two together say
+	// whether the thing actually answers.
+	ProxyEnabled bool   `json:"proxyEnabled,omitempty"`
+	ProxyRunning bool   `json:"proxyRunning,omitempty"`
+	ProxyType    string `json:"proxyType,omitempty"`
+	ProxyPort    int    `json:"proxyPort,omitempty"`
 
 	// Congestion is the TCP congestion control the tunnel's own sockets run
 	// under; CongestionWanted is what they ask for. They differ when the kernel
@@ -211,10 +229,20 @@ func GatherSystem() SystemStats {
 	s.MonitorRunning = manage.MonitorRunning()
 	s.Congestion, s.CongestionWanted = network.TunnelCongestion()
 
+	// Only ask systemd about the proxy when it is supposed to be there; an
+	// operator who never enabled it should not pay for the check.
+	if pc := localproxy.Load(); pc.Enabled {
+		s.ProxyEnabled = true
+		s.ProxyType = string(pc.Type)
+		s.ProxyPort = pc.Port
+		s.ProxyRunning = manage.ProxyRunning()
+	}
+
 	// Refresh in the background so the stats endpoint never waits on GitHub —
 	// and at most once per interval, not once per poll: this endpoint is hit
 	// every few seconds and does not need a goroutine each time.
 	kickUpdateCheck()
+	s.Version = app.Version
 	if tag, ok := manage.UpdateAvailable(); ok {
 		s.UpdateTag = tag
 	}

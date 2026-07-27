@@ -142,3 +142,37 @@ func TestEveryScriptedElementExists(t *testing.T) {
 		}
 	}
 }
+
+// The two notices added for the built-in proxy and for a new release both have
+// a quiet state and a loud one, and getting that backwards is the whole failure
+// mode: a panel that nags when nothing is wrong gets ignored, and one that
+// stays silent when something is wrong is worse than not having the field.
+func TestNoticesStayQuietUntilThereIsSomethingToSay(t *testing.T) {
+	body := string(dashboardHTML)
+
+	for _, tc := range []struct{ id, gate, why string }{
+		{"updbar", "s.updateTag", "the update banner must appear only when a newer release exists"},
+		{"pill-proxy", "s.proxyEnabled", "the proxy pill must appear only when the proxy is turned on"},
+		{"pill-cong", "s.congestion", "the congestion pill must appear only where the answer is knowable"},
+	} {
+		// Hidden in the markup, so nothing flashes before the first poll.
+		if !regexp.MustCompile(`id="` + tc.id + `"[^>]*style="display:none"`).MatchString(body) {
+			t.Errorf("%s is not hidden in the markup — it would show before any data arrives", tc.id)
+		}
+		if !strings.Contains(body, tc.gate) {
+			t.Errorf("%s: %s (no reference to %s)", tc.id, tc.why, tc.gate)
+		}
+	}
+}
+
+// The release tag is a name chosen on GitHub, so it reaches the page as text
+// and never as markup. innerHTML here would make whoever can publish a release
+// able to run script in the panel.
+func TestReleaseTagIsNeverTreatedAsMarkup(t *testing.T) {
+	body := string(dashboardHTML)
+	for _, bad := range []string{"innerHTML=s.updateTag", "innerHTML = s.updateTag", "innerHTML+=s.updateTag"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("the release tag is written with %q; it must be set as text", bad)
+		}
+	}
+}

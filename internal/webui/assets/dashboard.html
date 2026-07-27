@@ -168,6 +168,18 @@
   .warnbar code{font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:11.5px;
     padding:1px 6px;border-radius:6px;background:rgba(255,159,10,.14)}
 
+  /* Update banner: the accent rather than the warning amber, because a release
+     being available is not a fault — it still gets a full-width row, since the
+     header pill alone is easy to look past for weeks. */
+  .updbar{display:flex;align-items:center;gap:10px;padding:12px 16px;margin-bottom:16px;
+    border-radius:14px;font-size:12.5px;font-weight:600;color:var(--red-soft);
+    background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.30);
+    animation:rise .6s cubic-bezier(.16,1,.3,1) both}
+  .updbar .ic{width:16px;height:16px;flex:none}
+  .updbar b{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .updbar .btn-sm{margin-left:auto;flex:none}
+  .updbar .note{font-weight:400;color:var(--muted)}
+
   /* Update notice: same accent the CLI uses to mark its Update entry. */
   .updpill{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 14px;
     border-radius:12px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.22s;
@@ -369,6 +381,18 @@
     Open <code>sudo backpack</code> on this server to reinstall it.</span>
   </div>
 
+  <!-- A newer tagged release is out. The header already carries a small pill,
+       which is easy to never notice; a release usually carries transport or
+       security fixes, so it is stated once, plainly, where it cannot be
+       missed. Updating replaces only the binary — configs and running tunnels
+       are left alone — and that is said here, because the reason people put
+       off updating a tunnel is the fear that it will break the tunnel. -->
+  <div class="updbar" id="updbar" style="display:none" role="status">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+    <span id="updbar-msg"></span>
+    <button class="btn-sm" onclick="openSettings();checkUpdate()">Update now</button>
+  </div>
+
   <div class="grid-meters">
     <div class="meter"><div class="ring" id="ring-cpu"></div>
       <div class="label"><svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="6" height="6"/><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>CPU</div>
@@ -393,6 +417,8 @@
     <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg></div><div><div class="k">Tunnels</div><div class="v" id="tun-count">—</div></div></div>
     <!-- Hidden unless the tunnel is on Linux, where the answer is knowable. -->
     <div class="pill" id="pill-cong" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7h-6"/><path d="M21 7v6"/></svg></div><div><div class="k">Congestion</div><div class="v" id="cong">—</div><div class="sub" id="cong-sub"></div></div></div>
+    <!-- Hidden unless the built-in proxy has been turned on. -->
+    <div class="pill" id="pill-proxy" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h.01"/></svg></div><div><div class="k">Built-in proxy</div><div class="v" id="proxy">—</div><div class="sub" id="proxy-sub"></div></div></div>
   </div>
 
   <div class="sec"><h2>Tunnels</h2><span class="count" id="tsum">0</span>
@@ -718,11 +744,44 @@ async function loadStats(){
       sub.style.display=missed?'block':'none';
       if(missed) sub.textContent=s.congestionWanted.toUpperCase()+' not available on this kernel';
     } else { cong.style.display='none'; }
+
+    // Built-in proxy. Shown only when it has been turned on, and the point of
+    // showing it is the disagreement: a tunnel forwarding a port to a proxy
+    // that is not running looks perfectly healthy from every other angle,
+    // while refusing every connection that reaches it.
+    var px=$('pill-proxy');
+    if(s.proxyEnabled){
+      px.style.display='';
+      $('proxy').textContent=(s.proxyType||'proxy').toUpperCase()+(s.proxyPort?' :'+s.proxyPort:'');
+      var psub=$('proxy-sub');
+      psub.style.display=s.proxyRunning?'none':'block';
+      if(!s.proxyRunning) psub.textContent='Enabled but not running — forwarded ports to it are refused';
+    } else { px.style.display='none'; }
     // Only speak when something is wrong or actionable: the monitor being down,
     // or a newer release waiting.
     $('warnbar').style.display = s.monitorRunning===false ? 'flex' : 'none';
     $('updpill').style.display = s.updateTag ? '' : 'none';
     if(s.updateTag) setText($('updtag'), s.updateTag+' available');
+
+    // The same fact as the header pill, said once where it will be read.
+    // setText, not innerHTML: the tag comes from a GitHub release name, so it
+    // is not ours to trust as markup.
+    $('updbar').style.display = s.updateTag ? 'flex' : 'none';
+    if(s.updateTag){
+      var m=$('updbar-msg'); m.textContent='';
+      var tag=document.createElement('b'); tag.textContent=s.updateTag;
+      if(s.version){
+        m.appendChild(document.createTextNode('You are on '));
+        var cur=document.createElement('b'); cur.textContent=s.version;
+        m.appendChild(cur);
+        m.appendChild(document.createTextNode(' — '));
+      }
+      m.appendChild(tag);
+      m.appendChild(document.createTextNode(' has been released on GitHub. '));
+      var note=document.createElement('span'); note.className='note';
+      note.textContent='Updating replaces the binary only — your tunnels and configs are kept.';
+      m.appendChild(note);
+    }
   }catch(e){}
 }
 
