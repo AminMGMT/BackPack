@@ -176,3 +176,137 @@ func TestReleaseTagIsNeverTreatedAsMarkup(t *testing.T) {
 		}
 	}
 }
+
+// The header carries only the facts that get looked at repeatedly. OS, location
+// and ISP are read when a server is first set up and essentially never again,
+// and they were taking half the header for good — on a phone that meant several
+// rows of chrome before the first tunnel.
+func TestHeaderCarriesOnlyTheFactsWorthPermanentSpace(t *testing.T) {
+	body := string(dashboardHTML)
+
+	block := between(body, `class="hostmeta"`, `</div>`+"\n    <div class=\"spacer\"")
+	if block == "" {
+		t.Fatal("the header host block could not be located")
+	}
+	for _, id := range []string{"uptime", "ipv4", "ipv6"} {
+		if !strings.Contains(block, `id="`+id+`"`) {
+			t.Errorf("the header no longer shows %s", id)
+		}
+	}
+	for _, id := range []string{"os", "loc", "isp"} {
+		if strings.Contains(block, `id="`+id+`"`) {
+			t.Errorf("%s is still in the header; it belongs in the menu", id)
+		}
+	}
+}
+
+// Every menu row goes through menuGo, which closes the menu before opening
+// whatever was chosen. A row that calls its panel directly leaves the menu
+// sitting open behind it, so the panel has to be dismissed twice.
+func TestEveryMenuDestinationClosesTheMenu(t *testing.T) {
+	body := string(dashboardHTML)
+
+	nav := between(body, `<nav class="menu"`, `</nav>`)
+	if nav == "" {
+		t.Fatal("the menu could not be located")
+	}
+	for _, m := range regexp.MustCompile(`onclick="([^"]+)"`).FindAllStringSubmatch(nav, -1) {
+		call := m[1]
+		// Logging out navigates away, so nothing is left behind to close.
+		if strings.Contains(call, "location.href") || strings.HasPrefix(call, "menuGo(") {
+			continue
+		}
+		t.Errorf("menu row runs %q directly; it should go through menuGo so the menu closes", call)
+	}
+}
+
+// The panel is used from phones, and until this it had no breakpoints at all —
+// the layout survived only because the header could wrap.
+func TestLayoutAdaptsToNarrowScreens(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, "@media (max-width:720px)") {
+		t.Error("no narrow-screen breakpoint; the layout is desktop-only")
+	}
+	// On a phone the menu is a sheet across the top rather than a dropdown
+	// pinned to a button, which on a short screen opens below the fold.
+	mobile := between(body, "@media (max-width:720px)", "@media (max-width:420px)")
+	if !strings.Contains(mobile, ".menu{position:fixed") {
+		t.Error("the menu is not a full-width sheet on narrow screens")
+	}
+}
+
+// between returns the text between the first occurrence of start and the next
+// occurrence of end after it, or "" when either is missing.
+func between(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	rest := s[i+len(start):]
+	j := strings.Index(rest, end)
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
+}
+
+// Settings was eight flat sections: to reach the eighth you scrolled past
+// seven, and to find which one held a setting you read all eight. It is five
+// collapsed groups now.
+
+// Every group starts closed, and each one has a header wired to the toggle.
+// A group whose body is not hidden in the markup is open on first paint, which
+// is the flat list again for that section.
+func TestSettingsGroupsStartClosed(t *testing.T) {
+	body := string(dashboardHTML)
+
+	sections := regexp.MustCompile(`ACC_SECTIONS=\[([^\]]+)\]`).FindStringSubmatch(body)
+	if sections == nil {
+		t.Fatal("the settings sections list could not be found")
+	}
+	names := regexp.MustCompile(`'([a-z]+)'`).FindAllStringSubmatch(sections[1], -1)
+	if len(names) < 2 {
+		t.Fatalf("found %d settings groups, expected several", len(names))
+	}
+
+	for _, m := range names {
+		id := m[1]
+		if !regexp.MustCompile(`id="accb-` + id + `" hidden`).MatchString(body) {
+			t.Errorf("the %q group is not hidden in the markup, so it is open on first paint", id)
+		}
+		if !regexp.MustCompile(`id="acch-` + id + `"[^>]*aria-expanded="false"`).MatchString(body) {
+			t.Errorf("the %q header does not report itself collapsed to assistive tech", id)
+		}
+		if !strings.Contains(body, `toggleAcc('`+id+`')`) {
+			t.Errorf("the %q group has no header wired to open it", id)
+		}
+	}
+}
+
+// Opening one group closes the rest. Each is tall enough that two at once
+// brings back the scrolling the accordion replaced.
+func TestOpeningOneSettingsGroupClosesTheOthers(t *testing.T) {
+	toggle := between(string(dashboardHTML), "function toggleAcc(", "\n}")
+	if toggle == "" {
+		t.Fatal("toggleAcc could not be found")
+	}
+	if !strings.Contains(toggle, "ACC_SECTIONS.forEach(closeAcc)") {
+		t.Error("opening a group does not close the others")
+	}
+}
+
+// The port and the password are both "how do I get into this panel", and used
+// to sit at opposite ends of the list. They are one group now — the merge is
+// the point, so it is held down.
+func TestPortAndPasswordShareOneGroup(t *testing.T) {
+	access := between(string(dashboardHTML), `id="accb-access"`, `</div>`+"\n    </div>")
+	if access == "" {
+		t.Fatal("the panel-access group could not be found")
+	}
+	for _, id := range []string{"pport", "np", "np2"} {
+		if !strings.Contains(access, `id="`+id+`"`) {
+			t.Errorf("%s is not in the panel-access group", id)
+		}
+	}
+}
