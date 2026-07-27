@@ -273,6 +273,8 @@
   .dl{display:grid;grid-template-columns:1fr 1fr;gap:12px 14px;margin-bottom:6px}
   .dsec{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
     margin:14px 0 10px;padding-top:14px;border-top:1px solid var(--stroke)}
+  /* A section heading may carry an icon; keep it on the baseline of the text. */
+  .dsec .ic{vertical-align:-1px;margin-right:5px}
 
   /* Sparkline: download carries the accent, upload stays quiet — identity by
      position and label, never by hue alone (the ↓/↑ labels sit right beside). */
@@ -979,6 +981,18 @@ function renderDetails(t){
     h+=dSec('Limits & forwarding')+'<div class="dl">';
     h+=dRow('Limits',lim.join(' · ')||'');
     h+=dRow('Real client IP',t.proxyProtocol?'On (PROXY protocol v2)':'');
+    h+='</div>';
+  }
+
+  // The bot's own relay, under its own heading. It used to appear among the
+  // forwarded ports as the raw mapping, which reads like something the operator
+  // added — and deleting it stops the bot for a reason that looks unrelated to
+  // the bot. Here it is named, and only the port is shown, since the rest of
+  // the mapping is not anybody's decision.
+  if(t.botRelay){
+    h+=dSec(ICON.bot+'Bot Relay')+'<div class="dl">';
+    h+=dRow('Local port',t.botRelayPort||'internal');
+    h+=dRow('What it does','Carries the Telegram bot to the API through this tunnel — added and kept up automatically',true);
     h+='</div>';
   }
 

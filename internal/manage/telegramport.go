@@ -182,3 +182,35 @@ func waitPortAccepting(port int, timeout time.Duration) bool {
 	}
 	return false
 }
+
+// SplitBotRelay separates the hidden bot-relay mapping from the ports an
+// operator is meant to see, and reports the loopback port it listens on.
+//
+// The relay is a port the bot adds for itself so the Telegram API can be
+// reached through the tunnel. It is machinery, not something anybody
+// configured, and showing it among the forwarded ports as
+// "127.0.0.1:28583=api.telegram.org:443" invites someone to tidy it away — at
+// which point the bot stops working for a reason that looks unrelated. The
+// port alone is worth showing, under its own name.
+//
+// The token may be empty. Two of the three forms a relay mapping can take are
+// recognisable without it, so a caller that has not read the config yet still
+// filters those rather than showing them; passing the real token additionally
+// catches the mapping whose port is derived from it.
+func SplitBotRelay(ports []string, token string) (visible []string, relayPort int, found bool) {
+	for _, p := range ports {
+		if !isBotRelayPort(p, token) {
+			visible = append(visible, p)
+			continue
+		}
+		found = true
+		// Only the Telegram form carries a port worth naming; the SOCKS forms
+		// point at an internal proxy the operator never chose.
+		if isTelegramPort(p) {
+			if port, ok := telegramMappingPort(p); ok {
+				relayPort = port
+			}
+		}
+	}
+	return visible, relayPort, found
+}

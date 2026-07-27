@@ -11,9 +11,9 @@ import (
 // one test, so nothing here touches a real installation's state.
 func withTempState(t *testing.T) {
 	t.Helper()
-	orig := updateStateFile
-	updateStateFile = t.TempDir() + "/update_check.json"
-	t.Cleanup(func() { updateStateFile = orig })
+	orig := UpdateStateFile
+	UpdateStateFile = t.TempDir() + "/update_check.json"
+	t.Cleanup(func() { UpdateStateFile = orig })
 }
 
 func TestNoCacheMeansNoNotice(t *testing.T) {

@@ -20,8 +20,10 @@ import (
 // So the answer is cached on disk and refreshed in the background. Everything
 // on the display path reads the cache and never touches the network.
 
-// updateStateFile holds the last result of a release check.
-var updateStateFile = app.ConfigDir + "/update_check.json"
+// UpdateStateFile is where the last release check is cached. Exported because
+// it is the seam anything testing the update notice has to move aside: the
+// alert loop reads this file to decide whether to announce a version.
+var UpdateStateFile = app.ConfigDir + "/update_check.json"
 
 // UpdateState is the cached result of looking for a newer release.
 type UpdateState struct {
@@ -45,7 +47,7 @@ func loadUpdateState() UpdateState {
 
 func loadUpdateStateLocked() UpdateState {
 	var s UpdateState
-	data, err := os.ReadFile(updateStateFile)
+	data, err := os.ReadFile(UpdateStateFile)
 	if err != nil {
 		return s
 	}
@@ -56,7 +58,7 @@ func loadUpdateStateLocked() UpdateState {
 func saveUpdateStateLocked(s UpdateState) error {
 	// The parent of the file actually being written, not a fixed directory —
 	// otherwise this aborts before writing whenever the two differ.
-	dir := filepath.Dir(updateStateFile)
+	dir := filepath.Dir(UpdateStateFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -87,7 +89,7 @@ func saveUpdateStateLocked(s UpdateState) error {
 	if err := os.Chmod(name, 0644); err != nil {
 		return err
 	}
-	return os.Rename(name, updateStateFile)
+	return os.Rename(name, UpdateStateFile)
 }
 
 // UpdateAvailable reports the newer tag, if the cache knows of one. It never

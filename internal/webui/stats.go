@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
@@ -106,7 +105,12 @@ type TunnelInfo struct {
 	PeerLocation string `json:"peerLocation"`
 	PeerISP      string `json:"peerISP"`
 	BotRelay     bool   `json:"botRelay"` // has a hidden port used for the Telegram relay
-	Country      string `json:"country"`  // user-chosen ISO country code (label)
+	// BotRelayPort is the loopback port that relay listens on. It is shown on
+	// its own, under its own name, rather than as the raw mapping: the mapping
+	// reads like something the operator set up and can therefore tidy away,
+	// and removing it stops the bot for a reason that looks unconnected.
+	BotRelayPort int    `json:"botRelayPort,omitempty"`
+	Country      string `json:"country"` // user-chosen ISO country code (label)
 	// PeerCountry is the ISO code detected from the peer's address, used for
 	// the flag. It is separate from Country so a label the user set by hand is
 	// never silently overwritten by a lookup.
@@ -151,20 +155,19 @@ type RatePoint struct {
 	Out float64 `json:"out"` // bytes/s sent over the tunnel
 }
 
-// splitBotRelay removes the internal SOCKS relay mapping from the visible ports
-// and reports whether it was present.
-func splitBotRelay(ports []string) (string, bool) {
-	suffix := fmt.Sprintf("=127.0.0.1:%d", app.SocksInternalPort)
-	var kept []string
-	bot := false
-	for _, p := range ports {
-		if strings.HasSuffix(strings.TrimSpace(p), suffix) {
-			bot = true
-			continue
-		}
-		kept = append(kept, p)
-	}
-	return strings.Join(kept, ", "), bot
+// splitBotRelay hides the bot's own relay mapping from the forwarded ports.
+//
+// It defers to manage, which owns the definition. This used to carry its own
+// copy that knew only the oldest of the three shapes a relay mapping can have,
+// so the current one — the mapping straight to the Telegram API — was listed
+// among the operator's ports as something they had configured.
+//
+// The token is not available this early; manage recognises the two
+// token-independent forms without it, and fillConfig runs the same split again
+// with the real token to catch the third.
+func splitBotRelay(ports []string, token string) (string, int, bool) {
+	visible, port, found := manage.SplitBotRelay(ports, token)
+	return strings.Join(visible, ", "), port, found
 }
 
 // --- network speed sampling -------------------------------------------------
@@ -317,16 +320,17 @@ func GatherTunnels() []TunnelInfo {
 			defer wg.Done()
 			// One read serves both the peer fallback and the traffic fields.
 			snap, snapErr := metrics.Read(app.ConfigDir, t.Name)
-			ports, bot := splitBotRelay(t.Ports)
+			ports, relayPort, bot := splitBotRelay(t.Ports, "")
 			info := TunnelInfo{
-				Name:      t.Name,
-				Role:      t.Role,
-				Transport: t.Transport,
-				Addr:      t.Addr,
-				Ports:     ports,
-				BotRelay:  bot,
-				Country:   manage.TunnelCountry(t.Name),
-				Ping:      -1,
+				Name:         t.Name,
+				Role:         t.Role,
+				Transport:    t.Transport,
+				Addr:         t.Addr,
+				Ports:        ports,
+				BotRelay:     bot,
+				BotRelayPort: relayPort,
+				Country:      manage.TunnelCountry(t.Name),
+				Ping:         -1,
 			}
 			if t.Role == "server" {
 				// Server (e.g. the Iran node): we can't ping our own bind_addr,
@@ -640,6 +644,15 @@ func fillConfig(info *TunnelInfo, t manage.Tunnel) {
 	}
 	if t.Role == "server" {
 		sc := cfg.Server
+		// Now that the token is known, split the ports again: one of the relay
+		// shapes derives its port from the token and cannot be spotted without
+		// it, so the earlier pass had to leave it in the list.
+		if ports, relayPort, bot := splitBotRelay(t.Ports, sc.Token); bot {
+			info.Ports, info.BotRelay = ports, true
+			if relayPort != 0 {
+				info.BotRelayPort = relayPort
+			}
+		}
 		info.Preset = manage.PresetValueLabel(sc.Preset)
 		info.MaxConnections = sc.MaxConnections
 		info.BandwidthMbps = sc.BandwidthMbps
