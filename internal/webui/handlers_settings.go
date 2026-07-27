@@ -98,6 +98,10 @@ type telegramView struct {
 		TunnelDown  bool `json:"tunnelDown"`
 		NewRelease  bool `json:"newRelease"`
 	} `json:"alerts"`
+	// Lang is the language the bot writes in, so the panel can offer it
+	// separately: the person reading the bot is not always the person reading
+	// the panel, and the two are set in different places.
+	Lang string `json:"lang"`
 }
 
 // handleTelegram reads (GET) or updates (POST) the bot configuration.
@@ -143,6 +147,7 @@ func telegramSnapshot() telegramView {
 	v.Alerts.DiskPercent = c.Alerts.DiskPercent
 	v.Alerts.TunnelDown = c.Alerts.TunnelDown
 	v.Alerts.NewRelease = c.Alerts.NewRelease
+	v.Lang = c.Language()
 	return v
 }
 
@@ -189,6 +194,9 @@ func applyTelegramForm(r *http.Request) error {
 	c.Alerts.Enabled = formBool(r, "alertsEnabled", c.Alerts.Enabled)
 	c.Alerts.TunnelDown = formBool(r, "alertTunnelDown", c.Alerts.TunnelDown)
 	c.Alerts.NewRelease = formBool(r, "alertNewRelease", c.Alerts.NewRelease)
+	if lang := r.FormValue("lang"); lang != "" {
+		c.Lang = lang
+	}
 	c.Alerts.CPUPercent = formPercent(r, "alertCPU", c.Alerts.CPUPercent)
 	c.Alerts.MemPercent = formPercent(r, "alertMem", c.Alerts.MemPercent)
 	c.Alerts.DiskPercent = formPercent(r, "alertDisk", c.Alerts.DiskPercent)

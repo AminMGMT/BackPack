@@ -39,7 +39,7 @@ func stageRelease(t *testing.T, tag string) {
 func TestNewerReleaseIsAnnouncedOnce(t *testing.T) {
 	stageRelease(t, "v999.0.0") // comfortably newer than anything we ship
 
-	first := releaseMessages()
+	first := releaseMessages(LangEN)
 	if len(first) != 1 {
 		t.Fatalf("a newer release produced %d messages, want 1", len(first))
 	}
@@ -52,7 +52,7 @@ func TestNewerReleaseIsAnnouncedOnce(t *testing.T) {
 
 	// The second pass is the one that matters: the alert loop runs every few
 	// seconds, so a message here means a message forever.
-	if again := releaseMessages(); len(again) != 0 {
+	if again := releaseMessages(LangEN); len(again) != 0 {
 		t.Errorf("the same release was announced twice: %q", again)
 	}
 }
@@ -62,7 +62,7 @@ func TestNewerReleaseIsAnnouncedOnce(t *testing.T) {
 func TestCurrentVersionIsNotAnnounced(t *testing.T) {
 	stageRelease(t, app.Version)
 
-	if msgs := releaseMessages(); len(msgs) != 0 {
+	if msgs := releaseMessages(LangEN); len(msgs) != 0 {
 		t.Errorf("the running version was announced as an update: %q", msgs)
 	}
 }
@@ -73,7 +73,7 @@ func TestCurrentVersionIsNotAnnounced(t *testing.T) {
 func TestAnnouncementSaysUpdatingIsRecoverable(t *testing.T) {
 	stageRelease(t, "v999.0.0")
 
-	msgs := releaseMessages()
+	msgs := releaseMessages(LangEN)
 	if len(msgs) != 1 {
 		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
@@ -81,5 +81,47 @@ func TestAnnouncementSaysUpdatingIsRecoverable(t *testing.T) {
 		if !strings.Contains(msgs[0], want) {
 			t.Errorf("the announcement never mentions %q, so it reads as a risk: %q", want, msgs[0])
 		}
+	}
+}
+
+// The bot writes in the operator's language. An announcement is one of the few
+// messages that arrives unprompted, so it is worth reading in the language the
+// person actually uses.
+func TestAnnouncementFollowsTheConfiguredLanguage(t *testing.T) {
+	stageRelease(t, "v999.0.0")
+	fa := releaseMessages(LangFA)
+	if len(fa) != 1 {
+		t.Fatalf("got %d messages, want 1", len(fa))
+	}
+	if !strings.Contains(fa[0], "منتشر شد") {
+		t.Errorf("the Persian announcement was not translated: %q", fa[0])
+	}
+	// The version numbers are the point of the message and must survive the
+	// substitution into a sentence whose word order differs.
+	if !strings.Contains(fa[0], "v999.0.0") || !strings.Contains(fa[0], app.Version) {
+		t.Errorf("the translated announcement lost a version number: %q", fa[0])
+	}
+}
+
+// An unknown or absent language is English, so a config written before the
+// setting existed keeps the wording it has always had.
+func TestUnsetLanguageIsEnglish(t *testing.T) {
+	for _, lang := range []string{"", "de", "EN", "farsi"} {
+		if got := (Config{Lang: lang}).Language(); got != LangEN {
+			t.Errorf("Config{Lang:%q}.Language() = %q, want %q", lang, got, LangEN)
+		}
+	}
+	if got := (Config{Lang: LangFA}).Language(); got != LangFA {
+		t.Errorf("an explicit Persian config reported %q", got)
+	}
+}
+
+// A sentence with no translation still sends, in English. These are the
+// messages that report a tunnel going down; silence would be far worse than
+// the wrong language.
+func TestUntranslatedTextStillSends(t *testing.T) {
+	const novel = "something nobody has translated yet"
+	if got := tr(LangFA, novel); got != novel {
+		t.Errorf("untranslated text became %q; it must pass through unchanged", got)
 	}
 }

@@ -310,3 +310,70 @@ func TestPortAndPasswordShareOneGroup(t *testing.T) {
 		}
 	}
 }
+
+// Persian support. The panel is used almost entirely by Persian speakers, and
+// right-to-left is a property of the page rather than of the words: setting dir
+// on the document mirrors a flex and grid layout on its own, so what has to be
+// checked is that it is set at all, and that the few rules written with a
+// physical side were corrected.
+func TestPersianFlipsThePageAndKeepsLatinReadable(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, `html.dir=LANG==='fa'?'rtl':'ltr'`) {
+		t.Error("choosing Persian does not set the document direction")
+	}
+	if !strings.Contains(body, `[dir="rtl"]`) {
+		t.Error("no right-to-left rules; the layout will mirror but the hand-placed pieces will not")
+	}
+	// An address or a port reordered on screen is worse than untranslated text:
+	// "127.0.0.1:8080" must not come out backwards inside a Persian page.
+	if !strings.Contains(body, "unicode-bidi:plaintext") {
+		t.Error("Latin runs inside Persian text are not isolated; addresses and ports will be reordered")
+	}
+}
+
+// An untranslated string falls back to English rather than to a key or to
+// nothing, so a half-finished dictionary degrades to the old wording.
+func TestUntranslatedStringsFallBackToEnglish(t *testing.T) {
+	fn := between(string(dashboardHTML), "function T(s){", "}")
+	if fn == "" {
+		t.Fatal("the translation helper could not be found")
+	}
+	if !strings.Contains(fn, "||s") {
+		t.Error("T() does not fall back to the original string")
+	}
+}
+
+// The language is chosen in the panel and remembered, and the choice is applied
+// before first paint — a Persian reader should not see a frame of English and a
+// left-to-right layout snap round.
+func TestLanguageIsRememberedAndAppliedImmediately(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, "localStorage.setItem('bp_lang'") {
+		t.Error("the language choice is not remembered")
+	}
+	i, j := strings.Index(body, "applyLang(LANG);"), strings.Index(body, "async function loadStats(")
+	if i < 0 {
+		t.Fatal("the stored language is never applied")
+	}
+	if j >= 0 && i > j {
+		t.Error("the language is applied after the first data load; the page will flash in English")
+	}
+}
+
+// The bot writes to a person who may not be the one reading the panel, so its
+// language is a separate choice and has to reach the API.
+func TestBotLanguageIsItsOwnSetting(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, `id="tglang"`) {
+		t.Error("there is no bot language control")
+	}
+	if !strings.Contains(body, "lang:$('tglang').value") {
+		t.Error("the bot language is never sent when saving")
+	}
+	if !strings.Contains(body, "$('tglang').value=t.lang") {
+		t.Error("the saved bot language is never read back, so the control shows the wrong value")
+	}
+}

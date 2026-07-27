@@ -145,6 +145,11 @@ type watcher struct {
 	// announce every tunnel that happens to be down.
 	tunnelUp map[string]bool
 	seeded   bool
+	// lang is the language the messages are written in. It sits on the watcher
+	// rather than being passed to every check because it is a property of the
+	// operator, not of any one reading, and the zero value is English — so a
+	// watcher built without one behaves exactly as it always did.
+	lang string
 }
 
 func newWatcher() *watcher {
@@ -166,6 +171,7 @@ func RunAlerts(ctx context.Context) {
 	for {
 		c := Load()
 		alerts := c.Alerts.normalise()
+		w.lang = c.Language()
 
 		if alerts.NewRelease {
 			// In its own goroutine: this is the one part of the loop that makes
@@ -256,17 +262,17 @@ func (w *watcher) checkAt(a AlertConfig, s sysstat.Snapshot, tunnels map[string]
 			// Fire on the crossing, then at most once per cooldown after that.
 			if !st.firing {
 				st.firing, st.lastSent = true, now
-				msgs = append(msgs, fmt.Sprintf("⚠️ %s at %.1f%% (threshold %d%%)\n%s",
-					label, value, threshold, extra))
+				msgs = append(msgs, fmt.Sprintf(tr(w.lang, "⚠️ %s at %.1f%% (threshold %d%%)\n%s"),
+					tr(w.lang, label), value, threshold, extra))
 			} else if now.Sub(st.lastSent) >= cooldown {
 				st.lastSent = now
-				msgs = append(msgs, fmt.Sprintf("⚠️ %s still at %.1f%%\n%s", label, value, extra))
+				msgs = append(msgs, fmt.Sprintf(tr(w.lang, "⚠️ %s still at %.1f%%\n%s"), tr(w.lang, label), value, extra))
 			}
 		case st.firing && value < float64(threshold-clearMargin):
 			// Only clear once well below the line, so a value sitting on the
 			// threshold cannot flap between alert and recovery.
 			st.firing = false
-			msgs = append(msgs, fmt.Sprintf("✅ %s back to normal — %.1f%%", label, value))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "✅ %s back to normal — %.1f%%"), tr(w.lang, label), value))
 		}
 	}
 
@@ -281,7 +287,7 @@ func (w *watcher) checkAt(a AlertConfig, s sysstat.Snapshot, tunnels map[string]
 		msgs = append(msgs, w.checkTunnels(tunnels)...)
 	}
 	if a.NewRelease {
-		msgs = append(msgs, releaseMessages()...)
+		msgs = append(msgs, releaseMessages(w.lang)...)
 	}
 	return msgs
 }
@@ -292,17 +298,17 @@ func (w *watcher) checkAt(a AlertConfig, s sysstat.Snapshot, tunnels map[string]
 //
 // It reads the cache written by the background check; it never makes the
 // network call itself, so a blocked GitHub cannot stall the alert loop.
-func releaseMessages() []string {
+func releaseMessages(lang string) []string {
 	tag, ok := manage.UpdateNeedsNotifying()
 	if !ok {
 		return nil
 	}
 	manage.MarkUpdateNotified(tag)
-	return []string{fmt.Sprintf(
-		"⬆️ Backpack %s has been released (you are on %s).\n\n"+
-			"Update from the CLI: sudo backpack → Update.\n"+
-			"It saves a restore point first and rolls back by itself if the "+
-			"tunnel does not come back up.", tag, app.Version)}
+	return []string{
+		fmt.Sprintf(tr(lang, "⬆️ Backpack %s has been released (you are on %s)."), tag, app.Version) +
+			"\n\n" + tr(lang, "Update from the CLI: sudo backpack → Update.") +
+			"\n" + tr(lang, "It saves a restore point first and rolls back by itself if the tunnel does not come back up."),
+	}
 }
 
 // checkTunnels reports transitions only. The first pass seeds the state without
@@ -329,17 +335,17 @@ func (w *watcher) checkTunnels(now map[string]bool) []string {
 			// A newly created tunnel: record it, but only announce if it is
 			// already down, which is worth knowing immediately.
 			if !up {
-				msgs = append(msgs, fmt.Sprintf("🔴 Tunnel *%s* is down", name))
+				msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🔴 Tunnel *%s* is down"), name))
 			}
 		case was && !up:
-			msgs = append(msgs, fmt.Sprintf("🔴 Tunnel *%s* went down", name))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🔴 Tunnel *%s* went down"), name))
 		case !was && up:
-			msgs = append(msgs, fmt.Sprintf("🟢 Tunnel *%s* is back up", name))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🟢 Tunnel *%s* is back up"), name))
 		}
 	}
 	for name := range w.tunnelUp {
 		if _, still := now[name]; !still {
-			msgs = append(msgs, fmt.Sprintf("🗑 Tunnel *%s* no longer exists", name))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🗑 Tunnel *%s* no longer exists"), name))
 		}
 	}
 

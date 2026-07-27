@@ -31,7 +31,14 @@
   *{box-sizing:border-box;margin:0;padding:0}
   html{-webkit-text-size-adjust:100%}
   body{
-    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Inter,system-ui,sans-serif;
+    /* Persian first, then the Latin stack. The panel is rendered by the
+       viewer's browser, not the server, so these are the reader's own fonts —
+       every current desktop and phone ships a good Persian face (Segoe UI /
+       Tahoma, SF Arabic, Noto Naskh Arabic), and Vazirmatn is picked up when
+       it happens to be installed. Nothing is downloaded, so the panel looks
+       the same on a server with no internet. */
+    font-family:Vazirmatn,-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Inter,
+      system-ui,"Noto Naskh Arabic","SF Arabic",Tahoma,sans-serif;
     background:var(--bg); color:var(--txt); -webkit-font-smoothing:antialiased;
     min-height:100dvh; padding:22px clamp(14px,4vw,40px) 60px;
     background-image:
@@ -137,6 +144,10 @@
     box-shadow:0 8px 22px rgba(var(--accent-rgb),.35)}
   .btn-primary:hover{transform:translateY(-1px)}
   .divider{height:1px;background:var(--stroke);margin:16px 0}
+
+  .langrow{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .langrow label{margin:0;flex:none;font-size:13px;font-weight:600;color:var(--txt)}
+  .langrow .sel{margin:0;flex:1}
 
   /* ---------- settings accordion ----------
      A closed section is one row, so all five fit without scrolling and the
@@ -389,6 +400,24 @@
   .empty{text-align:center;color:var(--muted);padding:50px 0;font-size:14px}
   @keyframes rise{from{opacity:0;transform:translateY(18px)}}
 
+  /* ---------- right to left ----------
+     Almost nothing needs flipping by hand: the layout is flex and grid, which
+     mirror themselves once dir is set. What is listed here is the handful of
+     places that were written with a physical side — a margin-left used as
+     "push to the far end", a rotation, a hard-coded padding-right — and those
+     do not mirror on their own. */
+  [dir="rtl"] .menu{right:auto;left:0}
+  [dir="rtl"] .menubtn{margin-left:0;margin-right:auto}
+  [dir="rtl"] .accnote,[dir="rtl"] .menucount{margin-left:0;margin-right:auto;text-align:left}
+  [dir="rtl"] .menuitem,[dir="rtl"] .acch{text-align:right}
+  [dir="rtl"] .wal .waddr{padding-right:0;padding-left:52px}
+  [dir="rtl"] .updbar .btn-sm{margin-left:0;margin-right:auto}
+  /* Latin text inside a Persian page — addresses, tags, log lines, ports —
+     keeps its own direction, or "127.0.0.1:8080" is reordered on screen. */
+  [dir="rtl"] .hm b,[dir="rtl"] .waddr,[dir="rtl"] .logbox,[dir="rtl"] code,
+  [dir="rtl"] .updbar b,[dir="rtl"] #rtok{direction:ltr;text-align:left;unicode-bidi:plaintext}
+  [dir="rtl"] .logfilter{text-align:right}
+
   /* ---------- narrow screens ----------
      There were no breakpoints at all before this: the layout held together only
      because everything in the header could wrap, which on a phone meant a
@@ -436,9 +465,9 @@
          ISP are read once when a server is set up and never again, so they
          moved into the menu rather than taking half the header for good. -->
     <div class="hostmeta">
-      <div class="hm">Uptime<b id="uptime">—</b></div>
-      <div class="hm">IPv4<b id="ipv4">—</b></div>
-      <div class="hm">IPv6<b id="ipv6">—</b></div>
+      <div class="hm"><span data-i18n>Uptime</span><b id="uptime">—</b></div>
+      <div class="hm"><span data-i18n>IPv4</span><b id="ipv4">—</b></div>
+      <div class="hm"><span data-i18n>IPv6</span><b id="ipv6">—</b></div>
     </div>
     <div class="spacer"></div>
     <button class="updpill" id="updpill" style="display:none" onclick="openSettings();checkUpdate()"
@@ -452,7 +481,7 @@
     <button class="menubtn" id="menubtn" onclick="toggleMenu(event)"
             aria-haspopup="true" aria-expanded="false" aria-controls="mainmenu">
       <svg class="ic" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-      <span>Menu</span>
+      <span data-i18n>Menu</span>
       <span class="notif" id="alnotif" style="display:none"></span>
     </button>
 
@@ -461,31 +490,31 @@
       <!-- The facts that left the header. Read once per server, so they belong
            where you go looking rather than in permanent view. -->
       <div class="menuinfo">
-        <div class="hm">OS<b id="os">—</b></div>
-        <div class="hm">Location<b id="loc">—</b></div>
-        <div class="hm">ISP<b id="isp">—</b></div>
+        <div class="hm"><span data-i18n>OS</span><b id="os">—</b></div>
+        <div class="hm"><span data-i18n>Location</span><b id="loc">—</b></div>
+        <div class="hm"><span data-i18n>ISP</span><b id="isp">—</b></div>
       </div>
       <button class="menuitem" onclick="menuGo(openSettings)">
         <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-        <span>Settings</span>
+        <span data-i18n>Settings</span>
       </button>
       <button class="menuitem" onclick="menuGo(openAlerts)">
         <svg class="ic" viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
-        <span>Alerts</span>
+        <span data-i18n>Alerts</span>
         <span class="menucount" id="almenucount" style="display:none"></span>
       </button>
       <button class="menuitem" onclick="menuGo(openHealth)">
         <svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-        <span>Health check</span>
+        <span data-i18n>Health check</span>
       </button>
       <button class="menuitem" onclick="menuGo(openSupport)">
         <svg class="ic" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 000-7.8z"/></svg>
-        <span>Support Backpack</span>
+        <span data-i18n>Support Backpack</span>
       </button>
       <div class="menusep"></div>
       <button class="menuitem danger" onclick="location.href='/logout'">
         <svg class="ic" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
-        <span>Log out</span>
+        <span data-i18n>Log out</span>
       </button>
     </nav>
 
@@ -525,16 +554,16 @@
   </div>
 
   <div class="grid-stats" id="stats">
-    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/></svg></div><div><div class="k">Download</div><div class="v" id="down">—</div></div></div>
-    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/></svg></div><div><div class="k">Upload</div><div class="v" id="up">—</div></div></div>
-    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></div><div><div class="k">Total In</div><div class="v" id="tin">—</div></div></div>
-    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></div><div><div class="k">Total Out</div><div class="v" id="tout">—</div></div></div>
-    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div><div><div class="k">Load</div><div class="v" id="load">—</div></div></div>
-    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg></div><div><div class="k">Tunnels</div><div class="v" id="tun-count">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/></svg></div><div><div class="k" data-i18n>Download</div><div class="v" id="down">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/></svg></div><div><div class="k" data-i18n>Upload</div><div class="v" id="up">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></div><div><div class="k" data-i18n>Total In</div><div class="v" id="tin">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></div><div><div class="k" data-i18n>Total Out</div><div class="v" id="tout">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div><div><div class="k" data-i18n>Load</div><div class="v" id="load">—</div></div></div>
+    <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg></div><div><div class="k" data-i18n>Tunnels</div><div class="v" id="tun-count">—</div></div></div>
     <!-- Hidden unless the tunnel is on Linux, where the answer is knowable. -->
-    <div class="pill" id="pill-cong" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7h-6"/><path d="M21 7v6"/></svg></div><div><div class="k">Congestion</div><div class="v" id="cong">—</div><div class="sub" id="cong-sub"></div></div></div>
+    <div class="pill" id="pill-cong" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7h-6"/><path d="M21 7v6"/></svg></div><div><div class="k" data-i18n>Congestion</div><div class="v" id="cong">—</div><div class="sub" id="cong-sub"></div></div></div>
     <!-- Hidden unless the built-in proxy has been turned on. -->
-    <div class="pill" id="pill-proxy" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h.01"/></svg></div><div><div class="k">Built-in proxy</div><div class="v" id="proxy">—</div><div class="sub" id="proxy-sub"></div></div></div>
+    <div class="pill" id="pill-proxy" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h.01"/></svg></div><div><div class="k" data-i18n>Built-in proxy</div><div class="v" id="proxy">—</div><div class="sub" id="proxy-sub"></div></div></div>
   </div>
 
   <div class="sec"><h2>Tunnels</h2><span class="count" id="tsum">0</span>
@@ -547,7 +576,7 @@
 <div class="modal" id="settings" onclick="if(event.target===this)closeSettings()">
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="settitle">
     <h3 id="settitle">Settings</h3>
-    <p>Everything is closed until you open it — one section at a time.</p>
+    <p data-i18n>Everything is closed until you open it — one section at a time.</p>
 
     <!-- Eight flat sections meant scrolling past seven to reach the eighth, and
          reading all eight to find out which one held a setting. They are five
@@ -560,16 +589,24 @@
          ends of the list. Restore points are made by updates, so they live
          with Update rather than as a section of their own. -->
 
+    <div class="langrow">
+      <label for="langsel" data-i18n>Language</label>
+      <select id="langsel" class="sel" onchange="applyLang(this.value)">
+        <option value="en">English</option>
+        <option value="fa">فارسی</option>
+      </select>
+    </div>
+
     <div class="acc">
       <button class="acch" id="acch-update" aria-expanded="false" aria-controls="accb-update" onclick="toggleAcc('update')">
         <svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
-        <span>Update</span><span class="accnote" id="accnote-update"></span>
+        <span data-i18n>Update</span><span class="accnote" id="accnote-update"></span>
         <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="accb" id="accb-update" hidden>
         <div class="upd">
           <span class="umsg" id="umsg">Check GitHub for the latest version.</span>
-          <button class="btn-sm" id="ubtn" onclick="checkUpdate()">Check</button>
+          <button class="btn-sm" id="ubtn" onclick="checkUpdate()" data-i18n>Check</button>
         </div>
         <div class="upd" style="margin-top:10px">
           <label for="chsel" style="margin:0;flex:none">Channel</label>
@@ -579,7 +616,7 @@
           </select>
         </div>
         <div class="msg" id="chmsg"></div>
-        <p class="acclabel">Restore points</p>
+        <p class="acclabel" data-i18n>Restore points</p>
         <p style="margin-bottom:10px">Saved by every update. Rolling back replaces the running binary,
         so it stays a CLI decision: <code style="margin:0">sudo backpack → Update → Restore points</code>.</p>
         <div id="rplist" class="msg">Loading…</div>
@@ -589,32 +626,32 @@
     <div class="acc">
       <button class="acch" id="acch-access" aria-expanded="false" aria-controls="accb-access" onclick="toggleAcc('access')">
         <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-        <span>Panel access</span><span class="accnote">Port &amp; password</span>
+        <span data-i18n>Panel access</span><span class="accnote" data-i18n>Port &amp; password</span>
         <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="accb" id="accb-access" hidden>
-        <p class="acclabel">Port</p>
+        <p class="acclabel" data-i18n>Port</p>
         <div class="upd">
           <input id="pport" type="number" min="1" max="65535" step="1" style="width:90px;margin:0"
                  placeholder="7777" aria-label="Web panel port">
           <span class="umsg" id="ppmsg">The panel restarts on the new port.</span>
-          <button class="btn-sm" id="ppbtn" onclick="savePanelPort()">Save</button>
+          <button class="btn-sm" id="ppbtn" onclick="savePanelPort()" data-i18n>Save</button>
         </div>
-        <p class="acclabel">Password</p>
+        <p class="acclabel" data-i18n>Password</p>
         <label for="np">New password (4–128 characters)</label>
         <input id="np" type="password" autocomplete="new-password" placeholder="New password" maxlength="128">
         <label for="np2">Confirm password</label>
         <input id="np2" type="password" autocomplete="new-password" placeholder="Repeat password" maxlength="128">
         <div class="msg" id="pwmsg"></div>
         <button class="btn-primary" style="width:100%;min-height:46px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer"
-                onclick="savePassword()">Save password</button>
+                onclick="savePassword()" data-i18n>Save password</button>
       </div>
     </div>
 
     <div class="acc">
       <button class="acch" id="acch-security" aria-expanded="false" aria-controls="accb-security" onclick="toggleAcc('security')">
         <svg class="ic" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        <span>Security</span><span class="accnote">Two-factor, devices, read-only token</span>
+        <span data-i18n>Security</span><span class="accnote" data-i18n>Two-factor, devices, read-only token</span>
         <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="accb" id="accb-security" hidden>
@@ -623,17 +660,17 @@
         <label class="tg" style="margin-bottom:8px"><input type="checkbox" id="lnotif" onchange="saveSecurity()">
           Message me on every panel login</label>
         <div class="msg" id="tfamsg"></div>
-        <p class="acclabel">Signed-in devices</p>
+        <p class="acclabel" data-i18n>Signed-in devices</p>
         <div id="seslist" class="msg">Loading…</div>
-        <button class="btn-sm" onclick="revokeOthers()" style="margin-top:6px">Sign out other devices</button>
-        <p class="acclabel">Remote access</p>
+        <button class="btn-sm" onclick="revokeOthers()" style="margin-top:6px" data-i18n>Sign out other devices</button>
+        <p class="acclabel" data-i18n>Remote access</p>
         <p style="margin-bottom:10px">A read-only token for a peer panel or a Prometheus scraper
         (<code style="margin:0">/metrics</code>). It can look, never change.</p>
         <div class="msg" id="rtok" style="word-break:break-all;font-family:ui-monospace,Menlo,monospace;font-size:11px"></div>
         <div class="upd">
           <span class="umsg" id="rtmsg"></span>
-          <button class="btn-sm" onclick="remoteToken('generate')">Generate</button>
-          <button class="btn-sm" onclick="remoteToken('revoke')">Revoke</button>
+          <button class="btn-sm" onclick="remoteToken('generate')" data-i18n>Generate</button>
+          <button class="btn-sm" onclick="remoteToken('revoke')" data-i18n>Revoke</button>
         </div>
       </div>
     </div>
@@ -641,7 +678,7 @@
     <div class="acc">
       <button class="acch" id="acch-telegram" aria-expanded="false" aria-controls="accb-telegram" onclick="toggleAcc('telegram')">
         <svg class="ic" viewBox="0 0 24 24"><path d="M22 3L2 11l6 2 2 6 3-4 5 4z"/><path d="M8 13l8-6"/></svg>
-        <span>Telegram bot</span><span class="accnote" id="accnote-telegram"></span>
+        <span data-i18n>Telegram bot</span><span class="accnote" id="accnote-telegram"></span>
         <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="accb" id="accb-telegram" hidden>
@@ -656,6 +693,12 @@
         <select id="tgrelay" class="sel">
           <option value="auto">Automatic — pick a live tunnel, switch if it drops</option>
           <option value="direct">Direct — only where Telegram is reachable</option>
+        </select>
+
+        <label for="tglang" data-i18n>Bot language</label>
+        <select id="tglang" class="sel">
+          <option value="en">English</option>
+          <option value="fa">فارسی</option>
         </select>
 
         <label for="tgevery">Status report every (hours, 0 = off)</label>
@@ -674,8 +717,8 @@
 
         <div class="upd">
           <span class="umsg" id="tgmsg"></span>
-          <button class="btn-sm" id="tgtestbtn" onclick="testTelegram()">Send test</button>
-          <button class="btn-sm" id="tgsavebtn" onclick="saveTelegram()">Save</button>
+          <button class="btn-sm" id="tgtestbtn" onclick="testTelegram()" data-i18n>Send test</button>
+          <button class="btn-sm" id="tgsavebtn" onclick="saveTelegram()" data-i18n>Save</button>
         </div>
       </div>
     </div>
@@ -683,15 +726,15 @@
     <div class="acc">
       <button class="acch" id="acch-backup" aria-expanded="false" aria-controls="accb-backup" onclick="toggleAcc('backup')">
         <svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-        <span>Backup</span><span class="accnote" id="accnote-backup"></span>
+        <span data-i18n>Backup</span><span class="accnote" id="accnote-backup"></span>
         <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="accb" id="accb-backup" hidden>
         <p style="margin-bottom:10px">Every tunnel and token, the panel password, Telegram settings and
         certificates — in one file. Keep it private.</p>
         <div class="upd">
-          <button class="btn-sm" onclick="exportBackup()">Download backup</button>
-          <button class="btn-sm" onclick="$('bfile').click()">Restore from file…</button>
+          <button class="btn-sm" onclick="exportBackup()" data-i18n>Download backup</button>
+          <button class="btn-sm" onclick="$('bfile').click()" data-i18n>Restore from file…</button>
           <input id="bfile" type="file" accept=".gz,.tar.gz,application/gzip"
                  style="display:none" onchange="importBackup(this)">
         </div>
@@ -702,7 +745,7 @@
     </div>
 
     <div class="actions" style="margin-top:14px">
-      <button class="btn-ghost" onclick="closeSettings()">Close</button>
+      <button class="btn-ghost" onclick="closeSettings()" data-i18n>Close</button>
     </div>
   </div>
 </div>
@@ -739,7 +782,7 @@
       </div>
     </div>
     <div class="actions" style="margin-top:18px">
-      <button class="btn-ghost" onclick="closeSupport()">Close</button>
+      <button class="btn-ghost" onclick="closeSupport()" data-i18n>Close</button>
     </div>
   </div>
 </div>
@@ -752,7 +795,7 @@
     <div id="histwrap"></div>
     <div id="ltwrap"></div>
     <div class="actions" style="margin-top:14px">
-      <button class="btn-ghost" onclick="closeDetails()">Close</button>
+      <button class="btn-ghost" onclick="closeDetails()" data-i18n>Close</button>
     </div>
   </div>
 </div>
@@ -764,7 +807,7 @@
     <div id="hcbody">Running checks…</div>
     <div class="actions" style="margin-top:14px">
       <button class="btn-sm" onclick="loadHealth()">Run again</button>
-      <button class="btn-ghost" onclick="closeHealth()">Close</button>
+      <button class="btn-ghost" onclick="closeHealth()" data-i18n>Close</button>
     </div>
   </div>
 </div>
@@ -775,7 +818,7 @@
     <p>What the monitoring service has fired — same source as the Telegram messages.</p>
     <div id="albody">Loading…</div>
     <div class="actions" style="margin-top:14px">
-      <button class="btn-ghost" onclick="closeAlerts()">Close</button>
+      <button class="btn-ghost" onclick="closeAlerts()" data-i18n>Close</button>
     </div>
   </div>
 </div>
@@ -797,6 +840,78 @@
 <script>
 const C = 2*Math.PI*50;
 const $=id=>document.getElementById(id);
+
+// ---- language ----
+//
+// The key of a translation is the English text itself. That costs a little
+// duplication and buys two things: the markup still reads as English, so it can
+// be understood without cross-referencing a key table; and anything not yet
+// translated falls back to English on its own rather than rendering a key or an
+// empty string. Adding a language is then a data change, not a code change.
+//
+// Persian is right to left, and that is a property of the page rather than of
+// the text: dir on <html> mirrors the whole layout, and the few places written
+// with a physical side are corrected in the stylesheet.
+const FA={
+  // header & menu
+  "Menu":"منو","Settings":"تنظیمات","Alerts":"هشدارها","Health check":"بررسی سلامت",
+  "Support Backpack":"حمایت از بک‌پک","Log out":"خروج",
+  "Uptime":"مدت روشن بودن","IPv4":"IPv4","IPv6":"IPv6","OS":"سیستم‌عامل",
+  "Location":"موقعیت","ISP":"سرویس‌دهنده","Tunnels":"تونل‌ها","Load":"بار سیستم",
+  "Download":"دانلود","Upload":"آپلود","Total In":"مجموع ورودی","Total Out":"مجموع خروجی",
+  "Congestion":"کنترل ازدحام","Built-in proxy":"پراکسی داخلی",
+  // settings
+  "Everything is closed until you open it — one section at a time.":
+    "همه بخش‌ها بسته‌اند تا بازشان کنی — هر بار یکی.",
+  "Update":"به‌روزرسانی","Panel access":"دسترسی پنل","Port & password":"پورت و رمز عبور",
+  "Security":"امنیت","Two-factor, devices, read-only token":"ورود دو مرحله‌ای، دستگاه‌ها، توکن فقط‌خواندنی",
+  "Telegram bot":"ربات تلگرام","Backup":"پشتیبان‌گیری",
+  "Port":"پورت","Password":"رمز عبور","Restore points":"نقاط بازیابی",
+  "Signed-in devices":"دستگاه‌های واردشده","Remote access":"دسترسی از راه دور",
+  "Check":"بررسی","Save":"ذخیره","Close":"بستن","Channel":"کانال",
+  "Save password":"ذخیره رمز عبور","Generate":"ساخت","Revoke":"ابطال",
+  "Sign out other devices":"خروج از سایر دستگاه‌ها",
+  "Download backup":"دانلود پشتیبان","Restore from file…":"بازیابی از فایل…",
+  "Send test":"ارسال آزمایشی","Alerts":"هشدارها","New version":"نسخه جدید",
+  "Tunnel up/down":"قطع و وصل تونل",
+  "Up to date":"به‌روز است","Connected":"متصل","Not set up":"تنظیم نشده",
+  "Weekly, automatic":"هفتگی، خودکار","Manual only":"فقط دستی",
+  "Language":"زبان","Bot language":"زبان ربات","English":"English","Persian":"فارسی",
+  // tunnels
+  "State":"وضعیت","Transport":"ترنسپورت","Preset":"پروفایل",
+  "Traffic In":"ترافیک ورودی","Traffic Out":"ترافیک خروجی","Tunnel Uptime":"مدت کارکرد تونل",
+  "Bot Relay":"رله ربات","Local port":"پورت محلی","Certificate":"گواهی","Failover":"جایگزینی",
+  "Limits & forwarding":"محدودیت‌ها و فوروارد","Overview":"نمای کلی",
+};
+let LANG=localStorage.getItem('bp_lang')==='fa'?'fa':'en';
+
+// T translates a string, falling back to the original when there is no entry.
+function T(s){ return (LANG==='fa'&&FA[s])||s; }
+
+// applyLang mirrors the page and swaps every marked string. The English text is
+// kept on the element the first time round, so switching back is exact rather
+// than a reverse lookup that a duplicate translation could get wrong.
+function applyLang(lang){
+  LANG=lang==='fa'?'fa':'en';
+  localStorage.setItem('bp_lang',LANG);
+  const html=document.documentElement;
+  html.lang=LANG==='fa'?'fa':'en';
+  html.dir=LANG==='fa'?'rtl':'ltr';
+
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    if(el.dataset.en===undefined) el.dataset.en=el.textContent.trim();
+    el.textContent=T(el.dataset.en);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el=>{
+    if(el.dataset.enPh===undefined) el.dataset.enPh=el.placeholder||'';
+    el.placeholder=T(el.dataset.enPh);
+  });
+  document.querySelectorAll('[data-i18n-label]').forEach(el=>{
+    if(el.dataset.enLabel===undefined) el.dataset.enLabel=el.getAttribute('aria-label')||'';
+    el.setAttribute('aria-label',T(el.dataset.enLabel));
+  });
+  const sel=$('langsel'); if(sel) sel.value=LANG;
+}
 const ICON={
   logs:'<svg class="ic" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>',
   bot:'<svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V5M9 3h6M9 13h.01M15 13h.01M8 19v2M16 19v2"/></svg>',
@@ -840,6 +955,8 @@ function closeMenu(){
   $('mainmenu').hidden=true; $('menuscrim').hidden=true;
   $('menubtn').setAttribute('aria-expanded','false');
 }
+applyLang(LANG);
+
 function toggleMenu(e){ if(e) e.stopPropagation(); menuOpen()?closeMenu():openMenu(); }
 function menuGo(fn){ closeMenu(); fn(); }
 
@@ -978,12 +1095,12 @@ function buildCard(t){
       <span class="badge bot" style="display:none" title="This tunnel relays the Telegram bot">${ICON.bot}</span>
     </div>
     <div class="rows">
-      <div class="r"><div class="k">${t.role==='server'?'Tunnel Port':'Server'}</div><div class="v addr"></div></div>
-      <div class="r"><div class="k">Ping</div><div class="v ping"></div></div>
-      <div class="r full"><div class="k">${t.role==='server'?'Forwarded Ports':'Remote'}</div><div class="v ports"></div></div>
-      <div class="r full trafrow" style="display:none"><div class="k">Traffic ↓ / ↑</div><div class="v traffic"></div>
+      <div class="r"><div class="k" data-i18n>${t.role==='server'?'Tunnel Port':'Server'}</div><div class="v addr"></div></div>
+      <div class="r"><div class="k" data-i18n>Ping</div><div class="v ping"></div></div>
+      <div class="r full"><div class="k" data-i18n>${t.role==='server'?'Forwarded Ports':'Remote'}</div><div class="v ports"></div></div>
+      <div class="r full trafrow" style="display:none"><div class="k" data-i18n>Traffic ↓ / ↑</div><div class="v traffic"></div>
         <div class="spark" style="display:none"></div></div>
-      <div class="r full peerrow" style="display:none"><div class="k">Peer</div><div class="v peer"></div></div>
+      <div class="r full peerrow" style="display:none"><div class="k" data-i18n>Peer</div><div class="v peer"></div></div>
     </div>
     <div class="cardbtns">
       <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} Logs</button>
@@ -1127,7 +1244,7 @@ function closeLogs(){
 // certificate, failover and — for KCP — the link-quality counters that answer
 // "is this transport earning its overhead on my route?".
 let detName=null;
-function dRow(k,v,full){ return v?`<div class="r${full?' full':''}"><div class="k">${k}</div><div class="v" style="white-space:normal">${esc(String(v))}</div></div>`:''; }
+function dRow(k,v,full){ return v?`<div class="r${full?' full':''}"><div class="k" data-i18n>${k}</div><div class="v" style="white-space:normal">${esc(String(v))}</div></div>`:''; }
 function dSec(label){ return `<div class="dsec">${label}</div>`; }
 function renderDetails(t){
   let h='';
@@ -1377,7 +1494,7 @@ function renderSessions(list){
     '<div class="al-ev" style="display:flex;align-items:center;gap:10px">'+
     '<div style="flex:1"><div class="t">'+esc(s.created)+(s.current?' · this device':'')+'</div>'+
     '<div class="m">'+esc(s.ip||'?')+'</div></div>'+
-    (s.current?'':'<button class="btn-sm" onclick="revokeSession(\''+esc(s.id)+'\')">Revoke</button>')+
+    (s.current?'':'<button class="btn-sm" onclick="revokeSession(\''+esc(s.id)+'\')" data-i18n>Revoke</button>')+
     '</div>').join('')||'No sessions.';
 }
 async function loadSessions(){
@@ -1563,6 +1680,7 @@ async function loadTelegram(){
     $('tgalerts').checked=!!t.alerts.enabled;
     $('tgdown').checked=!!t.alerts.tunnelDown;
     $('tgrel').checked=!!t.alerts.newRelease;
+    $('tglang').value=t.lang||'en';
     $('tgcpu').value=t.alerts.cpu; $('tgmem').value=t.alerts.mem; $('tgdisk').value=t.alerts.disk;
     await fillRelayOptions(t.relayMode);
   }catch(e){ $('tgstate').textContent='Could not load the bot settings.'; }
@@ -1599,6 +1717,7 @@ async function saveTelegram(){
       alertsEnabled:$('tgalerts').checked?'1':'0',
       alertTunnelDown:$('tgdown').checked?'1':'0',
       alertNewRelease:$('tgrel').checked?'1':'0',
+      lang:$('tglang').value,
       alertCPU:$('tgcpu').value, alertMem:$('tgmem').value, alertDisk:$('tgdisk').value,
     });
     const r=await fetch('/api/telegram',{method:'POST',body});

@@ -45,6 +45,10 @@ type Config struct {
 	SocksPort int `json:"socks_port"`
 	// Alerts controls threshold and tunnel-state notifications.
 	Alerts AlertConfig `json:"alerts"`
+	// Lang is the language the bot writes in: "en" or "fa". Empty means
+	// English, so a config written before this existed keeps the wording it
+	// has always had rather than changing language on an update.
+	Lang string `json:"lang,omitempty"`
 }
 
 // Load reads the saved config, returning a zero value if none exists.
