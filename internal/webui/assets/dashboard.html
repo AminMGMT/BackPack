@@ -206,6 +206,10 @@
     background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.22)}
   .pill .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .pill .v{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  /* A one-line note under a pill's value, for the case where the number is
+     correct but needs explaining — shown amber because it only appears when
+     something did not take effect. */
+  .pill .sub{font-size:10.5px;font-weight:600;color:var(--amber);margin-top:2px;display:none}
 
   /* ---------- section title ---------- */
   .sec{display:flex;align-items:center;gap:10px;margin:6px 2px 14px}
@@ -387,6 +391,8 @@
     <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></div><div><div class="k">Total Out</div><div class="v" id="tout">—</div></div></div>
     <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div><div><div class="k">Load</div><div class="v" id="load">—</div></div></div>
     <div class="pill"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg></div><div><div class="k">Tunnels</div><div class="v" id="tun-count">—</div></div></div>
+    <!-- Hidden unless the tunnel is on Linux, where the answer is knowable. -->
+    <div class="pill" id="pill-cong" style="display:none"><div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7h-6"/><path d="M21 7v6"/></svg></div><div><div class="k">Congestion</div><div class="v" id="cong">—</div><div class="sub" id="cong-sub"></div></div></div>
   </div>
 
   <div class="sec"><h2>Tunnels</h2><span class="count" id="tsum">0</span>
@@ -698,6 +704,20 @@ async function loadStats(){
     $('tin').textContent=s.totalRecv; $('tout').textContent=s.totalSent;
     $('load').textContent=s.load||'—';
     $('tun-count').textContent=s.tunnelsRunning+' / '+s.tunnelsTotal;
+
+    // Congestion control. The tunnel asks every socket for one algorithm and
+    // ignores the answer, so the only way to know it took is to read it back.
+    // When it did not, the tunnel still works — it is just slower on a long
+    // lossy path than the preset promises, which is worth saying.
+    var cong=$('pill-cong');
+    if(s.congestion){
+      cong.style.display='';
+      $('cong').textContent=s.congestion.toUpperCase();
+      var missed=s.congestionWanted&&s.congestion!==s.congestionWanted;
+      var sub=$('cong-sub');
+      sub.style.display=missed?'block':'none';
+      if(missed) sub.textContent=s.congestionWanted.toUpperCase()+' not available on this kernel';
+    } else { cong.style.display='none'; }
     // Only speak when something is wrong or actionable: the monitor being down,
     // or a newer release waiting.
     $('warnbar').style.display = s.monitorRunning===false ? 'flex' : 'none';

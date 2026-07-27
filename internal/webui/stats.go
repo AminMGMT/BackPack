@@ -15,6 +15,7 @@ import (
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/sysstat"
+	"github.com/backpack/backpack/internal/utils/network"
 	psnet "github.com/shirou/gopsutil/v4/net"
 )
 
@@ -63,6 +64,16 @@ type SystemStats struct {
 	// empty when this version is current. Same source as the CLI's notice and
 	// the Telegram announcement, so the three can never disagree.
 	UpdateTag string `json:"updateTag,omitempty"`
+
+	// Congestion is the TCP congestion control the tunnel's own sockets run
+	// under; CongestionWanted is what they ask for. They differ when the kernel
+	// does not have the requested algorithm, and the request is silently
+	// dropped by design — the connection still works, just not as fast on a
+	// long lossy path, and the presets were tuned expecting it to be there.
+	// Empty means the question has no answer here (not Linux), so the panel
+	// says nothing rather than guessing.
+	Congestion       string `json:"congestion,omitempty"`
+	CongestionWanted string `json:"congestionWanted,omitempty"`
 }
 
 // TunnelInfo is one row for /api/tunnels.
@@ -198,6 +209,7 @@ func GatherSystem() SystemStats {
 	}
 
 	s.MonitorRunning = manage.MonitorRunning()
+	s.Congestion, s.CongestionWanted = network.TunnelCongestion()
 
 	// Refresh in the background so the stats endpoint never waits on GitHub —
 	// and at most once per interval, not once per poll: this endpoint is hit

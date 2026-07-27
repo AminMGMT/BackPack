@@ -110,3 +110,35 @@ func TestGreenMeansOnline(t *testing.T) {
 		}
 	}
 }
+
+// Every element the script reaches for has to exist in the markup.
+//
+// $('id') returns null for an element that is not there, and the next property
+// access throws — which does not fail loudly, it stops the rest of that
+// function running. That is how the theme-picker leftover above broke
+// openSettings(): one dead reference, and the dialog silently stopped being
+// set up. Adding a field to the panel means adding markup and script in two
+// places, so this checks they agree.
+func TestEveryScriptedElementExists(t *testing.T) {
+	pages := map[string][]byte{
+		"dashboard.html": dashboardHTML,
+		"login.html":     loginHTML,
+	}
+	idRe := regexp.MustCompile(`\bid=["']([^"']+)["']`)
+	refRe := regexp.MustCompile(`\$\(["']([^"']+)["']\)`)
+
+	for name, page := range pages {
+		body := string(page)
+
+		present := map[string]bool{}
+		for _, m := range idRe.FindAllStringSubmatch(body, -1) {
+			present[m[1]] = true
+		}
+		for _, m := range refRe.FindAllStringSubmatch(body, -1) {
+			if !present[m[1]] {
+				t.Errorf("%s: the script reads $(%q) but no element has that id — "+
+					"the call returns null and stops the function it is in", name, m[1])
+			}
+		}
+	}
+}
