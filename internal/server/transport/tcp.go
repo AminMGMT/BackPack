@@ -613,6 +613,12 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
 					s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
 					localConn.conn.Close()
+					// The slot this connection took on accept is only freed by the
+					// handler goroutine, which never runs when the connection times
+					// out waiting to be paired. Without this a tunnel with a
+					// connection limit loses a slot for every timeout until it can
+					// accept nothing at all.
+					s.limits.release()
 					break loop
 				}
 

@@ -2,6 +2,36 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.6.1 — 2026-07-27
+
+A hotfix. Tunnels updated to v1.6.0 came up, held a good ping, and then carried
+nothing: sites and applications would not open through them.
+
+### Fixed
+- **Forwarded connections stopped carrying data.** v1.6.0 added a zero-copy path
+  to the forwarded relay — between two ordinary sockets, the kernel moved the
+  bytes itself instead of them passing through this process. It is reverted. The
+  relay is byte-for-byte the loop the upstream project uses, which is the
+  behaviour proven on real tunnels; the optimisation was worth CPU on the plain
+  TCP transport and nothing else, and it was the only place the forwarded data
+  path had diverged. The traffic counting that existed only to serve it is gone
+  with it, back to counting each read and write.
+
+  Speed is unaffected: the ceiling is set by the mux stream window and the KCP
+  window, which this never touched. Every performance preset behaves exactly as
+  it did.
+- **A connection limit leaked a slot on every timeout.** A forwarded connection
+  that waited more than three seconds for a tunnel connection to pair with was
+  closed without releasing the slot it took when it was accepted — only the
+  handler frees that, and the handler never runs for a connection that timed
+  out. On a tunnel with `max_connections` set, the limit filled up permanently
+  until it would accept nothing at all. Tunnels with no limit configured were
+  never affected, because the limiter does not count at all when it is unlimited.
+
+### Notes
+No config, wire protocol, or tunnel behaviour changes. Updating replaces the
+binary.
+
 ## v1.6.0 — 2026-07-27
 
 A release about being told the truth. The panel now says what it actually

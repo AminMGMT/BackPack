@@ -12,11 +12,11 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// The relay now has two paths: io.Copy, which lets the kernel splice between
-// two sockets without the bytes ever entering this process, and the original
-// buffered loop, kept for the sniffer because it has to see each chunk to
-// attribute it to a port. Both must move the same bytes and tear the
-// connection down the same way — that is what these tests hold in place.
+// The forwarded relay: a read/write loop per direction that closes both ends
+// when either finishes. It briefly had a second, zero-copy path; that was
+// removed to keep this identical to the upstream project, whose behaviour is
+// the one proven on real tunnels. These tests cover what the loop must do
+// regardless — carry both directions intact, and never leave one end open.
 
 func quietLogger() *logrus.Logger {
 	l := logrus.New()
@@ -63,7 +63,7 @@ func TestRelayCarriesBothDirections(t *testing.T) {
 		name    string
 		sniffer bool
 	}{
-		{"zero-copy", false},
+		{"plain", false},
 		{"sniffer", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

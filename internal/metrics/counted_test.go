@@ -7,29 +7,18 @@ import (
 	"testing"
 )
 
-// The counting wrapper sits on the tunnel connection, which means it also sits
-// on the path io.Copy uses to reach a file descriptor and splice. A wrapper
-// offering only Read and Write hides that descriptor, so counting a connection
-// used to quietly cost it the kernel's zero-copy path on every byte it carried.
-// These tests pin both halves of the fix: the fast path is reachable, and the
-// numbers it reports are still exact.
+// Traffic counting wraps the tunnel connection, so a read is data arriving from
+// the peer and a write is data leaving for it. Only the tunnel side is wrapped:
+// wrapping both would count every byte twice, since each one also crosses a
+// local socket.
+//
+// This wrapper briefly carried a ReadFrom/WriteTo pair, so that io.Copy could
+// splice between the two sockets of a relay without the bytes passing through
+// this process. It was removed: the forwarded relay is back to the plain
+// read/write loop the upstream project uses, and counting follows it.
 
-// A wrapper that exposes neither method sends io.Copy down the buffered path
-// regardless of what it wraps, so this is the property the whole change rests
-// on.
-func TestCountedConnDoesNotHideTheFastPath(t *testing.T) {
-	c := CountedConn(&net.TCPConn{})
-	if _, ok := c.(io.ReaderFrom); !ok {
-		t.Error("a counted connection must offer ReadFrom, or io.Copy cannot splice into it")
-	}
-	if _, ok := c.(io.WriterTo); !ok {
-		t.Error("a counted connection must offer WriteTo, or io.Copy cannot splice out of it")
-	}
-}
-
-// traffic runs fn and reports what the tunnel counters moved while it ran. The
-// counters are process-wide, so every test here measures a delta rather than an
-// absolute.
+// traffic runs fn and reports what the counters moved while it ran. They are
+// process-wide, so every test here measures a delta rather than an absolute.
 func traffic(fn func()) (in, out uint64) {
 	beforeIn, beforeOut := Traffic()
 	fn()
@@ -37,149 +26,71 @@ func traffic(fn func()) (in, out uint64) {
 	return afterIn - beforeIn, afterOut - beforeOut
 }
 
-// ReadFrom feeds the tunnel, so what it moves is outbound — and all of it must
-// be counted even though this process never sees the bytes.
-func TestReadFromCountsEveryByteAsOutbound(t *testing.T) {
-	payload := bytes.Repeat([]byte("backpack"), 4096) // 32 KiB, more than one copy buffer
-	var sink bytes.Buffer
-	c := CountedConn(writeOnly{w: &sink}).(*countedConn)
-
-	in, out := traffic(func() {
-		n, err := c.ReadFrom(bytes.NewReader(payload))
-		if err != nil {
-			t.Fatalf("ReadFrom: %v", err)
-		}
-		if n != int64(len(payload)) {
-			t.Fatalf("ReadFrom moved %d bytes, want %d", n, len(payload))
-		}
-	})
-
-	if out != uint64(len(payload)) {
-		t.Errorf("counted %d bytes out, want %d", out, len(payload))
-	}
-	if in != 0 {
-		t.Errorf("counted %d bytes in, want 0 — ReadFrom is outbound only", in)
-	}
-	if !bytes.Equal(sink.Bytes(), payload) {
-		t.Error("the bytes that arrived are not the bytes that were sent")
-	}
-}
-
-// WriteTo drains the tunnel, so what it moves is inbound.
-func TestWriteToCountsEveryByteAsInbound(t *testing.T) {
-	payload := bytes.Repeat([]byte("backpack"), 4096)
-	c := CountedConn(readOnly{r: bytes.NewReader(payload)}).(*countedConn)
+// A read is inbound and a write is outbound, and both are counted in full.
+func TestReadsAreInboundAndWritesAreOutbound(t *testing.T) {
+	payload := bytes.Repeat([]byte("backpack"), 4096) // 32 KiB
 
 	var sink bytes.Buffer
-	in, out := traffic(func() {
-		n, err := c.WriteTo(&sink)
-		if err != nil {
-			t.Fatalf("WriteTo: %v", err)
-		}
-		if n != int64(len(payload)) {
-			t.Fatalf("WriteTo moved %d bytes, want %d", n, len(payload))
-		}
-	})
-
-	if in != uint64(len(payload)) {
-		t.Errorf("counted %d bytes in, want %d", in, len(payload))
-	}
-	if out != 0 {
-		t.Errorf("counted %d bytes out, want 0 — WriteTo is inbound only", out)
-	}
-}
-
-// The fast path must not count a byte twice. It would if ReadFrom reached the
-// wrapper's own Write instead of the connection underneath it, which is also
-// the shape that would recurse forever.
-func TestFastPathCountsBytesOnlyOnce(t *testing.T) {
-	payload := bytes.Repeat([]byte("x"), 8192)
-
-	var viaWrite, viaReadFrom uint64
-	c := CountedConn(writeOnly{w: io.Discard}).(*countedConn)
-	_, viaWrite = traffic(func() {
+	c := CountedConn(writeOnly{w: &sink})
+	_, out := traffic(func() {
 		if _, err := c.Write(payload); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
 	})
-	_, viaReadFrom = traffic(func() {
-		if _, err := c.ReadFrom(bytes.NewReader(payload)); err != nil {
-			t.Fatalf("ReadFrom: %v", err)
-		}
-	})
-
-	if viaWrite != viaReadFrom {
-		t.Errorf("the same payload counted as %d bytes written and %d bytes spliced; "+
-			"the two paths must agree", viaWrite, viaReadFrom)
+	if out != uint64(len(payload)) {
+		t.Errorf("counted %d bytes out, want %d", out, len(payload))
 	}
-}
+	if !bytes.Equal(sink.Bytes(), payload) {
+		t.Error("the bytes that arrived are not the bytes that were sent")
+	}
 
-// End to end over real sockets: a counted tunnel connection relayed with
-// io.Copy must deliver the payload intact and report it exactly once. This is
-// the arrangement the transports actually build.
-func TestCountedRelayOverRealSocketsIsExact(t *testing.T) {
-	payload := bytes.Repeat([]byte("through-the-tunnel"), 2048)
-
-	client, server := tcpPair(t)
-	sink, sinkPeer := tcpPair(t)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		// The tunnel side is the counted one, exactly as the transports wrap it.
-		io.Copy(sinkPeer, CountedConn(server))
-		sinkPeer.Close()
-	}()
-
+	r := CountedConn(readOnly{r: bytes.NewReader(payload)})
+	got := make([]byte, len(payload))
 	in, _ := traffic(func() {
-		go func() {
-			client.Write(payload)
-			client.Close()
-		}()
-		got, err := io.ReadAll(sink)
-		if err != nil {
-			t.Errorf("reading the relayed payload: %v", err)
+		if _, err := io.ReadFull(r, got); err != nil {
+			t.Fatalf("Read: %v", err)
 		}
-		if !bytes.Equal(got, payload) {
-			t.Errorf("relayed %d bytes, want %d — the payload did not survive", len(got), len(payload))
-		}
-		<-done
 	})
-
 	if in != uint64(len(payload)) {
 		t.Errorf("counted %d bytes in, want %d", in, len(payload))
 	}
 }
 
-// tcpPair returns the two ends of a connected TCP connection.
-func tcpPair(t *testing.T) (client, server net.Conn) {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
+// Counting has to move while the connection is alive, not only when it ends: a
+// tunnel carrying a long download would otherwise report nothing for as long as
+// it lasted, and the panel would show it as idle.
+func TestCountersMoveWhileTheConnectionIsOpen(t *testing.T) {
+	c := CountedConn(writeOnly{w: io.Discard})
+	chunk := bytes.Repeat([]byte("x"), 1024)
 
-	type accepted struct {
-		conn net.Conn
-		err  error
+	for i := 1; i <= 4; i++ {
+		_, out := traffic(func() {
+			if _, err := c.Write(chunk); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+		})
+		if out != uint64(len(chunk)) {
+			t.Fatalf("write %d counted %d bytes, want %d — counting is not incremental",
+				i, out, len(chunk))
+		}
 	}
-	ch := make(chan accepted, 1)
-	go func() {
-		c, err := ln.Accept()
-		ch <- accepted{c, err}
-	}()
+}
 
-	client, err = net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
+// The local side of a relay must never be wrapped, or every byte is counted
+// twice. This checks the wrapper is a thin pass-through so that a caller can
+// tell what it is holding.
+func TestOnlyTheWrappedConnectionCounts(t *testing.T) {
+	var sink bytes.Buffer
+	raw := writeOnly{w: &sink}
+
+	_, out := traffic(func() {
+		if _, err := raw.Write([]byte("not counted")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if out != 0 {
+		t.Errorf("an unwrapped connection contributed %d bytes to the counters", out)
 	}
-	a := <-ch
-	if a.err != nil {
-		t.Fatalf("accept: %v", a.err)
-	}
-	t.Cleanup(func() { client.Close(); a.conn.Close() })
-	return client, a.conn
 }
 
 // writeOnly and readOnly are net.Conns that can only do the one thing the test

@@ -9,7 +9,6 @@ package metrics
 
 import (
 	"encoding/json"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -300,87 +299,6 @@ func (c *countedConn) Write(b []byte) (int, error) {
 		bytesOut.Add(uint64(n))
 	}
 	return n, err
-}
-
-// ReadFrom and WriteTo exist so that wrapping a connection to count it does not
-// also cost it the kernel's zero-copy path.
-//
-// io.Copy moves bytes between two TCP sockets with splice(2), never touching
-// user memory — but only when it can reach both file descriptors. A wrapper
-// offering nothing but Read and Write hides the descriptor underneath it, so
-// counting a connection silently downgraded every copy over it to a
-// read-into-a-buffer-then-write loop. These two methods hand the unwrapped
-// connection back to io.Copy, which picks splice again where it applies.
-//
-// Neither can recurse: the connection handed on is the wrapped one, never the
-// wrapper.
-const (
-	// spliceChunk is how much one copy moves before the counters are updated.
-	//
-	// A copy that runs to completion and only then reports would be exact but
-	// useless: splice hands back one total when the connection closes, so a
-	// tunnel carrying a long download would report nothing at all for minutes
-	// and then jump by the whole figure. The live graph would read as idle, and
-	// so would the throughput signal the connection pool scales on — which
-	// exists precisely to notice long-lived streams, and would have been made
-	// blind by the very change meant to speed them up.
-	//
-	// Copying in bounded pieces fixes that: the kernel still splices each
-	// piece, and the counters move while the connection is alive. Nothing is
-	// ever lost, only delayed at most one piece — the final partial one is
-	// counted when the copy ends.
-	//
-	// 256 KiB is the compromise. Large enough that splice does real work per
-	// call, small enough that anything fast enough to matter reports several
-	// times a second: at 100 Mbit/s that is every 20 ms.
-	spliceChunk = 256 * 1024
-)
-
-// ReadFrom copies from r into the tunnel, so what it moves is leaving for the
-// peer.
-func (c *countedConn) ReadFrom(r io.Reader) (int64, error) {
-	return countedCopy(c.Conn, r, &bytesOut)
-}
-
-// WriteTo copies out of the tunnel into w, so what it moves arrived from the
-// peer.
-func (c *countedConn) WriteTo(w io.Writer) (int64, error) {
-	return countedCopy(w, c.Conn, &bytesIn)
-}
-
-// countedCopy moves everything from src to dst, adding to counter as it goes
-// rather than once at the end.
-//
-// io.CopyN bounds each piece with an io.LimitedReader, which the kernel's
-// splice path unwraps and honours, so bounding the copy costs nothing: the
-// bytes still go straight from socket to socket.
-func countedCopy(dst io.Writer, src io.Reader, counter *atomic.Uint64) (int64, error) {
-	var total int64
-	for {
-		n, err := io.CopyN(dst, src, spliceChunk)
-		if n > 0 {
-			total += n
-			counter.Add(uint64(n))
-		}
-		if err != nil {
-			// A short final piece ends the copy normally; the source simply ran
-			// out, which is how every relay finishes.
-			if err == io.EOF {
-				return total, nil
-			}
-			return total, err
-		}
-	}
-}
-
-// Unwrap returns the connection underneath the traffic counter, or c itself if
-// it is not wrapped. Callers use it to ask what a connection really is — the
-// relay checks for a pair of TCP sockets before choosing the zero-copy path.
-func Unwrap(c net.Conn) net.Conn {
-	if counted, ok := c.(*countedConn); ok {
-		return counted.Conn
-	}
-	return c
 }
 
 // AddBytes records traffic for transports that do not hand out a net.Conn —
