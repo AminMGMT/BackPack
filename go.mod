@@ -12,6 +12,7 @@ require (
 	github.com/xtaci/kcp-go/v5 v5.6.72
 	github.com/xtaci/smux v1.5.27
 	golang.org/x/crypto v0.45.0
+	golang.org/x/sys v0.38.0
 	golang.org/x/time v0.14.0
 )
 
@@ -31,6 +32,5 @@ require (
 	github.com/tklauser/numcpus v0.8.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 )

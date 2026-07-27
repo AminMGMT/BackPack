@@ -1,5 +1,7 @@
 package network
 
+import "sync/atomic"
+
 // TCP socket tuning that applies to every TCP-based transport.
 
 // PinTCPBuffers decides whether TCP sockets get a fixed SO_RCVBUF/SO_SNDBUF.
@@ -21,7 +23,21 @@ package network
 // burst, so KCP keeps setting its own buffers on its own socket.
 //
 // Set true (config: so_pin_tcp) only to reproduce the old behaviour.
-var PinTCPBuffers = false
+//
+// It is read from every socket the process opens and written once from the
+// engine's constructor, so it is atomic rather than a plain variable. One
+// process runs one tunnel, which is why a single process-wide setting is the
+// right shape — but "written before anything reads it" is a claim about
+// goroutine ordering that nothing enforces, and the race detector rightly
+// called it. An atomic makes it true instead of hoped for.
+var pinTCPBuffers atomic.Bool
+
+// SetPinTCPBuffers records whether TCP buffers should be pinned. The engine
+// calls it once, before any listener or dialer exists.
+func SetPinTCPBuffers(pin bool) { pinTCPBuffers.Store(pin) }
+
+// PinTCPBuffers reports whether TCP buffers should be pinned.
+func PinTCPBuffers() bool { return pinTCPBuffers.Load() }
 
 // TCPCongestion is the congestion control algorithm requested per socket.
 // BBR keeps the pipe full on a long, mildly-lossy path where the loss-based

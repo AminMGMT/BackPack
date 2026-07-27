@@ -52,7 +52,7 @@ func TestTransportConcurrentConnections(t *testing.T) {
 					// A distinct payload per connection: if the transport ever
 					// delivers one connection's data to another, the comparison
 					// inside roundTrip fails.
-					payload := []byte(fmt.Sprintf("connection-%03d-", i))
+					payload := fmt.Appendf(nil, "connection-%03d-", i)
 					payload = append(payload, randomPayload(t, 8*1024)...)
 					if err := tun.roundTrip(payload); err != nil {
 						atomic.AddInt64(&failures, 1)

@@ -28,7 +28,7 @@ type Client struct {
 func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 	ctx, cancel := context.WithCancel(parentCtx)
 	// One process runs one tunnel, so the socket tuning is process-wide.
-	network.PinTCPBuffers = cfg.SOPinTCP
+	network.SetPinTCPBuffers(cfg.SOPinTCP)
 	return &Client{
 		config: cfg,
 		ctx:    ctx,

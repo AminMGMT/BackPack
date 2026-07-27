@@ -57,7 +57,7 @@ func TestBackendPoolCarriesTrafficAcrossBackends(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	for i := 0; i < 6; i++ {
-		msg := []byte(fmt.Sprintf("backend-pool-%d", i))
+		msg := fmt.Appendf(nil, "backend-pool-%d", i)
 		if err := poolRoundTrip(entry, msg); err != nil {
 			t.Fatalf("connection %d did not echo through the pool: %v", i, err)
 		}

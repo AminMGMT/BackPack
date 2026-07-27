@@ -146,15 +146,15 @@ func tunnelBlock(t manage.Tunnel, h manage.Health) string {
 		icon = "🟡"
 	}
 
-	head := icon + " "
+	fmt.Fprintf(&b, "%s ", icon)
 	if f := tunnelFlag(t); f != "" {
-		head += f + " "
+		fmt.Fprintf(&b, "%s ", f)
 	}
-	head += t.Name + " [ " + strings.ToUpper(t.Transport) + " ]"
+	fmt.Fprintf(&b, "%s [ %s ]", t.Name, strings.ToUpper(t.Transport))
 	if p := manage.PresetLabel(t.Name); p != "" {
-		head += " [ " + p + " ]"
+		fmt.Fprintf(&b, " [ %s ]", p)
 	}
-	b.WriteString(head + "\n")
+	b.WriteString("\n")
 
 	if t.Role == "server" {
 		fmt.Fprintf(&b, "Tunnel Port : %s\n", portOf(t.Addr))

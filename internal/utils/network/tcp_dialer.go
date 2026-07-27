@@ -71,7 +71,7 @@ func attemptTcpDialer(
 				return err
 			}
 
-			if PinTCPBuffers && SO_RCVBUF > 0 {
+			if PinTCPBuffers() && SO_RCVBUF > 0 {
 				err = s.Control(func(fd uintptr) {
 					if err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, SO_RCVBUF); err != nil {
 						err = fmt.Errorf("failed to set SO_RCVBUF: %v", err)
@@ -82,7 +82,7 @@ func attemptTcpDialer(
 				return err
 			}
 
-			if PinTCPBuffers && SO_SNDBUF > 0 {
+			if PinTCPBuffers() && SO_SNDBUF > 0 {
 				err = s.Control(func(fd uintptr) {
 					if err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, SO_SNDBUF); err != nil {
 						err = fmt.Errorf("failed to set SO_SNDBUF: %v", err)

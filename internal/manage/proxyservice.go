@@ -39,7 +39,7 @@ func EnableProxyService(cfg localproxy.Config) error {
 		return err
 	}
 	path := app.ServiceDir + "/" + app.ProxyService
-	if err := os.WriteFile(path, []byte(fmt.Sprintf(proxyUnit, app.BinPath)), 0644); err != nil {
+	if err := os.WriteFile(path, fmt.Appendf(nil, proxyUnit, app.BinPath), 0644); err != nil {
 		return err
 	}
 	if err := DaemonReload(); err != nil {

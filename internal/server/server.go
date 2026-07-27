@@ -30,7 +30,7 @@ type Server struct {
 func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 	ctx, cancel := context.WithCancel(parentCtx)
 	// One process runs one tunnel, so the socket tuning is process-wide.
-	network.PinTCPBuffers = cfg.SOPinTCP
+	network.SetPinTCPBuffers(cfg.SOPinTCP)
 	return &Server{
 		config: cfg,
 		ctx:    ctx,

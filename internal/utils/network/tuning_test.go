@@ -10,7 +10,7 @@ import "testing"
 // that can be flipped back by accident while looking like a tuning improvement,
 // so it is asserted rather than left to review.
 func TestTCPBuffersAreNotPinnedByDefault(t *testing.T) {
-	if PinTCPBuffers {
+	if PinTCPBuffers() {
 		t.Fatal("PinTCPBuffers must default to false so the kernel can auto-tune the TCP window")
 	}
 }

@@ -135,11 +135,11 @@ func TestPreviousVersionConfigStillCarriesTraffic(t *testing.T) {
 	srvPath := filepath.Join(dir, "srv.toml")
 	cliPath := filepath.Join(dir, "cli.toml")
 	if err := os.WriteFile(srvPath,
-		[]byte(fmt.Sprintf(v150ServerConfig, tunnelPort, token, entryPort, backend.addr)), 0600); err != nil {
+		fmt.Appendf(nil, v150ServerConfig, tunnelPort, token, entryPort, backend.addr), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(cliPath,
-		[]byte(fmt.Sprintf(v150ClientConfig, tunnelPort, token)), 0600); err != nil {
+		fmt.Appendf(nil, v150ClientConfig, tunnelPort, token), 0600); err != nil {
 		t.Fatal(err)
 	}
 
