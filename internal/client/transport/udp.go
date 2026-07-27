@@ -139,6 +139,7 @@ func (c *UdpTransport) channelDialer() {
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelTCPConn.Close()
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
@@ -146,6 +147,7 @@ func (c *UdpTransport) channelDialer() {
 			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				c.logger.Errorf("failed to set read deadline: %v", err)
 				tunnelTCPConn.Close()
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 

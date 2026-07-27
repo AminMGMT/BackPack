@@ -123,6 +123,10 @@ func (c *WsMuxTransport) Restart() {
 	c.config.TunnelStatus = ""
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	// The published pool figures belong to the run that just ended. Left
+	// behind, the panel would keep showing the size and throughput of a
+	// connection that is gone until the new run's first tick replaced them.
+	metrics.ClearPool()
 	drain(c.controlFlow)
 
 	// set the log level again

@@ -122,6 +122,10 @@ func (c *TcpTransport) Restart() {
 	c.config.TunnelStatus = ""
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	// The published pool figures belong to the run that just ended. Left
+	// behind, the panel would keep showing the size and throughput of a
+	// connection that is gone until the new run's first tick replaced them.
+	metrics.ClearPool()
 	drain(c.controlFlow)
 
 	// set the log level again
@@ -171,6 +175,7 @@ func (c *TcpTransport) channelDialer() {
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelTCPConn.Close()
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
@@ -178,6 +183,7 @@ func (c *TcpTransport) channelDialer() {
 			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				c.logger.Errorf("failed to set read deadline: %v", err)
 				tunnelTCPConn.Close()
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 

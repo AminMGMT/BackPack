@@ -154,6 +154,10 @@ func (c *KcpTransport) Restart() {
 	c.config.TunnelStatus = ""
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	// The published pool figures belong to the run that just ended. Left
+	// behind, the panel would keep showing the size and throughput of a
+	// connection that is gone until the new run's first tick replaced them.
+	metrics.ClearPool()
 	drain(c.controlFlow)
 
 	c.logger.SetLevel(level)
@@ -207,6 +211,7 @@ func (c *KcpTransport) channelDialer() {
 			if err := utils.SendBinaryTransportString(tunnelConn, c.config.Token, utils.SG_Chan); err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelConn.Close()
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
@@ -214,6 +219,7 @@ func (c *KcpTransport) channelDialer() {
 			if err := tunnelConn.SetReadDeadline(time.Now().Add(c.config.DialTimeOut)); err != nil {
 				c.logger.Errorf("failed to set read deadline: %v", err)
 				tunnelConn.Close()
+				bo.Wait(c.state.Ctx())
 				continue
 			}
 
