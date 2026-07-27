@@ -116,10 +116,13 @@ func IntervalHours() int {
 // answer "is everything fine": the interesting facts are few enough to fit
 // together, so they do.
 func StatusText() string {
+	// The report is one of the two places the bot writes unprompted, so it is
+	// written in whatever language the operator chose.
+	lang := Load().Language()
 	var b strings.Builder
 	tunnels := manage.List()
 	if len(tunnels) == 0 {
-		return "No tunnels configured."
+		return tr(lang, "No tunnels configured.")
 	}
 
 	health := manage.AllHealth()
@@ -127,19 +130,19 @@ func StatusText() string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(tunnelBlock(t, health[t.Name]))
+		b.WriteString(tunnelBlock(lang, t, health[t.Name]))
 	}
 
 	if manage.IsActive(app.WebUIService) {
 		pw, port := webPanelInfo()
-		fmt.Fprintf(&b, "\nWeb Panel : http://%s:%d\nPassword : %s\n",
+		fmt.Fprintf(&b, "\n"+tr(lang, "Web Panel")+" : http://%s:%d\n"+tr(lang, "Password")+" : %s\n",
 			manage.PublicIPv4(), port, pw)
 	}
 	return b.String()
 }
 
 // tunnelBlock renders one tunnel.
-func tunnelBlock(t manage.Tunnel, h manage.Health) string {
+func tunnelBlock(lang string, t manage.Tunnel, h manage.Health) string {
 	var b strings.Builder
 
 	icon := "🔴"
@@ -161,12 +164,12 @@ func tunnelBlock(t manage.Tunnel, h manage.Health) string {
 	b.WriteString("\n")
 
 	if t.Role == "server" {
-		fmt.Fprintf(&b, "Tunnel Port : %s\n", portOf(t.Addr))
+		fmt.Fprintf(&b, tr(lang, "Tunnel Port")+" : %s\n", portOf(t.Addr))
 		if ports := manage.VisiblePorts(t.Ports, manage.TunnelToken(t.Name)); len(ports) > 0 {
-			fmt.Fprintf(&b, "Forwarded Port : %s\n", strings.Join(ports, ", "))
+			fmt.Fprintf(&b, tr(lang, "Forwarded Port")+" : %s\n", strings.Join(ports, ", "))
 		}
 	} else {
-		fmt.Fprintf(&b, "Server : %s\n", t.Addr)
+		fmt.Fprintf(&b, tr(lang, "Server")+" : %s\n", t.Addr)
 	}
 
 	if snap, err := metrics.Read(app.ConfigDir, t.Name); err == nil {

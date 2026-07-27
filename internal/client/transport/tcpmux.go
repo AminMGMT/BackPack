@@ -260,6 +260,12 @@ func (c *TcpMuxTransport) poolMaintainer() {
 			// is asking for new ones — see poolload.go.
 			mbps := load.mbps()
 
+			// The pool is allowed to outgrow its configured size, which from
+			// outside is indistinguishable from a leak. Publish what it is
+			// doing and why, so the panel can say "8 configured, 19 open,
+			// carrying 240 Mbit/s" instead of leaving somebody to guess.
+			metrics.ReportPool(poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, mbps)
+
 			// Dynamically adjust the pool size based on current connections
 			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrow(newPoolSize, c.config.ConnPoolSize)) ||
 				load.wantsMore(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize) {

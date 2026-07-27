@@ -128,6 +128,9 @@ type TunnelInfo struct {
 	// KCPLossPercent is derived from the counters above: how much of the sent
 	// traffic needed resending — the honest answer to "is this link lossy?".
 	KCPLossPercent float64 `json:"kcpLossPercent,omitempty"`
+	// Pool is the client's connection pool; nil on a server tunnel and on the
+	// transports that do not keep one.
+	Pool *metrics.PoolStats `json:"pool,omitempty"`
 
 	// From the tunnel's own config.
 	Preset         string   `json:"preset,omitempty"`         // display label: Balance / Turbo / Aggressive / Custom
@@ -629,6 +632,7 @@ func fillMetrics(info *TunnelInfo, snap metrics.Snapshot) {
 	info.BytesIn = sysstat.HumanBytes(snap.BytesIn)
 	info.BytesOut = sysstat.HumanBytes(snap.BytesOut)
 	info.Rates = rates.sample(info.Name, snap)
+	info.Pool = snap.Pool
 	if snap.KCP != nil {
 		info.KCP = snap.KCP
 		info.KCPLossPercent = snap.KCP.LossPercent()

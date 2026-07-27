@@ -90,9 +90,9 @@
       <svg class="ic" viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg>
     </div>
     <h1>Backpack</h1>
-    <div class="sub">Enter your access password</div>
+    <div class="sub" id="sub">Enter your access password</div>
     <form method="post" action="/login">
-      <label class="sr-only" for="pw">Access password</label>
+      <label class="sr-only" for="pw" id="pwlabel">Access password</label>
       <div class="field">
         <input id="pw" name="password" type="password" maxlength="128"
                placeholder="Password" autofocus autocomplete="current-password" required>
@@ -100,7 +100,7 @@
           <svg class="ic" viewBox="0 0 24 24" id="eye"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <button type="submit">Unlock</button>
+      <button type="submit" id="unlock">Unlock</button>
     </form>
     <div class="foot">TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
   </div>
@@ -119,6 +119,22 @@
       :'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
     i.focus();
   }
+</script>
+<script>
+// The language the panel was left in. The login page has no settings of its
+// own — it follows the choice already made, so a Persian reader is not shown an
+// English door to a Persian panel.
+(function(){
+  if(localStorage.getItem('bp_lang')!=='fa') return;
+  document.documentElement.lang='fa';
+  document.documentElement.dir='rtl';
+  const set=(id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
+  set('sub','رمز عبور خود را وارد کن');
+  set('pwlabel','رمز عبور');
+  set('unlock','ورود');
+  const pw=document.getElementById('pw');
+  if(pw){ pw.placeholder='رمز عبور'; pw.style.direction='ltr'; pw.style.textAlign='left'; }
+})();
 </script>
 </body>
 </html>

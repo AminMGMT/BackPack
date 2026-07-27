@@ -43,6 +43,26 @@ type Snapshot struct {
 
 	// KCP-only. Zero on every other transport.
 	KCP *KCPStats `json:"kcp,omitempty"`
+
+	// The connection pool, on the client transports that keep one. The pool is
+	// allowed to grow past PoolConfigured under load, so reporting only the
+	// live count would look like a leak; the two together, with the throughput
+	// that caused it, are what make the number explainable.
+	Pool *PoolStats `json:"pool,omitempty"`
+}
+
+// PoolStats is the state of the client's connection pool.
+type PoolStats struct {
+	// Live is how many connections are open right now.
+	Live int `json:"live"`
+	// Target is the size the pool is currently aiming for, and Configured is
+	// what the operator asked for. Target above Configured means the pool grew
+	// on purpose.
+	Target     int `json:"target"`
+	Configured int `json:"configured"`
+	// Mbps is the throughput over the last interval — the signal that grows the
+	// pool, and the answer to whether it is working hard or leaking.
+	Mbps int `json:"mbps"`
 }
 
 // The connected peer, published by whichever transport is running. One tunnel
@@ -171,6 +191,9 @@ func (c *Collector) Snapshot() Snapshot {
 	}
 	if c.bytesOut != nil {
 		s.BytesOut = c.bytesOut()
+	}
+	if live, target, configured, mbps := PoolState(); configured > 0 {
+		s.Pool = &PoolStats{Live: live, Target: target, Configured: configured, Mbps: mbps}
 	}
 	if c.transport == "kcp" {
 		// kcp-go keeps these counters process-wide. A tunnel runs as its own

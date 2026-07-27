@@ -377,3 +377,111 @@ func TestBotLanguageIsItsOwnSetting(t *testing.T) {
 		t.Error("the saved bot language is never read back, so the control shows the wrong value")
 	}
 }
+
+// The menu opened behind the tunnel cards.
+//
+// Nothing about the CSS looked wrong: the menu carried a z-index far above
+// anything else on the page. The header creates its own stacking context — it
+// has a filled animation — so that number only ever ranked things inside the
+// header, and the cards, being positioned and later in the document, painted
+// over the whole header regardless. The fix is to rank the header itself, and
+// only while the menu is open, so it does not also cover the log drawer.
+//
+// This is worth a test precisely because the broken version looks correct.
+func TestMenuIsRaisedByLiftingTheHeaderNotTheMenu(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, "header.menuopen{z-index:") {
+		t.Error("the header is never raised; a z-index on the menu alone cannot escape the header's stacking context")
+	}
+	for _, want := range []string{"classList.add('menuopen')", "classList.remove('menuopen')"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the menu does not %s, so the header never changes layer", want)
+		}
+	}
+
+	// It must stay under the modals, or an open dialog would be covered by the
+	// header behind it.
+	header := regexp.MustCompile(`header\.menuopen\{z-index:(\d+)\}`).FindStringSubmatch(body)
+	modal := regexp.MustCompile(`\.modal\{position:fixed;inset:0;z-index:(\d+)`).FindStringSubmatch(body)
+	if header == nil || modal == nil {
+		t.Fatal("could not read the layering back out of the stylesheet")
+	}
+	if header[1] >= modal[1] {
+		t.Errorf("the open header (%s) is not below the modals (%s)", header[1], modal[1])
+	}
+}
+
+// Persian is the language nearly every operator of this panel reads, so a
+// string that was never added to the dictionary is a real gap rather than a
+// cosmetic one. This walks the markup and reports anything marked translatable
+// that has no Persian, which is the check that stops the dictionary quietly
+// falling behind the page.
+func TestEveryMarkedStringHasPersian(t *testing.T) {
+	body := string(dashboardHTML)
+
+	// Look at the markup only: the script contains the dictionary itself.
+	_, rest, ok := strings.Cut(body, "</style>")
+	if !ok {
+		t.Fatal("could not separate the stylesheet")
+	}
+	markup, _, ok := strings.Cut(rest, "<script>")
+	if !ok {
+		t.Fatal("could not separate the script")
+	}
+
+	dict := between(body, "const FA={", "\n};")
+	if dict == "" {
+		t.Fatal("the Persian dictionary could not be found")
+	}
+
+	// Proper nouns that must not be translated: ticker symbols and chain names.
+	skip := regexp.MustCompile(`TRX|BEP20|TON|IPv4|IPv6`)
+
+	space := regexp.MustCompile(`\s+`)
+	for _, m := range regexp.MustCompile(`data-i18n[^>]*>([^<]+)<`).FindAllStringSubmatch(markup, -1) {
+		text := space.ReplaceAllString(strings.TrimSpace(m[1]), " ")
+		if text == "" || skip.MatchString(text) {
+			continue
+		}
+		if !strings.Contains(dict, `"`+text+`"`) {
+			t.Errorf("no Persian for %q — it will stay English when the panel is switched", text)
+		}
+	}
+}
+
+// Markup injected after the first pass — tunnel rows, details, check results —
+// has to be swept again, or half the page reverts to English the moment it
+// updates.
+func TestDynamicMarkupIsTranslatedToo(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, "function relang()") {
+		t.Fatal("nothing re-applies the language after a render")
+	}
+	for _, site := range []string{
+		"renderDetails(t); relang();",
+		"if(built) relang();",
+	} {
+		if !strings.Contains(body, site) {
+			t.Errorf("markup rendered at %q is never re-translated", site)
+		}
+	}
+}
+
+// The login page has no settings of its own, so it follows the choice already
+// stored. An English door on a Persian panel is the first thing anybody sees.
+func TestLoginPageFollowsTheStoredLanguage(t *testing.T) {
+	body := string(loginHTML)
+
+	if !strings.Contains(body, "localStorage.getItem('bp_lang')") {
+		t.Error("the login page ignores the language the panel was left in")
+	}
+	if !strings.Contains(body, "dir='rtl'") {
+		t.Error("the login page never flips to right-to-left")
+	}
+	// The password itself is Latin and must not be reordered by the flip.
+	if !strings.Contains(body, "pw.style.direction='ltr'") {
+		t.Error("the password field is not kept left-to-right")
+	}
+}

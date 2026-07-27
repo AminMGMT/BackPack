@@ -42,6 +42,13 @@ var fa = map[string]string{
 	"⬆️ Backpack %s has been released (you are on %s).":                                            "⬆️ نسخه %s بک‌پک منتشر شد (نسخه فعلی شما %s است).",
 	"Update from the CLI: sudo backpack → Update.":                                                 "برای به‌روزرسانی در ترمینال: sudo backpack ← Update.",
 	"It saves a restore point first and rolls back by itself if the tunnel does not come back up.": "ابتدا یک نقطه بازیابی می‌سازد و اگر تونل بالا نیامد، خودش برمی‌گردد.",
+	// Status report
+	"No tunnels configured.": "هیچ تونلی تنظیم نشده است.",
+	"Tunnel Port":            "پورت تونل",
+	"Forwarded Port":         "پورت فورواردشده",
+	"Server":                 "سرور",
+	"Web Panel":              "پنل وب",
+	"Password":               "رمز عبور",
 }
 
 // tr translates one sentence, returning it unchanged when there is no entry.
