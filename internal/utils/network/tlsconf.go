@@ -69,6 +69,23 @@ func ServerTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, err
 	return cfg, nil
 }
 
+// HTTPSConfig builds a *tls.Config for an ordinary HTTPS server — the web
+// panel. It offers the same two ways to get a certificate as the tunnel
+// listeners, and deliberately skips the ALPN pinning they need: that exists so
+// a WebSocket upgrade can never be negotiated away to HTTP/2, and a panel has
+// no upgrade to protect.
+//
+// Renewal is not something the caller has to arrange. Both paths hand back a
+// config whose certificate is resolved per handshake, so an ACME certificate
+// reissued at the 60-day mark of its 90-day life is served from the next
+// connection onward without restarting the panel.
+func HTTPSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error) {
+	if s.UsesACME() {
+		return acmeTLSConfig(s, logf)
+	}
+	return fileTLSConfig(s.CertFile, s.KeyFile)
+}
+
 // pinHTTP11ALPN forces ALPN negotiation to HTTP/1.1, dropping HTTP/2 while
 // keeping acme-tls/1 for certificate issuance.
 //

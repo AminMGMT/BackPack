@@ -414,8 +414,12 @@ func panelHeader(cfg webui.Config) {
 	tui.Rule()
 	if webui.Running() {
 		fmt.Printf("  %sStatus%s      %s● running%s\n", tui.Gray, tui.Reset, tui.Bold+tui.White, tui.Reset)
-		fmt.Printf("  %sWeb Panel%s   %shttp://%s:%d%s\n", tui.Gray, tui.Reset,
-			tui.Bold+tui.White, cachedServerIP(), cfg.Port, tui.Reset)
+		host := cachedServerIP()
+		if cfg.TLSDomain != "" {
+			host = cfg.TLSDomain
+		}
+		fmt.Printf("  %sWeb Panel%s   %s%s://%s:%d%s\n", tui.Gray, tui.Reset,
+			tui.Bold+tui.White, cfg.Scheme(), host, cfg.Port, tui.Reset)
 		fmt.Printf("  %sLogin code%s  %s%s%s\n", tui.Gray, tui.Reset, tui.Bold+tui.Red, cfg.Password, tui.Reset)
 	} else {
 		fmt.Printf("  %sStatus%s      %s○ stopped%s %s(use Restart panel to start it)%s\n",
@@ -439,6 +443,7 @@ func webPanelMenu() {
 			{Title: "Change panel port", Desc: fmt.Sprintf("current: %d", cfg.Port)},
 			{Title: "Regenerate login code", Desc: "new random 8-digit code"},
 			{Title: "Set a custom password", Desc: "replace the login code with your own"},
+			{Title: "Certificate", Desc: panelCertDesc(cfg)},
 			{Title: "Restart panel", Desc: "also starts it when stopped"},
 			{Title: "Stop panel", Desc: "disable the web UI"},
 		})
@@ -456,6 +461,8 @@ func webPanelMenu() {
 		case 2:
 			setCustomPassword()
 		case 3:
+			panelCertMenu(cfg)
+		case 4:
 			if _, err := webui.EnsureRunning(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else if err := manage.RestartService(app.WebUIService); err != nil {
@@ -464,7 +471,7 @@ func webPanelMenu() {
 				tui.Success("Web panel restarted.")
 			}
 			tui.PressEnter()
-		case 4:
+		case 5:
 			if err := webui.Disable(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else {
@@ -475,6 +482,87 @@ func webPanelMenu() {
 			return
 		}
 	}
+}
+
+// panelCertDesc summarises how the panel is reached, for the menu line.
+func panelCertDesc(cfg webui.Config) string {
+	switch {
+	case !cfg.HTTPS:
+		return "plain HTTP — no certificate"
+	case cfg.TLSDomain != "":
+		return "Let's Encrypt for " + cfg.TLSDomain + " (renews itself)"
+	default:
+		return "HTTPS with a self-signed certificate"
+	}
+}
+
+// panelCertMenu chooses how the panel presents itself.
+//
+// The two certificate options are not interchangeable. A self-signed one works
+// anywhere, including on a bare IP, which is where most of these panels live —
+// and every browser will warn about it once, because that is exactly what a
+// self-signed certificate is for. Let's Encrypt issues one browsers trust, but
+// only for a domain name that resolves to this server, and reaching it needs
+// port 80 open for the challenge.
+//
+// Switching changes the address people have bookmarked, so it says so.
+func panelCertMenu(cfg webui.Config) {
+	tui.Clear()
+	tui.Title("Panel certificate")
+	fmt.Println()
+	tui.Info("Currently: " + panelCertDesc(cfg))
+	fmt.Println()
+
+	idx := tui.ChooseOpt("How should the panel be served?", []tui.Option{
+		{Title: "Plain HTTP", Desc: "no certificate — the default"},
+		{Title: "HTTPS, self-signed", Desc: "works on a bare IP; the browser warns once"},
+		{Title: "HTTPS, Let's Encrypt", Desc: "trusted certificate — needs a domain and port 80"},
+	})
+
+	switch idx {
+	case 0:
+		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail = false, "", ""
+	case 1:
+		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail = true, "", ""
+	case 2:
+		fmt.Println()
+		tui.Warn("The domain must already point at this server, and port 80 must be")
+		tui.Warn("reachable — Let's Encrypt uses it to verify the name is yours.")
+		fmt.Println()
+		domain := strings.TrimSpace(tui.PromptDefault("Domain (e.g. panel.example.com)", cfg.TLSDomain))
+		if domain == "" {
+			tui.Warn("No domain given — nothing changed.")
+			tui.PressEnter()
+			return
+		}
+		email := strings.TrimSpace(tui.PromptDefault("Email for expiry warnings (optional)", cfg.TLSEmail))
+		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail = true, domain, email
+	default:
+		return
+	}
+
+	if err := webui.Save(cfg); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	if err := manage.RestartService(app.WebUIService); err != nil {
+		tui.Error("Saved, but the panel would not restart: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+
+	fmt.Println()
+	tui.Success("Saved. The panel is now on " + panelCertDesc(cfg) + ".")
+	host := cachedServerIP()
+	if cfg.TLSDomain != "" {
+		host = cfg.TLSDomain
+	}
+	tui.Warn(fmt.Sprintf("The address changed — use %s://%s:%d", cfg.Scheme(), host, cfg.Port))
+	if cfg.HTTPS && cfg.TLSDomain != "" {
+		tui.Warn("The first request takes a few seconds while the certificate is issued.")
+	}
+	tui.PressEnter()
 }
 
 // changePanelPort moves the web panel to a different port and restarts it.

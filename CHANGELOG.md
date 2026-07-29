@@ -2,6 +2,82 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.6.3 — 2026-07-29
+
+The panel gets a clear-out. The header carried six facts nobody reads twice,
+the tile row carried eight figures to answer four questions, and the menu would
+not close. All of that is smaller now, the accent colour is yours to pick, and
+the panel can serve itself over HTTPS.
+
+### Fixed
+- **A server card never showed its own tunnel port.** The field was declared,
+  documented, and never once assigned, so every card printed a dash where the
+  port belongs — the one number on a card that cannot be found anywhere else on
+  the page.
+- **The menu would not close when you clicked away from it.** Its backdrop asked
+  to cover the viewport and covered only the header, because the header carries
+  a backdrop-filter and a filtered element becomes the containing block for
+  anything positioned against the viewport inside it. Nothing about the CSS
+  looked wrong. The menu and its backdrop live outside the header now, which
+  also fixes the full-width sheet on phones — mispositioned by the same trap,
+  and not previously noticed.
+- **A connection limit leaked a slot on every timeout.** A forwarded connection
+  that waited more than three seconds to be paired was closed without releasing
+  the slot it took on accept; only the handler frees that, and the handler never
+  runs for a connection that timed out. Tunnels with `max_connections` set would
+  fill up permanently. Tunnels with no limit were never affected.
+
+### Added
+- **Pick the accent colour.** Six of them — Ember (the CLI's own, and the
+  default), Pomegranate, Saffron, Pistachio, Turquoise and Frost — in Settings
+  beside Language. Every coloured thing in the panel derives from one variable,
+  so a theme is that variable and nothing else, and the login screen follows the
+  same choice: it is the first thing anyone sees, and a sign-in page in a colour
+  the panel does not use reads as a different product.
+- **HTTPS for the web panel**, under Web Panel → Certificate in the CLI. A
+  self-signed certificate works anywhere, including on the bare IP most of these
+  panels live on, and the browser warns once. With a domain that resolves here
+  and port 80 reachable, Let's Encrypt issues one browsers trust and renews it
+  on its own — the certificate is resolved per handshake, so a reissue lands
+  without restarting the panel. Off by default, and it stays off on upgrade:
+  turning it on changes the address people have bookmarked, so it is a
+  deliberate act rather than something an update does to you.
+- **GitHub, with its star count**, in the menu. Fetched by the browser so it
+  works from a panel on a server with no internet of its own, cached for six
+  hours because GitHub allows sixty anonymous requests an hour, and simply left
+  off when it cannot be had.
+- A prompt asking for a star, shown at most once every three days, never on a
+  first visit, and never again after either answer. This panel also carries the
+  alerts, and anything that teaches people to dismiss it without reading costs
+  more than a star is worth.
+
+### Changed
+- **The header carries the brand and the way in, and nothing else.** Uptime,
+  the addresses, OS, location and ISP all moved into the menu: they are read
+  when a server is set up and then almost never again, which does not earn a
+  permanent strip across the top of every screen.
+- **The tile row went from eight to four**: download, upload, one total, and the
+  running version. In and out were two tiles answering half a question each —
+  "how much has this machine moved" is the question, so it is one figure now.
+  Load and the tunnel count were already on screen elsewhere, and the congestion
+  algorithm is a setup detail, so it joined the rest of the machine's facts in
+  the menu.
+- **A tunnel's status is a ring around its whole card**, drawn inside the edge,
+  instead of a bar down one side. The same three pixels, now describing the card
+  they belong to, breathing on the status dot's rhythm — identical duration and
+  identical keyframes, so the two read as one signal rather than two things
+  blinking near each other.
+- **Traffic on a card is one line** — `↓ 203.5 GiB  ↑ 13.0 GiB  Σ 216.6 GiB` —
+  with the glyphs quiet and the figures bright. Dropping the label and the
+  pairing slash bought the total, which is what most people were adding up in
+  their head.
+- Support Backpack left the menu. The heart button already floats in the corner
+  of every screen, and asking twice is not asking better.
+
+### Notes
+No config, wire protocol, or tunnel behaviour changes. Updating replaces the
+binary.
+
 ## v1.6.1 — 2026-07-27
 
 A hotfix. Tunnels updated to v1.6.0 came up, held a good ping, and then carried

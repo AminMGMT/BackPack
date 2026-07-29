@@ -11,17 +11,62 @@ import (
 // re-adds without meaning to — a colour picker looks like a feature, and the
 // reason it is absent lives in the changelog rather than the code.
 
-// TestNoThemePicker checks that nothing survives of the removed accent picker.
-// A leftover handler is worse than useless: openSettings() called a function
-// that no longer existed, which throws and stops the rest of the dialog from
-// being set up.
-func TestNoThemePicker(t *testing.T) {
+// The accent is chosen by the operator again.
+//
+// It was fixed for a while, and the tests here used to forbid a picker outright
+// — the reasoning being that one colour, matching the CLI, was the decision.
+// That has been reversed deliberately. What remains worth guarding is the
+// property that made the single accent workable in the first place: every
+// coloured thing derives from one variable, so a theme is that variable and
+// nothing else. A picker that started overriding individual rules would drift
+// out of step one rule at a time.
+func TestThemeIsOneVariableAndNothingElse(t *testing.T) {
+	body := string(dashboardHTML)
+
+	fn := between(body, "function applyAccent(id){", "\n}")
+	if fn == "" {
+		t.Fatal("applyAccent could not be found")
+	}
+	if !strings.Contains(fn, "setProperty('--accent-rgb'") {
+		t.Error("applying a theme does not set --accent-rgb")
+	}
+	// One property, not a list of them.
+	if n := strings.Count(fn, "setProperty("); n != 1 {
+		t.Errorf("applying a theme writes %d properties; a theme is one variable", n)
+	}
+
+	// The default has to be the CLI's colour, so an install nobody has touched
+	// looks like the tool it belongs to.
+	if !regexp.MustCompile(`\['ember','255,69,58'`).MatchString(body) {
+		t.Error("the default accent is no longer the CLI's own colour")
+	}
+	if !strings.Contains(body, "applyAccent(storedAccent())") {
+		t.Error("the stored accent is never applied on load")
+	}
+}
+
+// The login page must follow the same choice: it is the first thing anyone
+// sees, and a sign-in screen in a colour the panel does not use reads as a
+// different product.
+func TestLoginFollowsTheChosenAccent(t *testing.T) {
+	body := string(loginHTML)
+	if !strings.Contains(body, "bp_accent") {
+		t.Error("the login page ignores the chosen accent")
+	}
+	if !strings.Contains(body, "setProperty('--accent-rgb'") {
+		t.Error("the login page reads the accent but never applies it")
+	}
+}
+
+func TestNoStaleThemeHandlers(t *testing.T) {
 	pages := map[string][]byte{
 		"dashboard.html": dashboardHTML,
 		"login.html":     loginHTML,
 	}
-	// bp_accent is exempted for login.html, which clears the stale key.
-	banned := []string{"applyTheme", "renderSwatches", "THEMES", "swatches"}
+	// The old picker's names, kept banned: a leftover handler is worse than
+	// useless, because openSettings() once called one that no longer existed,
+	// which threw and stopped the rest of the dialog being set up.
+	banned := []string{"applyTheme", "renderSwatches", "THEMES"}
 
 	for name, page := range pages {
 		body := string(page)
@@ -32,16 +77,11 @@ func TestNoThemePicker(t *testing.T) {
 		}
 	}
 
-	// The dashboard must not read a saved accent back at all.
-	if strings.Contains(string(dashboardHTML), "getItem('bp_accent')") {
-		t.Error("dashboard.html still restores a saved accent, so an old choice would stick")
-	}
-	// The login page may only remove it, never apply it.
-	if strings.Contains(string(loginHTML), "getItem('bp_accent')") {
-		t.Error("login.html still applies a saved accent")
-	}
-	if !strings.Contains(string(loginHTML), "removeItem('bp_accent')") {
-		t.Error("login.html should clear the accent saved by older builds")
+	// An accent saved by an older build must still resolve to something. The
+	// names changed when the picker came back, so an unrecognised one has to
+	// fall through to the default rather than leaving the page uncoloured.
+	if !strings.Contains(string(dashboardHTML), "||ACCENTS[0]") {
+		t.Error("an unknown saved accent does not fall back to the default")
 	}
 }
 
@@ -66,11 +106,14 @@ func TestSingleAccent(t *testing.T) {
 	dash := find(t, "dashboard.html", dashboardHTML)
 	login := find(t, "login.html", loginHTML)
 
+	// Each page declares exactly one accent in CSS — the default. Alternatives
+	// live in a script table and are applied at runtime, never as a second
+	// declaration that could drift from the first.
 	if len(dash) != 1 {
-		t.Errorf("dashboard.html declares %d accents, want exactly 1: %v", len(dash), dash)
+		t.Errorf("dashboard.html declares %d accents in CSS, want exactly 1: %v", len(dash), dash)
 	}
 	if len(login) != 1 {
-		t.Errorf("login.html declares %d accents, want exactly 1: %v", len(login), login)
+		t.Errorf("login.html declares %d accents in CSS, want exactly 1: %v", len(login), login)
 	}
 	if dash[0] != login[0] {
 		t.Errorf("the two pages disagree on the accent: dashboard %q, login %q", dash[0], login[0])
@@ -103,7 +146,10 @@ func TestGreenMeansOnline(t *testing.T) {
 		switch {
 		case strings.Contains(line, ".online"),
 			strings.Contains(line, "ping.good"),
+			// The online pulse, on the status dot and on the ring around the
+			// card that breathes with it.
 			strings.Contains(line, "@keyframes pulse"),
+			strings.Contains(line, "@keyframes ring-on"),
 			strings.Contains(line, "--green:"): // the declaration itself
 		default:
 			t.Errorf("green used outside an online/health indicator:\n  %s", strings.TrimSpace(line))
@@ -152,8 +198,8 @@ func TestNoticesStayQuietUntilThereIsSomethingToSay(t *testing.T) {
 
 	for _, tc := range []struct{ id, gate, why string }{
 		{"updbar", "s.updateTag", "the update banner must appear only when a newer release exists"},
-		{"pill-proxy", "s.proxyEnabled", "the proxy pill must appear only when the proxy is turned on"},
-		{"pill-cong", "s.congestion", "the congestion pill must appear only where the answer is knowable"},
+		{"hm-proxy", "s.proxyEnabled", "the proxy row must appear only when the proxy is turned on"},
+		{"hm-cong", "s.congestion", "the congestion row must appear only where the answer is knowable"},
 	} {
 		// Hidden in the markup, so nothing flashes before the first poll.
 		if !regexp.MustCompile(`id="` + tc.id + `"[^>]*style="display:none"`).MatchString(body) {
@@ -177,25 +223,29 @@ func TestReleaseTagIsNeverTreatedAsMarkup(t *testing.T) {
 	}
 }
 
-// The header carries only the facts that get looked at repeatedly. OS, location
-// and ISP are read when a server is first set up and essentially never again,
-// and they were taking half the header for good — on a phone that meant several
-// rows of chrome before the first tunnel.
-func TestHeaderCarriesOnlyTheFactsWorthPermanentSpace(t *testing.T) {
+// The header carries the brand and the way in, and nothing else.
+//
+// Every fact about the machine — uptime, addresses, OS, location, ISP — is read
+// when a server is set up and then almost never again, so none of it earns a
+// permanent strip across the top of every screen. It all moved into the menu.
+func TestHeaderCarriesNothingButTheBrand(t *testing.T) {
 	body := string(dashboardHTML)
 
-	block := between(body, `class="hostmeta"`, `</div>`+"\n    <div class=\"spacer\"")
-	if block == "" {
-		t.Fatal("the header host block could not be located")
+	header := between(body, "<header>", "</header>")
+	if header == "" {
+		t.Fatal("the header could not be located")
 	}
-	for _, id := range []string{"uptime", "ipv4", "ipv6"} {
-		if !strings.Contains(block, `id="`+id+`"`) {
-			t.Errorf("the header no longer shows %s", id)
+	for _, id := range []string{"uptime", "ipv4", "ipv6", "os", "loc", "isp"} {
+		if strings.Contains(header, `id="`+id+`"`) {
+			t.Errorf("%s is still in the header; it belongs in the menu", id)
 		}
 	}
-	for _, id := range []string{"os", "loc", "isp"} {
-		if strings.Contains(block, `id="`+id+`"`) {
-			t.Errorf("%s is still in the header; it belongs in the menu", id)
+
+	// They have to be somewhere, or the fix is a deletion.
+	menu := between(body, `<nav class="menu"`, "</nav>")
+	for _, id := range []string{"uptime", "ipv4", "ipv6", "os", "loc", "isp"} {
+		if !strings.Contains(menu, `id="`+id+`"`) {
+			t.Errorf("%s was removed from the header but never added to the menu", id)
 		}
 	}
 }
@@ -378,37 +428,36 @@ func TestBotLanguageIsItsOwnSetting(t *testing.T) {
 	}
 }
 
-// The menu opened behind the tunnel cards.
+// The menu and its backdrop must not live inside <header>.
 //
-// Nothing about the CSS looked wrong: the menu carried a z-index far above
-// anything else on the page. The header creates its own stacking context — it
-// has a filled animation — so that number only ever ranked things inside the
-// header, and the cards, being positioned and later in the document, painted
-// over the whole header regardless. The fix is to rank the header itself, and
-// only while the menu is open, so it does not also cover the log drawer.
+// The header carries a backdrop-filter, and a filtered element becomes the
+// containing block for every position:fixed descendant. A backdrop written to
+// cover the viewport therefore covered only the header, so clicking anywhere
+// below it did nothing and the menu would not close; the same trap
+// mispositioned the full-width sheet on phones. Both are laid out against the
+// viewport now, which is what they were written to assume.
 //
-// This is worth a test precisely because the broken version looks correct.
-func TestMenuIsRaisedByLiftingTheHeaderNotTheMenu(t *testing.T) {
+// Nothing about the CSS looks wrong in either arrangement, which is exactly why
+// this is pinned.
+func TestMenuIsNotTrappedInsideTheFilteredHeader(t *testing.T) {
 	body := string(dashboardHTML)
 
-	if !strings.Contains(body, "header.menuopen{z-index:") {
-		t.Error("the header is never raised; a z-index on the menu alone cannot escape the header's stacking context")
+	header := between(body, "<header>", "</header>")
+	if header == "" {
+		t.Fatal("the header could not be located")
 	}
-	for _, want := range []string{"classList.add('menuopen')", "classList.remove('menuopen')"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the menu does not %s, so the header never changes layer", want)
+	if !strings.Contains(header, "backdrop-filter") && !strings.Contains(body, "header{") {
+		t.Skip("the header no longer appears to be filtered")
+	}
+	for _, id := range []string{"menuscrim", "mainmenu"} {
+		if strings.Contains(header, `id="`+id+`"`) {
+			t.Errorf("%s is inside the filtered header; position:fixed will be measured "+
+				"against the header instead of the viewport", id)
 		}
 	}
-
-	// It must stay under the modals, or an open dialog would be covered by the
-	// header behind it.
-	header := regexp.MustCompile(`header\.menuopen\{z-index:(\d+)\}`).FindStringSubmatch(body)
-	modal := regexp.MustCompile(`\.modal\{position:fixed;inset:0;z-index:(\d+)`).FindStringSubmatch(body)
-	if header == nil || modal == nil {
-		t.Fatal("could not read the layering back out of the stylesheet")
-	}
-	if header[1] >= modal[1] {
-		t.Errorf("the open header (%s) is not below the modals (%s)", header[1], modal[1])
+	// And it has to be positioned, or it lands wherever the last layout left it.
+	if !strings.Contains(body, "function placeMenu(") {
+		t.Error("nothing positions the menu once it is fixed to the viewport")
 	}
 }
 
@@ -496,7 +545,7 @@ func TestLoginPageFollowsTheStoredLanguage(t *testing.T) {
 func TestMenuHasItsOwnOpaqueSurface(t *testing.T) {
 	body := string(dashboardHTML)
 
-	menu := between(body, ".menu{position:absolute", "}")
+	menu := between(body, ".menu{position:fixed", "}")
 	if menu == "" {
 		t.Fatal("the menu rule could not be found")
 	}
@@ -521,5 +570,83 @@ func TestMenuHasItsOwnOpaqueSurface(t *testing.T) {
 	// The blur is still worth keeping for the edges.
 	if !strings.Contains(menu, "backdrop-filter:blur(") {
 		t.Error("the menu lost its backdrop blur")
+	}
+}
+
+// The star prompt has to be easy to get rid of.
+//
+// This panel also carries the alerts, so anything that trains someone to
+// dismiss it without reading costs more than a star is worth. Three properties
+// keep it tolerable: it never appears on a first visit, it waits days between
+// asks, and both "no" answers are final.
+func TestStarPromptCanAlwaysBeSilenced(t *testing.T) {
+	body := string(dashboardHTML)
+
+	fn := between(body, "function maybeAskForStar(){", "\n}")
+	if fn == "" {
+		t.Fatal("the star prompt logic could not be found")
+	}
+	if !strings.Contains(fn, "if(st.done) return;") {
+		t.Error("a dismissed prompt can come back")
+	}
+	if !strings.Contains(fn, "st.first") {
+		t.Error("the prompt does not skip the first visit; it would beg before it has been useful")
+	}
+	if !strings.Contains(fn, "STAR_EVERY") {
+		t.Error("nothing spaces the prompt out — it could appear on every load")
+	}
+
+	// Both ways of saying no have to stick, and following the link counts as
+	// done: GitHub never tells us whether the star was given, and asking again
+	// after someone has starred is worse than not asking.
+	for _, fname := range []string{"function starNever(){", "function starOnGitHub(){"} {
+		f := between(body, fname, "\n}")
+		if f == "" {
+			t.Errorf("%s not found", fname)
+			continue
+		}
+		if !strings.Contains(f, "done:true") {
+			t.Errorf("%s does not record the answer, so the prompt returns in three days", fname)
+		}
+	}
+
+	// The interval is stated in the source; a prompt every few hours would pass
+	// every check above and still be a nuisance.
+	if !regexp.MustCompile(`STAR_EVERY\s*=\s*3\s*\*\s*24\s*\*\s*3600\s*\*\s*1000`).MatchString(body) {
+		t.Error("the prompt interval is not three days")
+	}
+}
+
+// The accent picker belongs in Settings, next to Language.
+//
+// It was first put in the menu, beside the machine's facts, because that is
+// where those had just moved. Nobody found it: how the panel looks is a
+// setting, and Settings is where people go to look for one. Both are opened
+// from the same button, which made it easy to miss and easy to get wrong.
+func TestAccentPickerIsInSettingsBesideLanguage(t *testing.T) {
+	body := string(dashboardHTML)
+
+	settings := between(body, `id="settings"`, `id="support"`)
+	if settings == "" {
+		t.Fatal("the settings dialog could not be located")
+	}
+	if !strings.Contains(settings, `id="accentrow"`) {
+		t.Error("the accent picker is not in Settings — that is where people look for it")
+	}
+
+	// Beside Language: the two are the same kind of choice, and separating them
+	// means one of them is somewhere unexpected.
+	lang := strings.Index(settings, `id="langsel"`)
+	accent := strings.Index(settings, `id="accentrow"`)
+	if lang < 0 || accent < 0 {
+		t.Fatal("Language or the accent picker is missing from Settings")
+	}
+	if between(settings[lang:accent], `<div class="acc">`, "") != "" {
+		t.Error("a settings group sits between Language and Theme; they should be adjacent")
+	}
+
+	// Six unlabelled dots are a guessing game, so the chosen one is named.
+	if !strings.Contains(settings, `id="accentname"`) {
+		t.Error("the chosen accent is never named")
 	}
 }

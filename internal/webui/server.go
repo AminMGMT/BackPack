@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 //go:embed assets/login.html
@@ -221,7 +223,40 @@ func Serve() error {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
-	return httpServer.ListenAndServe()
+	if !cfg.HTTPS {
+		return httpServer.ListenAndServe()
+	}
+
+	// A certificate for the panel itself. The self-signed pair is generated
+	// against whatever the panel answers on — a bare IP is normal here, and no
+	// certificate authority will sign one of those, so it is the only option
+	// without a domain. With a domain, Let's Encrypt issues a real one and
+	// renews it on its own; the config is resolved per handshake, so a renewal
+	// lands without restarting the panel.
+	settings := network.TLSSettings{
+		ACMEDomain:   cfg.TLSDomain,
+		ACMEEmail:    cfg.TLSEmail,
+		ACMECacheDir: app.ConfigDir + "/acme",
+	}
+	if settings.ACMEDomain == "" {
+		host := cfg.TLSDomain
+		if host == "" {
+			host = manage.PublicIPv4()
+		}
+		certFile, keyFile, err := manage.EnsureSelfSignedCert("webui", host)
+		if err != nil {
+			return fmt.Errorf("web panel certificate: %w", err)
+		}
+		settings.CertFile, settings.KeyFile = certFile, keyFile
+	}
+	tlsCfg, err := network.HTTPSConfig(settings, func(format string, a ...any) {
+		log.Printf(format, a...)
+	})
+	if err != nil {
+		return fmt.Errorf("web panel TLS: %w", err)
+	}
+	httpServer.TLSConfig = tlsCfg
+	return httpServer.ListenAndServeTLS("", "")
 }
 
 // requireAuth wraps a handler, redirecting unauthenticated users to /login

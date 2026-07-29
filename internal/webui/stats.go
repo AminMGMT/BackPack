@@ -48,8 +48,12 @@ type SystemStats struct {
 
 	TotalSent string `json:"totalSent"`
 	TotalRecv string `json:"totalRecv"`
-	UpSpeed   string `json:"upSpeed"`
-	DownSpeed string `json:"downSpeed"`
+	// TotalTraffic is the two added together. The panel shows one figure rather
+	// than a pair: "how much has this machine moved" is the question people
+	// actually ask, and splitting it cost two tiles to answer half of it each.
+	TotalTraffic string `json:"totalTraffic"`
+	UpSpeed      string `json:"upSpeed"`
+	DownSpeed    string `json:"downSpeed"`
 
 	TunnelsTotal   int `json:"tunnelsTotal"`
 	TunnelsRunning int `json:"tunnelsRunning"`
@@ -123,6 +127,9 @@ type TunnelInfo struct {
 	Uptime   string `json:"uptime,omitempty"`
 	BytesIn  string `json:"bytesIn,omitempty"`
 	BytesOut string `json:"bytesOut,omitempty"`
+	// BytesTotal is the two added. The card shows all three on one line, and a
+	// sum of two already-formatted strings is not something the browser can do.
+	BytesTotal string `json:"bytesTotal,omitempty"`
 	// KCP link-quality counters; nil on every other transport.
 	KCP *metrics.KCPStats `json:"kcp,omitempty"`
 	// KCPLossPercent is derived from the counters above: how much of the sent
@@ -281,6 +288,7 @@ func fillNetwork(s *SystemStats) {
 	cur := netSample{sent: counters[0].BytesSent, recv: counters[0].BytesRecv, at: time.Now()}
 	s.TotalSent = sysstat.HumanBytes(cur.sent)
 	s.TotalRecv = sysstat.HumanBytes(cur.recv)
+	s.TotalTraffic = sysstat.HumanBytes(cur.sent + cur.recv)
 
 	netMu.Lock()
 	prev := lastNet
@@ -332,8 +340,13 @@ func GatherTunnels() []TunnelInfo {
 				Ports:        ports,
 				BotRelay:     bot,
 				BotRelayPort: relayPort,
-				Country:      manage.TunnelCountry(t.Name),
-				Ping:         -1,
+				// The port clients dial. It was declared and documented but
+				// never filled in, so every server card showed a dash where
+				// its own port should be — the one number on the card you
+				// cannot look up anywhere else on the page.
+				TunnelPort: tunnelPortOf(t.Addr),
+				Country:    manage.TunnelCountry(t.Name),
+				Ping:       -1,
 			}
 			if t.Role == "server" {
 				// Server (e.g. the Iran node): we can't ping our own bind_addr,
@@ -570,6 +583,16 @@ func resolveIP(host string) string {
 	return ips[0].String()
 }
 
+// tunnelPortOf reduces a bind address to the part that matters. A server binds
+// "0.0.0.0:1231" or "[::]:1231"; the host half is noise on a card, and on a
+// client the address is the peer's and belongs in full.
+func tunnelPortOf(addr string) string {
+	if _, port := splitHostPort(addr); port != "" {
+		return port
+	}
+	return ""
+}
+
 func splitHostPort(addr string) (string, string) {
 	if h, p, err := net.SplitHostPort(addr); err == nil {
 		return h, p
@@ -631,6 +654,7 @@ func fillMetrics(info *TunnelInfo, snap metrics.Snapshot) {
 	info.Uptime = snap.Uptime
 	info.BytesIn = sysstat.HumanBytes(snap.BytesIn)
 	info.BytesOut = sysstat.HumanBytes(snap.BytesOut)
+	info.BytesTotal = sysstat.HumanBytes(snap.BytesIn + snap.BytesOut)
 	info.Rates = rates.sample(info.Name, snap)
 	info.Pool = snap.Pool
 	if snap.KCP != nil {

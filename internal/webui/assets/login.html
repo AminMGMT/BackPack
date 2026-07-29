@@ -105,10 +105,18 @@
     <div class="foot">TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
   </div>
 <script>
-  // The panel has a single fixed theme, so nothing is read back from storage.
-  // Older builds let the accent be changed and saved it here; clear it so an
-  // upgraded install does not keep a colour the panel no longer offers.
-  try{ localStorage.removeItem('bp_accent'); }catch(e){}
+  // The accent chosen in the panel applies here too. Signing in is the first
+  // thing anyone sees, and a login screen in a colour the panel does not use
+  // reads as a different product. The table is duplicated rather than shared
+  // because this page loads before anything else and must not depend on it.
+  (function(){
+    const A={ember:'255,69,58',pomegranate:'231,29,54',saffron:'247,181,56',
+             pistachio:'127,184,0',turquoise:'65,187,217',frost:'173,202,214'};
+    try{
+      const v=A[localStorage.getItem('bp_accent')];
+      if(v) document.documentElement.style.setProperty('--accent-rgb',v);
+    }catch(e){}
+  })();
   function togglePw(){
     const i=document.getElementById('pw'), t=document.getElementById('toggle'), e=document.getElementById('eye');
     const show=i.type==='password';

@@ -31,6 +31,29 @@ type Config struct {
 	// LoginNotify sends a Telegram message on every successful panel login —
 	// the cheap way to notice a password in the wrong hands.
 	LoginNotify bool `json:"login_notify,omitempty"`
+
+	// HTTPS, when set, serves the panel over TLS instead of plain HTTP.
+	//
+	// It is off by default and stays that way on upgrade: a panel reached at
+	// http://ip:7777 keeps working exactly as it did. Turning it on is a
+	// deliberate act, because it changes the address people have bookmarked.
+	//
+	// TLSDomain switches to Let's Encrypt for that name, which must resolve to
+	// this server; empty means the generated self-signed certificate, which
+	// works on a bare IP. Certificates renew themselves either way — an ACME
+	// one is reissued well before its ninety days are up and picked up on the
+	// next connection, with no restart.
+	HTTPS     bool   `json:"https,omitempty"`
+	TLSDomain string `json:"tls_domain,omitempty"`
+	TLSEmail  string `json:"tls_email,omitempty"`
+}
+
+// Scheme is the URL scheme the panel answers on.
+func (c Config) Scheme() string {
+	if c.HTTPS {
+		return "https"
+	}
+	return "http"
 }
 
 // Load reads the saved config, filling defaults for missing fields.
