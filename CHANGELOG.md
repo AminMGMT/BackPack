@@ -2,6 +2,67 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.6.5 — 2026-08-01
+
+The panel is checked from a phone more often than from a desktop, so it installs
+as one now. Getting there needed a certificate, which needed a terminal — that
+is a Settings screen too. And the release before this one shipped a broken brace
+that quietly emptied the Health Check.
+
+### Fixed
+- **Health Check and Alerts came up empty.** Both write their rows and then ask
+  the page to re-translate itself, and `applyLang` assigns `textContent` to
+  every element marked `data-i18n` — including the containers those rows had
+  just been written into. The results were overwritten by the placeholder the
+  markup shipped with, in the same tick they arrived. The hostname in the header
+  was being reset the same way between polls.
+- **The accent picker multiplied.** A merge had joined `function relang(){` to
+  the comment that opened the accent section, so the closing brace ended up
+  sixty lines further down and the whole block — the palette, the swatch builder
+  and a GitHub request — became the body of a function called on every render.
+  Six swatches became twelve, then eighteen, depending on how many panels you
+  had opened. It also meant none of it ran on page load.
+- **Settings toggle labels sat under their switch instead of beside it.**
+  `.modal label` sets `display:block` and outranks a bare `.tg`, so the flex row
+  never applied inside Settings. Invisible while the control was a small
+  checkbox; obvious once it became a 40px switch.
+- **Location and ISP were usually blank.** The public address was resolved once,
+  behind a `sync.Once`, and the panel starts from systemd at boot — often before
+  the network is up. One failed lookup then stuck for the life of the process,
+  and the geo lookup that depends on it never had anything to work with. Both
+  are now refreshed in the background, retried while incomplete, and never block
+  a request.
+- **Changing the panel port redirected to `http://`** even when the panel was
+  serving HTTPS.
+
+### Added
+- **Install the panel as an app.** A service worker, a proper manifest and real
+  bitmap icons — including a maskable one for Android and a PNG for iOS, which
+  ignores SVG for a home-screen icon. On a phone or tablet the panel offers to
+  add itself once: one tap where the browser supports it, the Share-menu steps
+  on iOS where it does not. The worker caches nothing on purpose — this is a
+  live dashboard behind a login, and a cached reading of a server is a wrong one
+  — so it exists for installability and answers a failed page load with an
+  offline card.
+- **Panel certificate, in the panel.** Settings → Panel access → Certificate,
+  with the same three choices as the CLI. Let's Encrypt is only offered when it
+  could actually succeed: the panel checks that the domain resolves to this
+  server and that a validation route exists (port 443 for TLS-ALPN, or a free
+  port 80 for HTTP-01), and refuses with the reason when it does not. Getting
+  that wrong restarts the panel onto a listener that can never complete a
+  handshake, and whoever pressed the button has a browser and no shell.
+
+### Changed
+- **Total traffic is the sum of the tunnels**, not the machine's interface
+  counters. It is now exactly the total of what the cards show, rather than a
+  larger figure including ssh, apt and the panel itself — and it survives a
+  reboot, which the interface counters do not. Up and down speed still come from
+  the interface: that answers what the box is doing now.
+- **The health pass probes tunnels concurrently.** Sequentially, a client tunnel
+  whose server is down cost the full four-second timeout each, and enough of
+  them ran past the panel's 30-second write timeout — cutting off the response
+  mid-flight.
+
 ## v1.6.3 — 2026-07-29
 
 The panel gets a clear-out. The header carried six facts nobody reads twice,
