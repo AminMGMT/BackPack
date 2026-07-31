@@ -196,6 +196,7 @@ func Serve() error {
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
 	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
 	mux.HandleFunc("/api/panelport", srv.requireAuth(srv.handlePanelPort))
+	mux.HandleFunc("/api/panelcert", srv.requireAuth(srv.handlePanelCert))
 	mux.HandleFunc("/api/backup/export", srv.requireAuth(srv.handleBackupExport))
 	mux.HandleFunc("/api/backup/import", srv.requireAuth(srv.handleBackupImport))
 	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))
@@ -211,10 +212,14 @@ func Serve() error {
 	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
 	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
 	mux.HandleFunc("/api/channel", srv.requireAuth(srv.handleChannel))
-	// The manifest and icon are what let the panel install as an app; the
-	// browser fetches them before any login, so they carry no data and no auth.
+	// The manifest, icons and service worker are what let the panel install as
+	// an app; the browser fetches them before any login, so they carry no data
+	// and no auth. The worker is required for an install offer and must be
+	// served from the root to control the whole origin.
 	mux.HandleFunc("/manifest.json", handleManifest)
 	mux.HandleFunc("/icon.svg", handleIcon)
+	mux.HandleFunc("/icons/", handleIconPNG)
+	mux.HandleFunc("/sw.js", handleServiceWorker)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

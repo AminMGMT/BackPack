@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
@@ -242,105 +243,131 @@ func tunnelChecks() []Check {
 	}
 
 	pairs := establishedPairs()
+
+	// Each tunnel is probed at the same time as the others. Done one after
+	// another, a client tunnel whose server is down costs the full 4-second
+	// reachability timeout, and a handful of them added up past the web panel's
+	// 30-second write timeout — the request was cut off mid-response and the
+	// Health Check screen came up empty. Results are collected per index and
+	// concatenated afterwards, so the report reads in configured order however
+	// the probes finish.
+	per := make([][]Check, len(tunnels))
+	var wg sync.WaitGroup
+	for i, t := range tunnels {
+		wg.Add(1)
+		go func(i int, t Tunnel) {
+			defer wg.Done()
+			per[i] = tunnelChecksFor(t, pairs)
+		}(i, t)
+	}
+	wg.Wait()
+
 	var out []Check
-	for _, t := range tunnels {
-		g := "Tunnel: " + t.Name
-		h := tunnelHealthWith(t, pairs)
+	for _, c := range per {
+		out = append(out, c...)
+	}
+	return out
+}
 
-		// Service + real connectivity.
-		switch h.State {
-		case "online":
-			out = append(out, Check{Group: g, Name: "State", Level: CheckOK,
-				Detail: fmt.Sprintf("online (%s %s)", t.Role, t.Transport)})
-		case "offline":
-			fix := "check the other side is running and reachable"
-			if t.Role == "client" {
-				fix = "verify the server address/port and that the same token is set on both sides"
-			}
-			out = append(out, Check{Group: g, Name: "State", Level: CheckFail,
-				Detail: "service running but peer not connected", Fix: fix})
-		default:
-			out = append(out, Check{Group: g, Name: "State", Level: CheckWarn,
-				Detail: h.Detail, Fix: "start it from Manage → Manage Tunnels"})
+// tunnelChecksFor is one tunnel's section of the report.
+func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
+	var out []Check
+	g := "Tunnel: " + t.Name
+	h := tunnelHealthWith(t, pairs)
+
+	// Service + real connectivity.
+	switch h.State {
+	case "online":
+		out = append(out, Check{Group: g, Name: "State", Level: CheckOK,
+			Detail: fmt.Sprintf("online (%s %s)", t.Role, t.Transport)})
+	case "offline":
+		fix := "check the other side is running and reachable"
+		if t.Role == "client" {
+			fix = "verify the server address/port and that the same token is set on both sides"
 		}
+		out = append(out, Check{Group: g, Name: "State", Level: CheckFail,
+			Detail: "service running but peer not connected", Fix: fix})
+	default:
+		out = append(out, Check{Group: g, Name: "State", Level: CheckWarn,
+			Detail: h.Detail, Fix: "start it from Manage → Manage Tunnels"})
+	}
 
-		// Config parses and is complete.
-		spec, err := LoadSpec(t.Name)
-		if err != nil {
-			out = append(out, Check{Group: g, Name: "Config", Level: CheckFail,
-				Detail: "unreadable: " + err.Error(), Fix: "restore from a backup"})
-			continue
-		}
+	// Config parses and is complete.
+	spec, err := LoadSpec(t.Name)
+	if err != nil {
+		out = append(out, Check{Group: g, Name: "Config", Level: CheckFail,
+			Detail: "unreadable: " + err.Error(), Fix: "restore from a backup"})
+		return out
+	}
 
-		if t.Role == "server" {
-			// The control port must actually be bound.
-			if p := addrPort(spec.BindAddr); p != "" {
-				if n, _ := strconv.Atoi(p); n > 0 {
-					// UDP-based transports do not appear in the TCP listen
-					// table, so a "not listening" verdict would be wrong.
-					if listening(n) || isDatagram(spec.Transport) {
-						out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK, Detail: p + " listening"})
-					} else {
-						out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
-							Detail: p + " not listening",
-							Fix:    "the service may have failed to bind — check its log"})
-					}
+	if t.Role == "server" {
+		// The control port must actually be bound.
+		if p := addrPort(spec.BindAddr); p != "" {
+			if n, _ := strconv.Atoi(p); n > 0 {
+				// UDP-based transports do not appear in the TCP listen
+				// table, so a "not listening" verdict would be wrong.
+				if listening(n) || isDatagram(spec.Transport) {
+					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK, Detail: p + " listening"})
+				} else {
+					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
+						Detail: p + " not listening",
+						Fix:    "the service may have failed to bind — check its log"})
 				}
 			}
-			// Forwarded ports the users actually connect to.
-			vis := VisiblePorts(spec.Ports, spec.Token)
-			if len(vis) == 0 {
-				out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
-					Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
-			} else {
-				out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
-					Detail: strings.Join(vis, ", ")})
-			}
-			if err := validatePortSpecs(vis); err != nil {
-				out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
-					Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
-			}
+		}
+		// Forwarded ports the users actually connect to.
+		vis := VisiblePorts(spec.Ports, spec.Token)
+		if len(vis) == 0 {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
+				Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
 		} else {
-			// Client: can we actually reach the server's tunnel port over TCP?
-			host, port := addrHost(spec.RemoteAddr, ""), addrPort(spec.RemoteAddr)
-			out = append(out, Check{Group: g, Name: "Server address", Level: CheckInfo, Detail: spec.RemoteAddr})
-			switch {
-			case host == "" || port == "":
-				// Nothing to probe.
-			case isDatagram(spec.Transport):
-				// There is no connect step to test on UDP: a silent port and a
-				// working one look identical from outside. Say so plainly
-				// rather than reporting a failure that may not be real.
-				out = append(out, Check{Group: g, Name: "Reachability", Level: CheckInfo,
-					Detail: "not testable on a UDP transport — trust the tunnel state above",
-					Fix:    "if it will not connect, check that UDP " + port + " is open on the server firewall"})
-			case reachable(host, port, 4*time.Second):
-				out = append(out, Check{Group: g, Name: "Reachability", Level: CheckOK,
-					Detail: "TCP connect to " + spec.RemoteAddr + " works"})
-			default:
-				out = append(out, Check{Group: g, Name: "Reachability", Level: CheckFail,
-					Detail: "cannot open TCP to " + spec.RemoteAddr,
-					Fix:    "check the server is up, the port matches, and the firewall allows it — or add a fallback address in Edit"})
-			}
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+				Detail: strings.Join(vis, ", ")})
 		}
-
-		// TLS certificate validity for the transports that terminate TLS.
-		if t.Role == "server" && needsTLS(spec.Transport) {
-			out = append(out, certCheck(g, spec.TLSCert))
+		if err := validatePortSpecs(vis); err != nil {
+			out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+				Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
 		}
-
-		// Token sanity — a default/short token is a real security problem.
+	} else {
+		// Client: can we actually reach the server's tunnel port over TCP?
+		host, port := addrHost(spec.RemoteAddr, ""), addrPort(spec.RemoteAddr)
+		out = append(out, Check{Group: g, Name: "Server address", Level: CheckInfo, Detail: spec.RemoteAddr})
 		switch {
-		case spec.Token == "":
-			out = append(out, Check{Group: g, Name: "Token", Level: CheckFail,
-				Detail: "empty", Fix: "recreate the tunnel with a generated token"})
-		case len(spec.Token) < 16 || spec.Token == "backpack":
-			out = append(out, Check{Group: g, Name: "Token", Level: CheckWarn,
-				Detail: "weak or default", Fix: "recreate the tunnel to get a 64-char token"})
+		case host == "" || port == "":
+			// Nothing to probe.
+		case isDatagram(spec.Transport):
+			// There is no connect step to test on UDP: a silent port and a
+			// working one look identical from outside. Say so plainly
+			// rather than reporting a failure that may not be real.
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckInfo,
+				Detail: "not testable on a UDP transport — trust the tunnel state above",
+				Fix:    "if it will not connect, check that UDP " + port + " is open on the server firewall"})
+		case reachable(host, port, 4*time.Second):
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckOK,
+				Detail: "TCP connect to " + spec.RemoteAddr + " works"})
 		default:
-			out = append(out, Check{Group: g, Name: "Token", Level: CheckOK,
-				Detail: fmt.Sprintf("%d characters", len(spec.Token))})
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckFail,
+				Detail: "cannot open TCP to " + spec.RemoteAddr,
+				Fix:    "check the server is up, the port matches, and the firewall allows it — or add a fallback address in Edit"})
 		}
+	}
+
+	// TLS certificate validity for the transports that terminate TLS.
+	if t.Role == "server" && needsTLS(spec.Transport) {
+		out = append(out, certCheck(g, spec.TLSCert))
+	}
+
+	// Token sanity — a default/short token is a real security problem.
+	switch {
+	case spec.Token == "":
+		out = append(out, Check{Group: g, Name: "Token", Level: CheckFail,
+			Detail: "empty", Fix: "recreate the tunnel with a generated token"})
+	case len(spec.Token) < 16 || spec.Token == "backpack":
+		out = append(out, Check{Group: g, Name: "Token", Level: CheckWarn,
+			Detail: "weak or default", Fix: "recreate the tunnel to get a 64-char token"})
+	default:
+		out = append(out, Check{Group: g, Name: "Token", Level: CheckOK,
+			Detail: fmt.Sprintf("%d characters", len(spec.Token))})
 	}
 	return out
 }

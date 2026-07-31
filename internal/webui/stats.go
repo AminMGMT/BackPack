@@ -46,14 +46,19 @@ type SystemStats struct {
 	DiskTotal   string  `json:"diskTotal"`
 	DiskPercent float64 `json:"diskPercent"`
 
-	TotalSent string `json:"totalSent"`
-	TotalRecv string `json:"totalRecv"`
-	// TotalTraffic is the two added together. The panel shows one figure rather
-	// than a pair: "how much has this machine moved" is the question people
-	// actually ask, and splitting it cost two tiles to answer half of it each.
+	// Traffic carried by the tunnels — every tunnel's persisted counters added
+	// up, so the headline figure is the sum of what the cards show rather than a
+	// larger number nothing on the page accounts for. It used to be the machine's
+	// NIC counters, which also include ssh, apt and the panel itself, and which
+	// reset on reboot while the per-tunnel counters survive one.
+	TotalSent    string `json:"totalSent"`
+	TotalRecv    string `json:"totalRecv"`
 	TotalTraffic string `json:"totalTraffic"`
-	UpSpeed      string `json:"upSpeed"`
-	DownSpeed    string `json:"downSpeed"`
+	// Speed stays on the interface counters: it answers "what is this box doing
+	// right now", which is the question a live rate is read for, and a tunnel's
+	// own rate is already on its card.
+	UpSpeed   string `json:"upSpeed"`
+	DownSpeed string `json:"downSpeed"`
 
 	TunnelsTotal   int `json:"tunnelsTotal"`
 	TunnelsRunning int `json:"tunnelsRunning"`
@@ -188,12 +193,85 @@ type netSample struct {
 }
 
 var (
-	lastNet   netSample
-	netMu     sync.Mutex
-	ipv4Cache string
-	ipv6Cache string
-	ipOnce    sync.Once
+	lastNet netSample
+	netMu   sync.Mutex
 )
+
+// --- identity (public addresses + geo) ---------------------------------------
+
+// All four values come from the network: two calls to an address echo, then a
+// geo lookup on the result. None of it belongs on the request path — a poll that
+// lands while they are being fetched would wait on up to three third-party HTTP
+// calls, and /api/stats is polled every few seconds.
+//
+// So the endpoint reads a cache and a refresher fills it in the background. The
+// first poll after a restart shows dashes and the one after that is complete,
+// which is the right trade: a blank field for a few seconds costs nothing, a
+// stalled dashboard costs the page.
+//
+// The addresses used to be behind a sync.Once. That made a transient failure
+// permanent — the panel starts from systemd at boot, often before the network is
+// up, and one failed lookup then left IPv4 (and with it Location and ISP, which
+// are derived from it) empty for as long as the process ran. Anything still
+// missing is retried; what has been found is refreshed hourly in case the VPS
+// is renumbered.
+type identityInfo struct {
+	ipv4, ipv6, location, isp string
+}
+
+var (
+	idMu        sync.Mutex
+	idCur       identityInfo
+	idRefreshed time.Time
+	idBusy      bool
+)
+
+// identity returns the cached values and kicks a refresh when they are stale or
+// incomplete. It never blocks on the network.
+func identity() identityInfo {
+	idMu.Lock()
+	cur, at, busy := idCur, idRefreshed, idBusy
+	// Complete answers keep for an hour; an incomplete one is retried every
+	// 30 seconds until it fills in, rather than being frozen by the first
+	// failure.
+	ttl := time.Hour
+	if cur.ipv4 == "" || cur.location == "" || cur.isp == "" {
+		ttl = 30 * time.Second
+	}
+	if !busy && time.Since(at) > ttl {
+		idBusy = true
+		go refreshIdentity()
+	}
+	idMu.Unlock()
+	return cur
+}
+
+func refreshIdentity() {
+	next := identityInfo{ipv4: manage.PublicIPv4(), ipv6: manage.PublicIPv6()}
+	if g := geo.Lookup(next.ipv4); g != nil {
+		next.location = strings.Trim(strings.TrimSpace(g.City+", "+g.Country), ", ")
+		next.isp = g.ISP
+	}
+
+	idMu.Lock()
+	defer idMu.Unlock()
+	idBusy = false
+	idRefreshed = time.Now()
+	// Keep what we already knew when a round comes back empty: a lookup that
+	// fails once should blank nothing on the page.
+	if next.ipv4 != "" {
+		idCur.ipv4 = next.ipv4
+	}
+	if next.ipv6 != "" {
+		idCur.ipv6 = next.ipv6
+	}
+	if next.location != "" {
+		idCur.location = next.location
+	}
+	if next.isp != "" {
+		idCur.isp = next.isp
+	}
+}
 
 // GatherSystem collects the current system statistics.
 func GatherSystem() SystemStats {
@@ -218,19 +296,6 @@ func GatherSystem() SystemStats {
 	s.DiskUsed, s.DiskTotal = sysstat.HumanBytes(m.DiskUsed), sysstat.HumanBytes(m.DiskTotal)
 	s.DiskPercent = m.DiskPercent
 
-	fillNetwork(&s)
-
-	// Public IPs (cached — they don't change) and geo (cached with TTL).
-	ipOnce.Do(func() {
-		ipv4Cache = manage.PublicIPv4()
-		ipv6Cache = manage.PublicIPv6()
-	})
-	s.IPv4, s.IPv6 = ipv4Cache, ipv6Cache
-	if g := geo.Lookup(ipv4Cache); g != nil {
-		s.Location = strings.TrimSpace(g.City + ", " + g.Country)
-		s.ISP = g.ISP
-	}
-
 	tunnels := manage.List()
 	s.TunnelsTotal = len(tunnels)
 	for _, t := range tunnels {
@@ -238,6 +303,14 @@ func GatherSystem() SystemStats {
 			s.TunnelsRunning++
 		}
 	}
+
+	fillNetwork(&s, tunnels)
+
+	// Identity — the public addresses and where they are. Read from a cache that
+	// a background refresher fills, never inline: the lookups are HTTP calls to
+	// third parties, and this endpoint is polled every few seconds.
+	id := identity()
+	s.IPv4, s.IPv6, s.Location, s.ISP = id.ipv4, id.ipv6, id.location, id.isp
 
 	s.MonitorRunning = manage.MonitorRunning()
 	s.Congestion, s.CongestionWanted = network.TunnelCongestion()
@@ -279,16 +352,35 @@ func kickUpdateCheck() {
 	go manage.RefreshUpdateCheckIfStale(6 * time.Hour)
 }
 
-// fillNetwork computes cumulative traffic and up/down speed since the last call.
-func fillNetwork(s *SystemStats) {
+// fillNetwork sets the traffic totals from the tunnels and the live rate from
+// the interface counters.
+//
+// The two come from different places on purpose. The total answers "how much has
+// this tunnel setup carried", so it is the sum of exactly what the cards show —
+// counting the box's ssh and apt traffic into a headline figure the cards cannot
+// account for is what made the number look wrong. The rate answers "what is
+// happening now", where the interface is the honest source.
+func fillNetwork(s *SystemStats, tunnels []manage.Tunnel) {
+	var in, out uint64
+	for _, t := range tunnels {
+		// A tunnel with no snapshot yet simply contributes nothing; the file
+		// appears once it has carried its first bytes.
+		snap, err := metrics.Read(app.ConfigDir, t.Name)
+		if err != nil {
+			continue
+		}
+		in += snap.BytesIn
+		out += snap.BytesOut
+	}
+	s.TotalRecv = sysstat.HumanBytes(in)
+	s.TotalSent = sysstat.HumanBytes(out)
+	s.TotalTraffic = sysstat.HumanBytes(in + out)
+
 	counters, err := psnet.IOCounters(false)
 	if err != nil || len(counters) == 0 {
 		return
 	}
 	cur := netSample{sent: counters[0].BytesSent, recv: counters[0].BytesRecv, at: time.Now()}
-	s.TotalSent = sysstat.HumanBytes(cur.sent)
-	s.TotalRecv = sysstat.HumanBytes(cur.recv)
-	s.TotalTraffic = sysstat.HumanBytes(cur.sent + cur.recv)
 
 	netMu.Lock()
 	prev := lastNet
