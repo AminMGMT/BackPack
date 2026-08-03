@@ -18,14 +18,22 @@ func Dial(proxyAddr, user, pass, targetHost string, targetPort int) (net.Conn, e
 	if err != nil {
 		return nil, err
 	}
-	if err := negotiate(conn, user, pass, targetHost, targetPort); err != nil {
+	if err := Negotiate(conn, user, pass, targetHost, targetPort); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	return conn, nil
 }
 
-func negotiate(conn net.Conn, user, pass, host string, port int) error {
+// Negotiate runs the SOCKS5 handshake on a connection that is already open to
+// the proxy, leaving it connected to targetHost:targetPort.
+//
+// It is separate from Dial because the tunnel has to open that connection
+// itself: the socket a tunnel dials carries its buffer sizes, its congestion
+// control, its keepalive and its MSS, and a connection opened by a plain
+// net.Dial here would have none of them. The handshake is the same either way,
+// so only the dialling differs.
+func Negotiate(conn net.Conn, user, pass, host string, port int) error {
 	conn.SetDeadline(time.Now().Add(20 * time.Second))
 
 	// With no credentials, offer no-auth; otherwise offer username/password.

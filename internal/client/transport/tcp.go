@@ -56,6 +56,10 @@ type TcpConfig struct {
 	MSS            int
 	SO_RCVBUF      int
 	SO_SNDBUF      int
+	// Proxy routes the connections that reach the tunnel server through a
+	// local or nearby proxy. Nil dials the server directly. It is never
+	// applied to the dial to the local backend — see network/proxy.go.
+	Proxy *network.ProxyConfig
 	// Stealth wraps every tunnel-carrying connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
@@ -172,7 +176,7 @@ func (c *TcpTransport) channelDialer() {
 			return
 		default:
 			//set default behaviour of control channel to nodelay, also using default buffer parameters
-			rawConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Proxy, c.config.Endpoints.Current(), "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -412,7 +416,7 @@ func (c *TcpTransport) tunnelDialer() {
 	// Next() rather than Current(): with load balancing enabled the pool
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
-	rawConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Next(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	rawConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Proxy, c.config.Endpoints.Next(), "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Error("tunnel server dialer: ", err)
 

@@ -97,6 +97,7 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		SoRcvBuf:        cc.SO_RCVBUF,
 		SoSndBuf:        cc.SO_SNDBUF,
 		EdgeIP:          cc.EdgeIP,
+		Proxy:           cc.Proxy,
 		MuxCon:          cc.MuxSession,
 		MuxVersion:      cc.MuxVersion,
 		MuxFrameSize:    cc.MaxFrameSize,

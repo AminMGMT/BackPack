@@ -97,6 +97,9 @@ type TunnelSpec struct {
 
 	// Edge/CDN IP override (client, websocket transports only)
 	EdgeIP string
+	// Proxy is the optional socks5:// or http:// URL the client reaches the
+	// tunnel server through. Empty means dial it directly.
+	Proxy string
 }
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
@@ -289,6 +292,9 @@ func (s TunnelSpec) Render() string {
 	s.writeKCP(p)
 	if isWS(s.Transport) && s.EdgeIP != "" {
 		p("edge_ip = %q\n", s.EdgeIP)
+	}
+	if s.Proxy != "" {
+		p("proxy = %q\n", s.Proxy)
 	}
 	if isMux(s.Transport) {
 		p("mux_session = %d\n", s.MuxCon)

@@ -143,6 +143,36 @@ func applyDefaults(cfg *config.Config) {
 	}
 
 	warnUnusedStreamBuffer(cfg)
+	checkProxy(cfg)
+}
+
+// checkProxy rejects a proxy URL that cannot work, at load time.
+//
+// A misspelled scheme or a missing port would otherwise surface as a tunnel
+// that simply never connects, with the reason buried in a dial error that names
+// the proxy rather than the typo. Failing here says which line of the file is
+// wrong, before anything has started.
+func checkProxy(cfg *config.Config) {
+	if cfg.Client.Proxy == "" {
+		return
+	}
+	p, err := network.ParseProxy(cfg.Client.Proxy)
+	if err != nil {
+		logger.Fatalf("invalid proxy setting: %v", err)
+	}
+
+	// The datagram transports cannot use it, and half-using it would be worse
+	// than refusing. Their control channel is TCP and would go through the
+	// proxy quite happily, while their data is UDP, which an HTTP CONNECT
+	// cannot carry at all and which SOCKS5 only carries through a separate
+	// UDP ASSOCIATE this client does not speak. The tunnel would come up and
+	// carry nothing — the failure that is hardest to attribute to its cause.
+	switch cfg.Client.Transport {
+	case config.UDP, config.KCP:
+		logger.Fatalf("proxy is not supported on the %s transport: its data is carried in UDP datagrams, which a TCP proxy cannot relay. Use tcp, tcpmux, ws, wss or wsmux, or remove the proxy setting.", cfg.Client.Transport)
+	}
+
+	logger.Infof("the tunnel server will be reached through %s", p)
 }
 
 // warnUnusedStreamBuffer says out loud that mux_streambuffer does nothing on

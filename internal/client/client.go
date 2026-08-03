@@ -67,6 +67,19 @@ func (c *Client) Start() {
 		c.logger.Infof("load balancing enabled across %d endpoints", endpoints.Len())
 	}
 
+	// Parsed once for every transport that can use it. The configuration was
+	// already validated at load time, so a failure here would mean the file
+	// changed underneath us; dialling directly is the safe reading, and it is
+	// said out loud rather than assumed.
+	proxy, err := network.ParseProxy(c.config.Proxy)
+	if err != nil {
+		c.logger.Errorf("ignoring the configured proxy and dialling directly: %v", err)
+		proxy = nil
+	}
+	if proxy != nil {
+		c.logger.Infof("reaching the tunnel server through %s", proxy)
+	}
+
 	switch c.config.Transport {
 	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
@@ -85,6 +98,7 @@ func (c *Client) Start() {
 			MSS:            c.config.MSS,
 			SO_RCVBUF:      c.config.SO_RCVBUF,
 			SO_SNDBUF:      c.config.SO_SNDBUF,
+			Proxy:          proxy,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
 			Stealth: c.config.Transport == config.STEALTH,
@@ -113,6 +127,7 @@ func (c *Client) Start() {
 			MSS:              c.config.MSS,
 			SO_RCVBUF:        c.config.SO_RCVBUF,
 			SO_SNDBUF:        c.config.SO_SNDBUF,
+			Proxy:            proxy,
 		}
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
@@ -167,6 +182,7 @@ func (c *Client) Start() {
 			Mode:           c.config.Transport,
 			AggressivePool: c.config.AggressivePool,
 			EdgeIP:         c.config.EdgeIP,
+			Proxy:          proxy,
 		}
 		WsClient := transport.NewWSClient(c.ctx, WsConfig, c.logger)
 		go WsClient.Start()
@@ -191,6 +207,7 @@ func (c *Client) Start() {
 			Mode:             c.config.Transport,
 			AggressivePool:   c.config.AggressivePool,
 			EdgeIP:           c.config.EdgeIP,
+			Proxy:            proxy,
 		}
 		wsMuxClient := transport.NewWSMuxClient(c.ctx, wsMuxConfig, c.logger)
 		go wsMuxClient.Start()

@@ -8,6 +8,7 @@ import (
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
 	"github.com/backpack/backpack/internal/tui"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // transportEntry is one selectable transport. An empty value marks an entry
@@ -413,6 +414,27 @@ func SetupClient() {
 		tui.Info("Optional edge IP: connect to a CDN edge (e.g. Cloudflare) instead of")
 		tui.Info("resolving the server address directly. Leave empty to skip.")
 		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
+	}
+
+	// Only offered where it can actually work: the datagram transports carry
+	// their data in UDP, which a TCP proxy cannot relay.
+	if transport != "udp" && transport != "kcp" {
+		fmt.Println()
+		tui.Info("Optional proxy: reach the tunnel server through a SOCKS5 or HTTP proxy,")
+		tui.Info("for a machine that cannot open outbound connections directly.")
+		tui.Warn("e.g. socks5://127.0.0.1:1080 — leave empty to dial the server directly.")
+		for {
+			raw := strings.TrimSpace(tui.PromptDefault("Proxy URL", ""))
+			if raw == "" {
+				break
+			}
+			if _, err := network.ParseProxy(raw); err != nil {
+				tui.Error(fmt.Sprintf("%v", err))
+				continue
+			}
+			s.Proxy = raw
+			break
+		}
 	}
 
 	// Backup addresses make the tunnel survive a filtered server IP: the client

@@ -8,16 +8,48 @@ import (
 	"time"
 )
 
+// TcpDialer opens a connection straight to remoteAddress.
+//
+// This is the dialer for anything that must not go through a proxy — above all
+// the dial to the local backend, which never leaves the machine. It cannot take
+// a proxy, which is what keeps that traffic off one by construction rather than
+// by remembering. Tunnel connections use TcpDialerVia.
 func TcpDialer(ctx context.Context, remoteAddress string, localSrc string, timeout time.Duration, keepAlive time.Duration, nodelay bool, retry int, SO_RCVBUF int, SO_SNDBUF, mss int) (*net.TCPConn, error) {
+	return TcpDialerVia(ctx, nil, remoteAddress, localSrc, timeout, keepAlive, nodelay, retry, SO_RCVBUF, SO_SNDBUF, mss)
+}
+
+// TcpDialerVia opens a connection to remoteAddress through proxy, or straight
+// to it when proxy is nil.
+//
+// The socket is dialled here either way, so it carries the tunnel's buffer
+// sizes, congestion control, keepalive and MSS whether it ends up talking to
+// the server or to a proxy standing in front of it; only the handshake that
+// follows differs. A proxy that refuses the connection fails the attempt, and
+// the retry and backoff above cover it exactly as a refused direct dial.
+func TcpDialerVia(ctx context.Context, proxy *ProxyConfig, remoteAddress string, localSrc string, timeout time.Duration, keepAlive time.Duration, nodelay bool, retry int, SO_RCVBUF int, SO_SNDBUF, mss int) (*net.TCPConn, error) {
 	var tcpConn *net.TCPConn
 	var err error
+
+	// With a proxy the socket is opened to the proxy, and the address the
+	// caller asked for becomes what the handshake asks the proxy to reach.
+	dialAddress := remoteAddress
+	if proxy != nil {
+		dialAddress = proxy.Address
+	}
 
 	retries := retry           // Number of retries
 	backoff := 1 * time.Second // Initial backoff duration
 
 	for i := 0; i < retries; i++ {
 		// Attempt to establish a TCP connection
-		tcpConn, err = attemptTcpDialer(ctx, remoteAddress, localSrc, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
+		tcpConn, err = attemptTcpDialer(ctx, dialAddress, localSrc, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
+		if err == nil && proxy != nil {
+			if err = connectThrough(tcpConn, proxy, remoteAddress, timeout); err != nil {
+				tcpConn.Close()
+				tcpConn = nil
+				err = fmt.Errorf("via %s: %w", proxy, err)
+			}
+		}
 		if err == nil {
 			// Connection successful
 			return tcpConn, nil

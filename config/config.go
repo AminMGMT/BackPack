@@ -146,6 +146,15 @@ type ClientConfig struct {
 	MSS              int           `toml:"mss"`
 	SO_RCVBUF        int           `toml:"so_rcvbuf"`
 	SO_SNDBUF        int           `toml:"so_sndbuf"`
+	// Proxy routes the connection to the tunnel server through a local or
+	// nearby proxy, for a client that cannot open an arbitrary outbound
+	// connection itself. One URL: "socks5://127.0.0.1:1080" or
+	// "http://user:pass@10.0.0.1:8080". Empty means dial the server directly.
+	//
+	// It applies only to the connections that reach the server. The dial to the
+	// local backend never goes through it — that traffic does not leave the
+	// machine, so sending it out and back would be both slower and wrong.
+	Proxy string `toml:"proxy"`
 	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
 	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
 	// the window, which costs a large multiple of the throughput on a fast
