@@ -46,24 +46,29 @@ func NewPoolNonce() (string, error) {
 }
 
 // EncodeControlAck packs the server's answer to a v2 control handshake: the
-// token the client checks the server by, and the nonce its pool connections
-// will carry.
+// token the client checks the server by, the nonce its pool connections will
+// carry, and the mux version it must use for this run (see mux.go).
 //
-// The nonce goes first because it is always exactly poolNonceHexLen characters,
-// so the two fields split apart on a fixed offset. A separator would have to be
-// a byte the token cannot contain, and the token is arbitrary user input.
-func EncodeControlAck(token, nonce string) string {
-	return nonce + token
+// The fixed-width fields go first, so everything splits apart on known offsets
+// and the token — arbitrary user input, which may contain any byte at all —
+// is simply whatever is left. A separator would have to be a byte the token
+// cannot contain, and there is no such byte.
+func EncodeControlAck(token, nonce string, muxVersion int) string {
+	return nonce + string(rune('0'+muxVersion)) + token
 }
 
 // DecodeControlAck splits what EncodeControlAck packed. A malformed answer
-// yields two empty strings, which fails the caller's token comparison — so a
-// server that answers with something else is rejected rather than half-trusted.
-func DecodeControlAck(ack string) (token, nonce string) {
-	if len(ack) < poolNonceHexLen {
-		return "", ""
+// yields an empty token, which fails the caller's comparison — so a server that
+// answers with something else is rejected rather than half-trusted.
+func DecodeControlAck(ack string) (token, nonce string, muxVersion int) {
+	if len(ack) < poolNonceHexLen+1 {
+		return "", "", 0
 	}
-	return ack[poolNonceHexLen:], ack[:poolNonceHexLen]
+	v := int(ack[poolNonceHexLen] - '0')
+	if v < 0 || v > 9 {
+		return "", "", 0
+	}
+	return ack[poolNonceHexLen+1:], ack[:poolNonceHexLen], v
 }
 
 // PoolNonce holds the nonce of the current run.

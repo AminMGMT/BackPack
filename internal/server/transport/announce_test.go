@@ -195,12 +195,17 @@ func TestControlHandshakeV2IssuesANonce(t *testing.T) {
 	if signal != utils.SG_ChanV2 {
 		t.Fatalf("answer came back as signal %d, want SG_ChanV2", signal)
 	}
-	token, nonce := network.DecodeControlAck(ack)
+	token, nonce, muxVersion := network.DecodeControlAck(ack)
 	if token != "a-token" {
 		t.Fatalf("answer carried token %q, want %q", token, "a-token")
 	}
 	if nonce == "" {
 		t.Fatal("a v2 handshake was answered without a nonce")
+	}
+	// The transport under test carries no mux sessions, so it imposes no
+	// version — the mux transports are what fill this in.
+	if muxVersion != 0 {
+		t.Fatalf("a plain TCP handshake imposed mux version %d", muxVersion)
 	}
 
 	select {

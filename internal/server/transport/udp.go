@@ -119,6 +119,19 @@ func (s *UdpTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// The whole tunnel may have been shut down while this restart was waiting —
+	// on a reload, or on the process going down. Rebuilding the run from a
+	// parent context that is already finished would bind the listeners again
+	// only to close them, and on a reload that means fighting the run that is
+	// replacing this one for its own ports. Nothing here is worth starting.
+	if s.parentctx.Err() != nil {
+		// The level was turned down to hide the timeouts a teardown produces;
+		// leaving it there would silence the shutdown itself.
+		s.logger.SetLevel(level)
+		s.logger.Debug("restart abandoned: the tunnel is shutting down")
+		return
+	}
+
 	ctx, cancel := context.WithCancel(s.parentctx)
 	s.ctx = ctx
 	s.cancel = cancel

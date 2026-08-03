@@ -72,22 +72,30 @@ func tokenMatches(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
-// controlAck builds the answer to a control handshake and the nonce that goes
-// with it. Answering with the token is what proves to the client that this
-// server knows the secret too; a v2 handshake carries a fresh nonce alongside
-// it, which is what the client's pool connections will present.
+// controlAck builds the answer to a control handshake, along with the run
+// settings it carries. Answering with the token is what proves to the client
+// that this server knows the secret too; a v2 handshake also carries a fresh
+// nonce, which is what the client's pool connections will present, and the mux
+// version the client must use (see network.ResolveMuxVersion).
 //
-// A legacy handshake yields an empty nonce, which leaves pool authorisation off
-// and the transport falling back to matching source addresses.
-func controlAck(sig byte, token string) (ack, nonce string, err error) {
+// A legacy handshake yields an empty nonce and version 0, which leaves pool
+// authorisation off — the transport falls back to matching source addresses —
+// and leaves the mux version to each end's own configuration, exactly as it
+// was before either mechanism existed.
+// It returns the version it actually promised rather than the one it was
+// offered, so the caller records what the client was told and not what the
+// server would have liked. Those differ for a legacy handshake, and a server
+// that ran a different version from the one it announced would produce exactly
+// the mismatch this whole mechanism exists to prevent.
+func controlAck(sig byte, token string, muxVersion int) (ack, nonce string, promised int, err error) {
 	if sig != utils.SG_ChanV2 {
-		return token, "", nil
+		return token, "", 0, nil
 	}
 	nonce, err = network.NewPoolNonce()
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
-	return network.EncodeControlAck(token, nonce), nonce, nil
+	return network.EncodeControlAck(token, nonce, muxVersion), nonce, muxVersion, nil
 }
 
 // controlCandidate is a connection that has proved it holds the token and asked
@@ -97,6 +105,9 @@ type controlCandidate struct {
 	// nonce is what this run's pool connections must present, or "" when the
 	// client spoke the legacy handshake and there is none.
 	nonce string
+	// muxVersion is the version imposed on this run, or 0 when the client
+	// spoke the legacy handshake and cannot be told one.
+	muxVersion int
 }
 
 // legacyPoolWarning is logged once per control channel established by a client

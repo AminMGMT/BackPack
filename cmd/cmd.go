@@ -45,16 +45,59 @@ func startMetrics(ctx context.Context, configPath, transport, role string) {
 	}()
 }
 
+// Run keeps one tunnel running from a configuration file, restarting it in
+// place whenever the file changes. See reload.go for why the file is watched at
+// all, and for the two rules that keep watching it from being a liability: a
+// file that does not parse is ignored, and a file that means the same thing
+// does not disturb the tunnel.
 func Run(configPath string, ctx context.Context) {
-	// Load and parse the configuration file
+	// The first load is the one that must succeed: there is no running tunnel
+	// to fall back to, so a bad file here is fatal exactly as it always was.
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		logger.Fatalf("failed to load configuration: %v", err)
 	}
-
-	// Apply default values to the configuration
 	applyDefaults(cfg)
 
+	// The kernel tuning is process-wide and does not depend on anything in the
+	// file that a reload can change, so it is applied once rather than on every
+	// reload.
+	tuned := false
+
+	for {
+		// The engine mutates the configuration it is given — the transports
+		// write their status back into it — so it gets its own copy and the
+		// pristine one is kept for comparing against the file.
+		running := *cfg
+
+		// Decided here rather than inside the goroutine, which would be reading
+		// the flag while this loop writes it.
+		applyTuning := !tuned
+		tuned = true
+
+		runCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runEngine(&running, runCtx, configPath, applyTuning)
+		}()
+
+		next := awaitConfigChange(ctx, configPath, cfg)
+		cancel()
+		<-done
+
+		if next == nil {
+			return // ctx ended: shutting down, not reloading
+		}
+
+		logger.Info("the configuration file changed; restarting the tunnel with it")
+		waitForPorts(ctx, portsInUse(cfg))
+		cfg = next
+	}
+}
+
+// runEngine runs one tunnel until ctx ends.
+func runEngine(cfg *config.Config, ctx context.Context, configPath string, applyTuning bool) {
 	configType := ""
 	if cfg.Server.BindAddr != "" {
 		configType = "server"
@@ -68,7 +111,7 @@ func Run(configPath string, ctx context.Context) {
 	switch configType {
 	case "server":
 		// Apply temporary TCP optimizations at startup
-		if !cfg.Server.SkipOptz {
+		if applyTuning && !cfg.Server.SkipOptz {
 			ApplyTCPTuning()
 		}
 
@@ -83,7 +126,7 @@ func Run(configPath string, ctx context.Context) {
 		logger.Println("shutting down server...")
 	case "client":
 		// Apply temporary TCP optimizations at startup
-		if !cfg.Client.SkipOptz {
+		if applyTuning && !cfg.Client.SkipOptz {
 			ApplyTCPTuning()
 		}
 

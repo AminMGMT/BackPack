@@ -61,10 +61,18 @@ func noteLegacyServer(logger *logrus.Logger, legacy *atomic.Bool, sent byte) {
 }
 
 // decodeControlAck reads the server's answer, returning the token to check it
-// by and the nonce for pool connections (empty from a legacy server).
-func decodeControlAck(ack string, signal byte) (token, nonce string) {
+// by, the nonce for pool connections, and the mux version to run this tunnel
+// at. A legacy server sends only the token, so the nonce is empty and the
+// version is 0 — nothing to apply, and each end keeps its own configuration.
+//
+// The server's version is used as given, even against this client's own
+// mux_version. That is deliberate, and it is what makes the whole thing safe:
+// smux has no negotiation of its own and tears down any session whose two ends
+// disagree, so exactly one side has to decide. Two ends each honouring their
+// own file is precisely how they end up mismatched.
+func decodeControlAck(ack string, signal byte) (token, nonce string, muxVersion int) {
 	if signal != utils.SG_ChanV2 {
-		return ack, ""
+		return ack, "", 0
 	}
 	return network.DecodeControlAck(ack)
 }

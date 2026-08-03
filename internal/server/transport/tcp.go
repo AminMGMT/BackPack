@@ -172,6 +172,19 @@ func (s *TcpTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// The whole tunnel may have been shut down while this restart was waiting —
+	// on a reload, or on the process going down. Rebuilding the run from a
+	// parent context that is already finished would bind the listeners again
+	// only to close them, and on a reload that means fighting the run that is
+	// replacing this one for its own ports. Nothing here is worth starting.
+	if s.parentctx.Err() != nil {
+		// The level was turned down to hide the timeouts a teardown produces;
+		// leaving it there would silence the shutdown itself.
+		s.logger.SetLevel(level)
+		s.logger.Debug("restart abandoned: the tunnel is shutting down")
+		return
+	}
+
 	ctx, cancel := context.WithCancel(s.parentctx)
 	s.ctx = ctx
 	s.cancel = cancel
@@ -455,7 +468,9 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 		return
 	}
 
-	ack, nonce, err := controlAck(ann.signal, s.config.Token)
+	// Plain TCP carries no mux sessions, so there is no version to settle: 0
+	// tells the client there is nothing to apply.
+	ack, nonce, _, err := controlAck(ann.signal, s.config.Token, 0)
 	if err != nil {
 		s.logger.Errorf("could not answer the control handshake: %v", err)
 		conn.Close()

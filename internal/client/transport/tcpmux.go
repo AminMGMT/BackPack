@@ -20,8 +20,12 @@ import (
 )
 
 type TcpMuxTransport struct {
-	config          *TcpMuxConfig
-	smuxConfig      *smux.Config
+	config *TcpMuxConfig
+	// muxV1/muxV2 are both built up front so that adopting the server's
+	// version costs nothing per session; muxVersion is the one in force.
+	muxV1           *smux.Config
+	muxV2           *smux.Config
+	muxVersion      atomic.Int32
 	parentctx       context.Context
 	state           clientState
 	logger          *logrus.Logger
@@ -70,15 +74,14 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	// Initialize the TcpTransport struct
+	muxSettings := network.MuxSettings{
+		MaxFrameSize:     config.MaxFrameSize,
+		MaxReceiveBuffer: config.MaxReceiveBuffer,
+		MaxStreamBuffer:  config.MaxStreamBuffer,
+	}
 	client := &TcpMuxTransport{
-		smuxConfig: &smux.Config{
-			Version:           config.MuxVersion,
-			KeepAliveInterval: 20 * time.Second,
-			KeepAliveTimeout:  40 * time.Second,
-			MaxFrameSize:      config.MaxFrameSize,
-			MaxReceiveBuffer:  config.MaxReceiveBuffer,
-			MaxStreamBuffer:   config.MaxStreamBuffer,
-		},
+		muxV1:           network.SmuxConfig(1, muxSettings),
+		muxV2:           network.SmuxConfig(2, muxSettings),
 		config:          config,
 		parentctx:       parentCtx,
 		logger:          logger,
@@ -125,6 +128,19 @@ func (c *TcpMuxTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// The whole tunnel may have been shut down while this restart was waiting —
+	// on a reload, or on the process going down. Rebuilding the run from a
+	// parent context that is already finished would bind the listeners again
+	// only to close them, and on a reload that means fighting the run that is
+	// replacing this one for its own ports. Nothing here is worth starting.
+	if c.parentctx.Err() != nil {
+		// The level was turned down to hide the timeouts a teardown produces;
+		// leaving it there would silence the shutdown itself.
+		c.logger.SetLevel(level)
+		c.logger.Debug("restart abandoned: the tunnel is shutting down")
+		return
+	}
+
 	ctx, cancel := context.WithCancel(c.parentctx)
 
 	// Publish the whole new generation at once: a reader must never see
@@ -134,6 +150,7 @@ func (c *TcpMuxTransport) Restart() {
 	// The next control channel issues its own nonce; carrying this one over
 	// would have the pool announcing a value the server has already forgotten.
 	c.poolNonce.Clear()
+	c.muxVersion.Store(0)
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	// The published pool figures belong to the run that just ended. Left
@@ -209,14 +226,17 @@ func (c *TcpMuxTransport) channelDialer() {
 			// Resetting the deadline (removes any existing deadline)
 			tunnelConn.SetReadDeadline(time.Time{})
 
-			token, nonce := decodeControlAck(message, ackSignal)
+			token, nonce, muxVersion := decodeControlAck(message, ackSignal)
 
 			if token == c.config.Token {
 				// Before the control channel is published, so the pool
 				// connections poolMaintainer starts below already have it.
 				c.poolNonce.Set(nonce)
+				// Settled before the pool starts, so no session is ever built
+				// on a version the server has not confirmed.
+				c.setMuxVersion(muxVersion)
 				c.state.SetConn(tunnelConn)
-				c.logger.Info("control channel established successfully")
+				c.logger.Infof("control channel established successfully (mux version %d)", c.muxVersion.Load())
 
 				c.config.TunnelStatus = "Connected (TCPMux)"
 
@@ -408,7 +428,7 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 	}()
 
 	// SMUX server
-	session, err := smux.Server(tunnelConn, c.smuxConfig)
+	session, err := smux.Server(tunnelConn, c.smuxCfg())
 	if err != nil {
 		c.logger.Errorf("failed to create mux session: %v", err)
 		return
@@ -471,4 +491,27 @@ func (c *TcpMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 	c.logger.Debugf("connected to local address %s successfully", remoteAddr)
 
 	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(stream), localConnection, c.logger, c.state.Usage(), int(port), c.config.Sniffer)
+}
+
+// setMuxVersion adopts the version the server settled on. A legacy server sends
+// none, and both ends then keep to their own configuration, exactly as they did
+// before there was anything to agree about.
+func (c *TcpMuxTransport) setMuxVersion(negotiated int) {
+	if negotiated != 1 && negotiated != 2 {
+		negotiated = c.config.MuxVersion
+		if negotiated != 1 && negotiated != 2 {
+			// Nothing configured and nothing negotiated: the peer predates the
+			// handshake, so it can only be speaking version 1.
+			negotiated = 1
+		}
+	}
+	c.muxVersion.Store(int32(negotiated))
+}
+
+// smuxCfg returns the session configuration for the version in force.
+func (c *TcpMuxTransport) smuxCfg() *smux.Config {
+	if c.muxVersion.Load() == 2 {
+		return c.muxV2
+	}
+	return c.muxV1
 }

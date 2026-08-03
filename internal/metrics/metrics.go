@@ -301,6 +301,22 @@ func (c *countedConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Uncount returns the connection underneath a CountedConn, reporting whether
+// there was one.
+//
+// Counting by wrapping only works while the bytes pass through this process.
+// The zero-copy relay hands the two sockets to the kernel and never sees the
+// data, so it has to reach the real *net.TCPConn — and then take over the
+// counting itself, which is what the second return value is for: it says which
+// side of the transfer was the tunnel side, and therefore whether what moves is
+// traffic in or traffic out.
+func Uncount(c net.Conn) (net.Conn, bool) {
+	if cc, ok := c.(*countedConn); ok {
+		return cc.Conn, true
+	}
+	return c, false
+}
+
 // AddBytes records traffic for transports that do not hand out a net.Conn —
 // the websocket ones read and write messages instead.
 func AddBytes(in, out uint64) {

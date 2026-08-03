@@ -49,14 +49,27 @@ func attemptTcpDialer(
 	mss int,
 ) (*net.TCPConn, error) {
 
-	//Resolve the address to a TCP address
-	tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddress)
-	if err != nil {
-		return nil, fmt.Errorf("DNS resolution: %v", err)
-	}
-
+	// The address is deliberately not resolved here.
+	//
+	// It used to be, through net.ResolveTCPAddr, which returns exactly one
+	// address — the first IPv4 one — and that address was then the only one
+	// ever dialled. A server name with several A records is the ordinary way to
+	// publish more than one route to the same machine, and it is what an
+	// operator reaches for when one IP starts being filtered: add another,
+	// leave the name alone. Resolving to a single address threw all of that
+	// away. The first record was tried forever, and if it was the blocked one
+	// the tunnel simply never connected, while every other record sat there
+	// working.
+	//
+	// Handing the name to the dialer instead gets Go's own behaviour: it
+	// resolves the lot and tries them in turn until one answers, splitting the
+	// timeout across the attempts, and races IPv4 against IPv6 (RFC 6555) so a
+	// host with an AAAA record that does not actually route no longer costs the
+	// whole connection. This is what rathole and gost both do, by dialling the
+	// name rather than an address.
 	var localTCPAddr *net.TCPAddr
 	if localSrc != "" {
+		var err error
 		localTCPAddr, err = net.ResolveTCPAddr("tcp", localSrc)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve local address: %v", err)
@@ -115,8 +128,8 @@ func attemptTcpDialer(
 		LocalAddr:       localTCPAddr,
 	}
 
-	// Dial the TCP connection with a timeout
-	conn, err := dialer.DialContext(ctx, "tcp", tcpAddr.String())
+	// Dial by name, so every address it resolves to gets a turn.
+	conn, err := dialer.DialContext(ctx, "tcp", remoteAddress)
 	if err != nil {
 		return nil, err
 	}

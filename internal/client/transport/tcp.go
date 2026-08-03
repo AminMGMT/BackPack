@@ -123,6 +123,19 @@ func (c *TcpTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// The whole tunnel may have been shut down while this restart was waiting —
+	// on a reload, or on the process going down. Rebuilding the run from a
+	// parent context that is already finished would bind the listeners again
+	// only to close them, and on a reload that means fighting the run that is
+	// replacing this one for its own ports. Nothing here is worth starting.
+	if c.parentctx.Err() != nil {
+		// The level was turned down to hide the timeouts a teardown produces;
+		// leaving it there would silence the shutdown itself.
+		c.logger.SetLevel(level)
+		c.logger.Debug("restart abandoned: the tunnel is shutting down")
+		return
+	}
+
 	ctx, cancel := context.WithCancel(c.parentctx)
 
 	// Publish the whole new generation at once: a reader must never see
@@ -218,7 +231,9 @@ func (c *TcpTransport) channelDialer() {
 			// Resetting the deadline (removes any existing deadline)
 			tunnelTCPConn.SetReadDeadline(time.Time{})
 
-			token, nonce := decodeControlAck(message, ackSignal)
+			// Plain TCP has no mux sessions, so the version the server sends
+			// is not applicable here.
+			token, nonce, _ := decodeControlAck(message, ackSignal)
 
 			if token == c.config.Token {
 				// Before the control channel is published, so the pool

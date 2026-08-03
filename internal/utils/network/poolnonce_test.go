@@ -1,6 +1,9 @@
 package network
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNewPoolNonceIsUniqueAndFullLength(t *testing.T) {
 	seen := map[string]bool{}
@@ -24,14 +27,20 @@ func TestControlAckRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPoolNonce: %v", err)
 	}
-	// Including tokens that would break a separator-based encoding.
+	// Including tokens that would break a separator-based encoding, and both
+	// mux versions plus "no version".
 	for _, token := range []string{"t", "a-token", "", "token|with:odd\x00bytes", "0123456789abcdef"} {
-		gotToken, gotNonce := DecodeControlAck(EncodeControlAck(token, nonce))
-		if gotToken != token {
-			t.Errorf("token %q round-tripped as %q", token, gotToken)
-		}
-		if gotNonce != nonce {
-			t.Errorf("nonce round-tripped as %q, want %q", gotNonce, nonce)
+		for _, version := range []int{0, 1, 2} {
+			gotToken, gotNonce, gotVersion := DecodeControlAck(EncodeControlAck(token, nonce, version))
+			if gotToken != token {
+				t.Errorf("token %q round-tripped as %q", token, gotToken)
+			}
+			if gotNonce != nonce {
+				t.Errorf("nonce round-tripped as %q, want %q", gotNonce, nonce)
+			}
+			if gotVersion != version {
+				t.Errorf("mux version %d round-tripped as %d", version, gotVersion)
+			}
 		}
 	}
 }
@@ -39,10 +48,11 @@ func TestControlAckRoundTrip(t *testing.T) {
 // A malformed answer must decode to nothing, so the caller's token comparison
 // fails and the server is rejected rather than half-trusted.
 func TestDecodeControlAckRejectsShortInput(t *testing.T) {
-	for _, ack := range []string{"", "short", "0123456789abcdef"} {
-		token, nonce := DecodeControlAck(ack)
-		if token != "" || nonce != "" {
-			t.Errorf("DecodeControlAck(%q) = (%q, %q), want empty", ack, token, nonce)
+	// The last one is nonce-length but carries no version byte at all.
+	for _, ack := range []string{"", "short", "0123456789abcdef", strings.Repeat("a", poolNonceHexLen)} {
+		token, nonce, version := DecodeControlAck(ack)
+		if token != "" || nonce != "" || version != 0 {
+			t.Errorf("DecodeControlAck(%q) = (%q, %q, %d), want empty", ack, token, nonce, version)
 		}
 	}
 }

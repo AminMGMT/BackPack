@@ -35,8 +35,12 @@ type tcpMuxGen struct {
 }
 
 type TcpMuxTransport struct {
-	config           *TcpMuxConfig
-	smuxConfig       *smux.Config
+	config *TcpMuxConfig
+	// muxV1/muxV2 are both built up front so that settling the version costs
+	// nothing per connection; muxVersion says which one this run agreed on.
+	muxV1            *smux.Config
+	muxV2            *smux.Config
+	muxVersion       atomic.Int32
 	parentctx        context.Context
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -85,20 +89,43 @@ type TcpMuxConfig struct {
 	BandwidthMbps int
 }
 
+// setMuxVersion records the version this run agreed on. A legacy client cannot
+// be told one, so it falls back to whatever the file configured — which is what
+// both ends did before there was anything to agree about.
+func (s *TcpMuxTransport) setMuxVersion(negotiated int) {
+	if negotiated != 1 && negotiated != 2 {
+		negotiated = network.ResolveMuxVersion(s.config.MuxVersion)
+		if s.config.MuxVersion == network.MuxVersionAuto {
+			// Nothing configured and nothing negotiated: the peer predates the
+			// handshake, so it can only be speaking version 1.
+			negotiated = 1
+		}
+	}
+	s.muxVersion.Store(int32(negotiated))
+}
+
+// smuxCfg returns the session configuration for the version this run settled
+// on.
+func (s *TcpMuxTransport) smuxCfg() *smux.Config {
+	if s.muxVersion.Load() == 2 {
+		return s.muxV2
+	}
+	return s.muxV1
+}
+
 func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
 	// Create a derived context from the parent context
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	// Initialize the TcpTransport struct
+	muxSettings := network.MuxSettings{
+		MaxFrameSize:     config.MaxFrameSize,
+		MaxReceiveBuffer: config.MaxReceiveBuffer,
+		MaxStreamBuffer:  config.MaxStreamBuffer,
+	}
 	server := &TcpMuxTransport{
-		smuxConfig: &smux.Config{
-			Version:           config.MuxVersion,
-			KeepAliveInterval: 20 * time.Second,
-			KeepAliveTimeout:  40 * time.Second,
-			MaxFrameSize:      config.MaxFrameSize,
-			MaxReceiveBuffer:  config.MaxReceiveBuffer,
-			MaxStreamBuffer:   config.MaxStreamBuffer,
-		},
+		muxV1:            network.SmuxConfig(1, muxSettings),
+		muxV2:            network.SmuxConfig(2, muxSettings),
 		config:           config,
 		parentctx:        parentCtx,
 		ctx:              ctx,
@@ -183,6 +210,19 @@ func (s *TcpMuxTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// The whole tunnel may have been shut down while this restart was waiting —
+	// on a reload, or on the process going down. Rebuilding the run from a
+	// parent context that is already finished would bind the listeners again
+	// only to close them, and on a reload that means fighting the run that is
+	// replacing this one for its own ports. Nothing here is worth starting.
+	if s.parentctx.Err() != nil {
+		// The level was turned down to hide the timeouts a teardown produces;
+		// leaving it there would silence the shutdown itself.
+		s.logger.SetLevel(level)
+		s.logger.Debug("restart abandoned: the tunnel is shutting down")
+		return
+	}
+
 	ctx, cancel := context.WithCancel(s.parentctx)
 	s.ctx = ctx
 	s.cancel = cancel
@@ -194,8 +234,11 @@ func (s *TcpMuxTransport) Restart() {
 	s.handshakeChannel = make(chan controlCandidate, 1)
 	s.controlChannel.Clear()
 	// The next run issues its own nonce, so connections still carrying this
-	// one must stop being accepted the moment the run ends.
+	// one must stop being accepted the moment the run ends. The mux version is
+	// settled again by the next handshake, with a peer that may not be the same
+	// one or the same build.
 	s.poolNonce.Clear()
+	s.muxVersion.Store(0)
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
 	// Stored atomically, like every other access: the goroutines of the run
@@ -230,12 +273,13 @@ func (s *TcpMuxTransport) channelHandshake(g *tcpMuxGen) {
 		// channel is, or a pool connection racing in behind the handshake
 		// would be checked against a nonce that is not there yet.
 		s.poolNonce.Set(candidate.nonce)
+		s.setMuxVersion(candidate.muxVersion)
 		s.controlChannel.Set(candidate.conn)
 
 		if candidate.nonce == "" {
 			s.logger.Warn(legacyPoolWarning)
 		}
-		s.logger.Info("control channel successfully established.")
+		s.logger.Infof("control channel successfully established (mux version %d).", s.muxVersion.Load())
 
 		return
 	}
@@ -442,7 +486,7 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 		return
 	}
 
-	ack, nonce, err := controlAck(ann.signal, s.config.Token)
+	ack, nonce, muxVersion, err := controlAck(ann.signal, s.config.Token, network.ResolveMuxVersion(s.config.MuxVersion))
 	if err != nil {
 		s.logger.Errorf("could not answer the control handshake: %v", err)
 		conn.Close()
@@ -456,7 +500,7 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 
 	s.logger.Info("control channel not found, attempting to establish a new session")
 	select {
-	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce}:
+	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce, muxVersion: muxVersion}:
 	default:
 		s.logger.Warnf("control channel handshake in progress...")
 		conn.Close()
@@ -466,7 +510,7 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 // deliverTunnelConn wraps an admitted connection in a mux session and hands it
 // to the pool, dropping it if the pool is full.
 func (s *TcpMuxTransport) deliverTunnelConn(g *tcpMuxGen, conn net.Conn) {
-	session, err := smux.Client(conn, s.smuxConfig)
+	session, err := smux.Client(conn, s.smuxCfg())
 	if err != nil {
 		s.logger.Errorf("failed to create MUX session for connection %s: %v", conn.RemoteAddr().String(), err)
 		conn.Close()
