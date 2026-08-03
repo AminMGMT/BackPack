@@ -24,27 +24,34 @@ import (
 // builds a fresh set for the next run, so carrying them here keeps a goroutine
 // that outlives its run from reaching into the run that replaced it.
 type tcpGen struct {
-	ctx            context.Context
-	tunnelChannel  chan net.Conn
-	localChannel   chan LocalTCPConn
-	reqNewConnChan chan struct{}
-	usageMonitor   *web.Usage
+	ctx              context.Context
+	tunnelChannel    chan net.Conn
+	localChannel     chan LocalTCPConn
+	reqNewConnChan   chan struct{}
+	handshakeChannel chan controlCandidate
+	usageMonitor     *web.Usage
 }
 
 type TcpTransport struct {
-	config         *TcpConfig
-	parentctx      context.Context
-	ctx            context.Context
-	cancel         context.CancelFunc
-	logger         *logrus.Logger
-	tunnelChannel  chan net.Conn
-	localChannel   chan LocalTCPConn
-	reqNewConnChan chan struct{}
-	controlChannel netControl
-	restartMutex   sync.Mutex
-	usageMonitor   *web.Usage
-	rtt            int64 // in ms, for UDP
-	limits         *limiter
+	config           *TcpConfig
+	parentctx        context.Context
+	ctx              context.Context
+	cancel           context.CancelFunc
+	logger           *logrus.Logger
+	tunnelChannel    chan net.Conn
+	localChannel     chan LocalTCPConn
+	reqNewConnChan   chan struct{}
+	handshakeChannel chan controlCandidate
+	controlChannel   netControl
+	restartMutex     sync.Mutex
+	usageMonitor     *web.Usage
+	rtt              int64 // in ms, for UDP
+	limits           *limiter
+	// poolNonce is what this run's pool connections must present. It is empty
+	// while no control channel is up, and stays empty for a legacy client that
+	// cannot present one — which is what keeps the source-address fallback
+	// reachable. See network.PoolNonce.
+	poolNonce network.PoolNonce
 }
 
 type TcpConfig struct {
@@ -87,9 +94,13 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 		tunnelChannel:  make(chan net.Conn, config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
-		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
-		rtt:            0,
+		// Buffered by one so a control channel that arrives in the moment
+		// between the listener starting and channelHandshake reaching its
+		// select is held rather than dropped.
+		handshakeChannel: make(chan controlCandidate, 1),
+		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
+		rtt:              0,
 	}
 
 	return server
@@ -101,11 +112,12 @@ func (s *TcpTransport) Start() {
 	// goroutine; a goroutine that outlives its run keeps what it started
 	// with instead of reading whatever the next run has installed.
 	g := &tcpGen{
-		ctx:            s.ctx,
-		tunnelChannel:  s.tunnelChannel,
-		localChannel:   s.localChannel,
-		reqNewConnChan: s.reqNewConnChan,
-		usageMonitor:   s.usageMonitor,
+		ctx:              s.ctx,
+		tunnelChannel:    s.tunnelChannel,
+		localChannel:     s.localChannel,
+		reqNewConnChan:   s.reqNewConnChan,
+		handshakeChannel: s.handshakeChannel,
+		usageMonitor:     s.usageMonitor,
 	}
 
 	s.config.TunnelStatus = "Disconnected (TCP)"
@@ -168,9 +180,13 @@ func (s *TcpTransport) Restart() {
 	s.tunnelChannel = make(chan net.Conn, s.config.ChannelSize)
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
+	s.handshakeChannel = make(chan controlCandidate, 1)
 	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
 	s.config.TunnelStatus = ""
 	s.controlChannel.Clear()
+	// The next run issues its own nonce, so connections still carrying this
+	// one must stop being accepted the moment the run ends.
+	s.poolNonce.Clear()
 
 	// set the log level again
 	s.logger.SetLevel(level)
@@ -178,55 +194,27 @@ func (s *TcpTransport) Restart() {
 	go s.Start()
 }
 
+// channelHandshake waits for a connection that has already proved it holds the
+// token and asked to be the control channel.
+//
+// The proving happens on the accept path, in the candidate's own goroutine —
+// see announce.go — so this only has to publish the winner.
 func (s *TcpTransport) channelHandshake(g *tcpGen) {
-	for {
-		select {
-		case <-g.ctx.Done():
-			return
-		case conn := <-g.tunnelChannel:
-			// Set a read deadline for the token response
-			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				s.logger.Errorf("failed to set read deadline: %v", err)
-				conn.Close()
-				continue
-			}
+	select {
+	case <-g.ctx.Done():
+		return
+	case candidate := <-g.handshakeChannel:
+		// Order matters: the nonce has to be in place before the control
+		// channel is, or a pool connection racing in behind the handshake
+		// would be checked against a nonce that is not there yet.
+		s.poolNonce.Set(candidate.nonce)
+		s.controlChannel.Set(candidate.conn)
 
-			msg, transport, err := utils.ReceiveBinaryTransportString(conn)
-			if transport != utils.SG_Chan {
-				s.logger.Errorf("invalid signal received for channel, Discarding connection")
-				conn.Close()
-				continue
-			} else if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.logger.Warn("timeout while waiting for control channel signal")
-				} else {
-					s.logger.Errorf("failed to receive control channel signal: %v", err)
-				}
-				conn.Close() // Close connection on error or timeout
-				continue
-			}
-
-			// Resetting the deadline (removes any existing deadline)
-			conn.SetReadDeadline(time.Time{})
-
-			if msg != s.config.Token {
-				s.logger.Warnf("invalid security token received")
-				conn.Close()
-				continue
-			}
-
-			err = utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan)
-			if err != nil {
-				s.logger.Errorf("failed to send security token: %v", err)
-				conn.Close()
-				continue
-			}
-
-			s.controlChannel.Set(conn)
-
-			s.logger.Info("control channel successfully established.")
-			return
+		if candidate.nonce == "" {
+			s.logger.Warn(legacyPoolWarning)
 		}
+		s.logger.Info("control channel successfully established.")
+		return
 	}
 }
 
@@ -353,18 +341,6 @@ func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
 				continue
 			}
 
-			// Drop all suspicious packets from other address rather than server
-			// Read the peer address once: checking "is it set" and then asking
-			// for the address separately leaves a window where the control
-			// channel is cleared in between and the address comes back nil,
-			// which the old type assertion turned into a panic. Comparing
-			// through sameHost also handles IPv6 peers correctly.
-			if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, tcpConn.RemoteAddr()) {
-				s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", tcpConn.RemoteAddr(), peer)
-				tcpConn.Close()
-				continue
-			}
-
 			// trying to set tcpnodelay
 			if !s.config.Nodelay {
 				if err := tcpConn.SetNoDelay(s.config.Nodelay); err != nil {
@@ -384,33 +360,123 @@ func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
-			// In stealth mode the Noise handshake is completed before the
-			// connection joins the pool, so everything downstream — the token
-			// exchange, the control channel, the data conns — reads and writes
-			// through the encrypted record layer without knowing it is there.
-			// The handshake runs in its own goroutine so one slow or hostile
-			// peer cannot hold up accepting the next connection, and a peer
-			// without the token fails it and never reaches the pool.
-			if s.config.Stealth {
-				go func(raw net.Conn) {
-					wrapped, err := network.NoiseServerConn(raw, s.config.Token, 15*time.Second)
-					if err != nil {
-						s.logger.Debugf("stealth handshake failed from %s: %v", raw.RemoteAddr(), err)
-						raw.Close()
-						return
-					}
-					s.deliverTunnelConn(g, wrapped)
-				}(conn)
-				continue
-			}
-
-			s.deliverTunnelConn(g, conn)
+			// Everything from here — the stealth handshake, the announcement,
+			// the token or nonce check — happens in this connection's own
+			// goroutine, so a peer that connects and then says nothing costs
+			// one goroutine and never delays the connections behind it.
+			go s.admitTunnelConn(g, conn)
 		}
 	}
 }
 
-// deliverTunnelConn hands an accepted (and, in stealth mode, already
-// Noise-wrapped) connection to the pool, dropping it if the pool is full.
+// admitTunnelConn takes one accepted connection through whatever it has to pass
+// before it can be used, and files it as a control channel or a pool
+// connection.
+func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
+	conn := raw
+
+	// In stealth mode the Noise handshake is completed first, so everything
+	// after it — the announcement, the control channel, the data conns — reads
+	// and writes through the encrypted record layer without knowing it is
+	// there. A peer without the token fails here and gets no further.
+	if s.config.Stealth {
+		wrapped, err := network.NoiseServerConn(raw, s.config.Token, 15*time.Second)
+		if err != nil {
+			s.logger.Debugf("stealth handshake failed from %s: %v", raw.RemoteAddr(), err)
+			raw.Close()
+			return
+		}
+		conn = wrapped
+	}
+
+	// A legacy client says nothing on a pool connection — it dials and waits
+	// for the server to name a destination — so there is no announcement to
+	// read and the only thing separating it from a stranger's connection is
+	// the source address. Reading here would deadlock against such a client,
+	// so this branch stays exactly as it was, and is reachable only once a
+	// legacy control channel has been established (which is what leaves the
+	// nonce empty).
+	if s.controlChannel.IsSet() && s.poolNonce.Get() == "" {
+		// Read the peer address once: checking "is it set" and then asking for
+		// the address separately leaves a window where the control channel is
+		// cleared in between and the address comes back nil. Comparing through
+		// sameHost also handles IPv6 peers correctly.
+		if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, conn.RemoteAddr()) {
+			s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", conn.RemoteAddr(), peer)
+			conn.Close()
+			return
+		}
+		s.deliverTunnelConn(g, conn)
+		return
+	}
+
+	ann, err := readAnnouncement(conn)
+	if err != nil {
+		s.logger.Debugf("no announcement from %s: %v", conn.RemoteAddr(), err)
+		conn.Close()
+		return
+	}
+
+	switch {
+	case isControlSignal(ann.signal):
+		s.admitControlChannel(g, conn, ann)
+
+	case ann.signal == utils.SG_Pool:
+		// The nonce is this run's, so a connection carrying a previous run's —
+		// or none at all — is refused here rather than joining the pool.
+		if !s.poolNonce.Verify(ann.payload) {
+			s.logger.Warnf("pool connection from %s presented an invalid nonce, discarding", conn.RemoteAddr())
+			conn.Close()
+			return
+		}
+		s.deliverTunnelConn(g, conn)
+
+	default:
+		s.logger.Warnf("unexpected announcement %d from %s, discarding", ann.signal, conn.RemoteAddr())
+		conn.Close()
+	}
+}
+
+// admitControlChannel verifies a peer claiming the control channel, answers it,
+// and offers it as the candidate for channelHandshake to publish.
+func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announcement) {
+	// One control channel per run. Without this a second claimant would be
+	// buffered on a channel nobody reads any more, holding its connection open
+	// until the next restart.
+	if s.controlChannel.IsSet() {
+		s.logger.Debugf("a control channel is already established, discarding the claim from %s", conn.RemoteAddr())
+		conn.Close()
+		return
+	}
+
+	if !tokenMatches(ann.payload, s.config.Token) {
+		s.logger.Warnf("invalid security token received from %s", conn.RemoteAddr())
+		conn.Close()
+		return
+	}
+
+	ack, nonce, err := controlAck(ann.signal, s.config.Token)
+	if err != nil {
+		s.logger.Errorf("could not answer the control handshake: %v", err)
+		conn.Close()
+		return
+	}
+	if err := utils.SendBinaryTransportString(conn, ack, ann.signal); err != nil {
+		s.logger.Errorf("failed to send security token: %v", err)
+		conn.Close()
+		return
+	}
+
+	select {
+	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce}:
+	default:
+		s.logger.Warn("a control channel is already established, discarding duplicate")
+		conn.Close()
+	}
+}
+
+// deliverTunnelConn hands an admitted connection to the pool, dropping it if
+// the pool is full.
 func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
 	select {
 	case g.tunnelChannel <- conn:

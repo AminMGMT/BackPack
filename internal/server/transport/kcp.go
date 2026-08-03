@@ -341,20 +341,15 @@ func (s *KcpTransport) acceptTunnelConn(g *kcpGen, listener *kcp.Listener) {
 				continue
 			}
 
-			// Drop sessions coming from anywhere other than the peer that owns
-			// the control channel. A KCP packet that decrypts correctly already
-			// proves knowledge of the token, but pinning the address keeps a
-			// second, unexpected peer from joining the tunnel.
-			// Read the peer address once: checking "is it set" and then asking
-			// for the address separately leaves a window where the control
-			// channel is cleared in between and the address comes back nil.
-			if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, session.RemoteAddr()) {
-				s.logger.Debugf("suspicious session from %v. expected address: %v. discarding...",
-					session.RemoteAddr(), peer)
-				session.Close()
-				continue
-			}
-
+			// Sessions used to be dropped unless they came from the same
+			// address as the control channel. That was already redundant here —
+			// a KCP session has to decrypt under a key derived from the token
+			// and then announce itself with the token again, in acceptSession
+			// below, so it proves what it knows before it is filed anywhere —
+			// and it cost every client that dials out from more than one
+			// address, behind carrier-grade NAT or a SNAT pool or on a
+			// multi-homed host, its entire pool. The control channel came up,
+			// every data session was discarded, and the tunnel carried nothing.
 			network.ApplyKCPSettings(session, s.kcpSettings)
 
 			// Every session announces what it is, and the announcement is read

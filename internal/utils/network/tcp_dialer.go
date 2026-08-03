@@ -66,10 +66,11 @@ func attemptTcpDialer(
 	// Options
 	dialer := &net.Dialer{
 		Control: func(network, address string, s syscall.RawConn) error {
-			err := ReusePortControl(network, address, s)
-			if err != nil {
-				return err
-			}
+			// No address-reuse options on an outgoing socket: it binds an
+			// ephemeral port it has no reason to share, and asking used to
+			// abort the dial outright wherever the kernel refused. See
+			// reuse_port.go.
+			var err error
 
 			if PinTCPBuffers() && SO_RCVBUF > 0 {
 				err = s.Control(func(fd uintptr) {

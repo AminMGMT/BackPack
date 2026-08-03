@@ -29,6 +29,15 @@ type TcpMuxTransport struct {
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
+	// poolNonce is what the server issued for this run; every pool connection
+	// presents it so the server need not judge them by source address. Empty
+	// against a server too old to issue one.
+	poolNonce network.PoolNonce
+	// legacyServer records that the server did not understand the nonce
+	// handshake, so later attempts skip straight to the old one instead of
+	// spending a connection discovering it again. It is not reset on restart:
+	// an upgraded server means an upgraded binary, which means a new process.
+	legacyServer atomic.Bool
 }
 
 type TcpMuxConfig struct {
@@ -122,6 +131,9 @@ func (c *TcpMuxTransport) Restart() {
 	// the new context paired with the old monitor, or vice versa.
 	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
 	c.config.TunnelStatus = ""
+	// The next control channel issues its own nonce; carrying this one over
+	// would have the pool announcing a value the server has already forgotten.
+	c.poolNonce.Clear()
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	// The published pool figures belong to the run that just ended. Left
@@ -162,8 +174,11 @@ func (c *TcpMuxTransport) channelDialer() {
 				continue
 			}
 
-			// Sending security token
-			err = utils.SendBinaryTransportString(tunnelConn, c.config.Token, utils.SG_Chan)
+			// Sending security token. The nonce-carrying handshake is asked
+			// for first; a server that predates it closes the connection
+			// without answering, which is what flips the fallback below.
+			signal := controlSignal(&c.legacyServer)
+			err = utils.SendBinaryTransportString(tunnelConn, c.config.Token, signal)
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelConn.Close()
@@ -172,19 +187,20 @@ func (c *TcpMuxTransport) channelDialer() {
 			}
 
 			// Set a read deadline for the token response
-			if err := tunnelConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			if err := tunnelConn.SetReadDeadline(time.Now().Add(controlAckTimeout)); err != nil {
 				c.logger.Errorf("failed to set read deadline: %v", err)
 				tunnelConn.Close()
 				bo.Wait(c.state.Ctx())
 				continue
 			}
 			// Receive response
-			message, _, err := utils.ReceiveBinaryTransportString(tunnelConn)
+			message, ackSignal, err := utils.ReceiveBinaryTransportString(tunnelConn)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					c.logger.Warn("timeout while waiting for control channel response")
 				} else {
 					c.logger.Errorf("failed to receive control channel response: %v", err)
+					noteLegacyServer(c.logger, &c.legacyServer, signal)
 				}
 				tunnelConn.Close() // Close connection on error or timeout
 				bo.Wait(c.state.Ctx())
@@ -193,7 +209,12 @@ func (c *TcpMuxTransport) channelDialer() {
 			// Resetting the deadline (removes any existing deadline)
 			tunnelConn.SetReadDeadline(time.Time{})
 
-			if message == c.config.Token {
+			token, nonce := decodeControlAck(message, ackSignal)
+
+			if token == c.config.Token {
+				// Before the control channel is published, so the pool
+				// connections poolMaintainer starts below already have it.
+				c.poolNonce.Set(nonce)
 				c.state.SetConn(tunnelConn)
 				c.logger.Info("control channel established successfully")
 
@@ -364,6 +385,14 @@ func (c *TcpMuxTransport) tunnelDialer() {
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
+		return
+	}
+
+	// Say what this connection is, so the server admits it on the nonce rather
+	// than on the address it happened to dial out from.
+	if err := announcePoolConn(tunnelConn, c.poolNonce.Get()); err != nil {
+		c.logger.Debugf("tunnel dialer: failed to announce the pool connection: %v", err)
+		tunnelConn.Close()
 		return
 	}
 
