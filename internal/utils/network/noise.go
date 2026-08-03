@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -46,6 +47,51 @@ const (
 	// noiseHandshakeTimeout bounds the handshake so a silent or stalling peer
 	// cannot hold a half-open connection forever.
 	noiseHandshakeTimeout = 15 * time.Second
+)
+
+// Hiding the shape of the traffic, not just its content.
+//
+// Encryption settles what is in a record; it says nothing about how big the
+// record is, and record sizes are one of the few things left for an observer to
+// work with on a stream they cannot read. Without padding every record is
+// exactly as long as whatever the layer above handed down, so the wire carries
+// a faithful transcript of the tunnel's own framing: a one-byte heartbeat, a
+// token exchange of a known length, a burst of full-sized records for a
+// download and small ones for an interactive session. None of that is secret in
+// itself, but together it is a pattern, and a pattern is what a classifier
+// needs.
+//
+// So each record carries a random amount of filler. Two decisions about where:
+//
+// The padding goes *inside* the encryption, unlike the scheme this was taken
+// from, which frames the padding length in the clear and appends visible
+// garbage. Padding an observer can find and subtract is not padding. Here the
+// length byte and the filler are both under the AEAD, so all that reaches the
+// wire is a record whose length moved.
+//
+// And the filler itself is left as zeroes. It is encrypted before it is sent,
+// so its content is already indistinguishable from anything else; generating
+// random bytes for it would cost a draw per record and buy nothing. Only the
+// *length* has to be unpredictable, and that is what is drawn.
+
+const (
+	// noiseVersion is what this build advertises in its handshake payload.
+	// Version 1 is the first that can pad. A peer that predates the negotiation
+	// sends no payload at all, which reads as version 0 and leaves padding off,
+	// so old and new ends still talk to each other.
+	noiseVersion byte = 1
+
+	// noiseVersionPadding is the version from which both ends pad.
+	noiseVersionPadding byte = 1
+
+	// noiseMaxPad is the most filler a record can carry. A byte's worth: enough
+	// that a record's length says little about its payload, small enough that
+	// the average cost — 128 bytes on a record that may be 64 KB — is noise.
+	noiseMaxPad = 255
+
+	// noisePaddedMaxPayload is the most plaintext a padded record can carry,
+	// once the length byte and the largest possible filler are accounted for.
+	noisePaddedMaxPayload = noiseMaxPayload - 1 - noiseMaxPad
 )
 
 // noiseSuite is fixed rather than negotiated: X25519, ChaCha20-Poly1305, BLAKE2s.
@@ -99,10 +145,15 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 	// connection's normal deadlines apply from then on.
 	_ = raw.SetDeadline(time.Now().Add(timeout))
 
+	// The version each end advertises rides in the handshake payload, which is
+	// already encrypted and already there — so agreeing on it costs no extra
+	// round trip and adds nothing to the wire an observer can read.
 	var sendCS, recvCS *noise.CipherState
+	var peerVersion byte
+
 	if initiator {
 		// -> e
-		msg, _, _, err := hs.WriteMessage(nil, nil)
+		msg, _, _, err := hs.WriteMessage(nil, []byte{noiseVersion})
 		if err != nil {
 			return nil, fmt.Errorf("noise: build first message: %w", err)
 		}
@@ -115,10 +166,11 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 			return nil, err
 		}
 		// A wrong token (or anything that is not the peer) fails here.
-		_, cs0, cs1, err := hs.ReadMessage(nil, in)
+		payload, cs0, cs1, err := hs.ReadMessage(nil, in)
 		if err != nil {
 			return nil, fmt.Errorf("noise: handshake rejected: %w", err)
 		}
+		peerVersion = versionFromPayload(payload)
 		sendCS, recvCS = cs0, cs1 // initiator sends with cs0, receives with cs1
 	} else {
 		// -> e
@@ -126,11 +178,21 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 		if err != nil {
 			return nil, err
 		}
-		if _, _, _, err := hs.ReadMessage(nil, in); err != nil {
+		payload, _, _, err := hs.ReadMessage(nil, in)
+		if err != nil {
 			return nil, fmt.Errorf("noise: handshake rejected: %w", err)
 		}
+		peerVersion = versionFromPayload(payload)
+
+		// Answer in kind. A peer that sent no version cannot read one, and
+		// against an initiator that predates this the reply must look exactly
+		// as it always did.
+		var reply []byte
+		if peerVersion > 0 {
+			reply = []byte{noiseVersion}
+		}
 		// <- e, ee
-		msg, cs0, cs1, err := hs.WriteMessage(nil, nil)
+		msg, cs0, cs1, err := hs.WriteMessage(nil, reply)
 		if err != nil {
 			return nil, fmt.Errorf("noise: build reply: %w", err)
 		}
@@ -145,7 +207,21 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 	if sendCS == nil || recvCS == nil {
 		return nil, fmt.Errorf("noise: handshake did not complete")
 	}
-	return &noiseConn{Conn: raw, send: sendCS, recv: recvCS}, nil
+
+	// Padding needs both ends: one side padding and the other not reading the
+	// length byte would corrupt every record.
+	pad := noiseVersion >= noiseVersionPadding && peerVersion >= noiseVersionPadding
+
+	return &noiseConn{Conn: raw, send: sendCS, recv: recvCS, pad: pad}, nil
+}
+
+// versionFromPayload reads the version a peer advertised. An empty payload is
+// a peer that predates the negotiation, which is version 0.
+func versionFromPayload(payload []byte) byte {
+	if len(payload) == 0 {
+		return 0
+	}
+	return payload[0]
 }
 
 // noiseConn is an encrypted net.Conn: the record layer over a completed Noise
@@ -154,8 +230,13 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 type noiseConn struct {
 	net.Conn
 
+	// pad reports whether both ends agreed to pad their records. Set once at
+	// handshake time and never written again.
+	pad bool
+
 	writeMu sync.Mutex
 	send    *noise.CipherState
+	padBuf  []byte // reused plaintext buffer: length byte, payload, filler
 
 	readMu  sync.Mutex
 	recv    *noise.CipherState
@@ -168,13 +249,18 @@ func (c *noiseConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
+	limit := noiseMaxPayload
+	if c.pad {
+		limit = noisePaddedMaxPayload
+	}
+
 	total := 0
 	for len(p) > 0 {
 		chunk := p
-		if len(chunk) > noiseMaxPayload {
-			chunk = chunk[:noiseMaxPayload]
+		if len(chunk) > limit {
+			chunk = chunk[:limit]
 		}
-		enc, err := c.send.Encrypt(nil, nil, chunk)
+		enc, err := c.send.Encrypt(nil, nil, c.plaintext(chunk))
 		if err != nil {
 			return total, err
 		}
@@ -187,13 +273,61 @@ func (c *noiseConn) Write(p []byte) (int, error) {
 	return total, nil
 }
 
+// plaintext returns what actually goes into a record: the chunk itself when
+// this connection does not pad, and otherwise the chunk wrapped in a length
+// byte and a random amount of filler.
+//
+// The caller holds writeMu, which is also what makes reusing the buffer safe.
+func (c *noiseConn) plaintext(chunk []byte) []byte {
+	if !c.pad {
+		return chunk
+	}
+
+	padLen := rand.IntN(noiseMaxPad + 1)
+	need := 1 + len(chunk) + padLen
+	if cap(c.padBuf) < need {
+		c.padBuf = make([]byte, need)
+	}
+	c.padBuf = c.padBuf[:need]
+
+	c.padBuf[0] = byte(padLen)
+	copy(c.padBuf[1:], chunk)
+	// The filler must be zeroed rather than left as whatever the buffer held.
+	// It is reused across records, so skipping this would send the tail of a
+	// previous record's plaintext as this one's padding — encrypted, but sent
+	// a second time under a different key stream, and to no purpose.
+	clear(c.padBuf[1+len(chunk):])
+
+	return c.padBuf
+}
+
+// unpad strips what plaintext added. It is strict about the lengths because a
+// record that does not describe itself is either a bug or a peer that should
+// not be trusted to keep going.
+func (c *noiseConn) unpad(plain []byte) ([]byte, error) {
+	if !c.pad {
+		return plain, nil
+	}
+	if len(plain) < 1 {
+		return nil, fmt.Errorf("noise: padded record is empty")
+	}
+	padLen := int(plain[0])
+	if 1+padLen > len(plain) {
+		return nil, fmt.Errorf("noise: padded record claims %d bytes of padding in %d bytes", padLen, len(plain))
+	}
+	return plain[1 : len(plain)-padLen], nil
+}
+
 // Read returns decrypted plaintext, reading and decrypting another record only
 // when its buffer is empty.
 func (c *noiseConn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 
-	if len(c.readBuf) == 0 {
+	// A loop rather than a single attempt: a padded record can legitimately
+	// carry no payload at all, and returning (0, nil) from Read is the kind of
+	// answer callers are entitled not to expect.
+	for len(c.readBuf) == 0 {
 		frame, err := readNoiseFrame(c.Conn)
 		if err != nil {
 			return 0, err
@@ -203,6 +337,9 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 			// A record that does not authenticate is not a short read to paper
 			// over — the stream's integrity is gone. Surface it.
 			return 0, fmt.Errorf("noise: record failed authentication: %w", err)
+		}
+		if plain, err = c.unpad(plain); err != nil {
+			return 0, err
 		}
 		c.readBuf = plain
 	}
