@@ -517,7 +517,7 @@ func (c *KcpTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 		recvBuf = c.config.SO_RCVBUF
 	}
 
-	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
 	if err != nil {
 		localDial.Report(c.logger, resolvedAddr, err)
 		stream.Close()

@@ -100,6 +100,12 @@ type TunnelSpec struct {
 	// Proxy is the optional socks5:// or http:// URL the client reaches the
 	// tunnel server through. Empty means dial it directly.
 	Proxy string
+	// LocalAddr, Interface and SOMark decide which way out of a multi-homed
+	// machine the tunnel leaves by. All optional; empty and zero mean "let the
+	// kernel route".
+	LocalAddr string
+	Interface string
+	SOMark    int
 }
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
@@ -295,6 +301,15 @@ func (s TunnelSpec) Render() string {
 	}
 	if s.Proxy != "" {
 		p("proxy = %q\n", s.Proxy)
+	}
+	if s.LocalAddr != "" {
+		p("local_addr = %q\n", s.LocalAddr)
+	}
+	if s.Interface != "" {
+		p("interface = %q\n", s.Interface)
+	}
+	if s.SOMark != 0 {
+		p("so_mark = %d\n", s.SOMark)
 	}
 	if isMux(s.Transport) {
 		p("mux_session = %d\n", s.MuxCon)

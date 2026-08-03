@@ -155,6 +155,19 @@ type ClientConfig struct {
 	// local backend never goes through it — that traffic does not leave the
 	// machine, so sending it out and back would be both slower and wrong.
 	Proxy string `toml:"proxy"`
+	// LocalAddr binds the connections that reach the server to a chosen source
+	// address, which on a machine with more than one uplink is what decides
+	// which of them the tunnel leaves by. An address on its own is enough; the
+	// port is the kernel's to pick. Needs no privilege.
+	LocalAddr string `toml:"local_addr"`
+	// Interface pins those connections to a named device, for when the source
+	// address alone does not settle the route. Linux, and needs CAP_NET_RAW.
+	Interface string `toml:"interface"`
+	// SOMark stamps an fwmark on their packets, which is what `ip rule` matches
+	// on — the way to put the tunnel on a routing table of its own without
+	// changing routing for the rest of the machine. Linux, and needs
+	// CAP_NET_ADMIN. Zero means none.
+	SOMark int `toml:"so_mark"`
 	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
 	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
 	// the window, which costs a large multiple of the throughput on a fast

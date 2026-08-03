@@ -8,41 +8,43 @@ import (
 	"time"
 )
 
-// TcpDialer opens a connection straight to remoteAddress.
+// TcpDialer opens a connection straight to remoteAddress, by whatever route the
+// kernel would choose.
 //
-// This is the dialer for anything that must not go through a proxy — above all
-// the dial to the local backend, which never leaves the machine. It cannot take
-// a proxy, which is what keeps that traffic off one by construction rather than
-// by remembering. Tunnel connections use TcpDialerVia.
-func TcpDialer(ctx context.Context, remoteAddress string, localSrc string, timeout time.Duration, keepAlive time.Duration, nodelay bool, retry int, SO_RCVBUF int, SO_SNDBUF, mss int) (*net.TCPConn, error) {
-	return TcpDialerVia(ctx, nil, remoteAddress, localSrc, timeout, keepAlive, nodelay, retry, SO_RCVBUF, SO_SNDBUF, mss)
+// This is the dialer for anything that must not be redirected — above all the
+// dial to the local backend, which never leaves the machine, and which a proxy
+// or an interface binding meant for the uplink would simply break. It has no
+// way to take either, which is what keeps that traffic off them by construction
+// rather than by remembering. Tunnel connections use TcpDialerVia.
+func TcpDialer(ctx context.Context, remoteAddress string, timeout time.Duration, keepAlive time.Duration, nodelay bool, retry int, SO_RCVBUF int, SO_SNDBUF, mss int) (*net.TCPConn, error) {
+	return TcpDialerVia(ctx, nil, remoteAddress, timeout, keepAlive, nodelay, retry, SO_RCVBUF, SO_SNDBUF, mss)
 }
 
-// TcpDialerVia opens a connection to remoteAddress through proxy, or straight
-// to it when proxy is nil.
+// TcpDialerVia opens a connection to remoteAddress the way out describes: from
+// a chosen source address or interface, marked for a routing rule, through a
+// proxy, or any combination — and straight to it when out is nil.
 //
-// The socket is dialled here either way, so it carries the tunnel's buffer
-// sizes, congestion control, keepalive and MSS whether it ends up talking to
-// the server or to a proxy standing in front of it; only the handshake that
-// follows differs. A proxy that refuses the connection fails the attempt, and
-// the retry and backoff above cover it exactly as a refused direct dial.
-func TcpDialerVia(ctx context.Context, proxy *ProxyConfig, remoteAddress string, localSrc string, timeout time.Duration, keepAlive time.Duration, nodelay bool, retry int, SO_RCVBUF int, SO_SNDBUF, mss int) (*net.TCPConn, error) {
+// The socket is dialled here whatever out says, so it carries the tunnel's
+// buffer sizes, congestion control, keepalive and MSS whether it ends up
+// talking to the server or to a proxy standing in front of it; only where it
+// goes and what handshake follows differ. Anything out asks for that cannot be
+// applied fails the attempt, and the retry and backoff below cover it exactly
+// as a refused dial would be.
+func TcpDialerVia(ctx context.Context, out *Outbound, remoteAddress string, timeout time.Duration, keepAlive time.Duration, nodelay bool, retry int, SO_RCVBUF int, SO_SNDBUF, mss int) (*net.TCPConn, error) {
 	var tcpConn *net.TCPConn
 	var err error
 
 	// With a proxy the socket is opened to the proxy, and the address the
 	// caller asked for becomes what the handshake asks the proxy to reach.
-	dialAddress := remoteAddress
-	if proxy != nil {
-		dialAddress = proxy.Address
-	}
+	dialAddress := out.dialAddress(remoteAddress)
+	proxy := out.proxy()
 
 	retries := retry           // Number of retries
 	backoff := 1 * time.Second // Initial backoff duration
 
 	for i := 0; i < retries; i++ {
 		// Attempt to establish a TCP connection
-		tcpConn, err = attemptTcpDialer(ctx, dialAddress, localSrc, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
+		tcpConn, err = attemptTcpDialer(ctx, dialAddress, out, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
 		if err == nil && proxy != nil {
 			if err = connectThrough(tcpConn, proxy, remoteAddress, timeout); err != nil {
 				tcpConn.Close()
@@ -72,7 +74,7 @@ func TcpDialerVia(ctx context.Context, proxy *ProxyConfig, remoteAddress string,
 func attemptTcpDialer(
 	ctx context.Context,
 	remoteAddress string,
-	localSrc string,
+	out *Outbound,
 	timeout time.Duration,
 	keepAlive time.Duration,
 	nodelay bool,
@@ -99,13 +101,9 @@ func attemptTcpDialer(
 	// host with an AAAA record that does not actually route no longer costs the
 	// whole connection. This is what rathole and gost both do, by dialling the
 	// name rather than an address.
-	var localTCPAddr *net.TCPAddr
-	if localSrc != "" {
-		var err error
-		localTCPAddr, err = net.ResolveTCPAddr("tcp", localSrc)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve local address: %v", err)
-		}
+	localTCPAddr, err := out.localTCPAddr()
+	if err != nil {
+		return nil, err
 	}
 
 	// Options
@@ -115,6 +113,15 @@ func attemptTcpDialer(
 			// ephemeral port it has no reason to share, and asking used to
 			// abort the dial outright wherever the kernel refused. See
 			// reuse_port.go.
+
+			// The interface and the fwmark come first and are the one thing
+			// here that can fail the dial: they were asked for by name, and a
+			// connection that leaves by the wrong link is worse than one that
+			// does not leave at all. See outbound.go.
+			if err := out.outboundControl(network, address, s); err != nil {
+				return err
+			}
+
 			var err error
 
 			if PinTCPBuffers() && SO_RCVBUF > 0 {

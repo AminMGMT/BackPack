@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func WebSocketDialer(ctx context.Context, proxy *ProxyConfig, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	var tunnelWSConn *websocket.Conn
 	var err error
 
@@ -22,7 +22,7 @@ func WebSocketDialer(ctx context.Context, proxy *ProxyConfig, addr string, edgeI
 
 	for i := 0; i < retries; i++ {
 		// Attempt to dial the WebSocket
-		tunnelWSConn, err = attemptDialWebSocket(ctx, proxy, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, SO_RCVBUF, SO_SNDBUF)
+		tunnelWSConn, err = attemptDialWebSocket(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, SO_RCVBUF, SO_SNDBUF)
 		if err == nil {
 			// If successful, return the connection
 			return tunnelWSConn, nil
@@ -41,7 +41,7 @@ func WebSocketDialer(ctx context.Context, proxy *ProxyConfig, addr string, edgeI
 	return nil, err
 }
 
-func attemptDialWebSocket(ctx context.Context, proxy *ProxyConfig, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	// Generate a random X-user-id
 	randomUserID := rand.Int31() // Generate a random int64 number
 
@@ -129,7 +129,7 @@ func attemptDialWebSocket(ctx context.Context, proxy *ProxyConfig, addr string, 
 			EnableCompression: true,
 			HandshakeTimeout:  45 * time.Second, // default handshake timeout
 			NetDial: func(_, addr string) (net.Conn, error) {
-				conn, err := TcpDialerVia(ctx, proxy, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
+				conn, err := TcpDialerVia(ctx, out, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
 					return nil, err
 				}
@@ -147,7 +147,7 @@ func attemptDialWebSocket(ctx context.Context, proxy *ProxyConfig, addr string, 
 		// its keying material can be bound into the credential. gorilla is then
 		// handed the finished connection and only writes the HTTP upgrade over
 		// it — it does no TLS of its own, and TLSClientConfig is not consulted.
-		rawConn, err := TcpDialerVia(ctx, proxy, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
+		rawConn, err := TcpDialerVia(ctx, out, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 		if err != nil {
 			return nil, err
 		}

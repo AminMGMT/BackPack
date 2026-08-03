@@ -435,6 +435,30 @@ func SetupClient() {
 			s.Proxy = raw
 			break
 		}
+
+		// Only worth asking on a machine that has somewhere else to go. On a
+		// single-uplink server the answer is always "the one route there is",
+		// and a prompt for it is a prompt to get wrong.
+		if names := routableInterfaces(); len(names) > 1 {
+			fmt.Println()
+			tui.Info("This machine has more than one network interface. You can pin the")
+			tui.Info("tunnel to one of them, or to a source address, if it should not")
+			tui.Info("leave by whichever route the kernel picks.")
+			tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel decide.")
+			for {
+				raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+				if raw == "" {
+					break
+				}
+				if _, err := net.InterfaceByName(raw); err != nil {
+					tui.Error(fmt.Sprintf("no such interface: %v", err))
+					continue
+				}
+				s.Interface = raw
+				break
+			}
+			s.LocalAddr = strings.TrimSpace(tui.PromptDefault("Source address (optional)", ""))
+		}
 	}
 
 	// Backup addresses make the tunnel survive a filtered server IP: the client
@@ -712,4 +736,29 @@ func splitFamilies(ips []string) (v4, v6 []string) {
 		}
 	}
 	return v4, v6
+}
+
+// routableInterfaces lists the up, non-loopback interfaces that hold an
+// address — the ones a tunnel could plausibly be pinned to.
+//
+// Loopback and down interfaces are left out because offering them would only
+// invite an answer that cannot work, and an interface with no address of its
+// own is not somewhere traffic can leave by.
+func routableInterfaces() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifi.Addrs()
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+		names = append(names, ifi.Name)
+	}
+	return names
 }

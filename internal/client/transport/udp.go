@@ -135,7 +135,7 @@ func (c *UdpTransport) channelDialer() {
 		case <-c.state.Ctx().Done():
 			return
 		default:
-			tunnelTCPConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), "", c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
+			tunnelTCPConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a

@@ -67,7 +67,7 @@ func TestDialerTriesEveryResolvedAddress(t *testing.T) {
 	}
 
 	conn, err := TcpDialer(context.Background(), net.JoinHostPort("localhost", port),
-		"", 5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("dialling a name whose first address is dead did not fall through to the live one: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestDialerStillDialsAnAddressLiteral(t *testing.T) {
 	}()
 
 	conn, err := TcpDialer(context.Background(), ln.Addr().String(),
-		"", 5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("dialling a literal address failed: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestDialerGivesUpOnAnUnreachableName(t *testing.T) {
 	// refuses immediately.
 	start := time.Now()
 	_, err := TcpDialer(context.Background(), net.JoinHostPort("localhost", "1"),
-		"", 2*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		2*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err == nil {
 		t.Fatal("dialling a closed port reported success")
 	}
@@ -131,7 +131,7 @@ func TestDialerHonoursTheTimeoutAcrossAddresses(t *testing.T) {
 	// and is not routed.
 	start := time.Now()
 	_, err := TcpDialer(context.Background(), "203.0.113.1:9",
-		"", 2*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		2*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err == nil {
 		t.Skip("something answered a documentation address; this network is unusual")
 	}
@@ -145,7 +145,7 @@ func TestDialerHonoursTheTimeoutAcrossAddresses(t *testing.T) {
 func TestDialerRejectsAMalformedAddress(t *testing.T) {
 	for _, addr := range []string{"", "no-port", "host:not-a-port"} {
 		if _, err := TcpDialer(context.Background(), addr,
-			"", time.Second, 30*time.Second, true, 1, 0, 0, 0); err == nil {
+			time.Second, 30*time.Second, true, 1, 0, 0, 0); err == nil {
 			t.Errorf("TcpDialer(%q) reported success", addr)
 		}
 	}
@@ -159,7 +159,7 @@ func TestDialerRetriesAreBounded(t *testing.T) {
 	// almost entirely the backoff between retries (1s, then 2s).
 	start := time.Now()
 	_, err := TcpDialer(context.Background(), "127.0.0.1:1",
-		"", time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err == nil {
 		t.Skip("something is listening on port 1")
 	}
@@ -169,7 +169,7 @@ func TestDialerRetriesAreBounded(t *testing.T) {
 
 	start = time.Now()
 	if _, err := TcpDialer(context.Background(), "127.0.0.1:1",
-		"", time.Second, 30*time.Second, true, 2, 0, 0, 0); err == nil {
+		time.Second, 30*time.Second, true, 2, 0, 0, 0); err == nil {
 		t.Skip("something is listening on port 1")
 	}
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
@@ -179,7 +179,7 @@ func TestDialerRetriesAreBounded(t *testing.T) {
 
 func TestDialerReportsTheAddressItFailedOn(t *testing.T) {
 	_, err := TcpDialer(context.Background(), "127.0.0.1:1",
-		"", time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err == nil {
 		t.Skip("something is listening on port 1")
 	}

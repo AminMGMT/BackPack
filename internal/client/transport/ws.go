@@ -47,10 +47,11 @@ type WsConfig struct {
 	Mode           config.TransportType
 	AggressivePool bool
 	EdgeIP         string
-	// Proxy routes the connections that reach the tunnel server through a
-	// local or nearby proxy. Nil dials the server directly. It is never
-	// applied to the dial to the local backend — see network/proxy.go.
-	Proxy *network.ProxyConfig
+	// Outbound says how the connections that reach the tunnel server leave
+	// this machine: through a proxy, from a chosen source address or
+	// interface, under a routing mark. Nil dials directly. None of it is ever
+	// applied to the dial to the local backend — see network/outbound.go.
+	Outbound *network.Outbound
 }
 
 func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
@@ -148,7 +149,7 @@ func (c *WsTransport) channelDialer() {
 		case <-c.state.Ctx().Done():
 			return
 		default:
-			tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Proxy, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
 			if err != nil {
 				c.logger.Errorf("control channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -313,7 +314,7 @@ func (c *WsTransport) tunnelDialer() {
 	// Next() rather than Current(): with load balancing enabled the pool
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
-	tunnelConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Proxy, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 1024*1024, 1024*1024)
+	tunnelConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 1024*1024, 1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
@@ -378,7 +379,7 @@ func (c *WsTransport) localDialer(tunnelCon *websocket.Conn, remoteAddr string, 
 		recvBuf = 0
 	}
 
-	localConnection, err := network.TcpDialer(c.state.Ctx(), remoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	localConnection, err := network.TcpDialer(c.state.Ctx(), remoteAddr, c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
 	if err != nil {
 		localDial.Report(c.logger, remoteAddr, err)
 		tunnelCon.Close()

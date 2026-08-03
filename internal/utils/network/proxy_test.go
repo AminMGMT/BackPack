@@ -161,8 +161,8 @@ func TestTcpDialerViaSocks5(t *testing.T) {
 		t.Fatalf("ParseProxy: %v", err)
 	}
 
-	conn, err := TcpDialerVia(context.Background(), p, "tunnel.example:9000",
-		"", 5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+	conn, err := TcpDialerVia(context.Background(), &Outbound{Proxy: p}, "tunnel.example:9000",
+		5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("dial through the proxy: %v", err)
 	}
@@ -240,8 +240,8 @@ func TestTcpDialerViaHTTPConnect(t *testing.T) {
 		t.Fatalf("ParseProxy: %v", err)
 	}
 
-	conn, err := TcpDialerVia(context.Background(), p, "tunnel.example:9000",
-		"", 5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+	conn, err := TcpDialerVia(context.Background(), &Outbound{Proxy: p}, "tunnel.example:9000",
+		5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("dial through the proxy: %v", err)
 	}
@@ -279,8 +279,8 @@ func TestTcpDialerViaReportsARefusedConnect(t *testing.T) {
 		t.Fatalf("ParseProxy: %v", err)
 	}
 
-	conn, err := TcpDialerVia(context.Background(), p, "tunnel.example:9000",
-		"", 5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+	conn, err := TcpDialerVia(context.Background(), &Outbound{Proxy: p}, "tunnel.example:9000",
+		5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err == nil {
 		conn.Close()
 		t.Fatal("a refused CONNECT was reported as success")
@@ -313,7 +313,7 @@ func TestTcpDialerViaWithNoProxyDialsDirectly(t *testing.T) {
 	}()
 
 	conn, err := TcpDialerVia(context.Background(), nil, ln.Addr().String(),
-		"", 5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
+		5*time.Second, 30*time.Second, true, 1, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("direct dial: %v", err)
 	}
@@ -330,8 +330,8 @@ func TestTcpDialerViaReportsAnUnreachableProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProxy: %v", err)
 	}
-	if _, err := TcpDialerVia(context.Background(), p, "tunnel.example:9000",
-		"", 2*time.Second, 30*time.Second, true, 1, 0, 0, 0); err == nil {
+	if _, err := TcpDialerVia(context.Background(), &Outbound{Proxy: p}, "tunnel.example:9000",
+		2*time.Second, 30*time.Second, true, 1, 0, 0, 0); err == nil {
 		t.Skip("something is listening on port 1")
 	}
 }

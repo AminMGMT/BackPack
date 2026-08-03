@@ -2,6 +2,142 @@
 
 All notable changes to Backpack are documented here.
 
+## Unreleased
+
+This one started from a report that the tunnel worked on most servers and not on
+some, with no error that said why. Chasing it down found several separate causes
+of exactly that symptom, all of them old, and all of them in the part of the code
+that decides whether a connection is allowed to exist at all.
+
+**Upgrade the server first, then the clients.** Three things now settle
+themselves between the two ends rather than being assumed, and all three fall
+back to the old behaviour when one end is older — but a new server with old
+clients is the combination that degrades most gracefully.
+
+### Fixed
+- **A tunnel would connect and then carry nothing, for any client that dials out
+  from more than one address.** The server accepted a pool connection only if its
+  source address matched the control channel's. Behind carrier-grade NAT, on a
+  multi-homed host, behind a SNAT pool or a load-balanced gateway, the pool dials
+  from a different address than the control channel did, and every one of those
+  connections was discarded. The control channel was fine, so the tunnel reported
+  itself connected and simply moved no traffic.
+
+  Pool connections now prove what they know instead of where they came from: the
+  server issues a random nonce when the control channel comes up, and each pool
+  connection presents it. Source address is out of the decision entirely. A
+  client too old to present one still works, on the old rule, with a warning
+  saying so.
+
+- **On some kernels the tunnel could not open a single socket.** Every socket —
+  outgoing connections included — asked for `SO_REUSEPORT`, and a kernel or
+  container that refuses the option failed the dial or the listen outright. It is
+  no longer asked for at all.
+
+  Where it *worked* it was worse. `SO_REUSEPORT` is a deliberate request to let
+  another process bind the same port, so a leftover process from a crash or an
+  upgrade no longer collided with "address already in use" — it quietly took a
+  share of the arriving connections, and the client's control channel and its
+  pool ended up on different processes.
+
+- **A port scanner could keep the tunnel's own client from connecting.** The
+  server read each new connection's token in a single loop, one connection at a
+  time, blocking up to two seconds on each. Anything that connected and said
+  nothing cost every connection queued behind it the full timeout. Each
+  connection is now handled in its own goroutine.
+
+- **Only the first address a server name resolved to was ever tried.** A name
+  with several A records — the ordinary way to publish more than one route to
+  the same machine — was resolved to a single address and that address dialled
+  forever. If it was the filtered one, the tunnel never connected while every
+  other record sat there working. Every resolved address is now tried in turn,
+  with IPv4 and IPv6 raced as usual.
+
+- **A restart could rebind ports after the tunnel had been told to stop.** The
+  restart path waits two seconds before rebuilding, and did not check whether the
+  tunnel was still meant to be running. On shutdown it leaked listeners; with the
+  new configuration reload it fought the run replacing it for its own ports.
+
+- **The control channel gave up after two seconds.** That has to cover a round
+  trip plus whatever the server takes to answer, and on a long or lossy path — the
+  ordinary case here, not the exceptional one — a single retransmitted SYN can eat
+  most of it. It is fifteen seconds now; failing fast bought nothing, because
+  failing means backing off and dialling again.
+
+- **`mux_streambuffer` did nothing on the default mux version.** smux only applies
+  a per-stream window on version 2; on version 1 there is no per-stream flow
+  control at all. The setting was accepted, shown back by the panel, and ignored.
+  It is now either applied or reported as inapplicable.
+
+### Added
+- **Reach the tunnel server through a proxy.** A client that cannot open an
+  arbitrary outbound connection can be pointed at one:
+
+  ```toml
+  proxy = "socks5://127.0.0.1:1080"
+  proxy = "http://user:pass@10.0.0.1:8080"
+  ```
+
+  Only the connections that reach the server go through it; the dial to the local
+  backend never can, by construction rather than by rule. Not available on the
+  `udp` and `kcp` transports, whose data is carried in datagrams a TCP proxy
+  cannot relay — configuring it there is refused at startup rather than half
+  working.
+
+- **Choose which way out of a multi-homed machine the tunnel leaves by.** On a
+  server with two uplinks the kernel's routing table decided, and the only way to
+  influence it was to change routing for the whole machine. Three ways to say it
+  instead, in increasing order of what they need from the system:
+
+  ```toml
+  local_addr = "192.0.2.10"   # bind the source address — needs no privilege
+  interface  = "eth1"          # pin to a device — Linux, needs CAP_NET_RAW
+  so_mark    = 100             # fwmark for `ip rule` — Linux, needs CAP_NET_ADMIN
+  ```
+
+  Any of these that is configured and cannot be applied fails the connection,
+  rather than being logged and skipped. They were asked for by name, and a tunnel
+  that quietly ignored "leave by eth1" would send traffic out the wrong link
+  while reporting itself healthy. Like the proxy, none of it touches the dial to
+  the local backend, and none of it is available on the datagram transports —
+  configuring it there is refused at startup.
+
+- **Editing a tunnel's configuration file now takes effect on its own.** The file
+  is watched, and a change stops the tunnel and starts it again from the new
+  configuration in the same process. A file that does not parse is ignored and
+  reported, so a half-saved file or a typo cannot take a working tunnel down; a
+  file that means the same thing is ignored silently, so touching it or editing a
+  comment does not drop every connection it is carrying.
+
+- **Stealth records carry random padding.** Encryption settles what is in a
+  record and says nothing about how big it is, and record sizes are one of the
+  few things left for an observer to work with. Each record now carries a random
+  amount of filler, inside the encryption — both the length and the filler are
+  under the AEAD, so all that reaches the wire is a record whose length moved.
+
+- **Zero-copy forwarding on Linux, for the `tcp` transport.** Where both ends of a
+  forwarded connection are plain sockets, the bytes are moved by the kernel
+  instead of being copied out into the process and back. Falls back to the
+  ordinary copy on anything else — another transport, a bandwidth-limited tunnel,
+  a kernel that declines — so the worst case is the performance of the previous
+  release.
+
+### Changed
+- **`mux_version` is negotiated rather than assumed.** smux has no version
+  negotiation of its own: every frame carries the number, and the first frame
+  whose number is not what the reader expects tears the session down. Because the
+  control channel is not muxed, a disagreement did not look like a failure — the
+  tunnel connected and carried nothing.
+
+  Leaving `mux_version` out (or at `0`) now has the server settle it on the
+  control channel and the client use what it is told. An explicit `1` or `2` is
+  still honoured on the server side. A client too old to be told anything keeps
+  to version 1, as it always did.
+
+- **Forwarded connections copy through 64 KB buffers, taken from a pool.** They
+  were 16 KB, freshly allocated per direction per connection. A relay's cost is
+  syscalls, and the buffer size sets how many a gigabyte takes.
+
 ## v1.6.5 — 2026-08-01
 
 The panel is checked from a phone more often than from a desktop, so it installs

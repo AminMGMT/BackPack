@@ -67,17 +67,17 @@ func (c *Client) Start() {
 		c.logger.Infof("load balancing enabled across %d endpoints", endpoints.Len())
 	}
 
-	// Parsed once for every transport that can use it. The configuration was
+	// Built once for every transport that can use it. The configuration was
 	// already validated at load time, so a failure here would mean the file
 	// changed underneath us; dialling directly is the safe reading, and it is
 	// said out loud rather than assumed.
-	proxy, err := network.ParseProxy(c.config.Proxy)
+	outbound, err := buildOutbound(c.config)
 	if err != nil {
-		c.logger.Errorf("ignoring the configured proxy and dialling directly: %v", err)
-		proxy = nil
+		c.logger.Errorf("ignoring the configured outbound settings and dialling directly: %v", err)
+		outbound = nil
 	}
-	if proxy != nil {
-		c.logger.Infof("reaching the tunnel server through %s", proxy)
+	if outbound.IsSet() {
+		c.logger.Infof("reaching the tunnel server %s", outbound)
 	}
 
 	switch c.config.Transport {
@@ -98,7 +98,7 @@ func (c *Client) Start() {
 			MSS:            c.config.MSS,
 			SO_RCVBUF:      c.config.SO_RCVBUF,
 			SO_SNDBUF:      c.config.SO_SNDBUF,
-			Proxy:          proxy,
+			Outbound:       outbound,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
 			Stealth: c.config.Transport == config.STEALTH,
@@ -127,7 +127,7 @@ func (c *Client) Start() {
 			MSS:              c.config.MSS,
 			SO_RCVBUF:        c.config.SO_RCVBUF,
 			SO_SNDBUF:        c.config.SO_SNDBUF,
-			Proxy:            proxy,
+			Outbound:         outbound,
 		}
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
@@ -182,7 +182,7 @@ func (c *Client) Start() {
 			Mode:           c.config.Transport,
 			AggressivePool: c.config.AggressivePool,
 			EdgeIP:         c.config.EdgeIP,
-			Proxy:          proxy,
+			Outbound:       outbound,
 		}
 		WsClient := transport.NewWSClient(c.ctx, WsConfig, c.logger)
 		go WsClient.Start()
@@ -207,7 +207,7 @@ func (c *Client) Start() {
 			Mode:             c.config.Transport,
 			AggressivePool:   c.config.AggressivePool,
 			EdgeIP:           c.config.EdgeIP,
-			Proxy:            proxy,
+			Outbound:         outbound,
 		}
 		wsMuxClient := transport.NewWSMuxClient(c.ctx, wsMuxConfig, c.logger)
 		go wsMuxClient.Start()
@@ -243,4 +243,27 @@ func (c *Client) Stop() {
 	if c.cancel != nil {
 		c.cancel()
 	}
+}
+
+// buildOutbound turns the client's configuration into the description the
+// dialer wants. A configuration with none of it set yields nil, which is the
+// ordinary "dial directly" case and costs nothing to carry.
+func buildOutbound(cfg *config.ClientConfig) (*network.Outbound, error) {
+	proxy, err := network.ParseProxy(cfg.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	out := &network.Outbound{
+		Proxy:     proxy,
+		LocalAddr: cfg.LocalAddr,
+		Interface: cfg.Interface,
+		Mark:      cfg.SOMark,
+	}
+	if !out.IsSet() {
+		return nil, nil
+	}
+	if err := out.Validate(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

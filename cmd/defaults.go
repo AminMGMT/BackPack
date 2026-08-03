@@ -143,36 +143,46 @@ func applyDefaults(cfg *config.Config) {
 	}
 
 	warnUnusedStreamBuffer(cfg)
-	checkProxy(cfg)
+	checkOutbound(cfg)
 }
 
-// checkProxy rejects a proxy URL that cannot work, at load time.
+// checkOutbound rejects a proxy or a routing binding that cannot work, at load
+// time.
 //
-// A misspelled scheme or a missing port would otherwise surface as a tunnel
-// that simply never connects, with the reason buried in a dial error that names
-// the proxy rather than the typo. Failing here says which line of the file is
-// wrong, before anything has started.
-func checkProxy(cfg *config.Config) {
-	if cfg.Client.Proxy == "" {
-		return
-	}
-	p, err := network.ParseProxy(cfg.Client.Proxy)
+// A misspelled scheme, a missing port or an interface that does not exist would
+// otherwise surface as a tunnel that simply never connects, with the reason
+// buried in a dial error. Failing here says which line of the file is wrong,
+// before anything has started.
+func checkOutbound(cfg *config.Config) {
+	proxy, err := network.ParseProxy(cfg.Client.Proxy)
 	if err != nil {
 		logger.Fatalf("invalid proxy setting: %v", err)
 	}
-
-	// The datagram transports cannot use it, and half-using it would be worse
-	// than refusing. Their control channel is TCP and would go through the
-	// proxy quite happily, while their data is UDP, which an HTTP CONNECT
-	// cannot carry at all and which SOCKS5 only carries through a separate
-	// UDP ASSOCIATE this client does not speak. The tunnel would come up and
-	// carry nothing — the failure that is hardest to attribute to its cause.
-	switch cfg.Client.Transport {
-	case config.UDP, config.KCP:
-		logger.Fatalf("proxy is not supported on the %s transport: its data is carried in UDP datagrams, which a TCP proxy cannot relay. Use tcp, tcpmux, ws, wss or wsmux, or remove the proxy setting.", cfg.Client.Transport)
+	out := &network.Outbound{
+		Proxy:     proxy,
+		LocalAddr: cfg.Client.LocalAddr,
+		Interface: cfg.Client.Interface,
+		Mark:      cfg.Client.SOMark,
+	}
+	if !out.IsSet() {
+		return
+	}
+	if err := out.Validate(); err != nil {
+		logger.Fatalf("invalid outbound setting: %v", err)
 	}
 
-	logger.Infof("the tunnel server will be reached through %s", p)
+	// The datagram transports carry their data outside the TCP dialer entirely,
+	// so none of this would reach it. Half-applying would be worse than
+	// refusing: the control channel is TCP and would honour every one of these
+	// settings, while the data went out by whatever route the kernel chose. The
+	// tunnel would come up and quietly leave by the wrong link — or, with a
+	// proxy, come up and carry nothing at all.
+	switch cfg.Client.Transport {
+	case config.UDP, config.KCP:
+		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is carried in UDP datagrams, which do not go through the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
+	}
+
+	logger.Infof("the tunnel server will be reached %s", out)
 }
 
 // warnUnusedStreamBuffer says out loud that mux_streambuffer does nothing on
