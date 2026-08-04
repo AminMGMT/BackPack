@@ -352,6 +352,14 @@ func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
 		}
 	}
 
+	// What the live tunnel is actually doing — the pool behind the control
+	// channel, what is crossing right now, and whether the path can carry a
+	// full-sized packet. Only worth measuring on a tunnel that is up; on one
+	// that is not, the checks above already say why. See diagnose_path.go.
+	if h.State == "online" {
+		out = append(out, pathChecks(g, t)...)
+	}
+
 	// TLS certificate validity for the transports that terminate TLS.
 	if t.Role == "server" && needsTLS(spec.Transport) {
 		out = append(out, certCheck(g, spec.TLSCert))
