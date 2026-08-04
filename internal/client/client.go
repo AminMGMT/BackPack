@@ -9,6 +9,7 @@ import (
 	"github.com/backpack/backpack/config"
 
 	"github.com/backpack/backpack/internal/client/transport"
+	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
 
 	"net/http"
@@ -29,6 +30,9 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 	ctx, cancel := context.WithCancel(parentCtx)
 	// One process runs one tunnel, so the socket tuning is process-wide.
 	network.SetPinTCPBuffers(cfg.SOPinTCP)
+	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
+	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
+	handlers.SetZeroCopy(cfg.ZeroCopy)
 	return &Client{
 		config: cfg,
 		ctx:    ctx,
@@ -132,8 +136,9 @@ func (c *Client) Start() {
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
 
-	case config.KCP:
+	case config.KCP, config.XDI:
 		kcp := c.config.KCPConfig.WithDefaults()
+		useICMP := c.config.Transport == config.XDI
 		kcpConfig := &transport.KcpConfig{
 			RemoteAddr:       c.config.RemoteAddr,
 			Endpoints:        endpoints,
@@ -162,6 +167,7 @@ func (c *Client) Start() {
 			AckNoDelay:       kcp.AckNoDelay,
 			DataShards:       kcp.DataShards,
 			ParityShards:     kcp.ParityShards,
+			UseICMP:          useICMP,
 		}
 		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
 		go kcpClient.Start()
@@ -180,6 +186,7 @@ func (c *Client) Start() {
 			WebPort:        c.config.WebPort,
 			SnifferLog:     c.config.SnifferLog,
 			Mode:           c.config.Transport,
+			SimpleAuth:     c.config.SimpleAuth,
 			AggressivePool: c.config.AggressivePool,
 			EdgeIP:         c.config.EdgeIP,
 			Outbound:       outbound,
@@ -205,6 +212,7 @@ func (c *Client) Start() {
 			WebPort:          c.config.WebPort,
 			SnifferLog:       c.config.SnifferLog,
 			Mode:             c.config.Transport,
+			SimpleAuth:       c.config.SimpleAuth,
 			AggressivePool:   c.config.AggressivePool,
 			EdgeIP:           c.config.EdgeIP,
 			Outbound:         outbound,

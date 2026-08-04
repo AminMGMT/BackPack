@@ -97,6 +97,19 @@ type KcpConfig struct {
 	AckNoDelay   bool
 	DataShards   int
 	ParityShards int
+	// UseICMP carries the session inside ICMP echo (the xdi transport) rather
+	// than UDP. Only the packet layer differs; everything here is unchanged.
+	UseICMP bool
+}
+
+// transportLabel is what the panel and logs call this transport — XDI when it
+// rides in ICMP echo, KCP when it rides in UDP. The two are the same protocol
+// otherwise.
+func (s *KcpTransport) transportLabel() string {
+	if s.config.UseICMP {
+		return "XDI"
+	}
+	return "KCP"
 }
 
 func (c *KcpConfig) settings() network.KCPSettings {
@@ -113,6 +126,7 @@ func (c *KcpConfig) settings() network.KCPSettings {
 		ParityShards: c.ParityShards,
 		SO_RCVBUF:    c.SO_RCVBUF,
 		SO_SNDBUF:    c.SO_SNDBUF,
+		UseICMP:      c.UseICMP,
 	}
 }
 
@@ -121,7 +135,7 @@ func NewKcpServer(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 
 	return &KcpTransport{
 		smuxConfig: &smux.Config{
-			Version:           config.MuxVersion,
+			Version:           network.ResolveStaticMuxVersion(config.MuxVersion),
 			KeepAliveInterval: 20 * time.Second,
 			KeepAliveTimeout:  40 * time.Second,
 			MaxFrameSize:      config.MaxFrameSize,
@@ -160,14 +174,14 @@ func (s *KcpTransport) Start() {
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
-	s.config.TunnelStatus = "Disconnected (KCP)"
+	s.config.TunnelStatus = "Disconnected (" + s.transportLabel() + ")"
 
 	go s.tunnelListener(g)
 
 	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
-		s.config.TunnelStatus = "Connected (KCP)"
+		s.config.TunnelStatus = "Connected (" + s.transportLabel() + ")"
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {

@@ -16,14 +16,14 @@ import (
 // a websocket upgrade, on a tunnel path, carrying a valid credential. Anything
 // else (a browser, a scanner, a probe with the wrong token) is not, and is
 // answered with the decoy site instead.
-func isTunnelRequest(r *http.Request, token string) bool {
+func isTunnelRequest(r *http.Request, token string, simpleAuth bool) bool {
 	if !websocket.IsWebSocketUpgrade(r) {
 		return false
 	}
 	if r.URL.Path != "/channel" && !strings.HasPrefix(r.URL.Path, "/tunnel") {
 		return false
 	}
-	return authorizeWSRequest(r, token)
+	return authorizeWSRequest(r, token, simpleAuth)
 }
 
 // serveDecoy answers a non-tunnel request as an ordinary web server would.
@@ -75,10 +75,20 @@ Commercial support is available at
 // terminated the client's TLS holds a different session and cannot produce it.
 // Either way the comparison is constant time, and a wss connection whose keying
 // material cannot be exported is rejected rather than waved through.
-func authorizeWSRequest(r *http.Request, token string) bool {
+//
+// simpleAuth turns the binding off and compares the raw token even over TLS.
+// That is exactly what the binding exists to prevent — anyone who terminates
+// the TLS then sees a token they could replay — so it is off by default. It is
+// here for one deployment the binding otherwise makes impossible: a TLS
+// terminating reverse proxy in front of the tunnel, NGINX being the usual one.
+// There the proxy legitimately holds a different TLS session from the client,
+// so a bound proof can never match; the operator who puts a trusted proxy there
+// is choosing to trust it with the token, which is the same thing the raw ws
+// transport already does.
+func authorizeWSRequest(r *http.Request, token string, simpleAuth bool) bool {
 	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 
-	if r.TLS == nil {
+	if r.TLS == nil || simpleAuth {
 		return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
 	}
 

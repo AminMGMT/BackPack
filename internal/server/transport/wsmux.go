@@ -57,6 +57,7 @@ type WsMuxTransport struct {
 type WsMuxConfig struct {
 	BindAddr         string
 	Token            string
+	SimpleAuth       bool
 	SnifferLog       string
 	TLSCertFile      string // Path to the TLS certificate file
 	TLSKeyFile       string // Path to the TLS key file
@@ -91,7 +92,7 @@ func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logr
 	// Initialize the TcpTransport struct
 	server := &WsMuxTransport{
 		smuxConfig: &smux.Config{
-			Version:           config.MuxVersion,
+			Version:           network.ResolveStaticMuxVersion(config.MuxVersion),
 			KeepAliveInterval: 20 * time.Second,
 			KeepAliveTimeout:  40 * time.Second,
 			MaxFrameSize:      config.MaxFrameSize,
@@ -296,7 +297,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			// browser, a scanner, a probe with the wrong token — gets the decoy
 			// website, so on 443 this looks like an ordinary HTTPS site rather
 			// than a tunnel that answers with 401.
-			if !isTunnelRequest(r, s.config.Token) {
+			if !isTunnelRequest(r, s.config.Token, s.config.SimpleAuth) {
 				serveDecoy(w)
 				return
 			}

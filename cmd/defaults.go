@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"os"
+	"runtime"
+
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/utils/network"
 
 	"github.com/sirupsen/logrus"
@@ -144,6 +148,28 @@ func applyDefaults(cfg *config.Config) {
 
 	warnUnusedStreamBuffer(cfg)
 	checkOutbound(cfg)
+	checkXdi(cfg)
+}
+
+// checkXdi refuses an xdi tunnel that cannot possibly work, before it tries.
+//
+// The transport needs a raw ICMP socket, which needs root or CAP_NET_RAW.
+// Without it the socket open fails deep inside the transport with an errno an
+// operator should not have to decode; caught here, it names the cause and what
+// to do. The server is normally root anyway — this is for the case where it is
+// not.
+func checkXdi(cfg *config.Config) {
+	usesXdi := cfg.Server.Transport == config.XDI || cfg.Client.Transport == config.XDI
+	if !usesXdi {
+		return
+	}
+	if runtime.GOOS != "linux" {
+		logger.Fatalf("the xdi transport is only available on Linux (it needs a raw ICMP socket)")
+	}
+	if os.Geteuid() != 0 {
+		logger.Fatalf("the xdi transport needs a raw ICMP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+	}
+	logger.Warn("xdi is experimental: it carries the tunnel inside ICMP echo (ping) packets, for networks that filter UDP and TCP but not ICMP. It is slower than the other transports and heavier on ICMP rate limits.")
 }
 
 // checkOutbound rejects a proxy or a routing binding that cannot work, at load
@@ -178,8 +204,8 @@ func checkOutbound(cfg *config.Config) {
 	// tunnel would come up and quietly leave by the wrong link — or, with a
 	// proxy, come up and carry nothing at all.
 	switch cfg.Client.Transport {
-	case config.UDP, config.KCP:
-		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is carried in UDP datagrams, which do not go through the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
+	case config.UDP, config.KCP, config.XDI:
+		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is not carried over the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
 	}
 
 	logger.Infof("the tunnel server will be reached %s", out)

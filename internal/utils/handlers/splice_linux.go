@@ -64,8 +64,12 @@ func spliceRelay(dst, src *net.TCPConn, onChunk func(n int)) (handled bool, err 
 	defer unix.Close(pr)
 	defer unix.Close(pw)
 
-	// Best effort: a pipe that cannot be grown just moves smaller chunks.
-	_, _ = unix.FcntlInt(uintptr(pw), unix.F_SETPIPE_SZ, spliceChunk)
+	// Best effort: a pipe that cannot be grown just moves smaller chunks, at
+	// the cost of more syscalls. Set on the read end to match what the Go
+	// runtime does in its own splice path — the capacity belongs to the pipe
+	// rather than to either descriptor, so both work, and matching the
+	// reference implementation leaves one less thing to wonder about.
+	_, _ = unix.FcntlInt(uintptr(pr), unix.F_SETPIPE_SZ, spliceChunk)
 
 	for {
 		inPipe, err := spliceDrain(srcRaw, pw)

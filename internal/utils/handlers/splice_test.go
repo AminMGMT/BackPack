@@ -13,6 +13,11 @@ import (
 // connection all arrive here as something other than *net.TCPConn, and the
 // caller relies on a false return to copy them itself.
 func TestSpliceTransferDeclinesNonTCPConns(t *testing.T) {
+	// Enabled on purpose: with it off this would pass without exercising any
+	// of the logic it claims to check.
+	restoreZeroCopy(t)
+	SetZeroCopy(true)
+
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
@@ -53,6 +58,9 @@ func TestUncountIdentifiesTheTunnelSide(t *testing.T) {
 // The guarantee comes from not unwrapping anything except the counter, so what
 // this checks is that an unknown wrapper is declined rather than unwrapped.
 func TestSpliceTransferDeclinesAnUnknownWrapper(t *testing.T) {
+	restoreZeroCopy(t)
+	SetZeroCopy(true)
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

@@ -78,3 +78,26 @@ func portFree(port int) bool {
 	ln.Close()
 	return true
 }
+
+// LegacySocksInUse reports whether any tunnel still relies on the fixed 1080
+// SOCKS port, so the monitor can bind it only when it is actually needed.
+//
+// Binding 1080 unconditionally — which is what the monitor used to do — squats
+// the one port every other SOCKS proxy expects. On a box that also runs a panel
+// or an xray SOCKS inbound, backpack boots first, wins 1080, and the other
+// service quietly loses it; the panel's nodes then drop, and the operator ends
+// up reinstalling backpack to clear it. Since every current tunnel derives its
+// relay port from its token instead, the only thing that still needs 1080 is a
+// tunnel written before that change — one whose forwarded ports still map to
+// 127.0.0.1:1080. Nothing else, and no fresh install, has any reason to hold it.
+func LegacySocksInUse(tunnels []Tunnel) bool {
+	suffix := fmt.Sprintf("=127.0.0.1:%d", app.SocksInternalPort)
+	for _, t := range tunnels {
+		for _, p := range t.Ports {
+			if strings.HasSuffix(strings.TrimSpace(p), suffix) {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/backpack/backpack/internal/server"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/handlers"
 
 	"github.com/BurntSushi/toml"
 )
@@ -118,6 +119,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 		startMetrics(ctx, configPath, string(cfg.Server.Transport), "server")
 
 		srv := server.NewServer(&cfg.Server, ctx) // server
+		reportZeroCopy(ctx)
 		go srv.Start()
 
 		// Wait for shutdown signal
@@ -133,6 +135,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 		startMetrics(ctx, configPath, string(cfg.Client.Transport), "client")
 
 		clnt := client.NewClient(&cfg.Client, ctx) // client
+		reportZeroCopy(ctx)
 		go clnt.Start()
 
 		// Wait for shutdown signal
@@ -153,4 +156,35 @@ func loadConfig(configPath string) (*config.Config, error) {
 		return &cfg, err
 	}
 	return &cfg, nil
+}
+
+// reportZeroCopy says, periodically and in the tunnel's own journal, whether
+// the kernel forwarding path is being used.
+//
+// Enabling it and having it work are different things: it declines silently on
+// a mux or websocket transport, on a rate-limited tunnel, and off Linux. An
+// operator who switched it on to try it has no way to tell which happened, and
+// the counters live in this process — not in the CLI that runs Health Check —
+// so this is where they have to be said out loud.
+//
+// It is deliberately in the log rather than the panel: the point of it is to be
+// pasted into a bug report alongside everything else from the same minutes.
+func reportZeroCopy(ctx context.Context) {
+	if !handlers.ZeroCopy() {
+		return
+	}
+	logger.Infof("zero-copy forwarding is enabled (experimental; plain tcp transport on Linux only) — %s", handlers.RelaySummary())
+
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				logger.Infof("zero-copy forwarding: %s", handlers.RelaySummary())
+			}
+		}
+	}()
 }

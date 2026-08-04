@@ -97,6 +97,9 @@ type TunnelSpec struct {
 
 	// Edge/CDN IP override (client, websocket transports only)
 	EdgeIP string
+	// SimpleAuth authorises a wss tunnel by the raw token, for a server behind
+	// a TLS-terminating proxy like NGINX. Off by default. See config.SimpleAuth.
+	SimpleAuth bool
 	// Proxy is the optional socks5:// or http:// URL the client reaches the
 	// tunnel server through. Empty means dial it directly.
 	Proxy string
@@ -106,6 +109,9 @@ type TunnelSpec struct {
 	LocalAddr string
 	Interface string
 	SOMark    int
+	// ZeroCopy hands forwarded traffic to the kernel instead of copying it
+	// through this process. Off by default — see config.ZeroCopy.
+	ZeroCopy bool
 }
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
@@ -145,12 +151,13 @@ func (s TunnelSpec) writeKCP(p func(string, ...any)) {
 
 // isMux reports whether a transport multiplexes over SMUX.
 func isMux(t string) bool {
-	return t == "tcpmux" || t == "wsmux" || t == "wssmux" || t == "kcp"
+	return t == "tcpmux" || t == "wsmux" || t == "wssmux" || t == "kcp" || t == "xdi"
 }
 
-// isKCP reports whether a transport rides on KCP (reliable ARQ over UDP).
+// isKCP reports whether a transport rides on KCP — over UDP (kcp) or over ICMP
+// echo (xdi). Both are tuned by the same kcp_* knobs and the same presets.
 func isKCP(t string) bool {
-	return t == "kcp"
+	return t == "kcp" || t == "xdi"
 }
 
 // IsDatagram reports whether a transport carries datagrams (UDP/KCP), for
@@ -161,7 +168,7 @@ func IsDatagram(t string) bool { return isDatagram(t) }
 // tunnel never shows up in the TCP listen table and cannot be probed with a
 // TCP connect, so every check that assumes TCP has to skip it.
 func isDatagram(t string) bool {
-	return t == "udp" || t == "kcp"
+	return t == "udp" || t == "kcp" || t == "xdi"
 }
 
 // supportsProxyProtocol reports whether a transport can prepend the PROXY
@@ -190,7 +197,7 @@ func needsTLS(t string) bool {
 // validTransport reports whether t is one of the engine's supported transports.
 func validTransport(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth":
+	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth", "xdi":
 		return true
 	}
 	return false
@@ -237,6 +244,12 @@ func (s TunnelSpec) Render() string {
 					p("acme_email = %q\n", s.ACMEEmail)
 				}
 			}
+			// The server end also has to be told to accept the raw token, or it
+			// keeps demanding the bound proof the fronted client can no longer
+			// send.
+			if s.SimpleAuth {
+				p("simple_auth = true\n")
+			}
 		}
 		if isMux(s.Transport) {
 			p("mux_con = %d\n", s.MuxCon)
@@ -247,6 +260,9 @@ func (s TunnelSpec) Render() string {
 		}
 		if supportsProxyProtocol(s.Transport) {
 			p("proxy_protocol = %t\n", s.ProxyProtocol)
+		}
+		if s.ZeroCopy {
+			p("zero_copy = true\n")
 		}
 		if s.MaxConnections > 0 {
 			p("max_connections = %d\n", s.MaxConnections)
@@ -299,6 +315,9 @@ func (s TunnelSpec) Render() string {
 	if isWS(s.Transport) && s.EdgeIP != "" {
 		p("edge_ip = %q\n", s.EdgeIP)
 	}
+	if needsTLS(s.Transport) && s.SimpleAuth {
+		p("simple_auth = true\n")
+	}
 	if s.Proxy != "" {
 		p("proxy = %q\n", s.Proxy)
 	}
@@ -310,6 +329,9 @@ func (s TunnelSpec) Render() string {
 	}
 	if s.SOMark != 0 {
 		p("so_mark = %d\n", s.SOMark)
+	}
+	if s.ZeroCopy {
+		p("zero_copy = true\n")
 	}
 	if isMux(s.Transport) {
 		p("mux_session = %d\n", s.MuxCon)

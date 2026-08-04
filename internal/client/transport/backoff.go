@@ -65,6 +65,3 @@ func (b *backoff) duration() time.Duration {
 	}
 	return time.Duration(d)
 }
-
-// reset returns to the floor, e.g. after a successful connection.
-func (b *backoff) reset() { b.attempt = 0 }

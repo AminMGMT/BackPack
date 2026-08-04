@@ -17,6 +17,11 @@ const (
 	// indistinguishable from random — so deep packet inspection has nothing to
 	// match. The pre-shared key is derived from the tunnel token.
 	STEALTH TransportType = "stealth"
+	// XDI carries the KCP transport inside ICMP echo instead of UDP —
+	// experimental. It is for the network that filters UDP and TCP but not
+	// ICMP, where the tunnel rides in ping packets. Linux only, and needs a raw
+	// socket. Everything above the packet layer is identical to KCP.
+	XDI TransportType = "xdi"
 )
 
 // KCPConfig holds the tuning of the KCP transport: a reliable, retransmitting
@@ -92,18 +97,36 @@ type ServerConfig struct {
 	// to this server. Empty keeps the self-signed certificate.
 	ACMEDomain string `toml:"acme_domain"`
 	ACMEEmail  string `toml:"acme_email"`
-	Heartbeat  int    `toml:"heartbeat"`
-	MuxCon     int    `toml:"mux_con"`
-	AcceptUDP  bool   `toml:"accept_udp"`
-	SkipOptz   bool   `toml:"skip_optz"`
-	MSS        int    `toml:"mss"`
-	SO_RCVBUF  int    `toml:"so_rcvbuf"`
-	SO_SNDBUF  int    `toml:"so_sndbuf"`
+	// SimpleAuth authorises a wss tunnel by the raw token instead of a proof
+	// bound to the TLS session. It exists for one deployment the binding
+	// otherwise makes impossible: a TLS-terminating reverse proxy — typically
+	// NGINX — in front of the tunnel, which holds a different TLS session from
+	// the client so a bound proof can never match. It is off by default because
+	// it hands the token to whoever terminates the TLS; turn it on only when a
+	// trusted proxy is doing so, and set it on both ends.
+	SimpleAuth bool `toml:"simple_auth"`
+	Heartbeat  int  `toml:"heartbeat"`
+	MuxCon     int  `toml:"mux_con"`
+	AcceptUDP  bool `toml:"accept_udp"`
+	SkipOptz   bool `toml:"skip_optz"`
+	MSS        int  `toml:"mss"`
+	SO_RCVBUF  int  `toml:"so_rcvbuf"`
+	SO_SNDBUF  int  `toml:"so_sndbuf"`
 	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
 	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
 	// the window, which costs a large multiple of the throughput on a fast
 	// uplink. The datagram transports set their own buffers regardless.
 	SOPinTCP bool `toml:"so_pin_tcp"`
+	// ZeroCopy lets the kernel move the bytes of forwarded connections
+	// directly between the two sockets, without them passing through this
+	// process. It is faster and it is the least proven path here, so it is off
+	// by default and turned on per tunnel.
+	//
+	// Purely local: nothing about it reaches the wire, so the two ends need not
+	// agree and it is safe to enable on one side first. It applies only to the
+	// plain `tcp` transport on Linux, and only when the tunnel has no bandwidth
+	// limit — anything else quietly keeps the buffered path.
+	ZeroCopy bool `toml:"zero_copy"`
 
 	ProxyProtocol bool `toml:"proxy_protocol"`
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
@@ -142,10 +165,18 @@ type ClientConfig struct {
 	DialTimeout      int           `toml:"dial_timeout"`
 	AggressivePool   bool          `toml:"aggressive_pool"`
 	EdgeIP           string        `toml:"edge_ip"`
-	SkipOptz         bool          `toml:"skip_optz"`
-	MSS              int           `toml:"mss"`
-	SO_RCVBUF        int           `toml:"so_rcvbuf"`
-	SO_SNDBUF        int           `toml:"so_sndbuf"`
+	// SimpleAuth authorises a wss tunnel by the raw token instead of a proof
+	// bound to the TLS session. It exists for one deployment the binding
+	// otherwise makes impossible: a TLS-terminating reverse proxy — typically
+	// NGINX — in front of the tunnel, which holds a different TLS session from
+	// the client so a bound proof can never match. It is off by default because
+	// it hands the token to whoever terminates the TLS; turn it on only when a
+	// trusted proxy is doing so, and set it on both ends.
+	SimpleAuth bool `toml:"simple_auth"`
+	SkipOptz   bool `toml:"skip_optz"`
+	MSS        int  `toml:"mss"`
+	SO_RCVBUF  int  `toml:"so_rcvbuf"`
+	SO_SNDBUF  int  `toml:"so_sndbuf"`
 	// Proxy routes the connection to the tunnel server through a local or
 	// nearby proxy, for a client that cannot open an arbitrary outbound
 	// connection itself. One URL: "socks5://127.0.0.1:1080" or
@@ -173,6 +204,16 @@ type ClientConfig struct {
 	// the window, which costs a large multiple of the throughput on a fast
 	// uplink. The datagram transports set their own buffers regardless.
 	SOPinTCP bool `toml:"so_pin_tcp"`
+	// ZeroCopy lets the kernel move the bytes of forwarded connections
+	// directly between the two sockets, without them passing through this
+	// process. It is faster and it is the least proven path here, so it is off
+	// by default and turned on per tunnel.
+	//
+	// Purely local: nothing about it reaches the wire, so the two ends need not
+	// agree and it is safe to enable on one side first. It applies only to the
+	// plain `tcp` transport on Linux, and only when the tunnel has no bandwidth
+	// limit — anything else quietly keeps the buffered path.
+	ZeroCopy bool `toml:"zero_copy"`
 
 	Preset string `toml:"preset"`
 	// LoadBalance spreads the pool's data connections over every configured

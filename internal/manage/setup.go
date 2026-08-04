@@ -17,9 +17,15 @@ type transportEntry struct {
 	label, desc, value string
 }
 
-// transportGroups organises the transports into the three families they
-// actually belong to, so the setup menu asks "which kind of connection?"
-// before asking for a specific variant.
+// transportGroups organises the transports into the families they actually
+// belong to, so the setup menu asks "which kind of connection?" before asking
+// for a specific variant.
+//
+// The Experimental family is deliberately its own thing rather than a variant
+// tucked under another: what it holds is not a flavour of TCP or UDP but a
+// different idea about how to move bytes at all — xDi rides in ICMP, which is
+// neither — and it is where anything else of that sort will go, so it should
+// read as "here be things still being proven", not as a footnote to UDP.
 var transportGroups = []struct {
 	label, desc string
 	entries     []transportEntry
@@ -38,6 +44,9 @@ var transportGroups = []struct {
 		{"WS Mux", "WebSocket — multiplexed", "wsmux"},
 		{"WSS", "secure WebSocket — TLS encrypted", "wss"},
 		{"WSS Mux", "TLS WebSocket — multiplexed", "wssmux"},
+	}},
+	{"Experimental", "newer ideas, still being proven — not for production yet", []transportEntry{
+		{"xDi (ICMP)", "tunnels inside ping packets, for networks that filter UDP/TCP but not ICMP — Linux, needs root", "xdi"},
 	}},
 }
 
@@ -126,6 +135,17 @@ func applyManualTuning(s *TunnelSpec) {
 		s.KCPDataShards = tui.PromptInt("FEC data shards (0 disables error correction)", s.KCPDataShards)
 		s.KCPParityShards = tui.PromptInt("FEC parity shards (losses repaired per group)", s.KCPParityShards)
 	}
+	// Zero-copy forwarding, offered only where it can actually engage: the
+	// kernel path needs two plain TCP sockets, so a mux, websocket or datagram
+	// transport would take the setting and quietly ignore it.
+	if s.Transport == "tcp" {
+		tui.Warn("Zero-copy hands forwarded traffic straight to the kernel. It is the")
+		tui.Warn("fastest path and the least proven one — try it on a spare tunnel")
+		tui.Warn("before a busy one. Nothing about it reaches the wire, so the two")
+		tui.Warn("ends need not agree.")
+		s.ZeroCopy = tui.Confirm("Enable zero-copy forwarding (experimental)", s.ZeroCopy)
+	}
+
 	// Manual edits no longer match any preset, so the tunnel is marked custom
 	// and a later preset change will not silently overwrite these answers.
 	s.Preset = ""
@@ -364,6 +384,7 @@ func SetupServer() {
 	if needsTLS(transport) && !setupServerTLS(&s) {
 		return
 	}
+	askSimpleAuth(&s, transport)
 
 	askProxyProtocol(&s)
 
@@ -415,10 +436,11 @@ func SetupClient() {
 		tui.Info("resolving the server address directly. Leave empty to skip.")
 		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
 	}
+	askSimpleAuth(&s, transport)
 
 	// Only offered where it can actually work: the datagram transports carry
 	// their data in UDP, which a TCP proxy cannot relay.
-	if transport != "udp" && transport != "kcp" {
+	if transport != "udp" && transport != "kcp" && transport != "xdi" {
 		fmt.Println()
 		tui.Info("Optional proxy: reach the tunnel server through a SOCKS5 or HTTP proxy,")
 		tui.Info("for a machine that cannot open outbound connections directly.")
@@ -761,4 +783,23 @@ func routableInterfaces() []string {
 		names = append(names, ifi.Name)
 	}
 	return names
+}
+
+// askSimpleAuth offers the raw-token authorisation that a wss tunnel behind a
+// TLS-terminating proxy needs. It is only meaningful there: over plain ws the
+// token already goes raw, and the datagram and TCP transports have no TLS
+// binding to turn off. Off by default, because without such a proxy it hands
+// the token to whoever terminates the TLS.
+func askSimpleAuth(s *TunnelSpec, transport string) {
+	if !needsTLS(transport) {
+		return
+	}
+	fmt.Println()
+	tui.Info("If a reverse proxy (NGINX and the like) terminates TLS in front of this")
+	tui.Info("tunnel, the default proof-of-session authorisation cannot match and the")
+	tui.Info("tunnel is rejected. Simple auth sends the raw token instead, which works")
+	tui.Info("through such a proxy.")
+	tui.Warn("Only enable it when a trusted proxy is terminating the TLS — it hands the")
+	tui.Warn("token to whatever does. Set the same answer on both ends.")
+	s.SimpleAuth = tui.Confirm("Use simple token auth (for a TLS-terminating proxy in front)", s.SimpleAuth)
 }

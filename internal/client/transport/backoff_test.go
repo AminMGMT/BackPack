@@ -23,11 +23,6 @@ func TestBackoffGrowsAndCaps(t *testing.T) {
 	if d < time.Duration(0.8*float64(30*time.Second)) || d > time.Duration(1.2*float64(30*time.Second)) {
 		t.Fatalf("capped duration = %v, want ~30s", d)
 	}
-
-	b.reset()
-	if b.attempt != 0 {
-		t.Fatalf("reset left attempt = %d", b.attempt)
-	}
 }
 
 // Wait returns promptly (false) when the context is cancelled.

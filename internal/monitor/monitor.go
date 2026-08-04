@@ -97,8 +97,20 @@ func Run() {
 func startSocksRelays(ctx context.Context, logger *logrus.Logger) {
 	auth := func(_, pass string) bool { return manage.TokenMatches(pass) }
 
-	ports := map[int]string{app.SocksInternalPort: "legacy"}
-	for _, t := range manage.List() {
+	tunnels := manage.List()
+
+	ports := map[int]string{}
+	// The well-known 1080 is bound only when a tunnel actually still maps to
+	// it. Binding it on every install — which is what used to happen — squats
+	// the port every other SOCKS proxy expects, so on a machine that also runs
+	// a panel or an xray inbound on 1080, whichever service boots first wins
+	// and the other silently loses its port. Backpack has no business holding
+	// 1080 unless one of its own tunnels, written before the port was derived
+	// from the token, is genuinely still using it.
+	if manage.LegacySocksInUse(tunnels) {
+		ports[app.SocksInternalPort] = "legacy"
+	}
+	for _, t := range tunnels {
 		if tok := manage.TunnelToken(t.Name); tok != "" {
 			ports[app.SocksPortForToken(tok)] = t.Name
 		}

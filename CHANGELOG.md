@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## Unreleased
+## v1.7.0 — 2026-08-04
 
 This one started from a report that the tunnel worked on most servers and not on
 some, with no error that said why. Chasing it down found several separate causes
@@ -15,6 +15,32 @@ back to the old behaviour when one end is older — but a new server with old
 clients is the combination that degrades most gracefully.
 
 ### Fixed
+- **A wss tunnel could not sit behind a TLS-terminating reverse proxy.** The wss
+  credential is a proof bound to the client's TLS session — which stops an
+  intermediary that terminated the TLS from replaying it, and also stops a
+  *legitimate* one, like an NGINX reverse proxy in front of the server, because
+  the proxy holds a different session and the bound proof can never match. There
+  was no way to run that setup at all. A new `simple_auth` option authorises on
+  the raw token instead, the same credential the plain ws transport already
+  sends:
+
+  ```toml
+  simple_auth = true
+  ```
+
+  It is off by default, because without a trusted proxy it hands the token to
+  whoever terminates the TLS. Set it on both ends when a proxy is doing so.
+
+- **Backpack squatted the well-known SOCKS port 1080 on every install.** The
+  monitor bound `127.0.0.1:1080` unconditionally, as a fallback for tunnels
+  written before the relay port was derived from the token. On a machine that
+  also runs a panel or an xray SOCKS inbound on 1080, backpack boots first, wins
+  the port, and the other service quietly loses it — the panel's nodes drop after
+  a reboot, and the only way anyone found to clear it was to uninstall backpack.
+  It now binds 1080 only when a tunnel actually still maps to it, and leaves it
+  alone otherwise. Nothing that uses the derived port — every current tunnel, and
+  every fresh install — touches 1080 at all.
+
 - **A tunnel would connect and then carry nothing, for any client that dials out
   from more than one address.** The server accepted a pool connection only if its
   source address matched the control channel's. Behind carrier-grade NAT, on a
@@ -115,12 +141,50 @@ clients is the combination that degrades most gracefully.
   amount of filler, inside the encryption — both the length and the filler are
   under the AEAD, so all that reaches the wire is a record whose length moved.
 
-- **Zero-copy forwarding on Linux, for the `tcp` transport.** Where both ends of a
-  forwarded connection are plain sockets, the bytes are moved by the kernel
-  instead of being copied out into the process and back. Falls back to the
-  ordinary copy on anything else — another transport, a bandwidth-limited tunnel,
-  a kernel that declines — so the worst case is the performance of the previous
-  release.
+- **A new experimental transport, `xdi`, tunnels inside ICMP echo.** It is for
+  the one network where UDP and TCP are filtered but ICMP is not — the tunnel
+  rides in ping packets, which such a network is unwilling to drop because ping
+  is how it proves itself reachable. It is the KCP transport with its packets in
+  echo requests and replies instead of UDP datagrams; everything above the packet
+  layer — the reliability, the error correction, the encryption — is identical,
+  so the `aggressive` preset drives it to the same throughput as KCP.
+
+  ICMP has no ports, so a raw ICMP socket receives every ping the host sees.
+  Several `xdi` tunnels on one machine stay out of each other's way — and out of
+  the way of stray pings and the kernel's own automatic replies — by a session
+  tag derived from each tunnel's token: a packet without this tunnel's tag is not
+  this tunnel's packet, and is dropped without a second look.
+
+  It is Linux only and needs a raw socket (root, or `cap_net_raw`), refused at
+  startup with that said plainly if it does not have one. Slower than the other
+  transports and heavier on ICMP rate limits, so it is a last resort, not a
+  default.
+
+- **Zero-copy forwarding, off by default.** Where both ends of a forwarded
+  connection are plain sockets, the bytes can be moved by the kernel instead of
+  being copied out into the process and back. It is the fastest path here and
+  the least proven, so it is opt-in per tunnel:
+
+  ```toml
+  zero_copy = true
+  ```
+
+  Nothing about it reaches the wire, so the two ends need not agree — it can be
+  enabled on one side, or on one tunnel, while everything else keeps the path it
+  has always used. It applies only to the plain `tcp` transport on Linux, and
+  only where the tunnel has no bandwidth limit; anything else silently keeps the
+  buffered copy, and the tunnel says which it is actually using in its log every
+  five minutes, because "enabled" and "in effect" are not the same thing.
+
+- **Health Check answers the two questions a tunnel could not answer about
+  itself.** How much of the pool is really there — a control channel with none
+  behind it looks healthy from every other angle while forwarding nothing — and
+  whether the path can carry a full-sized packet. The second one is measured
+  rather than assumed: where a network drops oversized packets without returning
+  an ICMP message, TCP never finds out, so the handshake and the heartbeats
+  arrive, the tunnel comes up and stays up, and every real transfer stalls. It
+  now reports the measured path MTU against the segment size the sockets are
+  actually using, and names the `mss` to set.
 
 ### Changed
 - **`mux_version` is negotiated rather than assumed.** smux has no version

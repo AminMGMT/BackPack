@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	var tunnelWSConn *websocket.Conn
 	var err error
 
@@ -22,7 +22,7 @@ func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP str
 
 	for i := 0; i < retries; i++ {
 		// Attempt to dial the WebSocket
-		tunnelWSConn, err = attemptDialWebSocket(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, SO_RCVBUF, SO_SNDBUF)
+		tunnelWSConn, err = attemptDialWebSocket(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, simpleAuth, SO_RCVBUF, SO_SNDBUF)
 		if err == nil {
 			// If successful, return the connection
 			return tunnelWSConn, nil
@@ -41,7 +41,7 @@ func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP str
 	return nil, err
 }
 
-func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	// Generate a random X-user-id
 	randomUserID := rand.Int31() // Generate a random int64 number
 
@@ -155,12 +155,22 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 		if err != nil {
 			return nil, err
 		}
-		proof, err := wssClientBinding(uconn, token)
-		if err != nil {
-			uconn.Close()
-			return nil, fmt.Errorf("wss: could not bind the credential to the TLS session: %w", err)
+		// With a trusted TLS-terminating proxy in front of the server (NGINX,
+		// typically), the proxy's TLS session is not the client's, so a bound
+		// proof can never match what the server computes. simpleAuth sends the
+		// raw token instead — the same credential the plain ws transport sends —
+		// which the operator has chosen to trust that proxy with. Without a
+		// proxy this is a downgrade, so it is off by default.
+		if simpleAuth {
+			headers.Set("Authorization", "Bearer "+token)
+		} else {
+			proof, err := wssClientBinding(uconn, token)
+			if err != nil {
+				uconn.Close()
+				return nil, fmt.Errorf("wss: could not bind the credential to the TLS session: %w", err)
+			}
+			headers.Set("Authorization", "Bearer "+proof)
 		}
-		headers.Set("Authorization", "Bearer "+proof)
 
 		dialer = websocket.Dialer{
 			EnableCompression: true,

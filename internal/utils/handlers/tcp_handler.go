@@ -52,8 +52,10 @@ func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn
 // path lands if the kernel declines it.
 func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	if spliceTransfer(from, to, logger, usage, remotePort, sniffer) {
+		countSpliced()
 		return
 	}
+	countBuffered()
 
 	bufp := getRelayBuffer()
 	defer putRelayBuffer(bufp)
@@ -102,6 +104,12 @@ func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.
 // TCP sockets, and reports whether it did. A false return means nothing was
 // moved and the caller must copy the stream itself.
 func spliceTransfer(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) bool {
+	// Off unless the operator asked for it. See zerocopy.go for why the
+	// default is the slower path.
+	if !ZeroCopy() {
+		return false
+	}
+
 	// Unwrapping the counter is safe because onChunk below counts exactly what
 	// it would have. Unwrapping anything else would not be — a bandwidth cap
 	// disappears if the bytes stop passing through it — so nothing else is

@@ -45,6 +45,32 @@ func ResolveMuxVersion(configured int) int {
 	return 2
 }
 
+// ResolveStaticMuxVersion is the choice for every mux transport that cannot
+// negotiate — KCP and xDi (whose control channel is itself a smux session, so
+// there is no muxless channel to agree over) and the websocket-mux transports
+// (which were simply never given a negotiation handshake). Both ends resolve
+// independently and must land on the same number from the same config, which
+// they do because the resolution is deterministic.
+//
+// Auto becomes 1, not 2, and the difference is the whole point: these transports
+// used version 1 on the previous release, so a 1.7.0 end meeting a 1.6.5 end has
+// to choose 1 or the two disagree and smux tears every session down. An operator
+// who wants 2 sets it explicitly on both ends. (smux rejects any version that is
+// not 1 or 2 outright — "unsupported protocol version" — which is what a bare
+// auto value of 0 produced before this existed, and is the regression this
+// prevents.)
+//
+// This is deliberately not ResolveMuxVersion: that one answers auto with 2,
+// because it is only ever consulted on the tcp/tcpmux negotiation handshake,
+// where the server imposes the version and a new client obeys. Here there is no
+// one to impose it, so backward compatibility decides.
+func ResolveStaticMuxVersion(configured int) int {
+	if configured == 1 || configured == 2 {
+		return configured
+	}
+	return 1
+}
+
 // MuxSettings is the tuning both ends apply once they agree on a version.
 type MuxSettings struct {
 	MaxFrameSize     int

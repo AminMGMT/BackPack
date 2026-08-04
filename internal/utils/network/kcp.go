@@ -3,6 +3,7 @@ package network
 import (
 	"crypto/sha256"
 	"fmt"
+	"net"
 
 	"github.com/xtaci/kcp-go/v5"
 	"golang.org/x/crypto/pbkdf2"
@@ -30,6 +31,21 @@ type KCPSettings struct {
 	// window in flight with no kernel-side congestion control to pace it.
 	SO_RCVBUF int
 	SO_SNDBUF int
+	// UseICMP carries the KCP session inside ICMP echo instead of UDP — the xdi
+	// transport. Everything above the packet layer is identical, so the only
+	// thing this changes is which kind of socket the datagrams ride in. See
+	// icmpconn_linux.go.
+	UseICMP bool
+}
+
+// effectiveMTU returns the MTU KCP should use, which is smaller over ICMP
+// because the echo header and the tunnel's own framing eat into the packet.
+// Left as configured for UDP.
+func (s KCPSettings) effectiveMTU() int {
+	if s.UseICMP {
+		return s.MTU - icmpMTUOverhead
+	}
+	return s.MTU
 }
 
 // kcpCrypt derives the KCP block cipher from the tunnel token. KCP has no
@@ -50,7 +66,7 @@ func kcpCrypt(token string) (kcp.BlockCrypt, error) {
 func ApplyKCPSettings(session *kcp.UDPSession, s KCPSettings) {
 	session.SetNoDelay(s.NoDelay, s.Interval, s.Resend, s.NoCongestion)
 	session.SetWindowSize(s.SndWnd, s.RcvWnd)
-	session.SetMtu(s.MTU)
+	session.SetMtu(s.effectiveMTU())
 	// Write delay off means a small write goes out on the next tick instead of
 	// waiting to be batched — the behaviour a tunnel wants.
 	session.SetWriteDelay(false)
@@ -67,12 +83,31 @@ func ApplyKCPSettings(session *kcp.UDPSession, s KCPSettings) {
 }
 
 // KCPListen opens a KCP listener on bindAddr. The returned listener yields
-// reliable, ordered sessions carried inside UDP datagrams.
+// reliable, ordered sessions carried inside UDP datagrams — or, when the
+// settings ask for it, inside ICMP echo (the xdi transport).
 func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 	block, err := kcpCrypt(token)
 	if err != nil {
 		return nil, err
 	}
+
+	// Over ICMP the socket is a raw ICMP one shared by every tunnel on the
+	// host, not a UDP socket bound to bindAddr — the bind address's port is
+	// meaningless here, and the session tag is what separates tunnels. KCP is
+	// handed that socket and does not know the difference.
+	if s.UseICMP {
+		conn, err := newICMPServerConn(token)
+		if err != nil {
+			return nil, err
+		}
+		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("xdi: failed to start the KCP listener: %w", err)
+		}
+		return listener, nil
+	}
+
 	listener, err := kcp.ListenWithOptions(bindAddr, block, s.DataShards, s.ParityShards)
 	if err != nil {
 		return nil, fmt.Errorf("kcp: failed to listen on %s: %w", bindAddr, err)
@@ -89,16 +124,51 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 	return listener, nil
 }
 
-// KCPDial opens a KCP session to remoteAddr with the tuning applied.
+// KCPDial opens a KCP session to remoteAddr with the tuning applied, over UDP
+// or — when the settings ask for it — over ICMP echo (the xdi transport).
 func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 	block, err := kcpCrypt(token)
 	if err != nil {
 		return nil, err
 	}
-	session, err := kcp.DialWithOptions(remoteAddr, block, s.DataShards, s.ParityShards)
-	if err != nil {
-		return nil, fmt.Errorf("kcp: failed to dial %s: %w", remoteAddr, err)
+
+	var session *kcp.UDPSession
+	if s.UseICMP {
+		conn, err := newICMPClientConn(token)
+		if err != nil {
+			return nil, err
+		}
+		// ICMP has no ports, so only the host of remoteAddr matters; the port
+		// is dropped. NewConn2 takes the address KCP will send every packet to,
+		// which is the server's IP.
+		ipAddr, err := hostToIPAddr(remoteAddr)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		session, err = kcp.NewConn2(ipAddr, block, s.DataShards, s.ParityShards, conn)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("xdi: failed to open the KCP session: %w", err)
+		}
+	} else {
+		session, err = kcp.DialWithOptions(remoteAddr, block, s.DataShards, s.ParityShards)
+		if err != nil {
+			return nil, fmt.Errorf("kcp: failed to dial %s: %w", remoteAddr, err)
+		}
 	}
+
 	ApplyKCPSettings(session, s)
 	return session, nil
+}
+
+// hostToIPAddr turns a "host" or "host:port" string into the *net.IPAddr the
+// ICMP socket dials, resolving a name if need be. The port, if any, is dropped:
+// ICMP does not have one.
+func hostToIPAddr(remoteAddr string) (*net.IPAddr, error) {
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	return net.ResolveIPAddr("ip4", host)
 }

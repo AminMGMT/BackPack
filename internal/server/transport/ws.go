@@ -58,6 +58,7 @@ type WsConfig struct {
 	ACMECacheDir string
 	TunnelStatus string
 	Token        string
+	SimpleAuth   bool
 	Ports        []string
 	Nodelay      bool
 	Sniffer      bool
@@ -269,7 +270,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 			// browser, a scanner, a probe with the wrong token — gets the decoy
 			// website, so on 443 this looks like an ordinary HTTPS site rather
 			// than a tunnel that answers with 401.
-			if !isTunnelRequest(r, s.config.Token) {
+			if !isTunnelRequest(r, s.config.Token, s.config.SimpleAuth) {
 				serveDecoy(w)
 				return
 			}

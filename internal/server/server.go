@@ -9,6 +9,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/server/transport"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
 
 	"github.com/sirupsen/logrus"
@@ -31,6 +32,9 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 	ctx, cancel := context.WithCancel(parentCtx)
 	// One process runs one tunnel, so the socket tuning is process-wide.
 	network.SetPinTCPBuffers(cfg.SOPinTCP)
+	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
+	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
+	handlers.SetZeroCopy(cfg.ZeroCopy)
 	return &Server{
 		config: cfg,
 		ctx:    ctx,
@@ -83,8 +87,9 @@ func (s *Server) Start() {
 		tcpServer := transport.NewTCPServer(s.ctx, tcpConfig, s.logger)
 		go tcpServer.Start()
 
-	case config.KCP:
+	case config.KCP, config.XDI:
 		kcp := s.config.KCPConfig.WithDefaults()
+		useICMP := s.config.Transport == config.XDI
 		kcpConfig := &transport.KcpConfig{
 			BindAddr:         s.config.BindAddr,
 			Heartbeat:        time.Duration(s.config.Heartbeat) * time.Second,
@@ -114,6 +119,7 @@ func (s *Server) Start() {
 			AckNoDelay:       kcp.AckNoDelay,
 			DataShards:       kcp.DataShards,
 			ParityShards:     kcp.ParityShards,
+			UseICMP:          useICMP,
 		}
 
 		kcpServer := transport.NewKcpServer(s.ctx, kcpConfig, s.logger)
@@ -160,6 +166,7 @@ func (s *Server) Start() {
 			WebPort:      s.config.WebPort,
 			SnifferLog:   s.config.SnifferLog,
 			Mode:         s.config.Transport,
+			SimpleAuth:   s.config.SimpleAuth,
 			TLSCertFile:  s.config.TLSCertFile,
 			ACMEDomain:   s.config.ACMEDomain,
 			ACMEEmail:    s.config.ACMEEmail,
@@ -191,6 +198,7 @@ func (s *Server) Start() {
 			WebPort:          s.config.WebPort,
 			SnifferLog:       s.config.SnifferLog,
 			Mode:             s.config.Transport,
+			SimpleAuth:       s.config.SimpleAuth,
 			TLSCertFile:      s.config.TLSCertFile,
 			ACMEDomain:       s.config.ACMEDomain,
 			ACMEEmail:        s.config.ACMEEmail,
