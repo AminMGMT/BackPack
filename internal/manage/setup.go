@@ -438,76 +438,82 @@ func SetupClient() {
 	}
 	askSimpleAuth(&s, transport)
 
-	// Only offered where it can actually work: the datagram transports carry
-	// their data in UDP, which a TCP proxy cannot relay.
-	if transport != "udp" && transport != "kcp" && transport != "xdi" {
-		fmt.Println()
-		tui.Info("Optional proxy: reach the tunnel server through a SOCKS5 or HTTP proxy,")
-		tui.Info("for a machine that cannot open outbound connections directly.")
-		tui.Warn("e.g. socks5://127.0.0.1:1080 — leave empty to dial the server directly.")
-		for {
-			raw := strings.TrimSpace(tui.PromptDefault("Proxy URL", ""))
-			if raw == "" {
-				break
-			}
-			if _, err := network.ParseProxy(raw); err != nil {
-				tui.Error(fmt.Sprintf("%v", err))
-				continue
-			}
-			s.Proxy = raw
-			break
-		}
-
-		// Only worth asking on a machine that has somewhere else to go. On a
-		// single-uplink server the answer is always "the one route there is",
-		// and a prompt for it is a prompt to get wrong.
-		if names := routableInterfaces(); len(names) > 1 {
+	// Proxy, interface pinning, and backup addresses are connectivity options
+	// that most tunnels never need. Gate them behind one confirm so the common
+	// path stays short, and only print their explanatory text on demand.
+	fmt.Println()
+	if tui.Confirm("Configure optional connection settings (proxy, interface, backup addresses)", false) {
+		// Only offered where it can actually work: the datagram transports carry
+		// their data in UDP, which a TCP proxy cannot relay.
+		if transport != "udp" && transport != "kcp" && transport != "xdi" {
 			fmt.Println()
-			tui.Info("This machine has more than one network interface. You can pin the")
-			tui.Info("tunnel to one of them, or to a source address, if it should not")
-			tui.Info("leave by whichever route the kernel picks.")
-			tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel decide.")
+			tui.Info("Optional proxy: reach the tunnel server through a SOCKS5 or HTTP proxy,")
+			tui.Info("for a machine that cannot open outbound connections directly.")
+			tui.Warn("e.g. socks5://127.0.0.1:1080 — leave empty to dial the server directly.")
 			for {
-				raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+				raw := strings.TrimSpace(tui.PromptDefault("Proxy URL", ""))
 				if raw == "" {
 					break
 				}
-				if _, err := net.InterfaceByName(raw); err != nil {
-					tui.Error(fmt.Sprintf("no such interface: %v", err))
+				if _, err := network.ParseProxy(raw); err != nil {
+					tui.Error(fmt.Sprintf("%v", err))
 					continue
 				}
-				s.Interface = raw
+				s.Proxy = raw
 				break
 			}
-			s.LocalAddr = strings.TrimSpace(tui.PromptDefault("Source address (optional)", ""))
-		}
-	}
 
-	// Backup addresses make the tunnel survive a filtered server IP: the client
-	// tries each one in turn until something answers.
-	fmt.Println()
-	tui.Info("Optional backup server addresses — if the main address ever stops")
-	tui.Info("answering, the client fails over to these automatically.")
-	tui.Warn("Comma separated; a bare IP reuses the main port. Leave empty to skip.")
-	if raw := strings.TrimSpace(tui.PromptDefault("Backup addresses", "")); raw != "" {
-		for _, part := range strings.Split(raw, ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
+			// Only worth asking on a machine that has somewhere else to go. On a
+			// single-uplink server the answer is always "the one route there is",
+			// and a prompt for it is a prompt to get wrong.
+			if names := routableInterfaces(); len(names) > 1 {
+				fmt.Println()
+				tui.Info("This machine has more than one network interface. You can pin the")
+				tui.Info("tunnel to one of them, or to a source address, if it should not")
+				tui.Info("leave by whichever route the kernel picks.")
+				tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel decide.")
+				for {
+					raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+					if raw == "" {
+						break
+					}
+					if _, err := net.InterfaceByName(raw); err != nil {
+						tui.Error(fmt.Sprintf("no such interface: %v", err))
+						continue
+					}
+					s.Interface = raw
+					break
+				}
+				s.LocalAddr = strings.TrimSpace(tui.PromptDefault("Source address (optional)", ""))
 			}
-			if _, _, err := net.SplitHostPort(part); err != nil {
-				part = net.JoinHostPort(strings.Trim(part, "[]"), remotePort)
-			}
-			s.FallbackAddrs = append(s.FallbackAddrs, part)
 		}
-	}
-	if len(s.FallbackAddrs) > 0 {
+
+		// Backup addresses make the tunnel survive a filtered server IP: the
+		// client tries each one in turn until something answers.
 		fmt.Println()
-		tui.Info("Load balancing spreads the tunnel's connections over ALL of those")
-		tui.Info("addresses at once instead of keeping them as spares.")
-		tui.Warn("Only turn this on if every address reaches the SAME server — a")
-		tui.Warn("second IP of it, another port, or a CDN edge in front of it.")
-		s.LoadBalance = tui.Confirm("Enable load balancing", false)
+		tui.Info("Optional backup server addresses — if the main address ever stops")
+		tui.Info("answering, the client fails over to these automatically.")
+		tui.Warn("Comma separated; a bare IP reuses the main port. Leave empty to skip.")
+		if raw := strings.TrimSpace(tui.PromptDefault("Backup addresses", "")); raw != "" {
+			for _, part := range strings.Split(raw, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				if _, _, err := net.SplitHostPort(part); err != nil {
+					part = net.JoinHostPort(strings.Trim(part, "[]"), remotePort)
+				}
+				s.FallbackAddrs = append(s.FallbackAddrs, part)
+			}
+		}
+		if len(s.FallbackAddrs) > 0 {
+			fmt.Println()
+			tui.Info("Load balancing spreads the tunnel's connections over ALL of those")
+			tui.Info("addresses at once instead of keeping them as spares.")
+			tui.Warn("Only turn this on if every address reaches the SAME server — a")
+			tui.Warn("second IP of it, another port, or a CDN edge in front of it.")
+			s.LoadBalance = tui.Confirm("Enable load balancing", false)
+		}
 	}
 
 	ApplyPreset(&s, choosePreset())
