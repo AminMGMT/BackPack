@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/backpack/backpack/internal/manage"
 )
@@ -18,7 +19,26 @@ var (
 // requireAuth rather than requireReadAuth: the remote monitoring token may
 // inspect a server, but it must never be able to change one.
 func (s *server) handleTunnelRestart(w http.ResponseWriter, r *http.Request) {
-	handleTunnelRestartWith(w, r, manage.List, manage.RestartService)
+	handleTunnelRestartWith(w, r, manage.List, func(service string) error {
+		return restartAndWait(service, manage.RestartService, manage.WaitServiceActive)
+	})
+}
+
+// restartAndWait does not report success merely because systemd accepted the
+// restart job. A service whose process immediately fails must be shown as a
+// failed restart in the panel, not as a brief success followed by a red card.
+func restartAndWait(
+	service string,
+	restart func(string) error,
+	waitActive func(string, time.Duration) bool,
+) error {
+	if err := restart(service); err != nil {
+		return err
+	}
+	if !waitActive(service, 10*time.Second) {
+		return errors.New("service did not become active")
+	}
+	return nil
 }
 
 // handleTunnelRestartWith keeps the systemd operation injectable for tests.

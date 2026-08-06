@@ -7,9 +7,40 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/backpack/backpack/internal/manage"
 )
+
+func TestRestartWaitsForServiceToBecomeActive(t *testing.T) {
+	var restarted, waited string
+	err := restartAndWait("backpack-client.service",
+		func(service string) error { restarted = service; return nil },
+		func(service string, timeout time.Duration) bool {
+			waited = service
+			if timeout != 10*time.Second {
+				t.Errorf("timeout = %s, want 10s", timeout)
+			}
+			return true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted != "backpack-client.service" || waited != restarted {
+		t.Fatalf("restarted %q and waited for %q", restarted, waited)
+	}
+}
+
+func TestRestartFailsWhenServiceDoesNotBecomeActive(t *testing.T) {
+	err := restartAndWait("backpack-client.service",
+		func(string) error { return nil },
+		func(string, time.Duration) bool { return false },
+	)
+	if err == nil {
+		t.Fatal("an inactive service was reported as restarted")
+	}
+}
 
 func TestTunnelRestartRouteRequiresPanelSession(t *testing.T) {
 	src, err := os.ReadFile("server.go")
