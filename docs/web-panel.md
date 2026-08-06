@@ -1,11 +1,12 @@
 # Web panel
 
-A **monitoring-only** dashboard on **port 7777**, matching the CLI's look. It
+A monitoring-focused dashboard on **port 7777**, matching the CLI's look. It
 shows live CPU / RAM / disk / traffic, each tunnel's state, real ping, and logs.
+A logged-in operator can also restart an individual tunnel from its card.
 Backup, Telegram setup and the panel password live in **Settings**.
 
 Run it on the **Iran** server, where you watch things from. It does not create
-or change tunnels — that is the CLI's job.
+or reconfigure tunnels — those remain the CLI's job.
 
 ## Getting in
 
