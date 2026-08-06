@@ -57,13 +57,14 @@ type spoofConn struct {
 	rawRecvPC   net.PacketConn // kept for Close/LocalAddr
 	recvProfile SpoofProfile
 
-	server   bool
-	tag      [xdiTagLen]byte
-	port     uint16
-	realPeer net.IP
-	spoofSrc net.IP
+	server    bool
+	tag       [xdiTagLen]byte
+	port      uint16
+	realPeer  net.IP
+	spoofSrcs []net.IP // forged sources, rotated one per packet; empty = no spoofing
 
 	rst     *rstGuard // the tcp RST-suppression rule, set when recvProfile is tcp
+	rot     atomic.Uint32
 	ipID    atomic.Uint32
 	tcpSeq  atomic.Uint32
 	icmpSeq atomic.Uint32
@@ -107,9 +108,16 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 	if realPeer == nil {
 		return nil, fmt.Errorf("spoof: the peer's real IPv4 address is required")
 	}
-	spoofSrc, err := chooseSpoofSrc(srcIP, srcPool)
+	spoofSrcs, err := parseSpoofPool(srcIP, srcPool)
 	if err != nil {
 		return nil, err
+	}
+	// No forged source configured: resolve the real local address toward the
+	// peer once, so every packet's header and checksum agree and the send path
+	// never has to look it up again. This is only the no-spoof safety net; a
+	// real spoof tunnel always sets a pool.
+	if len(spoofSrcs) == 0 {
+		spoofSrcs = []net.IP{localSourceToward(realPeer)}
 	}
 	tag, port := spoofIdentity(token)
 
@@ -128,7 +136,7 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 	c := &spoofConn{
 		send: send, sendPC: sendPC, sendProfile: sendProfile,
 		recvProfile: recvProfile, server: server, tag: tag, port: port,
-		realPeer: realPeer, spoofSrc: spoofSrc,
+		realPeer: realPeer, spoofSrcs: spoofSrcs,
 	}
 
 	if recvProfile == SpoofProfileUDP {
@@ -153,6 +161,10 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 		return nil, err
 	}
 	c.rawRecv, c.rawRecvPC = rawRecv, rawRecvPC
+	// Push the demux into the kernel so the read loop only wakes for this
+	// tunnel's flow. Best effort: the userspace tag check still guarantees
+	// correctness if the kernel refuses the filter, so the error is ignored.
+	_ = attachSpoofBPF(rawRecvPC, recvProfile, port)
 	if recvProfile == SpoofProfileTCP {
 		c.rst = installRSTGuard(port)
 	}
@@ -167,14 +179,21 @@ func newSpoofClientConn(token string, uplink, downlink SpoofProfile, realPeer ne
 	return newSpoofConn(false, token, uplink, downlink, realPeer, srcIP, srcPool, iface)
 }
 
-// sourceFor returns the source address to stamp and to checksum with: the forged
-// one if configured, otherwise the real local address toward the peer (a safety
-// net — a spoof tunnel normally sets a source).
+// sourceFor returns the source address to stamp on the next packet: the pool is
+// rotated one address per packet, so the tunnel's volume is spread across every
+// forged source and a source that starts being dropped costs only its share
+// rather than the whole tunnel. The pool always holds at least one address (the
+// real local one when nothing is forged), so this never allocates or blocks.
 func (c *spoofConn) sourceFor() net.IP {
-	if c.spoofSrc != nil {
-		return c.spoofSrc
-	}
-	if u, err := net.Dial("udp", net.JoinHostPort(c.realPeer.String(), "9")); err == nil {
+	n := len(c.spoofSrcs)
+	return c.spoofSrcs[int(c.rot.Add(1)-1)%n]
+}
+
+// localSourceToward returns the real local address the kernel would use to reach
+// dst, resolved once at construction. Used only when nothing is forged, so the
+// packet's header source matches its checksum's pseudo-header.
+func localSourceToward(dst net.IP) net.IP {
+	if u, err := net.Dial("udp", net.JoinHostPort(dst.String(), "9")); err == nil {
 		defer u.Close()
 		if la, ok := u.LocalAddr().(*net.UDPAddr); ok && la.IP.To4() != nil {
 			return la.IP.To4()
@@ -209,7 +228,11 @@ func (c *spoofConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 		Len:      ipv4.HeaderLen,
 		TotalLen: ipv4.HeaderLen + len(shim),
 		ID:       int(c.ipID.Add(1) & 0xffff),
-		Flags:    ipv4.DontFragment,
+		// Don't-Fragment is deliberately NOT set: on a path whose MTU is smaller
+		// than expected, DF turns an oversize packet into a silent black hole —
+		// the "fragmentation needed" ICMP goes to the forged source and is lost —
+		// whereas without it the packet fragments and still arrives. KCP already
+		// sizes datagrams under the MTU, so fragmentation is rare regardless.
 		TTL:      64,
 		Protocol: c.sendProfile.ipProtocol(),
 		Src:      src,

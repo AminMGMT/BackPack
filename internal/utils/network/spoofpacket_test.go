@@ -113,26 +113,23 @@ func TestSpoofICMPEchoRoundTrip(t *testing.T) {
 	}
 }
 
-func TestChooseSpoofSrc(t *testing.T) {
+func TestParseSpoofPool(t *testing.T) {
 	// No source configured spoofs nothing.
-	if ip, err := chooseSpoofSrc("", nil); err != nil || ip != nil {
-		t.Fatalf("empty should be nil: %v %v", ip, err)
+	if ips, err := parseSpoofPool("", nil); err != nil || len(ips) != 0 {
+		t.Fatalf("empty should be none: %v %v", ips, err)
 	}
-	// A single address is used as-is.
-	if ip, err := chooseSpoofSrc("81.28.60.1", nil); err != nil || ip.String() != "81.28.60.1" {
-		t.Fatalf("single: %v %v", ip, err)
+	// A single address becomes a one-element pool.
+	if ips, err := parseSpoofPool("81.28.60.1", nil); err != nil || len(ips) != 1 || ips[0].String() != "81.28.60.1" {
+		t.Fatalf("single: %v %v", ips, err)
 	}
-	// Every pick from a pool is a member of that pool.
+	// The whole pool is parsed and kept in order.
 	pool := []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
-	member := map[string]bool{"1.1.1.1": true, "8.8.8.8": true, "9.9.9.9": true}
-	for i := 0; i < 50; i++ {
-		ip, err := chooseSpoofSrc("", pool)
-		if err != nil || !member[ip.String()] {
-			t.Fatalf("pool pick %q not a member: %v", ip, err)
-		}
+	ips, err := parseSpoofPool("", pool)
+	if err != nil || len(ips) != 3 || ips[0].String() != "1.1.1.1" || ips[2].String() != "9.9.9.9" {
+		t.Fatalf("pool: %v %v", ips, err)
 	}
 	// A bad entry is rejected, not silently dropped.
-	if _, err := chooseSpoofSrc("not-an-ip", nil); err == nil {
+	if _, err := parseSpoofPool("not-an-ip", nil); err == nil {
 		t.Fatal("an invalid address should be an error")
 	}
 }

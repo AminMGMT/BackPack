@@ -406,6 +406,24 @@ func askSpoof(s *TunnelSpec) {
 			break
 		}
 	}
+
+	fmt.Println()
+	tui.Info("WireGuard pipe: carry a whole-device WireGuard VPN over this tunnel")
+	tui.Info("instead of forwarding ports. WireGuard brings its own encryption, so")
+	tui.Info("there is no KCP underneath. Forwarded ports are ignored in this mode.")
+	if tui.Confirm("Enable WireGuard pipe mode", false) {
+		s.SpoofPipe = true
+		def := "127.0.0.1:51820"
+		if s.Role == "server" {
+			tui.Info("Where the real WireGuard listens on THIS server (datagrams are forwarded here).")
+		} else {
+			tui.Info("Where the tunnel listens for WireGuard — point WireGuard's `endpoint` here.")
+		}
+		s.SpoofPipeAddr = strings.TrimSpace(tui.PromptDefault("WireGuard UDP endpoint", def))
+		if s.SpoofPipeAddr == "" {
+			s.SpoofPipeAddr = def
+		}
+	}
 }
 
 // askSpoofProfile prompts for one packet profile and returns its config value.

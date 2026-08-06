@@ -88,6 +88,29 @@ func TestSpoofAsymmetricRoundTrip(t *testing.T) {
 	}
 }
 
+// Pipe mode renders its keys and they survive a round trip.
+func TestSpoofPipeRoundTrip(t *testing.T) {
+	s := TunnelSpec{
+		Role: "server", Name: "iran", Transport: "spoof",
+		BindAddr: "0.0.0.0:1234", Token: "t", Ports: []string{"51820"},
+		SpoofProfile: "udp", SpoofPeerIP: "38.87.117.94",
+		SpoofPipe: true, SpoofPipeAddr: "127.0.0.1:51820",
+	}
+	out := s.Render()
+	for _, want := range []string{"spoof_pipe = true", `spoof_pipe_addr = "127.0.0.1:51820"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q\n---\n%s", want, out)
+		}
+	}
+	var cfg config.Config
+	if _, err := toml.Decode(out, &cfg); err != nil {
+		t.Fatalf("pipe config does not parse: %v", err)
+	}
+	if !cfg.Server.SpoofPipe || cfg.Server.SpoofPipeAddr != "127.0.0.1:51820" {
+		t.Fatalf("pipe fields did not survive: %+v", cfg.Server.SpoofConfig)
+	}
+}
+
 // A non-spoof transport must never carry spoof_* keys, the same guarantee
 // writeKCP gives for the kcp knobs.
 func TestNonSpoofOmitsSpoofKeys(t *testing.T) {

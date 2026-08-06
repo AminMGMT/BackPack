@@ -222,6 +222,17 @@ type SpoofConfig struct {
 	// for a multi-homed host where the forged source would otherwise pick the
 	// wrong link. Empty lets the kernel route by the real destination.
 	SpoofInterface string `toml:"spoof_interface"`
+	// SpoofPipe switches the spoof transport from a KCP tunnel to a raw UDP pipe
+	// for WireGuard: instead of forwarding ports, it relays datagrams between a
+	// local WireGuard socket and the forged-source channel, so a whole-device VPN
+	// rides over it. WireGuard supplies its own encryption and loss handling, so
+	// no KCP sits underneath. Ports/mux settings are ignored in this mode.
+	SpoofPipe bool `toml:"spoof_pipe"`
+	// SpoofPipeAddr is this host's WireGuard UDP endpoint. On the client it is
+	// where the tunnel listens and where WireGuard's `endpoint` points; on the
+	// server it is where the real WireGuard listens and datagrams are forwarded.
+	// Defaults to 127.0.0.1:51820.
+	SpoofPipeAddr string `toml:"spoof_pipe_addr"`
 }
 
 // ServerConfig represents the configuration for the server.

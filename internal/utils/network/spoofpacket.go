@@ -3,27 +3,30 @@ package network
 import (
 	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"net"
 )
 
-// chooseSpoofSrc parses the forged source: one picked at random from the pool if
-// given, otherwise the single address, otherwise nil (no spoofing). A bad entry
-// is an error rather than a silent fall-through, so a typo is caught at startup.
-func chooseSpoofSrc(srcIP string, pool []string) (net.IP, error) {
+// parseSpoofPool parses every forged source the carrier may use: the whole pool
+// if given, otherwise the single address, otherwise none (no spoofing). A bad
+// entry is an error rather than a silent drop, so a typo is caught at startup.
+// The carrier rotates through the returned addresses one per packet, which both
+// spreads the tunnel's volume across them — evading a per-IP rate limit on any
+// one whitelisted address — and keeps the tunnel alive if some of them start
+// being dropped mid-session.
+func parseSpoofPool(srcIP string, pool []string) ([]net.IP, error) {
 	candidates := pool
 	if len(candidates) == 0 && srcIP != "" {
 		candidates = []string{srcIP}
 	}
-	if len(candidates) == 0 {
-		return nil, nil
+	out := make([]net.IP, 0, len(candidates))
+	for _, s := range candidates {
+		ip := net.ParseIP(s).To4()
+		if ip == nil {
+			return nil, fmt.Errorf("spoof: %q is not a valid IPv4 address", s)
+		}
+		out = append(out, ip)
 	}
-	pick := candidates[rand.Intn(len(candidates))]
-	ip := net.ParseIP(pick).To4()
-	if ip == nil {
-		return nil, fmt.Errorf("spoof: %q is not a valid IPv4 address", pick)
-	}
-	return ip, nil
+	return out, nil
 }
 
 // The L4 shim the spoof carrier wraps around each datagram, and its checksum.
