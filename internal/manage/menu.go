@@ -311,11 +311,12 @@ func chooseForwardedPort(title string, ports []string) int {
 
 func addForwardedPort(ports []string, entry string) ([]string, error) {
 	entry = strings.TrimSpace(entry)
-	if err := validatePortSpecs([]string{entry}); err != nil {
+	updated := append([]string(nil), ports...)
+	updated = append(updated, entry)
+	if err := validatePortSpecs(updated); err != nil {
 		return nil, err
 	}
-	updated := append([]string(nil), ports...)
-	return append(updated, entry), nil
+	return updated, nil
 }
 
 func replaceForwardedPort(ports []string, index int, entry string) ([]string, error) {
@@ -323,11 +324,11 @@ func replaceForwardedPort(ports []string, index int, entry string) ([]string, er
 		return nil, fmt.Errorf("port selection is out of range")
 	}
 	entry = strings.TrimSpace(entry)
-	if err := validatePortSpecs([]string{entry}); err != nil {
-		return nil, err
-	}
 	updated := append([]string(nil), ports...)
 	updated[index] = entry
+	if err := validatePortSpecs(updated); err != nil {
+		return nil, err
+	}
 	return updated, nil
 }
 

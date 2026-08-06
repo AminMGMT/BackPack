@@ -60,3 +60,32 @@ func TestForwardedPortEditsRejectInvalidInput(t *testing.T) {
 		t.Fatal("replacing the list with an empty value succeeded")
 	}
 }
+
+func TestForwardedPortEditsRejectDuplicateListeners(t *testing.T) {
+	if _, err := addForwardedPort([]string{"443=127.0.0.1:443"}, "443=127.0.0.1:8443"); err == nil {
+		t.Fatal("adding the same exposed port with a different backend succeeded")
+	}
+	if _, err := replaceForwardedPort([]string{"443", "8080"}, 1, "443"); err == nil {
+		t.Fatal("editing an entry onto an existing exposed port succeeded")
+	}
+}
+
+func TestForwardedPortValidationFindsOverlappingListeners(t *testing.T) {
+	for _, ports := range [][]string{
+		{"443", "443"},
+		{"400-450", "425"},
+		{"443", "127.0.0.1:443=127.0.0.1:8443"},
+		{"[::]:443=127.0.0.1:443", "192.0.2.1:443=127.0.0.1:8443"},
+	} {
+		if err := validatePortSpecs(ports); err == nil {
+			t.Errorf("overlapping listeners were accepted: %v", ports)
+		}
+	}
+
+	if err := validatePortSpecs([]string{
+		"127.0.0.1:443=127.0.0.1:8443",
+		"192.0.2.1:443=127.0.0.1:9443",
+	}); err != nil {
+		t.Fatalf("distinct listen addresses were rejected: %v", err)
+	}
+}
