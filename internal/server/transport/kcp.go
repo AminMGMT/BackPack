@@ -104,6 +104,8 @@ type KcpConfig struct {
 	// (the spoof transport). Only the packet layer differs. See spoofSettings.
 	UseSpoof       bool
 	SpoofProfile   string
+	SpoofUplink    string
+	SpoofDownlink  string
 	SpoofSrcIP     string
 	SpoofSrcPool   []string
 	SpoofPeerIP    string
@@ -141,9 +143,10 @@ func (c *KcpConfig) settings() network.KCPSettings {
 	}
 	if c.UseSpoof {
 		// Profile is validated at load time (checkSpoof); default to udp here.
-		profile, _ := network.ParseSpoofProfile(c.SpoofProfile)
+		up, down := network.ResolveSpoofDirections(c.SpoofProfile, c.SpoofUplink, c.SpoofDownlink)
 		s.Spoof = &network.SpoofCarrier{
-			Profile:   profile,
+			Uplink:    up,
+			Downlink:  down,
 			SrcIP:     c.SpoofSrcIP,
 			SrcPool:   c.SpoofSrcPool,
 			PeerIP:    c.SpoofPeerIP,

@@ -69,7 +69,9 @@ type TunnelSpec struct {
 
 	// Spoof transport (raw IP with a forged source). Filled only when the
 	// transport is spoof; see config.SpoofConfig.
-	SpoofProfile   string   // "udp" (default)
+	SpoofProfile   string   // "udp" (default), "icmp" or "tcp" — both directions
+	SpoofUplink    string   // client→server profile override (empty = symmetric)
+	SpoofDownlink  string   // server→client profile override (empty = symmetric)
 	SpoofSrcIP     string   // forged source address, empty to keep the real one
 	SpoofSrcPool   []string // forged sources to rotate through per session
 	SpoofPeerIP    string   // peer's real IPv4; required on the server
@@ -169,6 +171,12 @@ func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
 		profile = "udp"
 	}
 	p("spoof_profile = %q\n", profile)
+	if s.SpoofUplink != "" {
+		p("spoof_uplink = %q\n", s.SpoofUplink)
+	}
+	if s.SpoofDownlink != "" {
+		p("spoof_downlink = %q\n", s.SpoofDownlink)
+	}
 	if s.SpoofSrcIP != "" {
 		p("spoof_src_ip = %q\n", s.SpoofSrcIP)
 	}

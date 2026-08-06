@@ -59,6 +59,25 @@ func ParseSpoofProfile(s string) (SpoofProfile, error) {
 	}
 }
 
+// ResolveSpoofDirections turns the profile knobs into an uplink/downlink pair:
+// each direction is its own setting if given, otherwise the symmetric profile,
+// otherwise udp. Validation happens at load time (checkSpoof), so a parse error
+// here falls back to udp rather than failing.
+func ResolveSpoofDirections(profile, uplink, downlink string) (SpoofProfile, SpoofProfile) {
+	pick := func(dir string) SpoofProfile {
+		v := dir
+		if v == "" {
+			v = profile
+		}
+		p, err := ParseSpoofProfile(v)
+		if err != nil {
+			return SpoofProfileUDP
+		}
+		return p
+	}
+	return pick(uplink), pick(downlink)
+}
+
 // ipProtocol is the IANA protocol number written into the IP header for a
 // profile, and the one the receive socket binds to.
 func (p SpoofProfile) ipProtocol() int {

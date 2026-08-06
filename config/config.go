@@ -98,11 +98,18 @@ func (k KCPConfig) WithDefaults() KCPConfig {
 // and, where it matters, on the spoofed addresses.
 type SpoofConfig struct {
 	// SpoofProfile is the L4 shim wrapped around each datagram, which decides
-	// what the packet looks like to inspection: "udp" (default — least likely
-	// to draw a kernel reply) or "tcp" (matches the reference tools, but the
-	// host kernel will RST the forged flow unless an iptables rule drops those;
-	// see the transport's docs). Later: icmp, ipip, gre.
+	// what the packet looks like to inspection: "udp" (default), "icmp" (looks
+	// like ping) or "tcp" (looks like a TCP flow; the receiving side auto-manages
+	// an iptables rule to drop the kernel's RSTs). It sets BOTH directions unless
+	// SpoofUplink/SpoofDownlink override them.
 	SpoofProfile string `toml:"spoof_profile"`
+	// SpoofUplink and SpoofDownlink set the profile per direction, for a path
+	// whose filtering is not symmetric — e.g. ICMP survives client→server while
+	// UDP survives server→client. Uplink is client→server, downlink is
+	// server→client; both ends must set the same pair. Empty falls back to
+	// SpoofProfile, which is the symmetric case.
+	SpoofUplink   string `toml:"spoof_uplink"`
+	SpoofDownlink string `toml:"spoof_downlink"`
 	// SpoofSrcIP is the forged source address stamped on every outgoing packet.
 	// Empty leaves the host's real source in place, which spoofs nothing.
 	SpoofSrcIP string `toml:"spoof_src_ip"`

@@ -123,6 +123,8 @@ func (s *Server) Start() {
 			UseICMP:          useICMP,
 			UseSpoof:         useSpoof,
 			SpoofProfile:     s.config.SpoofProfile,
+			SpoofUplink:      s.config.SpoofUplink,
+			SpoofDownlink:    s.config.SpoofDownlink,
 			SpoofSrcIP:       s.config.SpoofSrcIP,
 			SpoofSrcPool:     s.config.SpoofSrcPool,
 			SpoofPeerIP:      s.config.SpoofPeerIP,

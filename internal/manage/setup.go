@@ -302,19 +302,18 @@ func askSpoof(s *TunnelSpec) {
 	tui.Warn("drop forged-source packets — prove it with the spoof tester first.")
 	fmt.Println()
 
-	// The two ends must agree on the profile.
-	tui.Info("Packet profile — what the tunnel looks like on the wire:")
-	switch tui.ChooseOpt("Profile", []tui.Option{
-		{Title: "UDP", Desc: "most compatible — plain datagrams (recommended)"},
-		{Title: "ICMP", Desc: "looks like ping traffic — good where UDP is filtered"},
-		{Title: "TCP", Desc: "looks like a TCP flow — auto-manages an iptables RST rule"},
-	}) {
-	case 1:
-		s.SpoofProfile = "icmp"
-	case 2:
-		s.SpoofProfile = "tcp"
-	default:
-		s.SpoofProfile = "udp"
+	// The two ends must agree on the profile(s). Most tunnels use one profile
+	// both ways; an asymmetric path can set each direction independently.
+	tui.Info("Packet profile — what the tunnel looks like on the wire. Both ends must match.")
+	s.SpoofProfile = askSpoofProfile("Profile (both directions)")
+
+	fmt.Println()
+	tui.Info("If this path filters differently by direction, set each direction on its")
+	tui.Info("own (uplink = client→server, downlink = server→client). Test each with")
+	tui.Info("the spoof tester.")
+	if tui.Confirm("Set a different profile per direction (asymmetric)", false) {
+		s.SpoofUplink = askSpoofProfile("Uplink (client→server)")
+		s.SpoofDownlink = askSpoofProfile("Downlink (server→client)")
 	}
 
 	// The server cannot learn the client's real address from the forged packets,
@@ -373,6 +372,22 @@ func askSpoof(s *TunnelSpec) {
 			s.SpoofInterface = iface
 			break
 		}
+	}
+}
+
+// askSpoofProfile prompts for one packet profile and returns its config value.
+func askSpoofProfile(title string) string {
+	switch tui.ChooseOpt(title, []tui.Option{
+		{Title: "UDP", Desc: "most compatible — plain datagrams (recommended)"},
+		{Title: "ICMP", Desc: "looks like ping traffic — good where UDP is filtered"},
+		{Title: "TCP", Desc: "looks like a TCP flow — auto-manages an iptables RST rule"},
+	}) {
+	case 1:
+		return "icmp"
+	case 2:
+		return "tcp"
+	default:
+		return "udp"
 	}
 }
 

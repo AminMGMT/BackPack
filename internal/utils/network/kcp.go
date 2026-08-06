@@ -44,8 +44,13 @@ type KCPSettings struct {
 
 // SpoofCarrier is the IP-spoofing carrier's tuning, passed down to the raw
 // socket. Nil in KCPSettings means the session rides on UDP (or ICMP) instead.
+//
+// Uplink is the client→server profile, Downlink the server→client one; for a
+// symmetric tunnel they are equal. The carrier's own constructor picks which is
+// its send and which its receive from the side it is on.
 type SpoofCarrier struct {
-	Profile   SpoofProfile
+	Uplink    SpoofProfile
+	Downlink  SpoofProfile
 	SrcIP     string   // forged source address, empty to keep the real one
 	SrcPool   []string // forged sources to rotate through; SrcIP is a member
 	PeerIP    string   // peer's real IPv4; required on the server, derived on the client
@@ -60,7 +65,13 @@ func (s KCPSettings) effectiveMTU() int {
 		return s.MTU - icmpMTUOverhead
 	}
 	if s.Spoof != nil {
-		return s.MTU - spoofOverhead(s.Spoof.Profile)
+		// Subtract the larger of the two directions' overhead so neither
+		// fragments, whichever way a given packet goes.
+		over := spoofOverhead(s.Spoof.Uplink)
+		if d := spoofOverhead(s.Spoof.Downlink); d > over {
+			over = d
+		}
+		return s.MTU - over
 	}
 	return s.MTU
 }
@@ -134,7 +145,7 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 		if peer == nil {
 			return nil, fmt.Errorf("spoof: spoof_peer_ip must be set to the client's real IPv4 address on the server")
 		}
-		conn, err := newSpoofServerConn(token, s.Spoof.Profile, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
+		conn, err := newSpoofServerConn(token, s.Spoof.Uplink, s.Spoof.Downlink, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +213,7 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 				peer = p
 			}
 		}
-		conn, err := newSpoofClientConn(token, s.Spoof.Profile, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
+		conn, err := newSpoofClientConn(token, s.Spoof.Uplink, s.Spoof.Downlink, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
 		if err != nil {
 			return nil, err
 		}

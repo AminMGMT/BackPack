@@ -6,6 +6,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // A spoof tunnel's spec must render the spoof_* keys, and a rendered config must
@@ -60,6 +61,30 @@ func TestSpoofDefaultsToUDP(t *testing.T) {
 	out := s.Render()
 	if !strings.Contains(out, `spoof_profile = "udp"`) {
 		t.Errorf("empty profile should render as udp\n---\n%s", out)
+	}
+}
+
+// An asymmetric tunnel renders each direction and the pair survives a round trip
+// and resolves back to the right send/receive profiles.
+func TestSpoofAsymmetricRoundTrip(t *testing.T) {
+	s := TunnelSpec{
+		Role: "client", Name: "kharej", Transport: "spoof",
+		RemoteAddr: "1.2.3.4:1234", Token: "t",
+		SpoofProfile: "udp", SpoofUplink: "icmp", SpoofDownlink: "udp",
+	}
+	out := s.Render()
+	for _, want := range []string{`spoof_uplink = "icmp"`, `spoof_downlink = "udp"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q\n---\n%s", want, out)
+		}
+	}
+	var cfg config.Config
+	if _, err := toml.Decode(out, &cfg); err != nil {
+		t.Fatalf("asymmetric spoof config does not parse: %v", err)
+	}
+	up, down := network.ResolveSpoofDirections(cfg.Client.SpoofProfile, cfg.Client.SpoofUplink, cfg.Client.SpoofDownlink)
+	if up != network.SpoofProfileICMP || down != network.SpoofProfileUDP {
+		t.Fatalf("directions resolved wrong: up=%s down=%s", up, down)
 	}
 }
 

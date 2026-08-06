@@ -171,6 +171,8 @@ func (c *Client) Start() {
 			UseICMP:          useICMP,
 			UseSpoof:         useSpoof,
 			SpoofProfile:     c.config.SpoofProfile,
+			SpoofUplink:      c.config.SpoofUplink,
+			SpoofDownlink:    c.config.SpoofDownlink,
 			SpoofSrcIP:       c.config.SpoofSrcIP,
 			SpoofSrcPool:     c.config.SpoofSrcPool,
 			SpoofPeerIP:      c.config.SpoofPeerIP,

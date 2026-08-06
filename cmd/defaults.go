@@ -173,19 +173,28 @@ func checkSpoof(cfg *config.Config) {
 	if os.Geteuid() != 0 {
 		logger.Fatalf("the spoof transport needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
-	// Validate the profile of whichever side is on spoof in this process.
-	profile := cfg.Server.SpoofProfile
+	// Validate both directions' profiles of whichever side is on spoof here. A
+	// direction defaults to spoof_profile, then to udp.
+	sc := cfg.Server.SpoofConfig
 	if cfg.Client.Transport == config.SPOOF {
-		profile = cfg.Client.SpoofProfile
+		sc = cfg.Client.SpoofConfig
 	}
-	if _, err := network.ParseSpoofProfile(profile); err != nil {
-		logger.Fatalf("invalid spoof_profile: %v", err)
+	for _, p := range []string{sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink} {
+		if _, err := network.ParseSpoofProfile(p); err != nil {
+			logger.Fatalf("invalid spoof profile: %v", err)
+		}
 	}
-	if profile == "tcp" {
+	up, down := network.ResolveSpoofDirections(sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink)
+	if up != down {
+		logger.Infof("spoof is asymmetric: uplink (client→server) %s, downlink (server→client) %s. Both ends must set the same pair.", up, down)
+	}
+	// The kernel RSTs a forged TCP segment on the side that RECEIVES tcp, so the
+	// iptables rule matters whenever either direction is tcp.
+	if up == "tcp" || down == "tcp" {
 		if _, err := exec.LookPath("iptables"); err != nil {
-			logger.Warn("spoof_profile=tcp needs the iptables binary to suppress the kernel's RSTs, and it was not found. The tunnel will run, but those RSTs may disrupt it. Install iptables, or use spoof_profile=udp or icmp.")
+			logger.Warn("a tcp spoof direction needs the iptables binary to suppress the kernel's RSTs, and it was not found. The tunnel will run, but those RSTs may disrupt it. Install iptables, or use udp/icmp.")
 		} else {
-			logger.Info("spoof_profile=tcp: a targeted iptables rule dropping the kernel's RSTs on the tunnel port is installed on start and removed on stop.")
+			logger.Info("tcp spoof direction: a targeted iptables rule dropping the kernel's RSTs on the tunnel port is installed on start and removed on stop.")
 		}
 	}
 
