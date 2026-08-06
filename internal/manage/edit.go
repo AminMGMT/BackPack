@@ -76,6 +76,8 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		SpoofPeerIP:     sc.SpoofPeerIP,
 		SpoofDstIP:      sc.SpoofDstIP,
 		SpoofInterface:  sc.SpoofInterface,
+		SpoofPipe:       sc.SpoofPipe,
+		SpoofPipeAddr:   sc.SpoofPipeAddr,
 	}, nil
 }
 
@@ -140,6 +142,8 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		SpoofPeerIP:     cc.SpoofPeerIP,
 		SpoofDstIP:      cc.SpoofDstIP,
 		SpoofInterface:  cc.SpoofInterface,
+		SpoofPipe:       cc.SpoofPipe,
+		SpoofPipeAddr:   cc.SpoofPipeAddr,
 	}, nil
 }
 

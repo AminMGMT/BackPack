@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
@@ -137,6 +138,37 @@ func (c *Client) Start() {
 		go tcpMuxClient.Start()
 
 	case config.KCP, config.XDI, config.SPOOF:
+		// The spoof transport in pipe mode is a bare datagram relay for
+		// WireGuard, not a KCP tunnel — handle it separately and stop here.
+		if c.config.Transport == config.SPOOF && c.config.SpoofPipe {
+			up, down := network.ResolveSpoofDirections(c.config.SpoofProfile, c.config.SpoofUplink, c.config.SpoofDownlink)
+			pipeAddr := c.config.SpoofPipeAddr
+			if pipeAddr == "" {
+				pipeAddr = "127.0.0.1:51820"
+			}
+			serverHost := c.config.RemoteAddr
+			if h, _, err := net.SplitHostPort(c.config.RemoteAddr); err == nil {
+				serverHost = h
+			}
+			serverIP := c.config.SpoofPeerIP
+			if serverIP == "" {
+				serverIP = serverHost
+			}
+			pipeCfg := &transport.SpoofPipeConfig{
+				Token: c.config.Token,
+				Carrier: network.SpoofCarrier{
+					Uplink: up, Downlink: down,
+					SrcIP: c.config.SpoofSrcIP, SrcPool: c.config.SpoofSrcPool,
+					PeerIP: c.config.SpoofPeerIP, Interface: c.config.SpoofInterface,
+				},
+				ServerIP: serverIP,
+				PipeAddr: pipeAddr,
+				Retry:    time.Duration(c.config.RetryInterval) * time.Second,
+			}
+			go transport.NewSpoofPipeClient(c.ctx, pipeCfg, c.logger).Start()
+			break
+		}
+
 		kcp := c.config.KCPConfig.WithDefaults()
 		useICMP := c.config.Transport == config.XDI
 		useSpoof := c.config.Transport == config.SPOOF

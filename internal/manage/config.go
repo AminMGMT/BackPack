@@ -77,6 +77,8 @@ type TunnelSpec struct {
 	SpoofPeerIP    string   // peer's real IPv4; required on the server
 	SpoofDstIP     string   // forged destination in the cosmetic shim (unused by udp)
 	SpoofInterface string   // egress device to pin the raw socket to
+	SpoofPipe      bool     // WireGuard-pipe mode instead of a KCP tunnel
+	SpoofPipeAddr  string   // this host's WireGuard UDP endpoint
 
 	// Throughput / latency tuning
 	MSS      int // TCP max segment size (0 = auto)
@@ -195,6 +197,14 @@ func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
 	}
 	if s.SpoofInterface != "" {
 		p("spoof_interface = %q\n", s.SpoofInterface)
+	}
+	if s.SpoofPipe {
+		p("spoof_pipe = true\n")
+		addr := s.SpoofPipeAddr
+		if addr == "" {
+			addr = "127.0.0.1:51820"
+		}
+		p("spoof_pipe_addr = %q\n", addr)
 	}
 }
 

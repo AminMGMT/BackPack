@@ -236,6 +236,19 @@ func checkSpoof(cfg *config.Config) {
 		logger.Info("spoof_profile icmp: to stop the kernel spraying echo replies at the forged sources, set net.ipv4.icmp_echo_ignore_all=1 on the server (this also stops it answering normal pings).")
 	}
 
+	// Pipe mode carries WireGuard rather than forwarding ports; sanity-check its
+	// endpoint and remind the operator to leave MTU headroom for the framing.
+	if sc.SpoofPipe {
+		addr := sc.SpoofPipeAddr
+		if addr == "" {
+			addr = "127.0.0.1:51820"
+		}
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			logger.Fatalf("spoof_pipe_addr %q must be host:port (the WireGuard UDP endpoint on this host)", addr)
+		}
+		logger.Infof("spoof pipe mode: WireGuard endpoint %s. Point WireGuard's `endpoint` at the client's %s, and set its MTU to ~1380 to leave room for the spoof framing.", addr, addr)
+	}
+
 	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this with the spoof tester on your real route before relying on it.")
 }
 
