@@ -14,7 +14,7 @@ import (
 // a server IP gets filtered: the client is given a primary address that answers
 // nothing and a backup that works, and must find its own way to the backup.
 func TestFailoverToBackupAddress(t *testing.T) {
-	for _, transport := range []string{"tcp", "tcpmux", "kcp"} {
+	for _, transport := range []string{"tcp", "tcpmux", "kcp", "quic"} {
 		t.Run(transport, func(t *testing.T) {
 			t.Parallel()
 			backend := startEchoBackend(t)
@@ -49,7 +49,7 @@ func TestFailoverToBackupAddress(t *testing.T) {
 // disappears and comes back — a reboot, a crash, an update — the client must
 // reconnect on its own, without anyone touching it.
 func TestServerRestartRecovery(t *testing.T) {
-	for _, transport := range []string{"tcp", "tcpmux", "kcp"} {
+	for _, transport := range []string{"tcp", "tcpmux", "kcp", "quic"} {
 		t.Run(transport, func(t *testing.T) {
 			t.Parallel()
 			backend := startEchoBackend(t)

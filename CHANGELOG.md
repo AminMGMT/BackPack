@@ -2,6 +2,68 @@
 
 All notable changes to Backpack are documented here.
 
+## Unreleased
+
+This one is about the UDP side of the engine: the three transports that carry
+their data in datagrams — udp, kcp (and xdi, which is kcp over ICMP) — plus quic,
+which joins them.
+
+### Added
+- **QUIC is available as a transport.** It carries the tunnel inside QUIC
+  streams over UDP: its own TLS 1.3, its own stream multiplexing, congestion
+  control and loss recovery, so every byte is encrypted and there is nothing to
+  hand-tune. Pick **UDP + QUIC** in Setup, or set `transport = "quic"`.
+
+  It is offered, not recommended. v1.5.0 records QUIC being built, tested on a
+  real Iran route, and dropped because it never completed a handshake there while
+  KCP on the same link ran at full speed. That finding still stands and nothing
+  since has disproved it, so the benchmark's advisor keeps recommending KCP for a
+  lossy link and names QUIC only as the other thing to try. Test it on your own
+  route before committing to it.
+
+### Fixed
+- **A client that restarted on its own left a dead tunnel behind, on every
+  datagram transport.** The server accepted exactly one control channel claim per
+  run. When the client restarted — a crash, a service restart, an edit — it
+  re-dialed with a fresh claim, and the server discarded it as a duplicate,
+  because as far as that run was concerned it already had a control channel.
+
+  Nothing corrected it. A datagram transport has no RST to deliver the news: on
+  KCP the server's control-channel read simply blocks and a heartbeat write to a
+  silent peer is buffered rather than refused, so the dead session stayed
+  "established" indefinitely and the tunnel was down until someone restarted the
+  server by hand. The server now keeps accepting claims for the whole run, and a
+  second one that passes the token check makes it rebuild and adopt the new
+  client. The decision sits on the token, never on the bare connection, so a peer
+  that does not know the secret cannot force a restart loop. There are end-to-end
+  tests for both halves on udp, kcp and quic, each driven by a real client
+  restart behind a cut path.
+
+- **UDP sockets kept the kernel's default buffers, whatever `so_rcvbuf` and
+  `so_sndbuf` said.** The settings were honoured on the TCP transports and
+  ignored on udp, on both ends. The kernel default is small enough that a
+  datagram flood — a speed test, a busy game server — overruns it, and the
+  packets it cannot hold are dropped before any goroutine reads them, which
+  looked like the tunnel stalling under load. Every UDP socket the transport
+  opens is now sized to the configured value.
+
+- **One bad forwarding target took down the whole udp client.** A target address
+  that would not resolve, or a UDP dial that failed, called `Fatalf` and killed
+  the process — every other tunnelled port with it. A failed dial also fell
+  through and dereferenced the nil connection one line later. Both now drop the
+  one flow and let the rest of the tunnel carry on.
+
+- **The udp control-channel handshake leaked a goroutine on every restart.** Its
+  accept loop had no way to be woken, so it sat blocked on the old listener past
+  the restart that replaced it. The listener is now closed when the run ends. The
+  control connection also gets TCP keepalive, so a peer that dies without closing
+  surfaces as a read error instead of a connection that hangs open forever.
+
+- **`proxy`, `local_addr`, `interface` and `so_mark` were accepted on quic and
+  silently ignored.** They apply to the TCP dialer, which a quic tunnel does not
+  use for anything — not even its control channel, which is a QUIC stream. They
+  are now refused at load time on quic, as they already were on udp, kcp and xdi.
+
 ## v1.7.0 — 2026-08-04
 
 This one started from a report that the tunnel worked on most servers and not on

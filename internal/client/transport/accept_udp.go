@@ -16,13 +16,17 @@ const BufferSize = 16 * 1024
 func UDPDialer(tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	remoteUDPAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
-		logger.Fatalf("failed to resolve remote address: %v", err)
+		// One flow's bad target must not take the whole client down: drop this
+		// flow and let the rest of the tunnel carry on.
+		logger.Errorf("failed to resolve remote address %q: %v", remoteAddr, err)
+		return
 	}
 
 	// Dial the remote UDP server
 	remoteConn, err := net.DialUDP("udp", nil, remoteUDPAddr)
 	if err != nil {
-		logger.Fatalf("failed to dial remote UDP address: %v", err)
+		logger.Errorf("failed to dial remote UDP address %q: %v", remoteAddr, err)
+		return
 	}
 
 	defer remoteConn.Close()

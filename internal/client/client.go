@@ -172,6 +172,25 @@ func (c *Client) Start() {
 		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
 		go kcpClient.Start()
 
+	case config.QUIC:
+		quicConfig := &transport.QuicConfig{
+			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
+			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:   c.config.ConnectionPool,
+			Token:          c.config.Token,
+			Sniffer:        c.config.Sniffer,
+			WebPort:        c.config.WebPort,
+			SnifferLog:     c.config.SnifferLog,
+			AggressivePool: c.config.AggressivePool,
+			SO_RCVBUF:      c.config.SO_RCVBUF,
+			SO_SNDBUF:      c.config.SO_SNDBUF,
+		}
+		quicClient := transport.NewQuicClient(c.ctx, quicConfig, c.logger)
+		go quicClient.Start()
+
 	case config.WS, config.WSS:
 		WsConfig := &transport.WsConfig{
 			RemoteAddr:     c.config.RemoteAddr,
@@ -232,6 +251,8 @@ func (c *Client) Start() {
 			WebPort:        c.config.WebPort,
 			SnifferLog:     c.config.SnifferLog,
 			AggressivePool: c.config.AggressivePool,
+			SO_RCVBUF:      c.config.SO_RCVBUF,
+			SO_SNDBUF:      c.config.SO_SNDBUF,
 		}
 		udpClient := transport.NewUDPClient(c.ctx, udpConfig, c.logger)
 		go udpClient.Start()

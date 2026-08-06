@@ -426,9 +426,27 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 		}
 		// The control channel carries small, latency-critical signals.
 		session.SetACKNoDelay(true)
+
+		// A control claim while one is already established means the client
+		// restarted on its own and re-dialed, while this run never noticed
+		// because the old session has not failed a read yet. channelHandshake
+		// only reads one claim per run, so without this the re-dial would fall
+		// through to the default below and be discarded, leaving the tunnel dead
+		// until the server was restarted by hand. Restart to adopt the new
+		// client — the listener it is retrying against comes back up as part of
+		// that restart.
+		if s.controlChannel.IsSet() {
+			s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
+			session.Close()
+			go s.Restart()
+			return
+		}
+
 		select {
 		case g.handshakeChannel <- session: // ok
 		default:
+			// channelHandshake has not begun reading in this run yet: a genuine
+			// duplicate racing the first claim, rather than a re-dial.
 			s.logger.Warnf("control channel handshake already in progress, discarding duplicate")
 			session.Close()
 		}

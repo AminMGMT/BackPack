@@ -168,7 +168,7 @@ func IsDatagram(t string) bool { return isDatagram(t) }
 // tunnel never shows up in the TCP listen table and cannot be probed with a
 // TCP connect, so every check that assumes TCP has to skip it.
 func isDatagram(t string) bool {
-	return t == "udp" || t == "kcp" || t == "xdi"
+	return t == "udp" || t == "kcp" || t == "xdi" || t == "quic"
 }
 
 // supportsProxyProtocol reports whether a transport can prepend the PROXY
@@ -177,7 +177,7 @@ func isDatagram(t string) bool {
 // connection to describe.
 func supportsProxyProtocol(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth":
+	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth", "quic":
 		return true
 	}
 	return false
@@ -197,7 +197,7 @@ func needsTLS(t string) bool {
 // validTransport reports whether t is one of the engine's supported transports.
 func validTransport(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth", "xdi":
+	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth", "xdi", "quic":
 		return true
 	}
 	return false

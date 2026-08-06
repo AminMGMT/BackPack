@@ -10,7 +10,7 @@ import (
 
 // tcpTransports are the transports that forward TCP connections. The raw UDP
 // transport forwards datagrams instead and is covered separately.
-var tcpTransports = []string{"tcp", "tcpmux", "kcp", "ws", "wsmux", "stealth"}
+var tcpTransports = []string{"tcp", "tcpmux", "kcp", "ws", "wsmux", "stealth", "quic"}
 
 // TestTransportCarriesData is the baseline every transport must pass: a payload
 // large enough to span many packets goes through and comes back unchanged.
@@ -77,7 +77,7 @@ func TestTransportConcurrentConnections(t *testing.T) {
 // serving after it has been drained and refilled — the pool maintainer opening
 // replacements is what makes a long-lived tunnel keep working.
 func TestTransportSequentialConnections(t *testing.T) {
-	for _, transport := range []string{"tcp", "tcpmux", "kcp"} {
+	for _, transport := range []string{"tcp", "tcpmux", "kcp", "quic"} {
 		t.Run(transport, func(t *testing.T) {
 			t.Parallel()
 			backend := startEchoBackend(t)
@@ -97,7 +97,7 @@ func TestTransportSequentialConnections(t *testing.T) {
 // the token must never be able to move traffic. It is easy to break this by
 // accident when changing a handshake, and nothing else would notice.
 func TestWrongTokenIsRejected(t *testing.T) {
-	for _, transport := range []string{"tcp", "tcpmux", "kcp"} {
+	for _, transport := range []string{"tcp", "tcpmux", "kcp", "quic"} {
 		t.Run(transport, func(t *testing.T) {
 			t.Parallel()
 			backend := startEchoBackend(t)

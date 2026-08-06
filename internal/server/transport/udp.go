@@ -51,6 +51,13 @@ type UdpConfig struct {
 	Heartbeat    time.Duration // in seconds, for udp conn and control channel
 	ChannelSize  int
 	WebPort      int
+	// SO_RCVBUF/SO_SNDBUF size the datagram sockets. The kernel default is a few
+	// hundred KB, which a datagram flood — a speed test, a busy game server —
+	// overruns in a blink, and the packets it cannot hold are dropped before any
+	// goroutine reads them. Sizing the socket to the preset's several MB is what
+	// keeps the tunnel carrying traffic under load instead of stalling.
+	SO_RCVBUF int
+	SO_SNDBUF int
 }
 
 func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
@@ -162,70 +169,103 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 
 	defer listener.Close()
 
-loop:
+	// Close the listener when the run ends so the blocked Accept below returns
+	// instead of holding this goroutine open past the restart that replaced it.
+	go func() {
+		<-g.ctx.Done()
+		listener.Close()
+	}()
+
+	// Unlike the pool listeners, this one keeps accepting for the whole run. The
+	// first valid claim becomes the control channel; a later one means the
+	// client restarted on its own and re-dialed, while this run never noticed
+	// because the old TCP connection has not yet failed a read or write. The
+	// old single-accept design left that tunnel dead until the server was
+	// restarted by hand — the exact symptom this fixes.
+	established := false
+
 	for {
-		select {
-		case <-g.ctx.Done():
-			return
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				s.logger.Debugf("failed to accept control channel connection on %s: %v", listener.Addr().String(), err)
-				continue
+		conn, err := listener.Accept()
+		if err != nil {
+			if g.ctx.Err() != nil {
+				return
 			}
-
-			// Set a read deadline for the token response
-			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				s.logger.Errorf("failed to set read deadline: %v", err)
-				conn.Close()
-				continue
-			}
-
-			msg, transport, err := utils.ReceiveBinaryTransportString(conn)
-			if transport != utils.SG_Chan {
-				s.logger.Errorf("invalid signal received for channel, Discarding connection")
-				conn.Close()
-				continue
-
-			} else if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.logger.Warn("timeout while waiting for control channel signal")
-				} else {
-					s.logger.Errorf("failed to receive control channel signal: %v", err)
-				}
-				conn.Close() // Close connection on error or timeout
-				continue
-			}
-
-			// Resetting the deadline (removes any existing deadline)
-			conn.SetReadDeadline(time.Time{})
-
-			if msg != s.config.Token {
-				s.logger.Warnf("invalid security token received")
-				conn.Close()
-				continue
-			}
-
-			err = utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan)
-			if err != nil {
-				s.logger.Errorf("failed to send security token: %v", err)
-				conn.Close()
-				continue
-			}
-
-			s.controlChannel.Set(conn)
-
-			s.logger.Info("control channel successfully established.")
-
-			break loop
+			s.logger.Debugf("failed to accept control channel connection on %s: %v", listener.Addr().String(), err)
+			continue
 		}
+
+		if !s.validControlClaim(conn) {
+			conn.Close()
+			continue
+		}
+
+		if established {
+			// A second valid claim means the client restarted on its own and
+			// re-dialed, while this run never noticed because the old connection
+			// has not failed a read or write yet. The claim is answered (above),
+			// so the client knows it reached the right server; rebuilding the run
+			// then re-binds this listener, which the re-dialing client reaches on
+			// its next retry.
+			s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
+			conn.Close()
+			go s.Restart()
+			return
+		}
+
+		// A dead client that never sends FIN/RST — a hard kill, or a path that
+		// blackholes under load — would otherwise sit here as a zombie. Keepalive
+		// probes turn that into a read error the channel handler can act on.
+		enableKeepAlive(conn, 30*time.Second)
+
+		s.controlChannel.Set(conn)
+		s.logger.Info("control channel successfully established.")
+		established = true
+
+		go s.tunnelListener(g)
+		go s.parsePortMappings(g)
+		go s.channelHandler(g)
+	}
+}
+
+// validControlClaim reads the token handshake a control-channel claimant must
+// pass and answers it. It leaves the connection open on success; the caller
+// closes it when this returns false.
+func (s *UdpTransport) validControlClaim(conn net.Conn) bool {
+	// Set a read deadline for the token response
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		s.logger.Errorf("failed to set read deadline: %v", err)
+		return false
 	}
 
-	go s.tunnelListener(g)
-	go s.parsePortMappings(g)
-	go s.channelHandler(g)
+	msg, transport, err := utils.ReceiveBinaryTransportString(conn)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			s.logger.Warn("timeout while waiting for control channel signal")
+		} else {
+			s.logger.Errorf("failed to receive control channel signal: %v", err)
+		}
+		return false
+	}
 
-	<-g.ctx.Done()
+	if transport != utils.SG_Chan {
+		s.logger.Errorf("invalid signal received for channel, discarding connection")
+		return false
+	}
+
+	// Resetting the deadline (removes any existing deadline)
+	conn.SetReadDeadline(time.Time{})
+
+	if msg != s.config.Token {
+		s.logger.Warnf("invalid security token received")
+		return false
+	}
+
+	if err := utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan); err != nil {
+		s.logger.Errorf("failed to send security token: %v", err)
+		return false
+	}
+
+	return true
 }
 
 func (s *UdpTransport) channelHandler(g *udpGen) {
@@ -306,6 +346,23 @@ func (s *UdpTransport) channelHandler(g *udpGen) {
 	}
 }
 
+// applyBuffers sizes a datagram socket to the configured SO_RCVBUF/SO_SNDBUF. A
+// zero value leaves the kernel default in place. Best effort: a socket that
+// refuses the size — usually because net.core.rmem_max is lower — still works,
+// it just has less headroom against a burst.
+func (s *UdpTransport) applyBuffers(conn *net.UDPConn) {
+	if s.config.SO_RCVBUF > 0 {
+		if err := conn.SetReadBuffer(s.config.SO_RCVBUF); err != nil {
+			s.logger.Warnf("failed to set UDP read buffer to %d: %v", s.config.SO_RCVBUF, err)
+		}
+	}
+	if s.config.SO_SNDBUF > 0 {
+		if err := conn.SetWriteBuffer(s.config.SO_SNDBUF); err != nil {
+			s.logger.Warnf("failed to set UDP write buffer to %d: %v", s.config.SO_SNDBUF, err)
+		}
+	}
+}
+
 func (s *UdpTransport) tunnelListener(g *udpGen) {
 	tunnelUDPAddr, err := net.ResolveUDPAddr("udp", s.config.BindAddr)
 	if err != nil {
@@ -316,6 +373,10 @@ func (s *UdpTransport) tunnelListener(g *udpGen) {
 	if err != nil {
 		s.logger.Fatalf("failed to listen on tunnel UDP port: %v", err)
 	}
+
+	// This one socket receives every client's pooled traffic, so it is the first
+	// place a flood is felt; give it the configured headroom.
+	s.applyBuffers(listener)
 
 	defer listener.Close()
 
@@ -500,6 +561,8 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 	if err != nil {
 		s.logger.Fatalf("failed to listen on local UDP port: %v", err)
 	}
+
+	s.applyBuffers(listener)
 
 	defer listener.Close()
 

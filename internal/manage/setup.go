@@ -38,6 +38,7 @@ var transportGroups = []struct {
 	{"UDP", "lower latency, better on lossy or throttled links", []transportEntry{
 		{"UDP", "raw datagrams — for UDP-based services", "udp"},
 		{"UDP + KCP", "reliable UDP with error correction — best on lossy links", "kcp"},
+		{"UDP + QUIC", "encrypted TLS 1.3 streams over UDP — self-tuning, great under loss", "quic"},
 	}},
 	{"WebSocket", "looks like normal web traffic — CDN friendly", []transportEntry{
 		{"WS", "WebSocket — HTTP camouflage, CDN friendly", "ws"},
@@ -445,7 +446,7 @@ func SetupClient() {
 	if tui.Confirm("Configure optional connection settings (proxy, interface, backup addresses)", false) {
 		// Only offered where it can actually work: the datagram transports carry
 		// their data in UDP, which a TCP proxy cannot relay.
-		if transport != "udp" && transport != "kcp" && transport != "xdi" {
+		if !isDatagram(transport) {
 			fmt.Println()
 			tui.Info("Optional proxy: reach the tunnel server through a SOCKS5 or HTTP proxy,")
 			tui.Info("for a machine that cannot open outbound connections directly.")

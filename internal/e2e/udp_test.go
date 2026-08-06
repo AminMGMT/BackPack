@@ -11,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/internal/client"
 	"github.com/backpack/backpack/internal/server"
+	"github.com/backpack/backpack/internal/utils"
 )
 
 // The raw UDP transport was the one protocol with no end-to-end coverage: the
@@ -81,6 +82,74 @@ func TestUDPTransportCarriesData(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatalf("udp tunnel never carried a datagram: %v", lastErr)
+}
+
+// TestUDPServerReadoptsControlChannel proves the server keeps accepting control
+// channel claims after the first one is established. That is what lets a client
+// which restarted on its own re-dial and recover the tunnel; the old
+// single-accept design left the second claim unanswered, so the tunnel stayed
+// dead until the server was restarted by hand.
+func TestUDPServerReadoptsControlChannel(t *testing.T) {
+	backendAddr := startUDPEchoBackend(t)
+
+	tunnelPort := freePort(t)
+	entryPort := freePort(t)
+	token := "udp-token-0123456789abcdefghij"
+
+	srvCfg := baseServerConfig("udp", tunnelPort, entryPort, backendAddr, token)
+	cliCfg := baseClientConfig("udp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	t.Cleanup(func() { cancel(); wg.Wait() })
+
+	srv := server.NewServer(srvCfg, ctx)
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Start() }()
+
+	time.Sleep(300 * time.Millisecond)
+
+	cli := client.NewClient(cliCfg, ctx)
+	wg.Add(1)
+	go func() { defer wg.Done(); cli.Start() }()
+
+	// Wait for the first control channel to be established, by proving data flows.
+	entry := fmt.Sprintf("127.0.0.1:%d", entryPort)
+	payload := []byte("udp-datagram-roundtrip-check")
+	deadline := time.Now().Add(tunnelReadyTimeout)
+	up := false
+	for time.Now().Before(deadline) {
+		if err := udpRoundTrip(entry, payload); err == nil {
+			up = true
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !up {
+		t.Fatal("udp tunnel never came up")
+	}
+
+	// A second control channel claim, exactly as a re-dialing client makes one.
+	// The server must answer it rather than leave it hanging; the answer is what
+	// proves the accept loop is still running after the first channel.
+	claim, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort))
+	if err != nil {
+		t.Fatalf("cannot dial the control port: %v", err)
+	}
+	defer claim.Close()
+	if err := claim.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("cannot set deadline: %v", err)
+	}
+	if err := utils.SendBinaryTransportString(claim, token, utils.SG_Chan); err != nil {
+		t.Fatalf("cannot send the control claim: %v", err)
+	}
+	msg, signal, err := utils.ReceiveBinaryTransportString(claim)
+	if err != nil {
+		t.Fatalf("server never answered a second control channel claim (re-adopt broken): %v", err)
+	}
+	if signal != utils.SG_Chan || msg != token {
+		t.Fatalf("unexpected control handshake answer: signal=%d msg=%q", signal, msg)
+	}
 }
 
 func udpRoundTrip(entry string, payload []byte) error {

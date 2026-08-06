@@ -199,12 +199,14 @@ func checkOutbound(cfg *config.Config) {
 
 	// The datagram transports carry their data outside the TCP dialer entirely,
 	// so none of this would reach it. Half-applying would be worse than
-	// refusing: the control channel is TCP and would honour every one of these
-	// settings, while the data went out by whatever route the kernel chose. The
-	// tunnel would come up and quietly leave by the wrong link — or, with a
-	// proxy, come up and carry nothing at all.
+	// refusing: on udp the control channel is TCP and would honour every one of
+	// these settings, while the data went out by whatever route the kernel
+	// chose. The tunnel would come up and quietly leave by the wrong link — or,
+	// with a proxy, come up and carry nothing at all. On kcp, xdi and quic not
+	// even the control channel is TCP, so the settings would be accepted and
+	// then ignored outright.
 	switch cfg.Client.Transport {
-	case config.UDP, config.KCP, config.XDI:
+	case config.UDP, config.KCP, config.XDI, config.QUIC:
 		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is not carried over the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
 	}
 

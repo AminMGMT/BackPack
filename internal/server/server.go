@@ -125,6 +125,27 @@ func (s *Server) Start() {
 		kcpServer := transport.NewKcpServer(s.ctx, kcpConfig, s.logger)
 		go kcpServer.Start()
 
+	case config.QUIC:
+		quicConfig := &transport.QuicConfig{
+			BindAddr:       s.config.BindAddr,
+			Heartbeat:      time.Duration(s.config.Heartbeat) * time.Second,
+			KeepAlive:      time.Duration(s.config.Keepalive) * time.Second,
+			Token:          s.config.Token,
+			ChannelSize:    s.config.ChannelSize,
+			Ports:          s.config.Ports,
+			Sniffer:        s.config.Sniffer,
+			WebPort:        s.config.WebPort,
+			SnifferLog:     s.config.SnifferLog,
+			SO_RCVBUF:      s.config.SO_RCVBUF,
+			SO_SNDBUF:      s.config.SO_SNDBUF,
+			ProxyProtocol:  s.config.ProxyProtocol,
+			MaxConnections: s.config.MaxConnections,
+			BandwidthMbps:  s.config.BandwidthMbps,
+		}
+
+		quicServer := transport.NewQuicServer(s.ctx, quicConfig, s.logger)
+		go quicServer.Start()
+
 	case config.TCPMUX:
 		tcpMuxConfig := &transport.TcpMuxConfig{
 			BindAddr:         s.config.BindAddr,
@@ -222,6 +243,8 @@ func (s *Server) Start() {
 			Sniffer:     s.config.Sniffer,
 			WebPort:     s.config.WebPort,
 			SnifferLog:  s.config.SnifferLog,
+			SO_RCVBUF:   s.config.SO_RCVBUF,
+			SO_SNDBUF:   s.config.SO_SNDBUF,
 		}
 
 		udpServer := transport.NewUDPServer(s.ctx, udpConfig, s.logger)

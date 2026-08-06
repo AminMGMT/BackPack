@@ -38,6 +38,12 @@ type UdpConfig struct {
 	WebPort        int
 	Sniffer        bool
 	AggressivePool bool
+	// SO_RCVBUF/SO_SNDBUF size every UDP socket the client opens — the sockets
+	// to the server and to the local backend. The kernel default is small enough
+	// that a datagram flood overruns it and drops packets before they are read;
+	// the preset's several MB is what carries a speed test without stalling.
+	SO_RCVBUF int
+	SO_SNDBUF int
 }
 
 func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
@@ -333,6 +339,23 @@ func (c *UdpTransport) channelHandler() {
 	}
 }
 
+// applyBuffers sizes a datagram socket to the configured SO_RCVBUF/SO_SNDBUF. A
+// zero value leaves the kernel default in place. Best effort: a socket that
+// refuses the size — usually because net.core.rmem_max is lower — still works,
+// it just has less headroom against a burst.
+func (c *UdpTransport) applyBuffers(conn *net.UDPConn) {
+	if c.config.SO_RCVBUF > 0 {
+		if err := conn.SetReadBuffer(c.config.SO_RCVBUF); err != nil {
+			c.logger.Warnf("failed to set UDP read buffer to %d: %v", c.config.SO_RCVBUF, err)
+		}
+	}
+	if c.config.SO_SNDBUF > 0 {
+		if err := conn.SetWriteBuffer(c.config.SO_SNDBUF); err != nil {
+			c.logger.Warnf("failed to set UDP write buffer to %d: %v", c.config.SO_SNDBUF, err)
+		}
+	}
+}
+
 func (c *UdpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
@@ -350,6 +373,8 @@ func (c *UdpTransport) tunnelDialer() {
 		c.logger.Error("failed to connect to server:", err)
 		return
 	}
+
+	c.applyBuffers(tunConn)
 
 	defer tunConn.Close()
 
@@ -428,8 +453,14 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 	// Dial the remote UDP server
 	remoteConn, err := net.DialUDP("udp", nil, remoteResolvedAddr)
 	if err != nil {
+		// Falling through here dereferenced a nil remoteConn one line later and
+		// took the whole client down with it; there is nothing to forward to, so
+		// stop.
 		c.logger.Errorf("failed to dial remote UDP address: %v", err)
+		return
 	}
+
+	c.applyBuffers(remoteConn)
 
 	defer remoteConn.Close()
 

@@ -130,6 +130,12 @@ type Recommendation struct {
 //     better than opening a connection per stream.
 //   - A path that barely answers at all is a filtering problem, not a tuning
 //     problem, and the answer is camouflage rather than speed.
+//
+// QUIC handles loss well too, and is offered in the menu, but it is never the
+// recommendation: on the route this tool exists for it has been seen to fail
+// its handshake outright on links where KCP ran at full speed. It is named as
+// an alternative to try instead, which is the honest place for it until it has
+// a track record here.
 func RecommendTransport(q PathQuality, current string) Recommendation {
 	r := Recommendation{Preset: PresetTurbo}
 
@@ -149,7 +155,8 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			fmt.Sprintf("%.0f%% of probes never completed — this link loses a lot of packets", q.LossPercent()),
 			"KCP repairs losses with error correction instead of waiting for retransmits, which is exactly this problem")
 		r.Caveats = append(r.Caveats,
-			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing")
+			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing",
+			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning")
 
 	case q.LossPercent() >= 2:
 		r.Transport, r.Label = "kcp", "UDP + KCP"
@@ -157,7 +164,8 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			fmt.Sprintf("%.0f%% packet loss measured — enough that TCP keeps backing off and losing speed", q.LossPercent()),
 			"KCP's error correction recovers those losses without a full round trip")
 		r.Caveats = append(r.Caveats,
-			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing")
+			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing",
+			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning")
 
 	case q.Jitter > q.Avg/3:
 		r.Transport, r.Label = "tcpmux", "TCP Mux"

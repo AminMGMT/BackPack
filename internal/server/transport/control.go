@@ -3,9 +3,23 @@ package transport
 import (
 	"net"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// enableKeepAlive turns on TCP keepalive on a control connection so a peer that
+// dies without closing — a hard kill, or a path that blackholes under load —
+// eventually surfaces as a read error instead of a connection that hangs open
+// forever. A no-op for anything that is not a TCP connection.
+func enableKeepAlive(conn net.Conn, period time.Duration) {
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcp.SetKeepAlive(true)
+	_ = tcp.SetKeepAlivePeriod(period)
+}
 
 // The control channel is written by the handshake goroutine and read by the
 // accept loop, the heartbeat loop and the restart path — all at the same time.
