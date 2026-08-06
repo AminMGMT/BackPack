@@ -87,9 +87,10 @@ func (s *Server) Start() {
 		tcpServer := transport.NewTCPServer(s.ctx, tcpConfig, s.logger)
 		go tcpServer.Start()
 
-	case config.KCP, config.XDI:
+	case config.KCP, config.XDI, config.SPOOF:
 		kcp := s.config.KCPConfig.WithDefaults()
 		useICMP := s.config.Transport == config.XDI
+		useSpoof := s.config.Transport == config.SPOOF
 		kcpConfig := &transport.KcpConfig{
 			BindAddr:         s.config.BindAddr,
 			Heartbeat:        time.Duration(s.config.Heartbeat) * time.Second,
@@ -120,6 +121,10 @@ func (s *Server) Start() {
 			DataShards:       kcp.DataShards,
 			ParityShards:     kcp.ParityShards,
 			UseICMP:          useICMP,
+			UseSpoof:         useSpoof,
+			SpoofProfile:     s.config.SpoofProfile,
+			SpoofSrcIP:       s.config.SpoofSrcIP,
+			SpoofInterface:   s.config.SpoofInterface,
 		}
 
 		kcpServer := transport.NewKcpServer(s.ctx, kcpConfig, s.logger)

@@ -48,6 +48,7 @@ var transportGroups = []struct {
 	}},
 	{"Experimental", "newer ideas, still being proven — not for production yet", []transportEntry{
 		{"xDi (ICMP)", "tunnels inside ping packets, for networks that filter UDP/TCP but not ICMP — Linux, needs root", "xdi"},
+		{"IP Spoofing", "forges the source of raw IP packets, for a path that filters on the real flow — Linux, needs root; prove it on your route", "spoof"},
 	}},
 }
 
@@ -284,6 +285,77 @@ func promptACMEDomain(currentDomain, currentEmail string) (domain, email string,
 	return domain, email, true
 }
 
+// askSpoof collects the IP-spoofing carrier's settings. It runs on both ends
+// for the spoof transport and is a no-op for every other transport.
+//
+// The two ends must agree on the profile. The forged source is what the far end
+// and the network see; whether replies find their way back is a property of the
+// route, which is why the wizard says out loud that it must be proven.
+func askSpoof(s *TunnelSpec) {
+	if s.Transport != "spoof" {
+		return
+	}
+	fmt.Println()
+	tui.Warn("IP Spoofing is experimental. It forges the source address of raw IP")
+	tui.Warn("packets. It only carries traffic where the upstream network does not")
+	tui.Warn("drop forged-source packets — prove it on your real route first.")
+	fmt.Println()
+
+	tui.Info("Packet profile — what the packets look like on the wire. Both ends must match.")
+	tui.Info("  udp  — default, nothing on the host answers it")
+	tui.Info("  tcp  — matches the reference tools, but needs an iptables rule to stop kernel RSTs")
+	profile := strings.ToLower(strings.TrimSpace(tui.PromptDefault("Profile (udp/tcp)", "udp")))
+	if profile != "tcp" {
+		profile = "udp"
+	}
+	s.SpoofProfile = profile
+
+	tui.Info("Forged source IP stamped on every outgoing packet. Leave empty to keep the real one.")
+	for {
+		raw := strings.TrimSpace(tui.PromptDefault("Spoof source IP", ""))
+		if raw == "" {
+			break
+		}
+		if net.ParseIP(raw).To4() == nil {
+			tui.Error("Enter a valid IPv4 address, e.g. 185.143.234.120")
+			continue
+		}
+		s.SpoofSrcIP = raw
+		break
+	}
+
+	tui.Info("Forged destination IP for the cosmetic header (optional; ignored by the udp profile).")
+	for {
+		raw := strings.TrimSpace(tui.PromptDefault("Spoof destination IP", ""))
+		if raw == "" {
+			break
+		}
+		if net.ParseIP(raw).To4() == nil {
+			tui.Error("Enter a valid IPv4 address.")
+			continue
+		}
+		s.SpoofDstIP = raw
+		break
+	}
+
+	if names := routableInterfaces(); len(names) > 0 {
+		tui.Info("Egress interface to send the raw packets from (optional).")
+		tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel route.")
+		for {
+			raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+			if raw == "" {
+				break
+			}
+			if _, err := net.InterfaceByName(raw); err != nil {
+				tui.Error(fmt.Sprintf("no such interface: %v", err))
+				continue
+			}
+			s.SpoofInterface = raw
+			break
+		}
+	}
+}
+
 // askProxyProtocol offers to forward the real client IP to the service behind
 // the tunnel. Without it that service sees every connection as coming from the
 // tunnel itself, which is why per-user device limits in VPN panels stop working
@@ -387,6 +459,8 @@ func SetupServer() {
 	}
 	askSimpleAuth(&s, transport)
 
+	askSpoof(&s)
+
 	askProxyProtocol(&s)
 
 	ApplyPreset(&s, choosePreset())
@@ -438,6 +512,8 @@ func SetupClient() {
 		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
 	}
 	askSimpleAuth(&s, transport)
+
+	askSpoof(&s)
 
 	// Proxy, interface pinning, and backup addresses are connectivity options
 	// that most tunnels never need. Gate them behind one confirm so the common

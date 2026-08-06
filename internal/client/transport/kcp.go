@@ -73,19 +73,28 @@ type KcpConfig struct {
 	// UseICMP carries the session inside ICMP echo (the xdi transport) rather
 	// than UDP. Only the packet layer differs; everything here is unchanged.
 	UseICMP bool
+	// UseSpoof carries the session inside raw IPv4 packets with a forged source
+	// (the spoof transport). Only the packet layer differs. See spoofSettings.
+	UseSpoof       bool
+	SpoofProfile   string
+	SpoofSrcIP     string
+	SpoofInterface string
 }
 
 // transportLabel is what the panel and logs call this transport — XDI over ICMP
-// echo, KCP over UDP.
+// echo, SPOOF over forged raw IP, KCP over UDP.
 func (c *KcpTransport) transportLabel() string {
 	if c.config.UseICMP {
 		return "XDI"
+	}
+	if c.config.UseSpoof {
+		return "SPOOF"
 	}
 	return "KCP"
 }
 
 func (c *KcpConfig) settings() network.KCPSettings {
-	return network.KCPSettings{
+	s := network.KCPSettings{
 		MTU:          c.MTU,
 		Interval:     c.Interval,
 		Resend:       c.Resend,
@@ -100,6 +109,16 @@ func (c *KcpConfig) settings() network.KCPSettings {
 		SO_SNDBUF:    c.SO_SNDBUF,
 		UseICMP:      c.UseICMP,
 	}
+	if c.UseSpoof {
+		// Profile is validated at load time (checkSpoof); default to udp here.
+		profile, _ := network.ParseSpoofProfile(c.SpoofProfile)
+		s.Spoof = &network.SpoofCarrier{
+			Profile:   profile,
+			SrcIP:     c.SpoofSrcIP,
+			Interface: c.SpoofInterface,
+		}
+	}
+	return s
 }
 
 func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.Logger) *KcpTransport {

@@ -68,6 +68,10 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		KCPAckNoDelay:   sc.AckNoDelay,
 		KCPDataShards:   sc.DataShards,
 		KCPParityShards: sc.ParityShards,
+		SpoofProfile:    sc.SpoofProfile,
+		SpoofSrcIP:      sc.SpoofSrcIP,
+		SpoofDstIP:      sc.SpoofDstIP,
+		SpoofInterface:  sc.SpoofInterface,
 	}, nil
 }
 
@@ -124,6 +128,10 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		KCPAckNoDelay:   cc.AckNoDelay,
 		KCPDataShards:   cc.DataShards,
 		KCPParityShards: cc.ParityShards,
+		SpoofProfile:    cc.SpoofProfile,
+		SpoofSrcIP:      cc.SpoofSrcIP,
+		SpoofDstIP:      cc.SpoofDstIP,
+		SpoofInterface:  cc.SpoofInterface,
 	}, nil
 }
 

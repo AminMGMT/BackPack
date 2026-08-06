@@ -67,6 +67,13 @@ type TunnelSpec struct {
 	KCPDataShards   int
 	KCPParityShards int
 
+	// Spoof transport (raw IP with a forged source). Filled only when the
+	// transport is spoof; see config.SpoofConfig.
+	SpoofProfile   string // "udp" (default) or "tcp"
+	SpoofSrcIP     string // forged source address, empty to keep the real one
+	SpoofDstIP     string // forged destination in the cosmetic shim, empty to mirror src
+	SpoofInterface string // egress device to pin the raw socket to
+
 	// Throughput / latency tuning
 	MSS      int // TCP max segment size (0 = auto)
 	SoRcvBuf int // per-socket receive buffer (bytes)
@@ -149,15 +156,38 @@ func (s TunnelSpec) writeKCP(p func(string, ...any)) {
 	p("kcp_parityshards = %d\n", s.KCPParityShards)
 }
 
-// isMux reports whether a transport multiplexes over SMUX.
-func isMux(t string) bool {
-	return t == "tcpmux" || t == "wsmux" || t == "wssmux" || t == "kcp" || t == "xdi"
+// writeSpoof emits the IP-spoofing knobs. A no-op for every other transport, so
+// a tunnel that is not on spoof never carries stale spoof settings.
+func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
+	if s.Transport != "spoof" {
+		return
+	}
+	profile := s.SpoofProfile
+	if profile == "" {
+		profile = "udp"
+	}
+	p("spoof_profile = %q\n", profile)
+	if s.SpoofSrcIP != "" {
+		p("spoof_src_ip = %q\n", s.SpoofSrcIP)
+	}
+	if s.SpoofDstIP != "" {
+		p("spoof_dst_ip = %q\n", s.SpoofDstIP)
+	}
+	if s.SpoofInterface != "" {
+		p("spoof_interface = %q\n", s.SpoofInterface)
+	}
 }
 
-// isKCP reports whether a transport rides on KCP — over UDP (kcp) or over ICMP
-// echo (xdi). Both are tuned by the same kcp_* knobs and the same presets.
+// isMux reports whether a transport multiplexes over SMUX.
+func isMux(t string) bool {
+	return t == "tcpmux" || t == "wsmux" || t == "wssmux" || t == "kcp" || t == "xdi" || t == "spoof"
+}
+
+// isKCP reports whether a transport rides on KCP — over UDP (kcp), over ICMP
+// echo (xdi), or over forged raw IP (spoof). All three are tuned by the same
+// kcp_* knobs and the same presets.
 func isKCP(t string) bool {
-	return t == "kcp" || t == "xdi"
+	return t == "kcp" || t == "xdi" || t == "spoof"
 }
 
 // IsDatagram reports whether a transport carries datagrams (UDP/KCP), for
@@ -168,7 +198,7 @@ func IsDatagram(t string) bool { return isDatagram(t) }
 // tunnel never shows up in the TCP listen table and cannot be probed with a
 // TCP connect, so every check that assumes TCP has to skip it.
 func isDatagram(t string) bool {
-	return t == "udp" || t == "kcp" || t == "xdi" || t == "quic"
+	return t == "udp" || t == "kcp" || t == "xdi" || t == "quic" || t == "spoof"
 }
 
 // supportsProxyProtocol reports whether a transport can prepend the PROXY
@@ -177,7 +207,7 @@ func isDatagram(t string) bool {
 // connection to describe.
 func supportsProxyProtocol(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth", "quic":
+	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth", "quic", "spoof":
 		return true
 	}
 	return false
@@ -197,7 +227,7 @@ func needsTLS(t string) bool {
 // validTransport reports whether t is one of the engine's supported transports.
 func validTransport(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth", "xdi", "quic":
+	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth", "xdi", "quic", "spoof":
 		return true
 	}
 	return false
@@ -229,6 +259,7 @@ func (s TunnelSpec) Render() string {
 		}
 		s.writeTuning(p)
 		s.writeKCP(p)
+		s.writeSpoof(p)
 		if s.Transport == "tcp" {
 			// accept_udp is only honoured by the plain TCP transport in the engine.
 			p("accept_udp = %t\n", s.AcceptUDP)
@@ -312,6 +343,7 @@ func (s TunnelSpec) Render() string {
 	}
 	s.writeTuning(p)
 	s.writeKCP(p)
+	s.writeSpoof(p)
 	if isWS(s.Transport) && s.EdgeIP != "" {
 		p("edge_ip = %q\n", s.EdgeIP)
 	}

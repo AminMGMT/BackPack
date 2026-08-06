@@ -28,6 +28,16 @@ const (
 	// ICMP, where the tunnel rides in ping packets. Linux only, and needs a raw
 	// socket. Everything above the packet layer is identical to KCP.
 	XDI TransportType = "xdi"
+	// SPOOF carries the KCP transport inside raw IPv4 packets whose source
+	// address is forged — experimental "IP Spoofing". It is for a path that
+	// filters on the real flow's source, or that only lets a particular address
+	// pair through: the datagrams route to the real peer as normal, but on the
+	// wire they appear to come from spoof_src_ip. Like xdi it is KCP over a
+	// hand-built raw socket, so encryption, error correction and the whole
+	// tunnel stack sit on top unchanged. Linux only, needs a raw socket, and
+	// only works where the upstream network does not drop forged-source packets
+	// (no BCP38 egress filtering) — which must be proven on the real route.
+	SPOOF TransportType = "spoof"
 )
 
 // KCPConfig holds the tuning of the KCP transport: a reliable, retransmitting
@@ -74,6 +84,36 @@ func (k KCPConfig) WithDefaults() KCPConfig {
 		k.DataShards, k.ParityShards = 0, 0
 	}
 	return k
+}
+
+// SpoofConfig holds the IP-spoofing carrier's settings, embedded in both the
+// server and client config so the spoof_* keys sit at the top level of the
+// table. It only takes effect when transport = "spoof"; every field is ignored
+// otherwise.
+//
+// The carrier forges the source address of the raw packets it sends. Routing
+// still uses the real peer — the server's bind address, the client's remote
+// address — so the packet actually arrives; only the source in the on-wire
+// header is replaced with SpoofSrcIP. The two ends must agree on the profile
+// and, where it matters, on the spoofed addresses.
+type SpoofConfig struct {
+	// SpoofProfile is the L4 shim wrapped around each datagram, which decides
+	// what the packet looks like to inspection: "udp" (default — least likely
+	// to draw a kernel reply) or "tcp" (matches the reference tools, but the
+	// host kernel will RST the forged flow unless an iptables rule drops those;
+	// see the transport's docs). Later: icmp, ipip, gre.
+	SpoofProfile string `toml:"spoof_profile"`
+	// SpoofSrcIP is the forged source address stamped on every outgoing packet.
+	// Empty leaves the host's real source in place, which spoofs nothing.
+	SpoofSrcIP string `toml:"spoof_src_ip"`
+	// SpoofDstIP is a forged destination written only into the cosmetic L4 shim
+	// of the profiles that carry one; the packet is still routed to the real
+	// peer. Empty mirrors SpoofSrcIP. Ignored by the udp profile.
+	SpoofDstIP string `toml:"spoof_dst_ip"`
+	// SpoofInterface pins the raw socket to a named egress device (e.g. "eth0"),
+	// for a multi-homed host where the forged source would otherwise pick the
+	// wrong link. Empty lets the kernel route by the real destination.
+	SpoofInterface string `toml:"spoof_interface"`
 }
 
 // ServerConfig represents the configuration for the server.
@@ -143,6 +183,9 @@ type ServerConfig struct {
 	// Embedded so the kcp_* keys sit at the top level of the [server] table
 	// alongside every other tuning key.
 	KCPConfig
+	// Embedded so the spoof_* keys sit at the top level too. Only used when
+	// transport = "spoof".
+	SpoofConfig
 }
 
 // ClientConfig represents the configuration for the client.
@@ -230,6 +273,9 @@ type ClientConfig struct {
 	// Embedded so the kcp_* keys sit at the top level of the [client] table
 	// alongside every other tuning key.
 	KCPConfig
+	// Embedded so the spoof_* keys sit at the top level too. Only used when
+	// transport = "spoof".
+	SpoofConfig
 }
 
 // Config represents the complete configuration, including both server and client settings.

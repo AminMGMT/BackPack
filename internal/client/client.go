@@ -136,9 +136,10 @@ func (c *Client) Start() {
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
 
-	case config.KCP, config.XDI:
+	case config.KCP, config.XDI, config.SPOOF:
 		kcp := c.config.KCPConfig.WithDefaults()
 		useICMP := c.config.Transport == config.XDI
+		useSpoof := c.config.Transport == config.SPOOF
 		kcpConfig := &transport.KcpConfig{
 			RemoteAddr:       c.config.RemoteAddr,
 			Endpoints:        endpoints,
@@ -168,6 +169,10 @@ func (c *Client) Start() {
 			DataShards:       kcp.DataShards,
 			ParityShards:     kcp.ParityShards,
 			UseICMP:          useICMP,
+			UseSpoof:         useSpoof,
+			SpoofProfile:     c.config.SpoofProfile,
+			SpoofSrcIP:       c.config.SpoofSrcIP,
+			SpoofInterface:   c.config.SpoofInterface,
 		}
 		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
 		go kcpClient.Start()

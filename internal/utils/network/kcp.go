@@ -36,14 +36,29 @@ type KCPSettings struct {
 	// thing this changes is which kind of socket the datagrams ride in. See
 	// icmpconn_linux.go.
 	UseICMP bool
+	// Spoof, when set, carries the KCP session inside raw IPv4 packets whose
+	// source is forged — the "IP Spoofing" transport. Like UseICMP it swaps only
+	// the packet layer; everything above is unchanged. See spoofconn_linux.go.
+	Spoof *SpoofCarrier
 }
 
-// effectiveMTU returns the MTU KCP should use, which is smaller over ICMP
-// because the echo header and the tunnel's own framing eat into the packet.
-// Left as configured for UDP.
+// SpoofCarrier is the IP-spoofing carrier's tuning, passed down to the raw
+// socket. Nil in KCPSettings means the session rides on UDP (or ICMP) instead.
+type SpoofCarrier struct {
+	Profile   SpoofProfile
+	SrcIP     string // forged source address, empty to keep the real one
+	Interface string // egress device to pin the raw socket to, empty for none
+}
+
+// effectiveMTU returns the MTU KCP should use, which is smaller on the carriers
+// whose framing eats into the packet: ICMP echo, or the spoof header. Left as
+// configured for plain UDP.
 func (s KCPSettings) effectiveMTU() int {
 	if s.UseICMP {
 		return s.MTU - icmpMTUOverhead
+	}
+	if s.Spoof != nil {
+		return s.MTU - spoofOverhead(s.Spoof.Profile)
 	}
 	return s.MTU
 }
@@ -108,6 +123,23 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 		return listener, nil
 	}
 
+	// Over the spoof carrier the socket is a raw IPv4 one shared by every tunnel
+	// on the host, like the ICMP one; the bind address's port is meaningless and
+	// the session tag separates tunnels. KCP is handed that socket and does not
+	// know the difference.
+	if s.Spoof != nil {
+		conn, err := newSpoofServerConn(token, s.Spoof.Profile, s.Spoof.SrcIP, s.Spoof.Interface)
+		if err != nil {
+			return nil, err
+		}
+		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("spoof: failed to start the KCP listener: %w", err)
+		}
+		return listener, nil
+	}
+
 	listener, err := kcp.ListenWithOptions(bindAddr, block, s.DataShards, s.ParityShards)
 	if err != nil {
 		return nil, fmt.Errorf("kcp: failed to listen on %s: %w", bindAddr, err)
@@ -150,6 +182,24 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("xdi: failed to open the KCP session: %w", err)
+		}
+	} else if s.Spoof != nil {
+		conn, err := newSpoofClientConn(token, s.Spoof.Profile, s.Spoof.SrcIP, s.Spoof.Interface)
+		if err != nil {
+			return nil, err
+		}
+		// The raw carrier has no ports; only the host of remoteAddr matters — it
+		// is the real destination every packet is routed to. NewConn2 takes that
+		// address, which is the server's IP.
+		ipAddr, err := hostToIPAddr(remoteAddr)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		session, err = kcp.NewConn2(ipAddr, block, s.DataShards, s.ParityShards, conn)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("spoof: failed to open the KCP session: %w", err)
 		}
 	} else {
 		session, err = kcp.DialWithOptions(remoteAddr, block, s.DataShards, s.ParityShards)

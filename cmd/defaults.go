@@ -149,6 +149,44 @@ func applyDefaults(cfg *config.Config) {
 	warnUnusedStreamBuffer(cfg)
 	checkOutbound(cfg)
 	checkXdi(cfg)
+	checkSpoof(cfg)
+}
+
+// checkSpoof refuses a spoof tunnel that cannot possibly work, before it tries,
+// and validates the profile so an unknown one is named here rather than silently
+// defaulting deep in the transport.
+//
+// Like xdi it needs a raw socket (root or CAP_NET_RAW) and is Linux only. The
+// warning is deliberately blunt: source spoofing only carries traffic where the
+// upstream network does not drop forged-source packets, and the tcp profile
+// additionally needs a firewall rule so the host kernel does not RST the flow.
+func checkSpoof(cfg *config.Config) {
+	usesSpoof := cfg.Server.Transport == config.SPOOF || cfg.Client.Transport == config.SPOOF
+	if !usesSpoof {
+		return
+	}
+	if runtime.GOOS != "linux" {
+		logger.Fatalf("the spoof transport is only available on Linux (it needs a raw IP socket)")
+	}
+	if os.Geteuid() != 0 {
+		logger.Fatalf("the spoof transport needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+	}
+	// Validate both ends' profiles (either may be the one that is set for this
+	// process; validating both is harmless and catches a typo on the other side
+	// of a shared config).
+	for _, p := range []string{string(cfg.Server.SpoofProfile), string(cfg.Client.SpoofProfile)} {
+		if _, err := network.ParseSpoofProfile(p); err != nil {
+			logger.Fatalf("invalid spoof_profile: %v", err)
+		}
+	}
+	profile := cfg.Server.SpoofProfile
+	if cfg.Client.Transport == config.SPOOF {
+		profile = cfg.Client.SpoofProfile
+	}
+	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this on your real route before relying on it.")
+	if profile == "tcp" {
+		logger.Warn("spoof_profile=tcp: the host kernel will RST the forged flow unless you add an iptables rule dropping outbound RSTs for the spoofed pair on both ends.")
+	}
 }
 
 // checkXdi refuses an xdi tunnel that cannot possibly work, before it tries.
@@ -206,7 +244,7 @@ func checkOutbound(cfg *config.Config) {
 	// even the control channel is TCP, so the settings would be accepted and
 	// then ignored outright.
 	switch cfg.Client.Transport {
-	case config.UDP, config.KCP, config.XDI, config.QUIC:
+	case config.UDP, config.KCP, config.XDI, config.QUIC, config.SPOOF:
 		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is not carried over the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
 	}
 
