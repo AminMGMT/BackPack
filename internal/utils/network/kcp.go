@@ -46,8 +46,10 @@ type KCPSettings struct {
 // socket. Nil in KCPSettings means the session rides on UDP (or ICMP) instead.
 type SpoofCarrier struct {
 	Profile   SpoofProfile
-	SrcIP     string // forged source address, empty to keep the real one
-	Interface string // egress device to pin the raw socket to, empty for none
+	SrcIP     string   // forged source address, empty to keep the real one
+	SrcPool   []string // forged sources to rotate through; SrcIP is a member
+	PeerIP    string   // peer's real IPv4; required on the server, derived on the client
+	Interface string   // egress device to pin the raw socket to, empty for none
 }
 
 // effectiveMTU returns the MTU KCP should use, which is smaller on the carriers
@@ -123,12 +125,16 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 		return listener, nil
 	}
 
-	// Over the spoof carrier the socket is a raw IPv4 one shared by every tunnel
-	// on the host, like the ICMP one; the bind address's port is meaningless and
-	// the session tag separates tunnels. KCP is handed that socket and does not
-	// know the difference.
+	// Over the spoof carrier the send side is a raw IPv4 socket and the receive
+	// side an ordinary UDP one; KCP is handed the pair as a single PacketConn and
+	// does not know the difference. The server must be told the client's real
+	// address, because the forged packets cannot reveal it.
 	if s.Spoof != nil {
-		conn, err := newSpoofServerConn(token, s.Spoof.Profile, s.Spoof.SrcIP, s.Spoof.Interface)
+		peer := net.ParseIP(s.Spoof.PeerIP)
+		if peer == nil {
+			return nil, fmt.Errorf("spoof: spoof_peer_ip must be set to the client's real IPv4 address on the server")
+		}
+		conn, err := newSpoofServerConn(token, s.Spoof.Profile, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
 		if err != nil {
 			return nil, err
 		}
@@ -184,19 +190,23 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 			return nil, fmt.Errorf("xdi: failed to open the KCP session: %w", err)
 		}
 	} else if s.Spoof != nil {
-		conn, err := newSpoofClientConn(token, s.Spoof.Profile, s.Spoof.SrcIP, s.Spoof.Interface)
-		if err != nil {
-			return nil, err
-		}
-		// The raw carrier has no ports; only the host of remoteAddr matters — it
-		// is the real destination every packet is routed to. NewConn2 takes that
-		// address, which is the server's IP.
+		// The real destination every packet is routed to is the server: its
+		// configured real address if given, otherwise the host of remoteAddr.
 		ipAddr, err := hostToIPAddr(remoteAddr)
 		if err != nil {
-			conn.Close()
 			return nil, err
 		}
-		session, err = kcp.NewConn2(ipAddr, block, s.DataShards, s.ParityShards, conn)
+		peer := ipAddr.IP
+		if s.Spoof.PeerIP != "" {
+			if p := net.ParseIP(s.Spoof.PeerIP); p != nil {
+				peer = p
+			}
+		}
+		conn, err := newSpoofClientConn(token, s.Spoof.Profile, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
+		if err != nil {
+			return nil, err
+		}
+		session, err = kcp.NewConn2(&net.IPAddr{IP: peer}, block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("spoof: failed to open the KCP session: %w", err)

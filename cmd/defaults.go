@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"net"
 	"os"
+	"os/exec"
 	"runtime"
 
 	"github.com/backpack/backpack/config"
@@ -171,22 +173,42 @@ func checkSpoof(cfg *config.Config) {
 	if os.Geteuid() != 0 {
 		logger.Fatalf("the spoof transport needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
-	// Validate both ends' profiles (either may be the one that is set for this
-	// process; validating both is harmless and catches a typo on the other side
-	// of a shared config).
-	for _, p := range []string{string(cfg.Server.SpoofProfile), string(cfg.Client.SpoofProfile)} {
-		if _, err := network.ParseSpoofProfile(p); err != nil {
-			logger.Fatalf("invalid spoof_profile: %v", err)
-		}
-	}
+	// Validate the profile of whichever side is on spoof in this process.
 	profile := cfg.Server.SpoofProfile
 	if cfg.Client.Transport == config.SPOOF {
 		profile = cfg.Client.SpoofProfile
 	}
-	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this on your real route before relying on it.")
-	if profile == "tcp" {
-		logger.Warn("spoof_profile=tcp: the host kernel will RST the forged flow unless you add an iptables rule dropping outbound RSTs for the spoofed pair on both ends.")
+	if _, err := network.ParseSpoofProfile(profile); err != nil {
+		logger.Fatalf("invalid spoof_profile: %v", err)
 	}
+	if profile == "tcp" {
+		if _, err := exec.LookPath("iptables"); err != nil {
+			logger.Warn("spoof_profile=tcp needs the iptables binary to suppress the kernel's RSTs, and it was not found. The tunnel will run, but those RSTs may disrupt it. Install iptables, or use spoof_profile=udp or icmp.")
+		} else {
+			logger.Info("spoof_profile=tcp: a targeted iptables rule dropping the kernel's RSTs on the tunnel port is installed on start and removed on stop.")
+		}
+	}
+
+	// The server cannot learn the client's real address from the forged packets,
+	// so it must be told it. The client derives the server's real address from
+	// remote_addr, so spoof_peer_ip is optional there.
+	if cfg.Server.Transport == config.SPOOF && net.ParseIP(cfg.Server.SpoofPeerIP).To4() == nil {
+		logger.Fatalf("the spoof transport needs spoof_peer_ip set to the client's real IPv4 address on the server (it cannot be learned from the forged packets)")
+	}
+
+	// A typo in any forged source is caught here rather than silently sending
+	// nothing.
+	pool := cfg.Server.SpoofSrcPool
+	if cfg.Client.Transport == config.SPOOF {
+		pool = cfg.Client.SpoofSrcPool
+	}
+	for _, ip := range pool {
+		if net.ParseIP(ip).To4() == nil {
+			logger.Fatalf("invalid IPv4 %q in spoof_src_pool", ip)
+		}
+	}
+
+	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this with the spoof tester on your real route before relying on it.")
 }
 
 // checkXdi refuses an xdi tunnel that cannot possibly work, before it tries.

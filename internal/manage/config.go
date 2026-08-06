@@ -69,10 +69,12 @@ type TunnelSpec struct {
 
 	// Spoof transport (raw IP with a forged source). Filled only when the
 	// transport is spoof; see config.SpoofConfig.
-	SpoofProfile   string // "udp" (default) or "tcp"
-	SpoofSrcIP     string // forged source address, empty to keep the real one
-	SpoofDstIP     string // forged destination in the cosmetic shim, empty to mirror src
-	SpoofInterface string // egress device to pin the raw socket to
+	SpoofProfile   string   // "udp" (default)
+	SpoofSrcIP     string   // forged source address, empty to keep the real one
+	SpoofSrcPool   []string // forged sources to rotate through per session
+	SpoofPeerIP    string   // peer's real IPv4; required on the server
+	SpoofDstIP     string   // forged destination in the cosmetic shim (unused by udp)
+	SpoofInterface string   // egress device to pin the raw socket to
 
 	// Throughput / latency tuning
 	MSS      int // TCP max segment size (0 = auto)
@@ -169,6 +171,16 @@ func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
 	p("spoof_profile = %q\n", profile)
 	if s.SpoofSrcIP != "" {
 		p("spoof_src_ip = %q\n", s.SpoofSrcIP)
+	}
+	if len(s.SpoofSrcPool) > 0 {
+		quoted := make([]string, len(s.SpoofSrcPool))
+		for i, ip := range s.SpoofSrcPool {
+			quoted[i] = fmt.Sprintf("%q", ip)
+		}
+		p("spoof_src_pool = [%s]\n", strings.Join(quoted, ", "))
+	}
+	if s.SpoofPeerIP != "" {
+		p("spoof_peer_ip = %q\n", s.SpoofPeerIP)
 	}
 	if s.SpoofDstIP != "" {
 		p("spoof_dst_ip = %q\n", s.SpoofDstIP)

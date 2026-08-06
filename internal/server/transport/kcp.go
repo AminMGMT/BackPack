@@ -105,6 +105,8 @@ type KcpConfig struct {
 	UseSpoof       bool
 	SpoofProfile   string
 	SpoofSrcIP     string
+	SpoofSrcPool   []string
+	SpoofPeerIP    string
 	SpoofInterface string
 }
 
@@ -143,6 +145,8 @@ func (c *KcpConfig) settings() network.KCPSettings {
 		s.Spoof = &network.SpoofCarrier{
 			Profile:   profile,
 			SrcIP:     c.SpoofSrcIP,
+			SrcPool:   c.SpoofSrcPool,
+			PeerIP:    c.SpoofPeerIP,
 			Interface: c.SpoofInterface,
 		}
 	}

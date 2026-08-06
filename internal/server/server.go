@@ -124,6 +124,8 @@ func (s *Server) Start() {
 			UseSpoof:         useSpoof,
 			SpoofProfile:     s.config.SpoofProfile,
 			SpoofSrcIP:       s.config.SpoofSrcIP,
+			SpoofSrcPool:     s.config.SpoofSrcPool,
+			SpoofPeerIP:      s.config.SpoofPeerIP,
 			SpoofInterface:   s.config.SpoofInterface,
 		}
 

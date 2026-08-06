@@ -35,9 +35,14 @@ const (
 	// SpoofProfileTCP wraps the payload in a TCP header, which is what the
 	// reference tools send. The host kernel WILL answer a forged TCP segment to
 	// a port it is not listening on with a RST, which tears the flow down — so
-	// this profile requires an iptables rule on both ends that drops outbound
-	// RSTs for the spoofed pair. See the transport docs for the exact rule.
+	// this profile installs a targeted iptables rule that drops the kernel's
+	// outbound RSTs for the tunnel's port. Needs the iptables binary.
 	SpoofProfileTCP SpoofProfile = "tcp"
+	// SpoofProfileICMP wraps the payload in an ICMP echo, so on the wire the
+	// tunnel looks like ping traffic — the same carrier xdi uses, but with a
+	// forged source. The direction byte in the frame discards the kernel's
+	// automatic echo reply, so no firewall rule is needed.
+	SpoofProfileICMP SpoofProfile = "icmp"
 )
 
 // ParseSpoofProfile validates a profile string, defaulting an empty one to UDP.
@@ -47,8 +52,10 @@ func ParseSpoofProfile(s string) (SpoofProfile, error) {
 		return SpoofProfileUDP, nil
 	case SpoofProfileTCP:
 		return SpoofProfileTCP, nil
+	case SpoofProfileICMP:
+		return SpoofProfileICMP, nil
 	default:
-		return "", fmt.Errorf("unknown spoof profile %q (supported: udp, tcp)", s)
+		return "", fmt.Errorf("unknown spoof profile %q (supported: udp, tcp, icmp)", s)
 	}
 }
 
@@ -58,6 +65,8 @@ func (p SpoofProfile) ipProtocol() int {
 	switch p {
 	case SpoofProfileTCP:
 		return 6 // IPPROTO_TCP
+	case SpoofProfileICMP:
+		return 1 // IPPROTO_ICMP
 	default:
 		return 17 // IPPROTO_UDP
 	}

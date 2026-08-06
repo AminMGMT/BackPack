@@ -15,20 +15,26 @@ import (
 
 var errSpoofNotLinux = errors.New("the spoof transport is only available on Linux")
 
-func newSpoofServerConn(token string, profile SpoofProfile, spoofSrcIP, iface string) (net.PacketConn, error) {
+func newSpoofServerConn(token string, profile SpoofProfile, realPeer net.IP, srcIP string, srcPool []string, iface string) (net.PacketConn, error) {
 	return nil, errSpoofNotLinux
 }
 
-func newSpoofClientConn(token string, profile SpoofProfile, spoofSrcIP, iface string) (net.PacketConn, error) {
+func newSpoofClientConn(token string, profile SpoofProfile, realPeer net.IP, srcIP string, srcPool []string, iface string) (net.PacketConn, error) {
 	return nil, errSpoofNotLinux
 }
+
+// SpoofRawSender is the spoof tester's send half; Linux only. The stub lets the
+// tester package build on other platforms, where NewSpoofRawSender is refused.
+type SpoofRawSender struct{}
+
+func NewSpoofRawSender(iface string) (*SpoofRawSender, error) { return nil, errSpoofNotLinux }
+func (s *SpoofRawSender) SendUDP(src, dst net.IP, srcPort, dstPort uint16, payload []byte) error {
+	return errSpoofNotLinux
+}
+func (s *SpoofRawSender) Close() error { return nil }
 
 // spoofOverhead mirrors the Linux value so the MTU arithmetic in kcp.go is
 // identical on every platform, even though the socket is never opened here.
 func spoofOverhead(p SpoofProfile) int {
-	l4 := 8
-	if p == SpoofProfileTCP {
-		l4 = 20
-	}
-	return 20 + l4 + xdiHeaderLen
+	return 20 + profileL4Len(p) + xdiHeaderLen
 }

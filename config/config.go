@@ -106,6 +106,17 @@ type SpoofConfig struct {
 	// SpoofSrcIP is the forged source address stamped on every outgoing packet.
 	// Empty leaves the host's real source in place, which spoofs nothing.
 	SpoofSrcIP string `toml:"spoof_src_ip"`
+	// SpoofSrcPool is an optional list of forged sources to rotate through: each
+	// time the carrier (re)connects it picks one, so the tunnel is not pinned to
+	// a single address a firewall might rate-limit or block. SpoofSrcIP, if set,
+	// is always a member. Empty means use SpoofSrcIP alone.
+	SpoofSrcPool []string `toml:"spoof_src_pool"`
+	// SpoofPeerIP is the peer's REAL IPv4 address — where the forged packets are
+	// actually routed. On the server it is REQUIRED: because the client forges
+	// its source, the server cannot learn where to send replies from the packets
+	// themselves and must be told the client's real address. On the client it is
+	// optional and defaults to the host of RemoteAddr.
+	SpoofPeerIP string `toml:"spoof_peer_ip"`
 	// SpoofDstIP is a forged destination written only into the cosmetic L4 shim
 	// of the profiles that carry one; the packet is still routed to the real
 	// peer. Empty mirrors SpoofSrcIP. Ignored by the udp profile.

@@ -288,9 +288,10 @@ func promptACMEDomain(currentDomain, currentEmail string) (domain, email string,
 // askSpoof collects the IP-spoofing carrier's settings. It runs on both ends
 // for the spoof transport and is a no-op for every other transport.
 //
-// The two ends must agree on the profile. The forged source is what the far end
-// and the network see; whether replies find their way back is a property of the
-// route, which is why the wizard says out loud that it must be proven.
+// The forged source is what the far end and the network see; whether replies
+// find their way back is a property of the route, which is why the wizard says
+// out loud that it must be proven — with the spoof tester (Manage → IP Spoofing
+// tester).
 func askSpoof(s *TunnelSpec) {
 	if s.Transport != "spoof" {
 		return
@@ -298,59 +299,78 @@ func askSpoof(s *TunnelSpec) {
 	fmt.Println()
 	tui.Warn("IP Spoofing is experimental. It forges the source address of raw IP")
 	tui.Warn("packets. It only carries traffic where the upstream network does not")
-	tui.Warn("drop forged-source packets — prove it on your real route first.")
+	tui.Warn("drop forged-source packets — prove it with the spoof tester first.")
 	fmt.Println()
 
-	tui.Info("Packet profile — what the packets look like on the wire. Both ends must match.")
-	tui.Info("  udp  — default, nothing on the host answers it")
-	tui.Info("  tcp  — matches the reference tools, but needs an iptables rule to stop kernel RSTs")
-	profile := strings.ToLower(strings.TrimSpace(tui.PromptDefault("Profile (udp/tcp)", "udp")))
-	if profile != "tcp" {
-		profile = "udp"
-	}
-	s.SpoofProfile = profile
-
-	tui.Info("Forged source IP stamped on every outgoing packet. Leave empty to keep the real one.")
-	for {
-		raw := strings.TrimSpace(tui.PromptDefault("Spoof source IP", ""))
-		if raw == "" {
-			break
-		}
-		if net.ParseIP(raw).To4() == nil {
-			tui.Error("Enter a valid IPv4 address, e.g. 185.143.234.120")
-			continue
-		}
-		s.SpoofSrcIP = raw
-		break
+	// The two ends must agree on the profile.
+	tui.Info("Packet profile — what the tunnel looks like on the wire:")
+	switch tui.ChooseOpt("Profile", []tui.Option{
+		{Title: "UDP", Desc: "most compatible — plain datagrams (recommended)"},
+		{Title: "ICMP", Desc: "looks like ping traffic — good where UDP is filtered"},
+		{Title: "TCP", Desc: "looks like a TCP flow — auto-manages an iptables RST rule"},
+	}) {
+	case 1:
+		s.SpoofProfile = "icmp"
+	case 2:
+		s.SpoofProfile = "tcp"
+	default:
+		s.SpoofProfile = "udp"
 	}
 
-	tui.Info("Forged destination IP for the cosmetic header (optional; ignored by the udp profile).")
-	for {
-		raw := strings.TrimSpace(tui.PromptDefault("Spoof destination IP", ""))
-		if raw == "" {
-			break
+	// The server cannot learn the client's real address from the forged packets,
+	// so it must be told it. The client already knows the server's real address
+	// from the tunnel address it dialled.
+	if s.Role == "server" {
+		tui.Info("The client forges its source, so the server cannot see where to send")
+		tui.Info("replies. Enter the client's REAL public IPv4 address.")
+		for {
+			raw := strings.TrimSpace(tui.Prompt("Client's real IPv4: "))
+			if net.ParseIP(raw).To4() != nil {
+				s.SpoofPeerIP = raw
+				break
+			}
+			tui.Error("Enter a valid IPv4 address, e.g. 203.0.113.10")
 		}
-		if net.ParseIP(raw).To4() == nil {
-			tui.Error("Enter a valid IPv4 address.")
-			continue
+	}
+
+	tui.Info("Forged source IP(s) stamped on outgoing packets. Give one, or several")
+	tui.Info("comma-separated to rotate through a pool (evades per-IP limits/blocks).")
+	tui.Warn("Use the spoof tester to find which ones actually pass. Empty spoofs nothing.")
+	raw := strings.TrimSpace(tui.PromptDefault("Spoof source IP(s)", ""))
+	if raw != "" {
+		var pool []string
+		for _, part := range strings.Split(raw, ",") {
+			ip := strings.TrimSpace(part)
+			if ip == "" {
+				continue
+			}
+			if net.ParseIP(ip).To4() == nil {
+				tui.Warn(fmt.Sprintf("skipping invalid IPv4 %q", ip))
+				continue
+			}
+			pool = append(pool, ip)
 		}
-		s.SpoofDstIP = raw
-		break
+		if len(pool) == 1 {
+			s.SpoofSrcIP = pool[0]
+		} else if len(pool) > 1 {
+			s.SpoofSrcIP = pool[0]
+			s.SpoofSrcPool = pool
+		}
 	}
 
 	if names := routableInterfaces(); len(names) > 0 {
 		tui.Info("Egress interface to send the raw packets from (optional).")
 		tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel route.")
 		for {
-			raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
-			if raw == "" {
+			iface := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+			if iface == "" {
 				break
 			}
-			if _, err := net.InterfaceByName(raw); err != nil {
+			if _, err := net.InterfaceByName(iface); err != nil {
 				tui.Error(fmt.Sprintf("no such interface: %v", err))
 				continue
 			}
-			s.SpoofInterface = raw
+			s.SpoofInterface = iface
 			break
 		}
 	}

@@ -169,6 +169,7 @@ func manageMenu() {
 			{Title: "Status", Desc: "live tunnel table"},
 			{Title: "Health Check", Desc: "find problems and get a fix for each one"},
 			{Title: "Link Test", Desc: "measure the link and get a transport recommendation"},
+			{Title: "IP Spoofing Tester", Desc: "find which forged source IPs cross the firewall (for the spoof transport)"},
 			{Title: "Tunnel Metrics", Desc: "traffic, packet loss and error correction per tunnel"},
 			{Title: "Restart ALL", Desc: "restart every tunnel at once"},
 			{Title: "Auto Refresh", Desc: "restart all tunnels every N hours — " + refreshLabel()},
@@ -185,16 +186,18 @@ func manageMenu() {
 		case 3:
 			manage.LinkTest()
 		case 4:
-			manage.TunnelMetrics()
+			manage.SpoofTest()
 		case 5:
+			manage.TunnelMetrics()
+		case 6:
 			ok, failed := manage.RestartAll()
 			tui.Success(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 			tui.PressEnter()
-		case 6:
-			autoRefreshMenu()
 		case 7:
-			builtinProxyMenu()
+			autoRefreshMenu()
 		case 8:
+			builtinProxyMenu()
+		case 9:
 			manage.FileLocations()
 		default:
 			return

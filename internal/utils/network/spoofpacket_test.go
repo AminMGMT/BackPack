@@ -79,6 +79,64 @@ func TestSpoofShimRejectsShort(t *testing.T) {
 	}
 }
 
+func TestSpoofICMPEchoRoundTrip(t *testing.T) {
+	const id = 0x4321
+	payload := []byte("kcp-over-ping")
+
+	// A client sends an echo request; a server sends an echo reply. Both carry
+	// the identifier and must be parseable back to the payload.
+	for _, typ := range []byte{icmpTypeEchoRequest, icmpTypeEchoReply} {
+		msg := buildICMPEcho(typ, id, 7, payload)
+		// The ICMP checksum spans the whole message and must verify to zero.
+		if got := onesComplement(msg); got != 0 {
+			t.Fatalf("type %d: icmp checksum does not verify to zero: %#04x", typ, got)
+		}
+		got, ok := parseICMPEcho(id, msg)
+		if !ok || !bytes.Equal(got, payload) {
+			t.Fatalf("type %d: icmp echo did not round-trip: ok=%v", typ, ok)
+		}
+	}
+
+	// A wrong identifier (another tunnel's) is rejected.
+	if _, ok := parseICMPEcho(id+1, buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)); ok {
+		t.Fatal("an echo with a different identifier was accepted")
+	}
+	// A non-echo ICMP type is rejected.
+	bad := buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)
+	bad[0] = 3 // destination unreachable
+	if _, ok := parseICMPEcho(id, bad); ok {
+		t.Fatal("a non-echo ICMP message was accepted")
+	}
+	// A truncated message is rejected, not sliced out of bounds.
+	if _, ok := parseICMPEcho(id, []byte{8, 0, 0}); ok {
+		t.Fatal("a too-short icmp message was accepted")
+	}
+}
+
+func TestChooseSpoofSrc(t *testing.T) {
+	// No source configured spoofs nothing.
+	if ip, err := chooseSpoofSrc("", nil); err != nil || ip != nil {
+		t.Fatalf("empty should be nil: %v %v", ip, err)
+	}
+	// A single address is used as-is.
+	if ip, err := chooseSpoofSrc("81.28.60.1", nil); err != nil || ip.String() != "81.28.60.1" {
+		t.Fatalf("single: %v %v", ip, err)
+	}
+	// Every pick from a pool is a member of that pool.
+	pool := []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+	member := map[string]bool{"1.1.1.1": true, "8.8.8.8": true, "9.9.9.9": true}
+	for i := 0; i < 50; i++ {
+		ip, err := chooseSpoofSrc("", pool)
+		if err != nil || !member[ip.String()] {
+			t.Fatalf("pool pick %q not a member: %v", ip, err)
+		}
+	}
+	// A bad entry is rejected, not silently dropped.
+	if _, err := chooseSpoofSrc("not-an-ip", nil); err == nil {
+		t.Fatal("an invalid address should be an error")
+	}
+}
+
 func TestParseSpoofProfile(t *testing.T) {
 	for _, in := range []string{"", "udp"} {
 		if p, err := ParseSpoofProfile(in); err != nil || p != SpoofProfileUDP {

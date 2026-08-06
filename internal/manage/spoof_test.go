@@ -20,18 +20,20 @@ func TestSpoofServerRenderRoundTrip(t *testing.T) {
 		BindAddr:       "0.0.0.0:1234",
 		Token:          "spoof-token-0123456789abcdefghij",
 		Ports:          []string{"443"},
-		SpoofProfile:   "tcp",
+		SpoofProfile:   "udp",
 		SpoofSrcIP:     "81.28.60.1",
-		SpoofDstIP:     "81.28.60.2",
+		SpoofSrcPool:   []string{"81.28.60.1", "81.28.60.2"},
+		SpoofPeerIP:    "38.87.117.94",
 		SpoofInterface: "eth0",
 	}
 	out := s.Render()
 
 	for _, want := range []string{
 		`transport = "spoof"`,
-		`spoof_profile = "tcp"`,
+		`spoof_profile = "udp"`,
 		`spoof_src_ip = "81.28.60.1"`,
-		`spoof_dst_ip = "81.28.60.2"`,
+		`spoof_src_pool = ["81.28.60.1", "81.28.60.2"]`,
+		`spoof_peer_ip = "38.87.117.94"`,
 		`spoof_interface = "eth0"`,
 	} {
 		if !strings.Contains(out, want) {
@@ -43,9 +45,11 @@ func TestSpoofServerRenderRoundTrip(t *testing.T) {
 	if _, err := toml.Decode(out, &cfg); err != nil {
 		t.Fatalf("rendered spoof config does not parse: %v", err)
 	}
-	if cfg.Server.SpoofProfile != "tcp" || cfg.Server.SpoofSrcIP != "81.28.60.1" ||
-		cfg.Server.SpoofDstIP != "81.28.60.2" || cfg.Server.SpoofInterface != "eth0" {
-		t.Fatalf("spoof fields did not survive the round trip: %+v", cfg.Server.SpoofConfig)
+	sc := cfg.Server.SpoofConfig
+	if sc.SpoofProfile != "udp" || sc.SpoofSrcIP != "81.28.60.1" ||
+		sc.SpoofPeerIP != "38.87.117.94" || sc.SpoofInterface != "eth0" ||
+		len(sc.SpoofSrcPool) != 2 || sc.SpoofSrcPool[1] != "81.28.60.2" {
+		t.Fatalf("spoof fields did not survive the round trip: %+v", sc)
 	}
 }
 

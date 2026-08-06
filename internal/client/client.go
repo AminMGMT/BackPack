@@ -172,6 +172,8 @@ func (c *Client) Start() {
 			UseSpoof:         useSpoof,
 			SpoofProfile:     c.config.SpoofProfile,
 			SpoofSrcIP:       c.config.SpoofSrcIP,
+			SpoofSrcPool:     c.config.SpoofSrcPool,
+			SpoofPeerIP:      c.config.SpoofPeerIP,
 			SpoofInterface:   c.config.SpoofInterface,
 		}
 		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
