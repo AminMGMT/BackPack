@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
 )
 
 // CheckLevel is how a diagnostic turned out.
@@ -271,6 +274,9 @@ func tunnelChecks() []Check {
 
 // tunnelChecksFor is one tunnel's section of the report.
 func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
+	if t.Mode == "direct" {
+		return directChecksFor(t)
+	}
 	var out []Check
 	g := "Tunnel: " + t.Name
 	h := tunnelHealthWith(t, pairs)
@@ -376,6 +382,63 @@ func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
 	default:
 		out = append(out, Check{Group: g, Name: "Token", Level: CheckOK,
 			Detail: fmt.Sprintf("%d characters", len(spec.Token))})
+	}
+	return out
+}
+
+func directChecksFor(t Tunnel) []Check {
+	g := "Direct: " + t.Name
+	path := app.ConfigPath(t.Name)
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return []Check{{Group: g, Name: "Config", Level: CheckFail, Detail: err.Error(), Fix: "restore or correct the direct config"}}
+	}
+	p, err := engine.Resolve(cfg)
+	if err != nil {
+		return []Check{{Group: g, Name: "Engine", Level: CheckFail, Detail: err.Error()}}
+	}
+	h, err := p.Health(context.Background(), engine.Request{ConfigPath: path, Config: cfg})
+	if err != nil {
+		return []Check{{Group: g, Name: "Desired state", Level: CheckFail, Detail: err.Error()}}
+	}
+	lvl := CheckOK
+	if !h.Ready {
+		lvl = CheckFail
+	}
+	detail := h.Detail
+	if h.Backend != "" {
+		detail += " (" + h.Backend + ")"
+	}
+	if len(h.Drift) > 0 {
+		detail += ": " + strings.Join(h.Drift, "; ")
+	}
+	out := []Check{{Group: g, Name: "Desired state", Level: lvl, Detail: detail, Fix: map[bool]string{true: "", false: "restart the instance; repeated drift may mean ufw/firewalld is reloading netfilter"}[h.Ready]}}
+	for _, m := range cfg.Forward.Mappings {
+		familyFlag := "-4"
+		if net.ParseIP(m.TargetAddress).To4() == nil {
+			familyFlag = "-6"
+		}
+		if b, e := exec.Command("ip", familyFlag, "route", "get", m.TargetAddress).CombinedOutput(); e != nil {
+			out = append(out, Check{Group: g, Name: "Route to " + m.TargetAddress, Level: CheckWarn, Detail: strings.TrimSpace(string(b)), Fix: "add a route to the direct target"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Route to " + m.TargetAddress, Level: CheckOK, Detail: strings.TrimSpace(string(b))})
+		}
+		_, tr, e := m.Ranges()
+		if e != nil {
+			continue
+		}
+		for _, proto := range m.Protocols {
+			if strings.EqualFold(proto, "tcp") {
+				port := strconv.Itoa(int(tr.Start))
+				if reachable(m.TargetAddress, port, 2*time.Second) {
+					out = append(out, Check{Group: g, Name: "TCP target", Level: CheckOK, Detail: net.JoinHostPort(m.TargetAddress, port) + " accepts connections"})
+				} else {
+					out = append(out, Check{Group: g, Name: "TCP target", Level: CheckWarn, Detail: net.JoinHostPort(m.TargetAddress, port) + " did not accept the diagnostic probe", Fix: "this does not make the local engine unhealthy; verify the target service and firewall"})
+				}
+			} else {
+				out = append(out, Check{Group: g, Name: "UDP target", Level: CheckInfo, Detail: net.JoinHostPort(m.TargetAddress, strconv.Itoa(int(tr.Start))) + " is unknown/unverifiable without application traffic"})
+			}
+		}
 	}
 	return out
 }

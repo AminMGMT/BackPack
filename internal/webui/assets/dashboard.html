@@ -1857,9 +1857,9 @@ function buildCard(t){
       <span class="badge bot" style="display:none" title="This tunnel relays the Telegram bot">${ICON.bot}</span>
     </div>
     <div class="rows">
-      <div class="r"><div class="k" data-i18n>${t.role==='server'?'Tunnel Port':'Server'}</div><div class="v addr"></div></div>
+      <div class="r"><div class="k addrlabel" data-i18n>${t.mode==='direct'?'Engine':(t.role==='server'?'Tunnel Port':'Server')}</div><div class="v addr"></div></div>
       <div class="r"><div class="k" data-i18n>Ping</div><div class="v ping"></div></div>
-      <div class="r full"><div class="k" data-i18n>${t.role==='server'?'Forwarded Ports':'Remote'}</div><div class="v ports"></div></div>
+      <div class="r full"><div class="k portslabel" data-i18n>${t.mode==='direct'?'Mappings':(t.role==='server'?'Forwarded Ports':'Remote')}</div><div class="v ports"></div></div>
       <div class="r full trafrow" style="display:none"><div class="v trafline"></div>
         <div class="spark" style="display:none"></div></div>
       <div class="r full peerrow" style="display:none"><div class="k" data-i18n>Peer</div><div class="v peer"></div></div>
@@ -1885,7 +1885,7 @@ function updateCard(el,t){
   const fl=el.querySelector('.flag'), fe=cc?flagEmoji(cc):'';
   if(fl.textContent!==fe){ fl.textContent=fe; fl.title=cc?countryName(cc):''; }
 
-  setText(el.querySelector('.badge.tr'),(t.transport||'').toUpperCase());
+  setText(el.querySelector('.badge.tr'),((t.mode==='direct'?t.engine:t.transport)||'').toUpperCase());
   el.querySelector('.badge.bot').style.display=t.botRelay?'':'none';
 
   const pe=el.querySelector('.ping'), pc='v ping '+pingClass(t.ping);
@@ -1893,7 +1893,9 @@ function updateCard(el,t){
   setText(pe,pingText(t.ping));
 
   // A server card shows the port clients dial; the full bind address is noise.
-  setText(el.querySelector('.addr'), t.role==='server' ? (t.tunnelPort||'—') : (t.addr||'—'));
+  setText(el.querySelector('.addrlabel'),t.mode==='direct'?'Engine':(t.role==='server'?'Tunnel Port':'Server'));
+  setText(el.querySelector('.portslabel'),t.mode==='direct'?'Mappings':(t.role==='server'?'Forwarded Ports':'Remote'));
+  setText(el.querySelector('.addr'), t.mode==='direct' ? (t.engine||'iptables') : (t.role==='server' ? (t.tunnelPort||'—') : (t.addr||'—')));
   setText(el.querySelector('.ports'),t.ports||t.addr||'—');
 
   // Traffic comes from the tunnel's own metrics snapshot; a tunnel that has
@@ -2029,9 +2031,19 @@ function renderDetails(t){
   h+=dRow('Tunnel Uptime',t.uptime);
   h+=dRow('Traffic In',t.bytesIn);
   h+=dRow('Traffic Out',t.bytesOut);
+	if(t.packetsIn) h+=dRow('Packets In',t.packetsIn);
+	if(t.packetsOut) h+=dRow('Packets Out',t.packetsOut);
   h+=dRow('Preset',t.preset);
+  h+=dRow('Mode',t.mode);
+  h+=dRow('Engine',(t.engine||'').toUpperCase());
   h+=dRow('Transport',(t.transport||'').toUpperCase());
   h+='</div>';
+
+  if(t.mode==='direct'&&t.mappings&&t.mappings.length){
+    h+=dSec('Direct mappings')+'<div class="dl">';
+    t.mappings.forEach(m=>{h+=dRow((m.protocols||[]).join('+').toUpperCase(),m.listenAddress+':'+m.listenPorts+' → '+m.targetAddress+':'+m.targetPorts,true);});
+    h+='</div>';
+  }
 
   const lim=[];
   if(t.maxConnections) lim.push(t.maxConnections+' connections');

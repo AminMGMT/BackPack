@@ -3,7 +3,9 @@ package manage
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
 	"github.com/backpack/backpack/internal/schedule"
 )
 
@@ -150,6 +154,35 @@ func BackupToFile(dir string) (string, error) {
 	return path, nil
 }
 
+func configsInDir(dir string) (map[string]*config.Config, error) {
+	result := map[string]*config.Config{}
+	paths, err := filepath.Glob(filepath.Join(dir, "*.toml"))
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		cfg, err := config.LoadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+		}
+		result[strings.TrimSuffix(filepath.Base(path), ".toml")] = cfg
+	}
+	return result, nil
+}
+
+func validateRestoreSet(ctx context.Context, dir string, configs map[string]*config.Config) error {
+	for name, cfg := range configs {
+		provider, err := engine.Resolve(cfg)
+		if err == nil {
+			err = provider.Validate(ctx, engine.Request{ConfigPath: filepath.Join(dir, name+".toml"), Config: cfg})
+		}
+		if err != nil {
+			return fmt.Errorf("restored instance %s is invalid or conflicts with this host: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // Restore reads a backup archive produced by WriteBackup, extracts it into the
 // config directory (overwriting matching files, leaving others untouched), then
 // re-registers a systemd service for every tunnel it finds and starts them. It
@@ -169,6 +202,22 @@ func Restore(r io.Reader) (RestoreResult, error) {
 
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return res, err
+	}
+	parent := filepath.Dir(app.ConfigDir)
+	stage, err := os.MkdirTemp(parent, ".backpack-restore-")
+	if err != nil {
+		return res, err
+	}
+	stageLive := true
+	defer func() {
+		if stageLive {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	// Restore remains additive: begin with the current tree, then overlay the
+	// archive in staging. No live file is touched before all candidates pass.
+	if err := copyTree(app.ConfigDir, stage); err != nil {
+		return res, fmt.Errorf("prepare restore candidate: %w", err)
 	}
 
 	sawConfig := false
@@ -205,8 +254,8 @@ func Restore(r io.Reader) (RestoreResult, error) {
 		if clean == filepath.Base(app.InstallPathFile) && fileExists(app.InstallPathFile) {
 			continue
 		}
-		target := filepath.Join(app.ConfigDir, clean)
-		if rel, err := filepath.Rel(app.ConfigDir, target); err != nil || strings.HasPrefix(rel, "..") {
+		target := filepath.Join(stage, clean)
+		if rel, err := filepath.Rel(stage, target); err != nil || strings.HasPrefix(rel, "..") {
 			return res, fmt.Errorf("refusing unsafe path in archive: %q", hdr.Name)
 		}
 
@@ -246,40 +295,130 @@ func Restore(r io.Reader) (RestoreResult, error) {
 		}
 	}
 
-	if sawConfig {
-		// Re-register a systemd unit for every restored tunnel, then start them.
-		tunnels := List()
-		unitFailed := map[string]bool{}
-		for _, t := range tunnels {
-			res.Tunnels = append(res.Tunnels, t.Name)
-			if err := writeUnit(t.Name); err != nil {
-				unitFailed[t.Name] = true
+	if !sawConfig {
+		// Non-tunnel settings still use the same atomic directory swap below.
+	}
+	candidates, err := configsInDir(stage)
+	if err != nil {
+		return res, err
+	}
+	if err := validateRestoreSet(context.Background(), stage, candidates); err != nil {
+		return res, err
+	}
+
+	oldTunnels := List()
+	oldActive := map[string]bool{}
+	oldNames := map[string]bool{}
+	for _, t := range oldTunnels {
+		oldNames[t.Name] = true
+		oldActive[t.Name] = IsActive(t.Service)
+		if oldActive[t.Name] {
+			if err := StopService(t.Service); err != nil {
+				return res, fmt.Errorf("quiesce %s before restore: %w", t.Name, err)
 			}
-		}
-		_ = DaemonReload()
-		for _, t := range tunnels {
-			if unitFailed[t.Name] {
-				res.Failed++
-				continue
-			}
-			// Enabled first so it survives a reboot, then restarted.
-			//
-			// Starting is not enough: `systemctl start` does nothing to a
-			// service that is already running, so a tunnel that was up would
-			// carry on with the configuration it was started with and quietly
-			// ignore the one just restored. It would also keep writing its old
-			// traffic totals over the restored ones.
-			if err := StartService(app.ServiceName(t.Name)); err != nil {
-				res.Failed++
-				continue
-			}
-			if err := RestartService(app.ServiceName(t.Name)); err != nil {
-				res.Failed++
-				continue
-			}
-			res.Started++
 		}
 	}
+	resumeOld := func() {
+		for _, t := range oldTunnels {
+			if oldActive[t.Name] {
+				_ = StartService(t.Service)
+			}
+		}
+	}
+
+	rollbackDir, err := os.MkdirTemp(parent, ".backpack-rollback-")
+	if err != nil {
+		resumeOld()
+		return res, err
+	}
+	_ = os.Remove(rollbackDir)
+	if err = os.Rename(app.ConfigDir, rollbackDir); err != nil {
+		resumeOld()
+		return res, fmt.Errorf("create restore point: %w", err)
+	}
+	if err = os.Rename(stage, app.ConfigDir); err != nil {
+		_ = os.Rename(rollbackDir, app.ConfigDir)
+		resumeOld()
+		return res, fmt.Errorf("activate restore candidate: %w", err)
+	}
+	stageLive = false
+
+	rollback := func(cause error) error {
+		for name := range candidates {
+			if oldNames[name] {
+				_ = StopService(app.ServiceName(name))
+			} else {
+				_ = DisableService(app.ServiceName(name))
+				removeUnit(name)
+			}
+		}
+		failedDir, _ := os.MkdirTemp(parent, ".backpack-failed-restore-")
+		if failedDir != "" {
+			_ = os.Remove(failedDir)
+			_ = os.Rename(app.ConfigDir, failedDir)
+		}
+		if e := os.Rename(rollbackDir, app.ConfigDir); e != nil {
+			return errors.Join(cause, fmt.Errorf("restore rollback failed: %w", e))
+		}
+		for _, t := range oldTunnels {
+			_ = writeUnit(t.Name)
+		}
+		_ = DaemonReload()
+		for _, t := range oldTunnels {
+			if oldActive[t.Name] {
+				_ = StartService(t.Service)
+			}
+		}
+		if failedDir != "" {
+			_ = os.RemoveAll(failedDir)
+		}
+		return cause
+	}
+
+	var names []string
+	for name := range candidates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		res.Tunnels = append(res.Tunnels, name)
+		if err := writeUnit(name); err != nil {
+			return res, rollback(fmt.Errorf("write restored unit %s: %w", name, err))
+		}
+	}
+	if err := DaemonReload(); err != nil {
+		return res, rollback(fmt.Errorf("reload restored units: %w", err))
+	}
+	for _, name := range names {
+		service := app.ServiceName(name)
+		if err := StartService(service); err != nil {
+			res.Failed++
+			return res, rollback(fmt.Errorf("start restored instance %s: %w", name, err))
+		}
+		if !WaitServiceActive(service, 12*time.Second) {
+			res.Failed++
+			return res, rollback(fmt.Errorf("restored instance %s did not become active", name))
+		}
+		if candidates[name].EffectiveEngine() == config.EngineIPTables {
+			provider, _ := engine.Resolve(candidates[name])
+			deadline := time.Now().Add(12 * time.Second)
+			ready := false
+			for time.Now().Before(deadline) {
+				h, _ := provider.Health(context.Background(), engine.Request{ConfigPath: app.ConfigPath(name), Config: candidates[name]})
+				if h.Ready {
+					ready = true
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			if !ready {
+				res.Failed++
+				return res, rollback(fmt.Errorf("restored direct instance %s failed desired-state health", name))
+			}
+		}
+		res.Started++
+	}
+	_ = os.RemoveAll(rollbackDir)
 
 	// Restore the auto-refresh schedule captured in the sidecar.
 	if res.AutoRefreshHours > 0 {

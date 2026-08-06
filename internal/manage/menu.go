@@ -29,9 +29,13 @@ func ManageTunnels() {
 		tui.Clear()
 		opts := make([]tui.Option, len(tunnels))
 		for i, t := range tunnels {
+			desc := fmt.Sprintf("%s %s — %s", t.Role, t.Transport, plainState(t.Service))
+			if t.Mode == "direct" {
+				desc = fmt.Sprintf("direct %s — %d mapping(s) — %s", t.Engine, len(t.Mappings), plainState(t.Service))
+			}
 			opts[i] = tui.Option{
 				Title: t.Name,
-				Desc:  fmt.Sprintf("%s %s — %s", t.Role, t.Transport, plainState(t.Service)),
+				Desc:  desc,
 			}
 		}
 
@@ -55,11 +59,19 @@ func plainState(service string) string {
 func manageOne(t Tunnel) {
 	for {
 		tui.Clear()
-		tui.Title(fmt.Sprintf("Tunnel: %s", t.Name))
-		fmt.Printf("  %s%s %s%s  %s\n\n", tui.Gray, t.Role, t.Transport, tui.Reset, stateLabel(t.Service))
+		tui.Title(fmt.Sprintf("Instance: %s", t.Name))
+		label := strings.TrimSpace(t.Role + " " + t.Transport)
+		if t.Mode == "direct" {
+			label = "direct " + t.Engine
+		}
+		fmt.Printf("  %s%s%s  %s\n\n", tui.Gray, label, tui.Reset, stateLabel(t.Service))
 
+		editDesc := "change tunnel port & forwarded ports"
+		if t.Mode == "direct" {
+			editDesc = "add, edit, or remove direct mappings"
+		}
 		idx := tui.ChooseOpt("Choose an action:", []tui.Option{
-			{Title: "Edit", Desc: "change tunnel port & forwarded ports"},
+			{Title: "Edit", Desc: editDesc},
 			{Title: "Start", Desc: "start the tunnel service"},
 			{Title: "Stop", Desc: "stop the tunnel service"},
 			{Title: "Restart", Desc: "restart the tunnel service"},
@@ -68,7 +80,11 @@ func manageOne(t Tunnel) {
 		})
 		switch idx {
 		case 0:
-			editPortsMenu(t.Name)
+			if t.Mode == "direct" {
+				editDirectMenu(t.Name)
+			} else {
+				editPortsMenu(t.Name)
+			}
 		case 1:
 			report(StartService(t.Service), "started")
 		case 2:

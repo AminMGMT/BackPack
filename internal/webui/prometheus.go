@@ -35,21 +35,39 @@ func (s *server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 
 	b.WriteString("# HELP backpack_tunnel_up 1 when the tunnel's peer is connected\n# TYPE backpack_tunnel_up gauge\n")
 	for _, t := range tunnels {
+		if t.Mode != "reverse" {
+			continue
+		}
 		up := health[t.Name].State == "online"
 		fmt.Fprintf(&b, "backpack_tunnel_up{name=%q,transport=%q,role=%q} %d\n",
 			t.Name, t.Transport, t.Role, int(boolVal(up)))
+	}
+	b.WriteString("# HELP backpack_instance_up 1 when the instance's engine-specific desired state is healthy\n# TYPE backpack_instance_up gauge\n")
+	for _, t := range tunnels {
+		up := health[t.Name].State == "online"
+		fmt.Fprintf(&b, "backpack_instance_up{name=%q,mode=%q,engine=%q} %d\n", t.Name, t.Mode, t.Engine, int(boolVal(up)))
 	}
 
 	counterHead(&b, "backpack_tunnel_bytes_in_total", "Bytes received over the tunnel")
 	counterHead(&b, "backpack_tunnel_bytes_out_total", "Bytes sent over the tunnel")
 	var kcpSnaps []metrics.Snapshot
+	counterHead(&b, "backpack_instance_rx_bytes_total", "Cumulative bytes received by an instance")
+	counterHead(&b, "backpack_instance_tx_bytes_total", "Cumulative bytes sent by an instance")
+	counterHead(&b, "backpack_instance_rx_packets_total", "Cumulative packets received by an instance")
+	counterHead(&b, "backpack_instance_tx_packets_total", "Cumulative packets sent by an instance")
 	for _, t := range tunnels {
 		snap, err := metrics.Read(app.ConfigDir, t.Name)
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(&b, "backpack_tunnel_bytes_in_total{name=%q} %d\n", t.Name, snap.BytesIn)
-		fmt.Fprintf(&b, "backpack_tunnel_bytes_out_total{name=%q} %d\n", t.Name, snap.BytesOut)
+		if t.Mode == "reverse" {
+			fmt.Fprintf(&b, "backpack_tunnel_bytes_in_total{name=%q} %d\n", t.Name, snap.BytesIn)
+			fmt.Fprintf(&b, "backpack_tunnel_bytes_out_total{name=%q} %d\n", t.Name, snap.BytesOut)
+		}
+		fmt.Fprintf(&b, "backpack_instance_rx_bytes_total{name=%q,mode=%q,engine=%q} %d\n", t.Name, t.Mode, t.Engine, snap.BytesIn)
+		fmt.Fprintf(&b, "backpack_instance_tx_bytes_total{name=%q,mode=%q,engine=%q} %d\n", t.Name, t.Mode, t.Engine, snap.BytesOut)
+		fmt.Fprintf(&b, "backpack_instance_rx_packets_total{name=%q,mode=%q,engine=%q} %d\n", t.Name, t.Mode, t.Engine, snap.PacketsIn)
+		fmt.Fprintf(&b, "backpack_instance_tx_packets_total{name=%q,mode=%q,engine=%q} %d\n", t.Name, t.Mode, t.Engine, snap.PacketsOut)
 		if snap.KCP != nil {
 			snap.Name = t.Name
 			kcpSnaps = append(kcpSnaps, snap)

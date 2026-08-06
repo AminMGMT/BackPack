@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/alerthist"
+	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
 )
 
 // Watchdog tuning.
@@ -30,6 +33,7 @@ const (
 func RunWatchdog(ctx context.Context) {
 	fails := map[string]int{}
 	lastRestart := map[string]time.Time{}
+	restartStreak := map[string]int{}
 	seenHealthy := map[string]bool{} // only "was up, then dropped" counts as a drop
 
 	ticker := time.NewTicker(wdInterval)
@@ -46,20 +50,40 @@ func RunWatchdog(ctx context.Context) {
 					fails[t.Name] = 0 // stopped on purpose (or systemd is restarting a crash)
 					continue
 				}
-				if tunnelHealthy(t, pairs) {
+				direct := t.Engine == string(config.EngineIPTables)
+				healthy := tunnelHealthy(t, pairs)
+				if direct {
+					healthy = directDesiredStateHealthy(ctx, t)
+				}
+				if healthy {
 					fails[t.Name] = 0
+					restartStreak[t.Name] = 0
 					seenHealthy[t.Name] = true
 					continue
 				}
 				// Only treat as a "drop" if it had connected before — a tunnel
 				// still waiting for its first connection isn't broken.
-				if !seenHealthy[t.Name] {
+				if !direct && !seenHealthy[t.Name] {
 					continue
 				}
 				fails[t.Name]++
-				if fails[t.Name] >= wdThreshold && time.Since(lastRestart[t.Name]) > wdCooldown {
-					RestartService(t.Service)
+				backoff := wdCooldown
+				if direct {
+					backoff *= time.Duration(1 << min(restartStreak[t.Name], 3))
+				}
+				if fails[t.Name] >= wdThreshold && time.Since(lastRestart[t.Name]) > backoff {
+					if err := RestartService(t.Service); err != nil {
+						continue
+					}
 					lastRestart[t.Name] = time.Now()
+					restartStreak[t.Name]++
+					if direct {
+						message := "Direct desired-state drift triggered reconcile for " + t.Name
+						if restartStreak[t.Name] >= 3 {
+							message += "; repeated drift suggests ufw, firewalld, or another firewall manager is rewriting rules"
+						}
+						alerthist.RecordEvent(message)
+					}
 					// On the record: "why did my tunnel reset overnight" should
 					// be answerable from the panel's alert view.
 					alerthist.RecordEvent("🔁 Watchdog restarted tunnel " + t.Name +
@@ -69,6 +93,19 @@ func RunWatchdog(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func directDesiredStateHealthy(ctx context.Context, t Tunnel) bool {
+	cfg, err := config.LoadFile(app.ConfigPath(t.Name))
+	if err != nil {
+		return false
+	}
+	p, err := engine.Resolve(cfg)
+	if err != nil {
+		return false
+	}
+	h, err := p.Health(ctx, engine.Request{ConfigPath: app.ConfigPath(t.Name), Config: cfg})
+	return err == nil && h.Ready
 }
 
 // tunnelHealthy reports whether a running tunnel currently has its connection up,

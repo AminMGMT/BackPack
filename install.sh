@@ -28,9 +28,9 @@ err()  { echo -e "${RED}[x]${NC} $*" >&2; }
 REPO="AminMGMT/BackPack"
 BIN_PATH="/usr/local/bin/backpack"
 INSTALL_DIR="/root/BackPack"
-GO_VERSION="1.24.5"
+GO_VERSION="1.25.0"
 # toolchain already on the machine is not usable for a source build.
-GO_MIN_MINOR=24
+GO_MIN_MINOR=25
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/tmp}")" 2>/dev/null && pwd || echo /tmp)"
 
 if [[ $EUID -ne 0 ]]; then err "Please run as root (sudo)."; exit 1; fi
@@ -95,7 +95,8 @@ install_release() {
       cp "$cand" "$INSTALL_DIR/$ASSET"
       # An offline install can carry SHA256SUMS beside the archive; verify it
       # when it is there, and say plainly when it is not.
-      local localsums="$(dirname "$cand")/SHA256SUMS"
+      local localsums
+      localsums="$(dirname "$cand")/SHA256SUMS"
       if [[ -f "$localsums" ]]; then
         # `|| rc=$?` rather than a bare call: `set -e` is currently suppressed
         # here because install_release runs inside `if`, so a bare call happens
@@ -178,6 +179,43 @@ build_from_source() {
   echo "$INSTALL_DIR" > /etc/backpack/install_path
 }
 
+# Direct-forward instances use the distribution's iptables compatibility
+# suite.  The engine itself detects nft vs legacy at runtime and verifies that
+# command/save/restore all belong to the same backend.  We deliberately do not
+# write sysctl.d here: forwarding is enabled and verified by each running
+# direct instance, and it is a shared host setting that uninstall must not
+# disable.
+ensure_netfilter_tools() {
+  if command -v iptables >/dev/null 2>&1 \
+     && command -v iptables-save >/dev/null 2>&1 \
+     && command -v iptables-restore >/dev/null 2>&1; then
+    info "Netfilter tools: $(iptables --version 2>/dev/null | head -1)"
+    return
+  fi
+
+  warn "iptables tools are missing; installing the distribution package..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y iptables
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y iptables
+  elif command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm iptables
+  else
+    err "No supported package manager was found. Install iptables manually."
+    exit 1
+  fi
+
+  if ! command -v iptables >/dev/null 2>&1 \
+     || ! command -v iptables-save >/dev/null 2>&1 \
+     || ! command -v iptables-restore >/dev/null 2>&1; then
+    err "iptables command/save/restore are still unavailable."
+    exit 1
+  fi
+}
+
 if install_release; then
   install_binary_from_tar
   info "Installed release binary -> ${BIN_PATH}"
@@ -194,6 +232,7 @@ else
 fi
 
 chmod +x "$BIN_PATH"
+ensure_netfilter_tools
 echo
 echo -e "${WHITE}Done!${NC}"
 

@@ -5,6 +5,7 @@ Detailed pages for each part of Backpack. Start with the
 
 ### Setup & management
 - [The CLI menu](cli-menu.md)
+- [Direct forwarding with iptables](direct-forward.md)
 - [Failover & load balancing](failover-load-balancing.md)
 - [Per-tunnel limits](limits.md)
 - [Server layout (file locations)](server-layout.md)

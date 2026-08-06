@@ -3,6 +3,7 @@
 package menu
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
 	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/optimize"
@@ -63,20 +65,22 @@ func Run() {
 		case "2":
 			manage.SetupClient()
 		case "3":
-			manageMenu()
+			manage.SetupDirect()
 		case "4":
-			backupMenu()
+			manageMenu()
 		case "5":
-			webPanelMenu()
+			backupMenu()
 		case "6":
-			optimizeMenu()
+			webPanelMenu()
 		case "7":
-			telegramMenu()
+			optimizeMenu()
 		case "8":
-			updateMenu()
+			telegramMenu()
 		case "9":
+			updateMenu()
+		case "10":
 			uninstallMenu()
-		case "10", "0":
+		case "11", "0":
 			tui.Info("Goodbye!")
 			return
 		default:
@@ -94,7 +98,7 @@ func printUpdateBanner() {
 	if !ok {
 		return
 	}
-	fmt.Printf("  %s⬆ %s is available%s %s— option 8 to update safely%s\n",
+	fmt.Printf("  %s⬆ %s is available%s %s— option 9 to update safely%s\n",
 		tui.Bold+tui.Red, tag, tui.Reset, tui.Gray, tui.Reset)
 }
 
@@ -103,18 +107,19 @@ func printMenu() {
 	fmt.Println()
 	menuItem(1, "Setup Server", "Iran side — exposes ports to users")
 	menuItem(2, "Setup Client", "Kharej side — dials out to the Iran server")
-	menuItem(3, "Manage", "tunnels, ports, transport, status, health check")
-	menuItem(4, "Backup & Restore", "save or restore the full configuration")
-	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")
-	menuItem(6, "Optimize", "kernel & network tuning — BBR, buffers, limits")
-	menuItem(7, "Telegram Bot", "status reports, relayed through a tunnel")
+	menuItem(3, "Setup Direct", "iptables direct forward — IPv4/IPv6, TCP/UDP")
+	menuItem(4, "Manage", "instances, ports, transport, status, health check")
+	menuItem(5, "Backup & Restore", "save or restore the full configuration")
+	menuItem(6, "Web Panel", "monitoring web UI — link, login code, port")
+	menuItem(7, "Optimize", "kernel & network tuning — BBR, buffers, limits")
+	menuItem(8, "Telegram Bot", "status reports, relayed through a tunnel")
 	updateDesc := "safe update with automatic rollback"
 	if tag, ok := manage.UpdateAvailable(); ok {
 		updateDesc = tag + " is out — safe update with automatic rollback"
 	}
-	menuItem(8, "Update", updateDesc)
-	menuItem(9, "Uninstall", "remove everything")
-	menuItem(10, "Exit", "")
+	menuItem(9, "Update", updateDesc)
+	menuItem(10, "Uninstall", "remove everything")
+	menuItem(11, "Exit", "")
 	fmt.Println()
 }
 
@@ -997,7 +1002,7 @@ func restorePointMenu() {
 	tui.PressEnter()
 }
 
-// uninstallMenu is main-menu item 9.
+// uninstallMenu is main-menu item 10.
 func uninstallMenu() {
 	tui.Clear()
 	tui.Title("Uninstall Backpack")
@@ -1014,13 +1019,31 @@ func uninstallMenu() {
 		repo = app.InstallDir
 	}
 
+	var cleanupFailures []string
 	for _, t := range manage.List() {
-		_ = manage.Delete(t.Name)
+		if err := manage.Delete(t.Name); err != nil {
+			cleanupFailures = append(cleanupFailures, t.Name+": "+err.Error())
+		}
+	}
+	if err := engine.CleanupOrphans(context.Background(), app.ConfigDir, true); err != nil {
+		cleanupFailures = append(cleanupFailures, "orphan netfilter cleanup: "+err.Error())
+	}
+	if len(cleanupFailures) > 0 {
+		tui.Error("Uninstall stopped because owned netfilter rules could not be safely cleaned:")
+		for _, failure := range cleanupFailures {
+			fmt.Println("  " + failure)
+		}
+		tui.Warn("Configs and the binary were kept so cleanup can be retried.")
+		tui.PressEnter()
+		return
 	}
 	_ = webui.Disable()
 	_ = manage.DisableMonitorService()
 	_ = schedule.SetAutoRefresh(0)
 	_ = telegram.Disable()
+	if err := engine.RemoveRuntimeArtifacts(); err != nil {
+		tui.Warn("Could not remove the netfilter runtime lock: " + err.Error())
+	}
 	os.RemoveAll(app.ConfigDir)
 	if err := os.Remove(app.BinPath); err != nil {
 		tui.Warn("Could not remove binary at " + app.BinPath + " — remove it manually.")

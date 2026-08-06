@@ -157,13 +157,21 @@ func tunnelBlock(lang string, t manage.Tunnel, h manage.Health) string {
 	if f := tunnelFlag(t); f != "" {
 		fmt.Fprintf(&b, "%s ", f)
 	}
-	fmt.Fprintf(&b, "%s [ %s ]", t.Name, strings.ToUpper(t.Transport))
+	label := strings.ToUpper(t.Transport)
+	if t.Mode == "direct" {
+		label = "DIRECT/" + strings.ToUpper(t.Engine)
+	}
+	fmt.Fprintf(&b, "%s [ %s ]", t.Name, label)
 	if p := manage.PresetLabel(t.Name); p != "" {
 		fmt.Fprintf(&b, " [ %s ]", p)
 	}
 	b.WriteString("\n")
 
-	if t.Role == "server" {
+	if t.Mode == "direct" {
+		for _, m := range t.Mappings {
+			fmt.Fprintf(&b, "%s %s:%s -> %s:%s\n", strings.ToUpper(strings.Join(m.Protocols, "+")), m.ListenAddress, m.ListenPorts, m.TargetAddress, m.TargetPorts)
+		}
+	} else if t.Role == "server" {
 		fmt.Fprintf(&b, tr(lang, "Tunnel Port")+" : %s\n", portOf(t.Addr))
 		if ports := manage.VisiblePorts(t.Ports, manage.TunnelToken(t.Name)); len(ports) > 0 {
 			fmt.Fprintf(&b, tr(lang, "Forwarded Port")+" : %s\n", strings.Join(ports, ", "))

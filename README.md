@@ -10,7 +10,7 @@
   <a href="https://github.com/AminMGMT/BackPack/releases"><img alt="Total downloads across all releases" src="https://img.shields.io/github/downloads/AminMGMT/BackPack/total?logo=github&label=total%20downloads&color=orange"></a>
 </p>
 
-**Backpack** is a high-performance **reverse tunnel** engine written entirely in
+**Backpack** is a high-performance **reverse tunnel and direct-forward** engine written entirely in
 **Go**, purpose-built for Iran ⇄ abroad (kharej) server setups. It ships as a
 single self-contained binary with an interactive CLI **and** a secured web
 dashboard — so you can run and manage everything with or without a terminal.
@@ -34,6 +34,8 @@ the **real service**. The tunnel is always dialed **by the client**
 
 ## Why Backpack?
 
+- **Kernel direct forwarding** — dual-stack TCP/UDP DNAT with iptables,
+  transactional rule generations, ownership-safe cleanup and persistent counters.
 - **Multi-transport** — nine transports across TCP, UDP and WebSocket, so you
   match the route instead of fighting it.
 - **Automatic rollback** — an update or edit that breaks a tunnel reverts itself,

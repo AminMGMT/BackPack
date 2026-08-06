@@ -41,6 +41,9 @@ const ( // Default values
 )
 
 func applyDefaults(cfg *config.Config) {
+	if cfg.EffectiveEngine() != config.EngineReverse {
+		return
+	}
 	// Token
 	if cfg.Server.Token == "" {
 		cfg.Server.Token = defaultToken

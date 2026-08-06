@@ -23,12 +23,16 @@ type Snapshot struct {
 	Name      string    `json:"name"`
 	Transport string    `json:"transport"`
 	Role      string    `json:"role"`
+	Engine    string    `json:"engine,omitempty"`
+	Mode      string    `json:"mode,omitempty"`
 	Taken     time.Time `json:"taken"`
 	Uptime    string    `json:"uptime"`
 
 	// Traffic over the tunnel itself, as the transport sees it.
-	BytesIn  uint64 `json:"bytes_in"`
-	BytesOut uint64 `json:"bytes_out"`
+	BytesIn    uint64 `json:"bytes_in"`
+	BytesOut   uint64 `json:"bytes_out"`
+	PacketsIn  uint64 `json:"packets_in,omitempty"`
+	PacketsOut uint64 `json:"packets_out,omitempty"`
 
 	// Peer is the address of the connected far end, when the transport knows
 	// it and the operating system does not.
@@ -186,10 +190,10 @@ func (c *Collector) Snapshot() Snapshot {
 	liveIn, liveOut := Traffic()
 	s.BytesIn, s.BytesOut = c.baseIn+liveIn, c.baseOut+liveOut
 	if c.bytesIn != nil {
-		s.BytesIn = c.bytesIn()
+		s.BytesIn = c.baseIn + c.bytesIn()
 	}
 	if c.bytesOut != nil {
-		s.BytesOut = c.bytesOut()
+		s.BytesOut = c.baseOut + c.bytesOut()
 	}
 	if live, target, configured, mbps := PoolState(); configured > 0 {
 		s.Pool = &PoolStats{Live: live, Target: target, Configured: configured, Mbps: mbps}
