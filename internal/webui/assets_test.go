@@ -518,6 +518,32 @@ func TestDynamicMarkupIsTranslatedToo(t *testing.T) {
 	}
 }
 
+// Restart is the one tunnel-level action available from the monitoring panel.
+// It must be deliberate, explain what it is doing while the request runs, and
+// use the authenticated mutation endpoint rather than the read-only API.
+func TestTunnelCardsOfferConfirmedRestart(t *testing.T) {
+	body := string(dashboardHTML)
+
+	if !strings.Contains(body, `onclick="restartTunnel('${n}',this)"`) {
+		t.Fatal("tunnel cards do not offer a restart action")
+	}
+	fn := between(body, "async function restartTunnel(name,btn){", "\n}")
+	if fn == "" {
+		t.Fatal("restartTunnel function not found")
+	}
+	for _, want := range []string{
+		"confirm(",
+		"btn.disabled=true",
+		"fetch('/api/tunnels/restart'",
+		"method:'POST'",
+		"if(!r.ok)",
+	} {
+		if !strings.Contains(fn, want) {
+			t.Errorf("restart action is missing %q", want)
+		}
+	}
+}
+
 // The login page has no settings of its own, so it follows the choice already
 // stored. An English door on a Persian panel is the first thing anybody sees.
 func TestLoginPageFollowsTheStoredLanguage(t *testing.T) {

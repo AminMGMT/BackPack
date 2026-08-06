@@ -503,6 +503,7 @@
     border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;
     background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
   .logbtn:hover{background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35);color:var(--red-soft)}
+  .logbtn:disabled{opacity:.55;cursor:wait;pointer-events:none}
 
   /* Details modal: the numbers worth a look but not worth card space —
      the cards stay cut back to what you actually read. */
@@ -930,7 +931,7 @@
   </div>
 
   <div class="sec"><h2 data-i18n>Tunnels</h2><span class="count" id="tsum">0</span>
-    <span class="count" style="margin-left:auto" title="Tunnels are created and managed from the CLI" data-i18n>monitoring only</span>
+    <span class="count" style="margin-left:auto" title="Tunnel settings are managed from the CLI" data-i18n>monitoring + restart</span>
   </div>
   <div class="grid-tun" id="tunnels"></div>
   <div class="empty" id="empty" style="display:none" data-i18n>No tunnels configured yet. Create one from the CLI menu (sudo backpack).</div>
@@ -1370,6 +1371,9 @@ const FA={
   "Language":"زبان","Bot language":"زبان ربات","Theme":"پوسته","English":"English","Persian":"فارسی",
   // tunnels
   "State":"وضعیت","Transport":"ترنسپورت","Preset":"پروفایل",
+  "Restart":"راه‌اندازی مجدد","Restart tunnel":"راه‌اندازی مجدد تونل",
+  "Restarting…":"در حال راه‌اندازی مجدد…","Restarted":"راه‌اندازی شد","Restart failed":"راه‌اندازی ناموفق بود",
+  "Could not restart tunnel:":"راه‌اندازی مجدد تونل ناموفق بود:",
   "Traffic In":"ترافیک ورودی","Traffic Out":"ترافیک خروجی","Tunnel Uptime":"مدت کارکرد تونل",
   "Bot Relay":"رله ربات","Local port":"پورت محلی","Certificate":"گواهی","Failover":"جایگزینی",
   "Limits & forwarding":"محدودیت‌ها و فوروارد","Overview":"نمای کلی",
@@ -1377,7 +1381,7 @@ const FA={
   "loading…":"در حال بارگذاری…",
   "Loading…":"در حال بارگذاری…",
   "Update now":"همین حالا به‌روزرسانی کن",
-  "monitoring only":"فقط پایش",
+  "monitoring + restart":"پایش و راه‌اندازی مجدد",
   "No tunnels configured yet. Create one from the CLI menu (sudo backpack).":"هنوز تونلی ساخته نشده. از منوی خط فرمان بساز (sudo backpack).",
   "Check GitHub for the latest version.":"آخرین نسخه را از گیت‌هاب بررسی کن.",
   "Stable — finished releases only (recommended)":"پایدار — فقط نسخه‌های نهایی (پیشنهادی)",
@@ -1611,6 +1615,7 @@ const ICON={
   logs:'<svg class="ic" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>',
   bot:'<svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V5M9 3h6M9 13h.01M15 13h.01M8 19v2M16 19v2"/></svg>',
   info:'<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+  restart:'<svg class="ic" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
 };
 const COUNTRIES=[
   ['','—'],['DE','Germany'],['NL','Netherlands'],['FR','France'],['GB','United Kingdom'],
@@ -1867,6 +1872,7 @@ function buildCard(t){
     <div class="cardbtns">
       <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} Logs</button>
       <button class="logbtn" onclick="openDetails('${n}')" aria-label="View details for ${n}">${ICON.info} Details</button>
+      <button class="logbtn" onclick="restartTunnel('${n}',this)" aria-label="Restart tunnel ${n}">${ICON.restart}<span data-i18n>Restart</span></button>
     </div>`;
   return el;
 }
@@ -1973,6 +1979,29 @@ async function loadTunnels(){
       if(t) { $('detbody').innerHTML=renderDetails(t); relang(); }
     }
   }catch(e){}
+}
+
+async function restartTunnel(name,btn){
+  if(!confirm(T('Restart tunnel')+' "'+name+'"?')) return;
+  const label=btn.querySelector('span');
+  btn.disabled=true;
+  label.textContent=T('Restarting…');
+  try{
+    const body=new URLSearchParams({name});
+    const r=await fetch('/api/tunnels/restart',{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body
+    });
+    if(!r.ok) throw new Error((await r.text()).trim()||r.statusText);
+    label.textContent=T('Restarted');
+    setTimeout(loadTunnels,500);
+  }catch(e){
+    label.textContent=T('Restart failed');
+    alert(T('Could not restart tunnel:')+' '+e.message);
+  }finally{
+    setTimeout(()=>{ btn.disabled=false; label.textContent=T('Restart'); },1500);
+  }
 }
 
 let logTimer=null, logName=null, logRaw='';

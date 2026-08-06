@@ -178,9 +178,9 @@ func Serve() error {
 	// deliberately run elsewhere — in the backpack-monitor service. See
 	// internal/monitor for why.
 
-	// The panel is a monitoring dashboard: live stats, tunnel state and logs.
-	// Tunnels are created and managed from the CLI; the only mutating actions
-	// here are panel-scoped (password, port, self-update).
+	// The panel is primarily a monitoring dashboard: live stats, tunnel state
+	// and logs. Configuration stays in the CLI, but a logged-in operator can
+	// restart a tunnel without opening a separate SSH session.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
 	mux.HandleFunc("/login2fa", srv.handleLogin2FA)
@@ -190,6 +190,7 @@ func Serve() error {
 	// or a Prometheus scraper can watch without holding a browser session.
 	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
 	mux.HandleFunc("/api/tunnels", srv.requireReadAuth(srv.handleTunnels))
+	mux.HandleFunc("/api/tunnels/restart", srv.requireAuth(srv.handleTunnelRestart))
 	mux.HandleFunc("/metrics", srv.requireReadAuth(srv.handlePrometheus))
 	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
