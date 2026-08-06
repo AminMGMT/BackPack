@@ -13,6 +13,21 @@ import (
 
 func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	done := make(chan struct{})
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+
+	// Relay reads are intentionally blocking, so merely selecting on ctx after
+	// one direction finishes cannot stop an idle connection. Close both sockets
+	// as soon as the generation ends; that wakes both copy loops and guarantees
+	// reconnect/reload does not retain old file descriptors indefinitely.
+	go func() {
+		select {
+		case <-ctx.Done():
+			from.Close()
+			to.Close()
+		case <-stopWatch:
+		}
+	}()
 
 	// Write Proxy Protocol V2 Header
 	if proxyProtocol {

@@ -71,6 +71,29 @@ func (s *clientState) SetConn(c net.Conn) {
 	s.conn = c
 }
 
+// SetConnFor publishes a control connection only when ctx still identifies
+// the current generation. A dial can finish after Restart has already
+// installed the next generation; publishing that late result would otherwise
+// let an old goroutine replace the new run's control channel.
+func (s *clientState) SetConnFor(ctx context.Context, c net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctx != ctx {
+		return false
+	}
+	s.conn = c
+	return true
+}
+
+// IsCurrent reports whether ctx belongs to the currently published
+// generation. It is used before a failing old worker requests a restart, so a
+// late error cannot tear down a healthy replacement generation.
+func (s *clientState) IsCurrent(ctx context.Context) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ctx == ctx
+}
+
 func (s *clientState) WSConn() *websocket.Conn {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
