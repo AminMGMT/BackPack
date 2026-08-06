@@ -72,6 +72,7 @@ type WsConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	Forward       bool
 }
 
 func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
@@ -299,17 +300,29 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 				}
 
 				go s.channelHandler(g)
-				go s.parsePortMappings(g)
+				if !s.config.Forward {
+					go s.parsePortMappings(g)
+				}
 
 				s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
-				for i := 0; i < numCPU; i++ {
-					go s.handleLoop(g)
+				if !s.config.Forward {
+					for i := 0; i < numCPU; i++ {
+						go s.handleLoop(g)
+					}
 				}
 
 				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
+				if s.config.Forward {
+					if !s.controlChannel.IsSet() {
+						conn.Close()
+						return
+					}
+					go s.handleForwardWS(g, conn)
+					return
+				}
 				wsConn := TunnelChannel{
 					conn: conn,
 					ping: make(chan struct{}),
@@ -373,6 +386,29 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 		s.controlChannel.Close()
 	}
 
+}
+
+func (s *WsTransport) handleForwardWS(g *wsGen, conn *websocket.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, payload, err := conn.ReadMessage()
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		conn.Close()
+		return
+	}
+	target := string(payload)
+	backend, port, _, err := dialForwardTCPBackend(g.ctx, target, s.config.KeepAlive)
+	if err != nil {
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_ForwardError})
+		conn.Close()
+		return
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_ForwardOK}); err != nil {
+		backend.Close()
+		conn.Close()
+		return
+	}
+	handlers.WSConnectionHandler(g.ctx, conn, backend, s.logger, g.usageMonitor, port, s.config.Sniffer)
 }
 
 func (s *WsTransport) parsePortMappings(g *wsGen) {

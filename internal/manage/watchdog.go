@@ -111,6 +111,12 @@ func directDesiredStateHealthy(ctx context.Context, t Tunnel) bool {
 // tunnelHealthy reports whether a running tunnel currently has its connection up,
 // based on the established TCP sockets in `pairs` ([local, peer] address pairs).
 func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
+	if t.AppForward() && isRawDatagram(t.Transport) && t.Role == "client" {
+		if connected, known := datagramServerPeer(app.ConfigDir, t.Name); known {
+			return connected
+		}
+		return true // not observable yet: avoid a startup restart loop
+	}
 	// UDP-based transports (udp, kcp) hold no TCP sockets at all, so the TCP
 	// table says nothing about them.
 	//

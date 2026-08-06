@@ -14,7 +14,12 @@ import (
 type EngineType string
 
 const (
-	EngineReverse  EngineType = "reverse"
+	EngineReverse EngineType = "reverse"
+	// EngineForward keeps Backpack's application-level tunnel and selected
+	// transport, but reverses who establishes it: the Iran edge dials the
+	// Kharej origin.  It is intentionally distinct from EngineIPTables, which
+	// is a kernel-only DNAT engine and does not carry a Backpack transport.
+	EngineForward  EngineType = "forward"
 	EngineIPTables EngineType = "iptables"
 )
 
@@ -294,6 +299,10 @@ type ServerConfig struct {
 // ClientConfig represents the configuration for the client.
 type ClientConfig struct {
 	RemoteAddr string `toml:"remote_addr"`
+	// Ports is used only by the forward engine.  In that mode the dialling
+	// client is the Iran edge, so it also owns the public ingress listeners.
+	// Reverse client configs omit it and retain their historical meaning.
+	Ports []string `toml:"ports"`
 	// FallbackAddrs are additional server addresses tried in order whenever the
 	// primary cannot be reached (a filtered IP, a blocked port, a CDN edge).
 	FallbackAddrs    []string      `toml:"fallback_addrs"`
@@ -366,6 +375,12 @@ type ClientConfig struct {
 	// plain `tcp` transport on Linux, and only when the tunnel has no bandwidth
 	// limit — anything else quietly keeps the buffered path.
 	ZeroCopy bool `toml:"zero_copy"`
+	// The following ingress controls are meaningful on the dialling side only
+	// for EngineForward. They mirror the long-standing reverse server knobs.
+	AcceptUDP      bool `toml:"accept_udp"`
+	ProxyProtocol  bool `toml:"proxy_protocol"`
+	MaxConnections int  `toml:"max_connections"`
+	BandwidthMbps  int  `toml:"bandwidth_mbps"`
 
 	Preset string `toml:"preset"`
 	// LoadBalance spreads the pool's data connections over every configured
@@ -444,6 +459,23 @@ func (c *Config) ValidateStructure() error {
 	case EngineReverse:
 		if hasForward || hasServer == hasClient {
 			return fmt.Errorf("engine %q requires exactly one of [server] or [client]", EngineReverse)
+		}
+	case EngineForward:
+		if hasForward || hasServer == hasClient {
+			return fmt.Errorf("engine %q requires exactly one of [server] or [client]", EngineForward)
+		}
+		// Operational roles are deliberately used here: [client] is the Iran
+		// dialler and therefore owns ingress ports; [server] is the Kharej
+		// listener and never exposes ports itself.
+		if hasClient {
+			if strings.TrimSpace(c.Client.RemoteAddr) == "" {
+				return fmt.Errorf("engine %q [client] requires remote_addr", EngineForward)
+			}
+			if len(c.Client.Ports) == 0 {
+				return fmt.Errorf("engine %q Iran [client] requires at least one ingress port mapping", EngineForward)
+			}
+		} else if strings.TrimSpace(c.Server.BindAddr) == "" {
+			return fmt.Errorf("engine %q Kharej [server] requires bind_addr", EngineForward)
 		}
 	case EngineIPTables:
 		if !hasForward || hasServer || hasClient {

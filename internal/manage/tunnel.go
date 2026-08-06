@@ -27,6 +27,30 @@ type Tunnel struct {
 	Service   string
 }
 
+// KernelDirect reports the standalone netfilter engine. Application-forward
+// instances also have mode=direct, but still have a role, transport and peer;
+// treating every direct mode as iptables breaks their management/UI paths.
+func (t Tunnel) KernelDirect() bool { return t.Engine == string(config.EngineIPTables) }
+
+// AppForward reports the application tunnel whose dial direction is reversed.
+func (t Tunnel) AppForward() bool { return t.Engine == string(config.EngineForward) }
+
+// DisplayRole preserves the geographic Server/Client language used by setup:
+// Iran is Server and Kharej is Client. EngineForward deliberately swaps the
+// operational TOML sections, but exposing that implementation detail in the
+// panel and management menu makes the same machine appear to change roles.
+func (t Tunnel) DisplayRole() string {
+	if t.AppForward() {
+		switch t.Role {
+		case "client":
+			return "server"
+		case "server":
+			return "client"
+		}
+	}
+	return t.Role
+}
+
 // List scans the config directory and returns all tunnels, sorted by name.
 func List() []Tunnel {
 	var tunnels []Tunnel
@@ -54,6 +78,9 @@ func List() []Tunnel {
 			t.Role = "client"
 			t.Transport = string(cfg.Client.Transport)
 			t.Addr = cfg.Client.RemoteAddr
+			if cfg.EffectiveEngine() == config.EngineForward {
+				t.Ports = append([]string(nil), cfg.Client.Ports...)
+			}
 		default:
 			continue
 		}

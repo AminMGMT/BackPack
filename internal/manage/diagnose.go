@@ -274,7 +274,7 @@ func tunnelChecks() []Check {
 
 // tunnelChecksFor is one tunnel's section of the report.
 func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
-	if t.Mode == "direct" {
+	if t.KernelDirect() {
 		return directChecksFor(t)
 	}
 	var out []Check
@@ -285,7 +285,7 @@ func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
 	switch h.State {
 	case "online":
 		out = append(out, Check{Group: g, Name: "State", Level: CheckOK,
-			Detail: fmt.Sprintf("online (%s %s)", t.Role, t.Transport)})
+			Detail: fmt.Sprintf("online (%s %s)", t.DisplayRole(), t.Transport)})
 	case "offline":
 		fix := "check the other side is running and reachable"
 		if t.Role == "client" {

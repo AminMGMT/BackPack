@@ -60,6 +60,30 @@ func TestExplicitReverseAndLegacyClientRemainValid(t *testing.T) {
 	}
 }
 
+func TestApplicationForwardUsesOperationalClientAndServerSections(t *testing.T) {
+	edge := "engine='forward'\n[client]\nremote_addr='192.0.2.10:443'\ntransport='tcp'\nports=['8443=127.0.0.1:8443']\n"
+	origin := "engine='forward'\n[server]\nbind_addr=':443'\ntransport='tcp'\n"
+	for _, body := range []string{edge, origin} {
+		cfg, err := LoadFile(writeConfig(t, body))
+		if err != nil {
+			t.Fatalf("valid application forward config rejected: %v\n%s", err, body)
+		}
+		if cfg.EffectiveEngine() != EngineForward || cfg.HasForward() {
+			t.Fatalf("application forward confused with iptables forwarding: %#v", cfg)
+		}
+	}
+
+	for _, body := range []string{
+		"engine='forward'\n[client]\nremote_addr='192.0.2.10:443'\ntransport='tcp'\n",
+		"engine='forward'\n[server]\ntransport='tcp'\n",
+		"engine='forward'\n[forward]\n",
+	} {
+		if _, err := LoadFile(writeConfig(t, body)); err == nil {
+			t.Fatalf("invalid application forward config accepted:\n%s", body)
+		}
+	}
+}
+
 func TestForwardValidation(t *testing.T) {
 	body := "engine='iptables'\n[forward]\n[[forward.mappings]]\nlisten_address='0.0.0.0'\nlisten_ports='1000-1002'\ntarget_address='192.0.2.10'\ntarget_ports='2000-2002'\nprotocols=['tcp','udp']\n"
 	if _, err := LoadFile(writeConfig(t, body)); err != nil {

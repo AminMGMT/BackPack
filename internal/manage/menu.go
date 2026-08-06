@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/tui"
 )
@@ -29,9 +30,11 @@ func ManageTunnels() {
 		tui.Clear()
 		opts := make([]tui.Option, len(tunnels))
 		for i, t := range tunnels {
-			desc := fmt.Sprintf("%s %s — %s", t.Role, t.Transport, plainState(t.Service))
-			if t.Mode == "direct" {
+			desc := fmt.Sprintf("%s %s — %s", t.DisplayRole(), t.Transport, plainState(t.Service))
+			if t.KernelDirect() {
 				desc = fmt.Sprintf("direct %s — %d mapping(s) — %s", t.Engine, len(t.Mappings), plainState(t.Service))
+			} else if t.AppForward() {
+				desc = fmt.Sprintf("direct %s over %s — %s", t.DisplayRole(), t.Transport, plainState(t.Service))
 			}
 			opts[i] = tui.Option{
 				Title: t.Name,
@@ -60,14 +63,16 @@ func manageOne(t Tunnel) {
 	for {
 		tui.Clear()
 		tui.Title(fmt.Sprintf("Instance: %s", t.Name))
-		label := strings.TrimSpace(t.Role + " " + t.Transport)
-		if t.Mode == "direct" {
+		label := strings.TrimSpace(t.DisplayRole() + " " + t.Transport)
+		if t.KernelDirect() {
 			label = "direct " + t.Engine
+		} else if t.AppForward() {
+			label = "direct " + label
 		}
 		fmt.Printf("  %s%s%s  %s\n\n", tui.Gray, label, tui.Reset, stateLabel(t.Service))
 
 		editDesc := "change tunnel port & forwarded ports"
-		if t.Mode == "direct" {
+		if t.KernelDirect() {
 			editDesc = "add, edit, or remove direct mappings"
 		}
 		idx := tui.ChooseOpt("Choose an action:", []tui.Option{
@@ -80,7 +85,7 @@ func manageOne(t Tunnel) {
 		})
 		switch idx {
 		case 0:
-			if t.Mode == "direct" {
+			if t.KernelDirect() {
 				editDirectMenu(t.Name)
 			} else {
 				editPortsMenu(t.Name)
@@ -134,6 +139,12 @@ func editPortsMenu(name string) {
 		tui.Clear()
 		tui.Title("Edit — " + name)
 		fmt.Println()
+		if spec.Engine == config.EngineForward {
+			if editForwardSpec(name, spec) {
+				continue
+			}
+			return
+		}
 
 		if spec.Role == "server" {
 			tui.Info("Tunnel (control) port : " + addrPort(spec.BindAddr))
@@ -218,10 +229,95 @@ func editPortsMenu(name string) {
 	}
 }
 
+// editForwardSpec renders Direct using the geographic roles shown by setup,
+// while applying settings to the operationally reversed TOML sections.
+// It returns true after an action so the caller redraws fresh values.
+func editForwardSpec(name string, spec TunnelSpec) bool {
+	if spec.Role == "server" { // Iran edge: operational [client]
+		tui.Info("Kharej address        : " + spec.RemoteAddr)
+		tui.Info("Exposed ports         : " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
+		tui.Info("Transport             : " + transportLabel(spec.Transport))
+		tui.Info("Performance preset    : " + presetLabel(spec.Preset))
+		tui.Info("Limits                : " + limitsSummary(spec))
+		fmt.Println()
+		opts := []tui.Option{
+			{Title: "Change tunnel port", Desc: "the port Iran dials on Kharej"},
+			{Title: "Change Kharej address", Desc: "IP or domain of the Direct origin"},
+			{Title: "Change exposed ports", Desc: "public Iran listen ports and Kharej targets"},
+			{Title: "Change transport", Desc: "switch carrier; change the other side too"},
+			{Title: "Change performance preset", Desc: "Balance, Turbo or Aggressive"},
+			{Title: "Limits", Desc: "cap ingress connections and bandwidth"},
+			{Title: "Backup Kharej addresses", Desc: "fail over if the primary path is blocked"},
+			{Title: "Load balancing", Desc: "spread over all Kharej addresses"},
+		}
+		if supportsProxyProtocol(spec.Transport) {
+			opts = append(opts, tui.Option{Title: "Real client IP", Desc: "send PROXY protocol to the Kharej backend"})
+		}
+		switch tui.ChooseOpt("Choose:", opts) {
+		case 0:
+			changeTunnelPort(name, spec)
+		case 1:
+			changeClientHost(name, spec)
+		case 2:
+			changeForwardedPorts(name, spec)
+		case 3:
+			changeTunnelTransport(name, spec)
+		case 4:
+			changeTunnelPreset(name, spec)
+		case 5:
+			editLimits(name, spec)
+		case 6:
+			changeFallbackAddrs(name, spec)
+		case 7:
+			toggleLoadBalance(name, spec)
+		case 8:
+			if supportsProxyProtocol(spec.Transport) {
+				toggleProxyProtocol(name, spec)
+			}
+		default:
+			return false
+		}
+		return true
+	}
+
+	// Kharej origin: operational [server]. It owns the TLS certificate and
+	// tunnel listener, but never exposes the public user ports.
+	tui.Info("Tunnel listen address : " + spec.BindAddr)
+	tui.Info("Transport             : " + transportLabel(spec.Transport))
+	tui.Info("Performance preset    : " + presetLabel(spec.Preset))
+	if needsTLS(spec.Transport) {
+		tui.Info("Certificate           : " + certSummary(spec))
+	}
+	fmt.Println()
+	opts := []tui.Option{
+		{Title: "Change tunnel port", Desc: "the Direct port Iran dials"},
+		{Title: "Change transport", Desc: "switch carrier; change the other side too"},
+		{Title: "Change performance preset", Desc: "Balance, Turbo or Aggressive"},
+	}
+	if needsTLS(spec.Transport) {
+		opts = append(opts, tui.Option{Title: "Certificate", Desc: "self-signed or Let's Encrypt"})
+	}
+	switch tui.ChooseOpt("Choose:", opts) {
+	case 0:
+		changeTunnelPort(name, spec)
+	case 1:
+		changeTunnelTransport(name, spec)
+	case 2:
+		changeTunnelPreset(name, spec)
+	case 3:
+		if needsTLS(spec.Transport) {
+			editCertificate(name, spec)
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 // changeTunnelPort prompts for and applies a new tunnel (control) port.
 func changeTunnelPort(name string, spec TunnelSpec) {
 	cur := addrPort(spec.BindAddr)
-	if spec.Role == "client" {
+	if !spec.operationalServer() {
 		cur = addrPort(spec.RemoteAddr)
 	}
 	fmt.Println()
@@ -236,7 +332,7 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 	}
 	// Check the protocol the transport actually binds: a UDP-based tunnel is
 	// unaffected by whatever holds the same TCP port, and vice versa.
-	if spec.Role == "server" && TunnelPortInUse(spec.Transport, port) {
+	if spec.operationalServer() && TunnelPortInUse(spec.Transport, port) {
 		tui.Error(fmt.Sprintf("Port %s is already in use on this machine.", port))
 		tui.PressEnter()
 		return
@@ -247,7 +343,7 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 		return
 	}
 	tui.Success(fmt.Sprintf("Tunnel port changed to %s and the tunnel was restarted.", port))
-	if spec.Role == "server" {
+	if spec.operationalServer() {
 		tui.Warn("Update the CLIENT side to the same port, or it will not reconnect.")
 	}
 	tui.PressEnter()
@@ -299,7 +395,7 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	if spec.Role == "server" && needsTLS(newTransport) {
+	if spec.operationalServer() && needsTLS(newTransport) {
 		tui.Info("A self-signed TLS certificate will be generated automatically if needed.")
 	}
 	if !tui.Confirm(fmt.Sprintf("Switch %q to %s now", name, transportLabel(newTransport)), true) {

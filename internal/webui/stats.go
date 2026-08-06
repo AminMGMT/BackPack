@@ -434,7 +434,7 @@ func GatherTunnels() []TunnelInfo {
 				Name:         t.Name,
 				Mode:         t.Mode,
 				Engine:       t.Engine,
-				Role:         t.Role,
+				Role:         t.DisplayRole(),
 				Transport:    t.Transport,
 				Mappings:     append([]config.ForwardMapping{}, t.Mappings...),
 				Addr:         t.Addr,
@@ -449,7 +449,7 @@ func GatherTunnels() []TunnelInfo {
 				Country:    manage.TunnelCountry(t.Name),
 				Ping:       -1,
 			}
-			if t.Mode == "direct" {
+			if t.KernelDirect() {
 				info.State = health[t.Name].State
 				var rendered []string
 				for _, m := range t.Mappings {
@@ -781,7 +781,7 @@ func fillConfig(info *TunnelInfo, t manage.Tunnel) {
 	if err != nil {
 		return
 	}
-	if t.Mode == "direct" {
+	if t.KernelDirect() {
 		return
 	}
 	if t.Role == "server" {
@@ -814,6 +814,11 @@ func fillConfig(info *TunnelInfo, t manage.Tunnel) {
 		info.Preset = manage.PresetValueLabel(cc.Preset)
 		info.LoadBalance = cc.LoadBalance
 		info.FallbackAddrs = cc.FallbackAddrs
+		if t.AppForward() {
+			info.MaxConnections = cc.MaxConnections
+			info.BandwidthMbps = cc.BandwidthMbps
+			info.ProxyProtocol = cc.ProxyProtocol
+		}
 	}
 }
 

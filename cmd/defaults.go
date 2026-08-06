@@ -41,7 +41,7 @@ const ( // Default values
 )
 
 func applyDefaults(cfg *config.Config) {
-	if cfg.EffectiveEngine() != config.EngineReverse {
+	if cfg.EffectiveEngine() != config.EngineReverse && cfg.EffectiveEngine() != config.EngineForward {
 		return
 	}
 	// Token

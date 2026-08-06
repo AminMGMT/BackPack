@@ -73,7 +73,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 	if err != nil {
 		return err
 	}
-	if cfg.EffectiveEngine() == config.EngineReverse {
+	if cfg.EffectiveEngine() == config.EngineReverse || cfg.EffectiveEngine() == config.EngineForward {
 		if cfg.HasServer() {
 			// Apply temporary TCP optimizations at startup
 			if applyTuning && !cfg.Server.SkipOptz {

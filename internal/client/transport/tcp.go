@@ -35,7 +35,8 @@ type TcpTransport struct {
 	// handshake, so later attempts skip straight to the old one instead of
 	// spending a connection discovering it again. It is not reset on restart:
 	// an upgraded server means an upgraded binary, which means a new process.
-	legacyServer atomic.Bool
+	legacyServer     atomic.Bool
+	forwardBandwidth *forwardBandwidth
 }
 type TcpConfig struct {
 	RemoteAddr string
@@ -64,6 +65,15 @@ type TcpConfig struct {
 	// Stealth wraps every tunnel-carrying connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// Forward turns this dialler into the Iran edge: it keeps the ordinary
+	// authenticated control channel, owns the public ingress listeners, and
+	// opens one authenticated data connection per accepted user connection.
+	Forward        bool
+	Ports          []string
+	AcceptUDP      bool
+	ProxyProtocol  bool
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 // wrapStealth upgrades a freshly dialled tunnel connection to the Noise record
@@ -83,12 +93,13 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 
 	// Initialize the TcpTransport struct
 	client := &TcpTransport{
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		config:           config,
+		parentctx:        parentCtx,
+		logger:           logger,
+		poolConnections:  0,
+		loadConnections:  0,
+		controlFlow:      make(chan struct{}, 100),
+		forwardBandwidth: newForwardBandwidth(config.BandwidthMbps),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -248,8 +259,18 @@ func (c *TcpTransport) channelDialer() {
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (TCP)"
-				go c.poolMaintainer()
 				go c.channelHandler()
+				if c.config.Forward {
+					if nonce == "" {
+						c.logger.Error("forward mode requires the authenticated v2 control handshake; peer is too old")
+						tunnelTCPConn.Close()
+						bo.Wait(c.state.Ctx())
+						continue
+					}
+					go c.startForwardTCPIngress()
+					return
+				}
+				go c.poolMaintainer()
 
 				return
 
@@ -261,6 +282,47 @@ func (c *TcpTransport) channelDialer() {
 			}
 		}
 	}
+}
+
+// openForwardTCP creates the data connection proactively from the Iran edge.
+// It returns only after the Kharej origin has successfully dialled the target,
+// so an unavailable backend becomes a prompt close instead of a black hole.
+func (c *TcpTransport) openForwardTCP(target string) (net.Conn, error) {
+	nonce := c.poolNonce.Get()
+	if nonce == "" || c.state.Conn() == nil {
+		return nil, fmt.Errorf("forward control channel is not ready")
+	}
+	raw, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	if err != nil {
+		return nil, fmt.Errorf("dial forward origin: %w", err)
+	}
+	conn, err := c.wrapStealth(raw)
+	if err != nil {
+		raw.Close()
+		return nil, fmt.Errorf("forward stealth handshake: %w", err)
+	}
+	fail := func(e error) (net.Conn, error) {
+		conn.Close()
+		return nil, e
+	}
+	if err := utils.SendBinaryTransportString(conn, nonce, utils.SG_ForwardTCP); err != nil {
+		return fail(fmt.Errorf("announce forward data connection: %w", err))
+	}
+	if err := utils.SendBinaryString(conn, target); err != nil {
+		return fail(fmt.Errorf("send forward target: %w", err))
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(c.config.DialTimeOut)); err != nil {
+		return fail(err)
+	}
+	status, err := utils.ReceiveBinaryByte(conn)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fail(fmt.Errorf("receive forward-open result: %w", err))
+	}
+	if status != utils.SG_ForwardOK {
+		return fail(fmt.Errorf("Kharej backend %q is unavailable or invalid", target))
+	}
+	return conn, nil
 }
 
 func (c *TcpTransport) poolMaintainer() {

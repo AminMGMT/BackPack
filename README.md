@@ -23,12 +23,12 @@ dashboard — so you can run and manage everything with or without a terminal.
 
 ## Architecture
 
-<p align="center"><img src="img/architecture.svg" alt="Backpack architecture: end users reach a forwarded port on the Iran server, the engine carries it through one transport to the kharej client, which forwards it to the real service. The client dials the server." width="100%"></p>
+<p align="center"><img src="img/architecture.svg" alt="Backpack architecture: end users reach a forwarded port on the Iran server, and the selected transport carries traffic to the real service on Kharej." width="100%"></p>
 
 An end user connects to a **forwarded port** on the Iran server; the engine
-carries it through **one transport** to the kharej client, which forwards it to
-the **real service**. The tunnel is always dialed **by the client**
-(kharej → Iran), so the far side needs no open inbound port.
+carries it through **one selected transport** to Kharej, which forwards it to
+the **real service**. In Direct mode Iran dials Kharej; in legacy Reverse mode
+Kharej dials Iran.
 
 ---
 
@@ -36,7 +36,7 @@ the **real service**. The tunnel is always dialed **by the client**
 
 - **Kernel direct forwarding** — dual-stack TCP/UDP DNAT with iptables,
   transactional rule generations, ownership-safe cleanup and persistent counters.
-- **Multi-transport** — nine transports across TCP, UDP and WebSocket, so you
+- **Multi-transport** — ten production transports across TCP, UDP and WebSocket, so you
   match the route instead of fighting it.
 - **Automatic rollback** — an update or edit that breaks a tunnel reverts itself,
   so you are never left with a dead tunnel.
@@ -132,7 +132,7 @@ after it.
 | Server | Where | Menu option | Why |
 |--------|-------|-------------|-----|
 | **Iran server** | entry point | **Setup Server** | It exposes the ports; users connect to the **Iran IP** (fast, unfiltered for local users). |
-| **Abroad (kharej)** | exit / origin | **Setup Client** | It dials the Iran server and forwards traffic to the real service (VPN panel, etc.). |
+| **Abroad (kharej)** | exit / origin | **Setup Client** | It accepts Direct or dials Iran for Reverse, then forwards traffic to the real service (VPN panel, etc.). |
 
 ```
    end users ──▶  Iran server (SERVER, exposes ports)  ──tunnel──▶  Kharej (CLIENT, real service)
@@ -147,10 +147,12 @@ after it.
 sudo backpack   →  1. Setup Server
 ```
 
-Pick the transport family (TCP / UDP / WebSocket) and then the variant, the
-tunnel port and the exposed ports, accept the suggested **64-character token**
-(press Enter), and choose a performance preset — **Turbo** is the recommended
-default. Copy the token; you'll need it on the client.
+Pick the transport family and its concrete variant, then choose the connection
+mode. **Direct** keeps that exact transport but makes Iran initiate the tunnel
+toward Kharej; **Reverse** keeps the legacy direction where Kharej initiates
+toward Iran. In both modes accept the suggested **64-character token** (press
+Enter), copy it to the other side, and configure the same transport and tunnel
+port there. **Turbo** is the recommended performance preset.
 
 ### 2) On the abroad (kharej) server — create the Client tunnel
 
@@ -158,14 +160,16 @@ default. Copy the token; you'll need it on the client.
 sudo backpack   →  2. Setup Client
 ```
 
-Enter the **Iran server IP**, the tunnel port and the **same token**. Done.
+Choose the same transport and mode. For Direct, choose the local tunnel listen
+port; for Reverse, enter the Iran server IP and tunnel port. Enter the **same
+token** on both sides. Done.
 
 ---
 
 ## Features
 
-**Transports** — TCP, TCP Mux, TCP + Stealth, UDP, UDP + KCP, WS, WS Mux,
-WSS and WSS Mux, with connection pooling.
+**Transports** — TCP, TCP Mux, TCP + Stealth, UDP, UDP + KCP, UDP + QUIC, WS,
+WS Mux, WSS and WSS Mux, with connection pooling where applicable.
 
 - **TCP + Stealth** — a TCP tunnel wrapped in a Noise layer with **no
   fingerprint**; on the wire it looks like random bytes, so there is nothing for

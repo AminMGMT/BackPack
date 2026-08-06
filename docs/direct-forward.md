@@ -1,82 +1,62 @@
-# Direct forwarding (iptables)
+# Direct connection mode
 
-Backpack can forward TCP and UDP traffic directly through the Linux kernel in
-addition to its existing reverse-tunnel mode. Each direct-forward config is a
-long-running systemd instance: it installs and watches its own rules, records
-traffic counters, and removes only its owned rules when stopped.
+Backpack supports two directions for its application tunnel. Both directions
+use the transport selected by the user (TCP, TCP Mux, Stealth, UDP, KCP, QUIC,
+WS, WSS, WS Mux or WSS Mux):
 
-Create one from **Setup Direct Forward** in the CLI, or use this TOML form:
+- **Direct:** the Iran server initiates the selected tunnel toward Kharej. The
+  public user ports remain on Iran and the backend service remains on Kharej.
+- **Reverse:** the legacy behaviour; Kharej initiates the selected tunnel
+  toward Iran.
+
+Run `sudo backpack`, choose **Setup Server** on Iran or **Setup Client** on
+Kharej, select the transport family and concrete transport, then select the
+connection mode. The mode question appears after every concrete transport and
+before the port questions. Both sides must use the same mode, transport,
+tunnel port and token.
+
+Direct application configs use `engine = "forward"`. Iran is operationally the
+dialling `[client]` and owns `ports`; Kharej is operationally the listening
+`[server]`. The CLI hides that implementation detail and continues to call the
+machines Server (Iran) and Client (Kharej).
 
 ```toml
-engine = "iptables"
+# Iran
+engine = "forward"
 
-[forward]
-
-[[forward.mappings]]
-listen_address = "0.0.0.0"
-listen_ports = "443"
-target_address = "203.0.113.10"
-target_ports = "8443"
-protocols = ["tcp", "udp"]
+[client]
+remote_addr = "KHAREJ_IP:8443"
+transport = "tcpmux"
+token = "SAME_LONG_TOKEN"
+ports = ["443=127.0.0.1:443"]
 ```
 
-`0.0.0.0` listens on every local IPv4 address and `::` does the same for IPv6.
-A specific listen address must exist on a local interface when the instance
-starts. The target must be an explicit, same-family unicast IP address; host
-names, loopback, multicast, unspecified addresses and IPv4/IPv6 translation
-are intentionally rejected.
+```toml
+# Kharej
+engine = "forward"
 
-Ports can be single values or equal-length ranges. Range mapping preserves the
-offset, for example `10000-10009` to `20000-20009`. A mapping is limited to
-1,024 expanded ports and an instance to 4,096. Only `tcp` and `udp` are valid.
-
-## Behaviour and requirements
-
-- Linux and root privileges are required. The installer provides the iptables
-  suite. Both `iptables-nft` and `iptables-legacy` are supported, but the
-  command, save and restore tools must use the same backend.
-- IPv4-only configs do not require IPv6 tools. IPv6 tools are checked only
-  when an IPv6 mapping is used.
-- Backpack enables `net.ipv4.ip_forward` and, when needed, IPv6 forwarding on
-  every start. Stop and uninstall do not turn these shared host settings off.
-- Direct forwarding applies only to ingress traffic. Backpack creates no
-  general `OUTPUT` rule, so locally generated host traffic is not redirected.
-- DNAT connections receive an instance-specific connection mark. FORWARD and
-  MASQUERADE rules require that mark and the exact configured tuple.
-- Rule changes are prepared in detached chains. Hooks are activated last and
-  failures roll back the new generation. Rules carry a structured ownership
-  comment, so cleanup never flushes a table or deletes an unrelated rule.
-
-Backpack refuses to start if a mapping overlaps another Backpack config, a
-local TCP/UDP listener, or an existing DNAT rule. If an nftables, multiport or
-ipset expression may overlap but cannot be interpreted safely, validation
-fails closed and reports the rule that needs review.
-
-## Health and counters
-
-Direct health represents local desired state: service, forwarding sysctls,
-backend, chains, hooks and the desired rule hash. Target reachability does not
-make the service unhealthy. **Diagnose** reports routes and an optional TCP
-probe separately; UDP reachability remains unknown because a connected UDP
-socket is not proof of a reachable service.
-
-RX/TX packets and bytes are counted by dedicated FORWARD accounting rules.
-Cumulative values are persisted under `/etc/backpack/forward-state` before a
-generation is removed, so restart, reconcile and reboot do not reduce the
-Prometheus totals.
-
-Legacy configs with no `engine` field remain reverse tunnels and need no
-migration. `mode` is display-only metadata and must not be written to TOML.
-
-## Integration test
-
-On a disposable Linux CI runner with root and network namespaces enabled, run:
-
-```bash
-sudo BACKPACK_NETNS_TEST=1 go test ./internal/engine -run TestDirectNetNSAcceptance -v
+[server]
+bind_addr = "0.0.0.0:8443"
+transport = "tcpmux"
+token = "SAME_LONG_TOKEN"
 ```
 
-The test builds isolated client, ingress and target namespaces and covers IPv4
-and IPv6, TCP and UDP, single-port and range remapping, MASQUERADE source
-visibility, stop cleanup and restart recovery. It is skipped during ordinary
-unprivileged unit-test runs.
+A bare mapping such as `443` exposes port 443 on Iran and connects it to
+`127.0.0.1:443` on Kharej. Ranges preserve offsets, for example
+`10000-10009=127.0.0.1:20000-20009`. IPv6 endpoints must use brackets. A pipe
+separates multiple backends and Direct load-balances over available members:
+`443=127.0.0.1:8443|127.0.0.1:9443`. An instance may expand at most 4096
+ingress ports, with at most 1024 ports from any one mapping.
+
+Legacy configs without `engine` remain Reverse and require no migration.
+`mode` is display metadata and is never written to TOML.
+
+## Advanced iptables engine
+
+The separate `engine = "iptables"` provider remains available for operators
+who intentionally want kernel DNAT/MASQUERADE without an application tunnel.
+It is not the Direct/Reverse choice in the normal setup wizard and must be
+configured explicitly with `[forward]`. It supports IPv4/IPv6 TCP/UDP mappings,
+owned generation chains, rollback, conflict detection and persistent counters.
+See the example config and engine tests under `internal/engine` for that
+advanced deployment path.

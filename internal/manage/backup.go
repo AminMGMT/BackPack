@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -170,14 +171,84 @@ func configsInDir(dir string) (map[string]*config.Config, error) {
 	return result, nil
 }
 
-func validateRestoreSet(ctx context.Context, dir string, configs map[string]*config.Config) error {
+func validateRestoreSet(ctx context.Context, dir string, configs map[string]*config.Config, replacing bool) error {
 	for name, cfg := range configs {
 		provider, err := engine.Resolve(cfg)
 		if err == nil {
-			err = provider.Validate(ctx, engine.Request{ConfigPath: filepath.Join(dir, name+".toml"), Config: cfg})
+			err = provider.Validate(ctx, engine.Request{ConfigPath: filepath.Join(dir, name+".toml"), Config: cfg, Replacing: replacing})
 		}
 		if err != nil {
 			return fmt.Errorf("restored instance %s is invalid or conflicts with this host: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func restoreTunnel(name string, cfg *config.Config) Tunnel {
+	t := Tunnel{Name: name, Engine: string(cfg.EffectiveEngine())}
+	switch {
+	case cfg.EffectiveEngine() == config.EngineIPTables:
+		t.Mappings = append([]config.ForwardMapping(nil), cfg.Forward.Mappings...)
+	case cfg.HasServer():
+		t.Role, t.Transport, t.Addr = "server", string(cfg.Server.Transport), cfg.Server.BindAddr
+		t.Ports = append([]string(nil), cfg.Server.Ports...)
+	case cfg.HasClient():
+		t.Role, t.Transport, t.Addr = "client", string(cfg.Client.Transport), cfg.Client.RemoteAddr
+		if cfg.EffectiveEngine() == config.EngineForward {
+			t.Ports = append([]string(nil), cfg.Client.Ports...)
+		}
+	}
+	return t
+}
+
+// validateRestoreClaims compares the whole staged set with itself. Binding
+// each candidate and immediately closing it cannot discover that two staged
+// instances both intend to claim the same socket, so that comparison must be
+// explicit before any live service is stopped.
+func validateRestoreClaims(configs map[string]*config.Config) error {
+	type ownedClaim struct {
+		name string
+		listenClaim
+	}
+	var claims []ownedClaim
+	for name, cfg := range configs {
+		for _, claim := range tunnelClaims(restoreTunnel(name, cfg)) {
+			claims = append(claims, ownedClaim{name: name, listenClaim: claim})
+		}
+	}
+	for i := range claims {
+		for j := 0; j < i; j++ {
+			if claimsOverlap(claims[i].listenClaim, claims[j].listenClaim) {
+				return fmt.Errorf("restored instances %s and %s both claim %s %s", claims[i].name, claims[j].name, claims[i].network, claims[i].addr)
+			}
+		}
+	}
+	return nil
+}
+
+// probeRestoreClaims runs only after old Backpack services have been
+// quiesced, so a bind failure now identifies an external listener rather than
+// the instance that the candidate is about to replace.
+func probeRestoreClaims(configs map[string]*config.Config) error {
+	for name, cfg := range configs {
+		t := restoreTunnel(name, cfg)
+		if t.KernelDirect() {
+			continue // the iptables provider performs netfilter conflict analysis
+		}
+		for _, claim := range tunnelClaims(t) {
+			if claim.network == "udp" {
+				pc, err := net.ListenPacket("udp", claim.addr)
+				if err != nil {
+					return fmt.Errorf("restored instance %s cannot claim UDP %s: %w", name, claim.addr, err)
+				}
+				_ = pc.Close()
+				continue
+			}
+			ln, err := net.Listen("tcp", claim.addr)
+			if err != nil {
+				return fmt.Errorf("restored instance %s cannot claim TCP %s: %w", name, claim.addr, err)
+			}
+			_ = ln.Close()
 		}
 	}
 	return nil
@@ -302,7 +373,10 @@ func Restore(r io.Reader) (RestoreResult, error) {
 	if err != nil {
 		return res, err
 	}
-	if err := validateRestoreSet(context.Background(), stage, candidates); err != nil {
+	if err := validateRestoreSet(context.Background(), stage, candidates, true); err != nil {
+		return res, err
+	}
+	if err := validateRestoreClaims(candidates); err != nil {
 		return res, err
 	}
 
@@ -324,6 +398,14 @@ func Restore(r io.Reader) (RestoreResult, error) {
 				_ = StartService(t.Service)
 			}
 		}
+	}
+	if err := validateRestoreSet(context.Background(), stage, candidates, false); err != nil {
+		resumeOld()
+		return res, err
+	}
+	if err := probeRestoreClaims(candidates); err != nil {
+		resumeOld()
+		return res, err
 	}
 
 	rollbackDir, err := os.MkdirTemp(parent, ".backpack-rollback-")
@@ -391,9 +473,13 @@ func Restore(r io.Reader) (RestoreResult, error) {
 	}
 	for _, name := range names {
 		service := app.ServiceName(name)
-		if err := StartService(service); err != nil {
+		// A restored name may already have a running process from before the
+		// atomic directory swap. Restart is required so it actually reads the
+		// restored config and cannot overwrite restored cumulative metrics with
+		// its old in-memory snapshot. systemd restart also starts an inactive unit.
+		if err := RestartService(service); err != nil {
 			res.Failed++
-			return res, rollback(fmt.Errorf("start restored instance %s: %w", name, err))
+			return res, rollback(fmt.Errorf("restart restored instance %s: %w", name, err))
 		}
 		if !WaitServiceActive(service, 12*time.Second) {
 			res.Failed++

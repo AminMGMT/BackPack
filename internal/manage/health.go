@@ -105,6 +105,13 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 				h.Connected = connected
 			}
 		}
+		if t.AppForward() && isRawDatagram(t.Transport) && t.Role == "client" {
+			if connected, known := datagramServerPeer(app.ConfigDir, t.Name); known {
+				h.Connected = connected
+			} else {
+				h.Connected = false
+			}
+		}
 		if h.Connected {
 			h.State = "online"
 			h.Detail = "peer connected"

@@ -133,7 +133,10 @@ func Path(dir, name string) string {
 type Collector struct {
 	// baseIn/baseOut are the totals this tunnel had already accumulated before
 	// this process started, read from the last written snapshot.
-	baseIn, baseOut uint64
+	baseIn, baseOut                 uint64
+	basePacketsIn, basePacketsOut   uint64
+	startIn, startOut               uint64
+	startPacketsIn, startPacketsOut uint64
 
 	dir       string
 	name      string
@@ -159,6 +162,8 @@ func NewCollector(dir, name, transport, role string, bytesIn, bytesOut func() ui
 		bytesIn:   bytesIn,
 		bytesOut:  bytesOut,
 	}
+	c.startIn, c.startOut = Traffic()
+	c.startPacketsIn, c.startPacketsOut = TrafficPackets()
 	// Carry on from whatever this tunnel had already moved.
 	//
 	// The live counters only know about this process, so without a baseline the
@@ -172,6 +177,7 @@ func NewCollector(dir, name, transport, role string, bytesIn, bytesOut func() ui
 	// again on the new machine.
 	if prev, err := Read(dir, name); err == nil {
 		c.baseIn, c.baseOut = prev.BytesIn, prev.BytesOut
+		c.basePacketsIn, c.basePacketsOut = prev.PacketsIn, prev.PacketsOut
 	}
 	return c
 }
@@ -188,7 +194,10 @@ func (c *Collector) Snapshot() Snapshot {
 	}
 	// The persisted baseline plus what this process has carried.
 	liveIn, liveOut := Traffic()
-	s.BytesIn, s.BytesOut = c.baseIn+liveIn, c.baseOut+liveOut
+	s.BytesIn, s.BytesOut = c.baseIn+(liveIn-c.startIn), c.baseOut+(liveOut-c.startOut)
+	livePacketsIn, livePacketsOut := TrafficPackets()
+	s.PacketsIn = c.basePacketsIn + (livePacketsIn - c.startPacketsIn)
+	s.PacketsOut = c.basePacketsOut + (livePacketsOut - c.startPacketsOut)
 	if c.bytesIn != nil {
 		s.BytesIn = c.baseIn + c.bytesIn()
 	}
@@ -276,8 +285,10 @@ func Read(dir, name string) (Snapshot, error) {
 // whichever side of the tunnel this process is. One tunnel runs per process, so
 // package-level totals describe exactly this tunnel.
 var (
-	bytesIn  atomic.Uint64
-	bytesOut atomic.Uint64
+	bytesIn    atomic.Uint64
+	bytesOut   atomic.Uint64
+	packetsIn  atomic.Uint64
+	packetsOut atomic.Uint64
 )
 
 // CountedConn wraps a tunnel connection so its traffic is recorded.
@@ -293,6 +304,7 @@ func (c *countedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		bytesIn.Add(uint64(n))
+		packetsIn.Add(1)
 	}
 	return n, err
 }
@@ -301,6 +313,7 @@ func (c *countedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		bytesOut.Add(uint64(n))
+		packetsOut.Add(1)
 	}
 	return n, err
 }
@@ -326,11 +339,18 @@ func Uncount(c net.Conn) (net.Conn, bool) {
 func AddBytes(in, out uint64) {
 	if in > 0 {
 		bytesIn.Add(in)
+		packetsIn.Add(1)
 	}
 	if out > 0 {
 		bytesOut.Add(out)
+		packetsOut.Add(1)
 	}
 }
 
 // Traffic returns the bytes carried over the tunnel so far.
 func Traffic() (in, out uint64) { return bytesIn.Load(), bytesOut.Load() }
+
+// TrafficPackets returns transport-level read/write units. For datagrams and
+// websocket messages these are real messages; for streams they are successful
+// relay reads/writes (kernel packet counts are not exposed to the process).
+func TrafficPackets() (in, out uint64) { return packetsIn.Load(), packetsOut.Load() }

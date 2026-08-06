@@ -71,6 +71,7 @@ type QuicConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	Forward       bool
 }
 
 func (c *QuicConfig) settings() network.QUICSettings {
@@ -143,6 +144,10 @@ func (s *QuicTransport) Start() {
 	}
 
 	s.config.TunnelStatus = "Connected (QUIC)"
+	go s.channelHandler(g)
+	if s.config.Forward {
+		return
+	}
 
 	numCPU := runtime.NumCPU()
 	if numCPU > 4 {
@@ -150,8 +155,6 @@ func (s *QuicTransport) Start() {
 	}
 
 	go s.parsePortMappings(g)
-	go s.channelHandler(g)
-
 	s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 	for i := 0; i < numCPU; i++ {
 		go s.handleLoop(g)
@@ -325,6 +328,14 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 			s.logger.Warnf("tunnel channel is full, discarding data stream from %s", conn.RemoteAddr())
 			stream.Close()
 		}
+
+	case utils.SG_ForwardTCP:
+		if !s.config.Forward || !s.controlChannel.IsSet() {
+			s.logger.Warnf("invalid forward QUIC stream from %s", conn.RemoteAddr())
+			stream.Close()
+			return
+		}
+		go handleForwardStream(g.ctx, wrapped, s.config.KeepAlive, s.logger, g.usageMonitor, s.config.Sniffer)
 
 	default:
 		s.logger.Warnf("unexpected announcement signal %v from %s", signal, conn.RemoteAddr())

@@ -67,14 +67,14 @@ func printStatusTable(tunnels []Tunnel) {
 		state := colorPad(tui.Color(color, plainState), plainState, 8)
 
 		detail := t.Addr
-		if t.Mode == "direct" {
+		if t.KernelDirect() {
 			var maps []string
 			for _, m := range t.Mappings {
 				maps = append(maps, fmt.Sprintf("%s:%s->%s:%s", m.ListenAddress, m.ListenPorts, m.TargetAddress, m.TargetPorts))
 			}
 			detail = strings.Join(maps, ",")
 		}
-		if t.Role == "server" && len(t.Ports) > 0 {
+		if (t.Role == "server" || (t.AppForward() && t.Role == "client")) && len(t.Ports) > 0 {
 			detail = strings.Join(t.Ports, ",")
 		}
 		fmt.Printf("%-16s %-8s %-10s %s %s\n",

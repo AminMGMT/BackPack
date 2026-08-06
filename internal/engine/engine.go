@@ -19,6 +19,9 @@ type Metadata struct {
 type Request struct {
 	ConfigPath string
 	Config     *config.Config
+	// Replacing means validation is evaluating a candidate for an instance
+	// whose current process may still own its existing listen sockets.
+	Replacing bool
 }
 
 type Health struct {

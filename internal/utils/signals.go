@@ -18,4 +18,18 @@ const (
 	// SG_Pool announces a pool connection, carrying the nonce the server handed
 	// out when the control channel was established.
 	SG_Pool
+
+	// SG_ForwardTCP announces a data connection opened by the dialling Iran
+	// edge. The payload is the current control-channel nonce; the next framed
+	// string is the backend target on the Kharej origin. Older binaries reject
+	// the unknown signal without changing legacy reverse behaviour.
+	SG_ForwardTCP
+	// SG_ForwardUDP is the datagram equivalent. It is reserved separately so a
+	// receiver can never interpret UDP framing as a TCP byte stream.
+	SG_ForwardUDP
+	// The origin answers a forward-open only after its backend dial succeeds.
+	// This keeps an accepted Iran-side user socket from hanging against a dead
+	// or invalid backend.
+	SG_ForwardOK
+	SG_ForwardError
 )

@@ -151,7 +151,7 @@ func promptDirectMapping(existing *config.ForwardMapping) (config.ForwardMapping
 
 func SetupDirect() {
 	tui.Clear()
-	tui.Title("Setup Direct Forward")
+	tui.Title("Advanced Kernel Direct Forward")
 	tui.Warn("Incoming TCP/UDP is DNATed directly to one fixed target with iptables.")
 	tui.Warn("MASQUERADE means the target sees this ingress server as the source.")
 	fmt.Println()
