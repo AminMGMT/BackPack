@@ -1420,6 +1420,11 @@ const FA={
   "Disk %":"دیسک ٪",
   "Tunnel Port":"پورت تونل",
   "Server":"سرور",
+  "Engine":"موتور",
+  "Mappings":"نگاشت‌ها",
+  "Kharej Server":"سرور خارج",
+  "Direction":"جهت اتصال",
+  "Iran → Kharej":"ایران → خارج",
   "Ping":"پینگ",
   "Forwarded Ports":"پورت‌های فورواردشده",
   "Remote":"مقصد",
@@ -1845,6 +1850,7 @@ function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
 let cardMap={}, lastTunnels=[];
 function buildCard(t){
   const n=esc(t.name);
+  const kernelDirect=t.engine==='iptables', appDirect=t.engine==='forward';
   const el=document.createElement('div');
   el.className='tun';
   el.dataset.name=t.name;
@@ -1857,9 +1863,9 @@ function buildCard(t){
       <span class="badge bot" style="display:none" title="This tunnel relays the Telegram bot">${ICON.bot}</span>
     </div>
     <div class="rows">
-      <div class="r"><div class="k" data-i18n>${t.role==='server'?'Tunnel Port':'Server'}</div><div class="v addr"></div></div>
+      <div class="r"><div class="k addrlabel" data-i18n>${kernelDirect?'Engine':(appDirect?(t.role==='server'?'Kharej Server':'Tunnel Port'):(t.role==='server'?'Tunnel Port':'Server'))}</div><div class="v addr"></div></div>
       <div class="r"><div class="k" data-i18n>Ping</div><div class="v ping"></div></div>
-      <div class="r full"><div class="k" data-i18n>${t.role==='server'?'Forwarded Ports':'Remote'}</div><div class="v ports"></div></div>
+      <div class="r full"><div class="k portslabel" data-i18n>${kernelDirect?'Mappings':(appDirect?(t.role==='server'?'Forwarded Ports':'Direction'):(t.role==='server'?'Forwarded Ports':'Remote'))}</div><div class="v ports"></div></div>
       <div class="r full trafrow" style="display:none"><div class="v trafline"></div>
         <div class="spark" style="display:none"></div></div>
       <div class="r full peerrow" style="display:none"><div class="k" data-i18n>Peer</div><div class="v peer"></div></div>
@@ -1871,6 +1877,7 @@ function buildCard(t){
   return el;
 }
 function updateCard(el,t){
+  const kernelDirect=t.engine==='iptables', appDirect=t.engine==='forward';
   const st=t.state||'stopped';
   if(el.classList.contains(st)===false){ el.className='tun '+st; }
   // The dot is the whole status display now, so it carries the label as a
@@ -1885,7 +1892,7 @@ function updateCard(el,t){
   const fl=el.querySelector('.flag'), fe=cc?flagEmoji(cc):'';
   if(fl.textContent!==fe){ fl.textContent=fe; fl.title=cc?countryName(cc):''; }
 
-  setText(el.querySelector('.badge.tr'),(t.transport||'').toUpperCase());
+  setText(el.querySelector('.badge.tr'),(kernelDirect?(t.engine||'iptables'):(appDirect?'DIRECT/'+(t.transport||''):t.transport||'')).toUpperCase());
   el.querySelector('.badge.bot').style.display=t.botRelay?'':'none';
 
   const pe=el.querySelector('.ping'), pc='v ping '+pingClass(t.ping);
@@ -1893,8 +1900,12 @@ function updateCard(el,t){
   setText(pe,pingText(t.ping));
 
   // A server card shows the port clients dial; the full bind address is noise.
-  setText(el.querySelector('.addr'), t.role==='server' ? (t.tunnelPort||'—') : (t.addr||'—'));
-  setText(el.querySelector('.ports'),t.ports||t.addr||'—');
+  const addrLabel=kernelDirect?'Engine':(appDirect?(t.role==='server'?'Kharej Server':'Tunnel Port'):(t.role==='server'?'Tunnel Port':'Server'));
+  const portsLabel=kernelDirect?'Mappings':(appDirect?(t.role==='server'?'Forwarded Ports':'Direction'):(t.role==='server'?'Forwarded Ports':'Remote'));
+  setText(el.querySelector('.addrlabel'),T(addrLabel));
+  setText(el.querySelector('.portslabel'),T(portsLabel));
+  setText(el.querySelector('.addr'),kernelDirect?(t.engine||'iptables'):(appDirect?(t.role==='server'?(t.addr||'—'):(t.tunnelPort||'—')):(t.role==='server'?(t.tunnelPort||'—'):(t.addr||'—'))));
+  setText(el.querySelector('.ports'),appDirect&&t.role!=='server'?T('Iran → Kharej'):(t.ports||t.addr||'—'));
 
   // Traffic comes from the tunnel's own metrics snapshot; a tunnel that has
   // never run has none, and the row stays hidden rather than showing a
@@ -2029,9 +2040,19 @@ function renderDetails(t){
   h+=dRow('Tunnel Uptime',t.uptime);
   h+=dRow('Traffic In',t.bytesIn);
   h+=dRow('Traffic Out',t.bytesOut);
+	if(t.packetsIn) h+=dRow('Packets In',t.packetsIn);
+	if(t.packetsOut) h+=dRow('Packets Out',t.packetsOut);
   h+=dRow('Preset',t.preset);
+  h+=dRow('Mode',t.mode);
+  h+=dRow('Engine',(t.engine||'').toUpperCase());
   h+=dRow('Transport',(t.transport||'').toUpperCase());
   h+='</div>';
+
+  if(t.mode==='direct'&&t.mappings&&t.mappings.length){
+    h+=dSec('Direct mappings')+'<div class="dl">';
+    t.mappings.forEach(m=>{h+=dRow((m.protocols||[]).join('+').toUpperCase(),m.listenAddress+':'+m.listenPorts+' → '+m.targetAddress+':'+m.targetPorts,true);});
+    h+='</div>';
+  }
 
   const lim=[];
   if(t.maxConnections) lim.push(t.maxConnections+' connections');
@@ -2163,7 +2184,8 @@ function closeDetails(){ $('details').classList.remove('on'); detName=null; }
 function renderLinkTestBox(t){
   const box=$('ltwrap');
   // Measured from the side that dials out; a TCP probe can't see a UDP port.
-  if(t.role!=='client'||['udp','kcp'].includes(t.transport)){ box.innerHTML=''; return; }
+  const dialler=t.engine==='forward'?t.role==='server':t.role==='client';
+  if(!dialler||['udp','kcp','quic','xdi','spoof'].includes(t.transport)){ box.innerHTML=''; return; }
   box.innerHTML=dSec('Link Test')+
     '<div class="upd"><span class="umsg" id="ltmsg">Latency, jitter and loss to '+esc(t.addr)+
     ', with a transport recommendation.</span>'+

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 )
@@ -16,16 +15,25 @@ import (
 // loadServerSpec reconstructs a server tunnel's spec from its config file so it
 // can be modified and re-saved without losing settings.
 func loadServerSpec(name string) (TunnelSpec, error) {
-	var cfg config.Config
-	if _, err := toml.DecodeFile(app.ConfigPath(name), &cfg); err != nil {
+	cfg, err := config.LoadFile(app.ConfigPath(name))
+	if err != nil {
 		return TunnelSpec{}, err
 	}
+	return serverSpecFromConfig(name, cfg)
+}
+
+func serverSpecFromConfig(name string, cfg *config.Config) (TunnelSpec, error) {
 	sc := cfg.Server
 	if sc.BindAddr == "" {
 		return TunnelSpec{}, fmt.Errorf("%q is not a server tunnel", name)
 	}
+	role := "server"
+	if cfg.EffectiveEngine() == config.EngineForward {
+		role = "client" // geographic Kharej role; [server] is operational
+	}
 	return TunnelSpec{
-		Role:            "server",
+		Role:            role,
+		Engine:          cfg.Engine,
 		Name:            name,
 		Transport:       string(sc.Transport),
 		BindAddr:        sc.BindAddr,
@@ -84,21 +92,31 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 // loadClientSpec reconstructs a client tunnel's spec from its config file so it
 // can be modified and re-saved without losing settings.
 func loadClientSpec(name string) (TunnelSpec, error) {
-	var cfg config.Config
-	if _, err := toml.DecodeFile(app.ConfigPath(name), &cfg); err != nil {
+	cfg, err := config.LoadFile(app.ConfigPath(name))
+	if err != nil {
 		return TunnelSpec{}, err
 	}
+	return clientSpecFromConfig(name, cfg)
+}
+
+func clientSpecFromConfig(name string, cfg *config.Config) (TunnelSpec, error) {
 	cc := cfg.Client
 	if cc.RemoteAddr == "" {
 		return TunnelSpec{}, fmt.Errorf("%q is not a client tunnel", name)
 	}
+	role := "client"
+	if cfg.EffectiveEngine() == config.EngineForward {
+		role = "server" // geographic Iran role; [client] is operational
+	}
 	return TunnelSpec{
-		Role:            "client",
+		Role:            role,
+		Engine:          cfg.Engine,
 		Name:            name,
 		Transport:       string(cc.Transport),
 		RemoteAddr:      cc.RemoteAddr,
 		FallbackAddrs:   cc.FallbackAddrs,
 		Token:           cc.Token,
+		Ports:           append([]string(nil), cc.Ports...),
 		ConnectionPool:  cc.ConnectionPool,
 		AggressivePool:  cc.AggressivePool,
 		KeepAlive:       cc.Keepalive,
@@ -115,6 +133,10 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		Interface:       cc.Interface,
 		SOMark:          cc.SOMark,
 		ZeroCopy:        cc.ZeroCopy,
+		AcceptUDP:       cc.AcceptUDP,
+		ProxyProtocol:   cc.ProxyProtocol,
+		MaxConnections:  cc.MaxConnections,
+		BandwidthMbps:   cc.BandwidthMbps,
 		MuxCon:          cc.MuxSession,
 		MuxVersion:      cc.MuxVersion,
 		MuxFrameSize:    cc.MaxFrameSize,
@@ -225,7 +247,7 @@ func EditTunnel(name, host, tunnelPort string, ports []string) error {
 		if tunnelPort != "" && !validPort(tunnelPort) {
 			return fmt.Errorf("invalid tunnel port %q", tunnelPort)
 		}
-		if s.Role == "server" {
+		if s.operationalServer() {
 			if host != "" {
 				return fmt.Errorf("the address can only be changed on client tunnels")
 			}
@@ -263,6 +285,11 @@ func EditTunnel(name, host, tunnelPort string, ports []string) error {
 		if err := validatePortSpecs(clean); err != nil {
 			return err
 		}
+		if s.Engine == config.EngineForward {
+			if err := validateForwardPortSpecs(clean); err != nil {
+				return err
+			}
+		}
 		// Keep the hidden Telegram/SOCKS relay mapping the user never sees.
 		for _, p := range s.Ports {
 			if isBotRelayPort(p, s.Token) {
@@ -291,7 +318,7 @@ func SetFallbackAddrs(name string, addrs []string) error {
 	if err != nil {
 		return err
 	}
-	if s.Role != "client" {
+	if s.operationalServer() {
 		return fmt.Errorf("fallback addresses apply to client tunnels only")
 	}
 
@@ -368,7 +395,7 @@ func ChangeTransport(name, transport string) error {
 		s.MuxStreamBuffer = 65536
 	}
 	// TLS transports need a certificate on the server side.
-	if s.Role == "server" && needsTLS(transport) && (s.TLSCert == "" || !fileExists(s.TLSCert)) {
+	if s.operationalServer() && needsTLS(transport) && (s.TLSCert == "" || !fileExists(s.TLSCert)) {
 		cert, key, err := EnsureSelfSignedCert(s.Name, "")
 		if err != nil {
 			return fmt.Errorf("could not generate a TLS certificate: %w", err)
@@ -399,7 +426,7 @@ func SetLoadBalance(name string, on bool) error {
 	if err != nil {
 		return err
 	}
-	if s.Role != "client" {
+	if s.operationalServer() {
 		return fmt.Errorf("load balancing is a client-side setting")
 	}
 	if on && len(s.FallbackAddrs) == 0 {
@@ -478,12 +505,21 @@ func applySpec(s TunnelSpec) error {
 	}
 	wasActive := IsActive(service)
 
-	if _, err := s.Save(); err != nil {
-		// Save failed — put the original file back untouched.
-		_ = os.WriteFile(path, prev, 0644)
+	if err := s.Validate(); err != nil {
+		return fmt.Errorf("invalid candidate configuration: %w", err)
+	}
+	if err := app.WriteFileAtomic(path, []byte(s.Render()), 0644); err != nil {
+		return fmt.Errorf("could not atomically install candidate config: %w", err)
+	}
+	if err := writeUnit(s.Name); err != nil {
+		_ = app.WriteFileAtomic(path, prev, 0644)
 		return err
 	}
-	// Save alone won't reload an already-running unit — restart explicitly.
+	if err := DaemonReload(); err != nil {
+		_ = app.WriteFileAtomic(path, prev, 0644)
+		return err
+	}
+	// Restart explicitly so an existing process cannot keep the old config.
 	if err := RestartService(service); err != nil {
 		revertSpec(path, prev, service, wasActive)
 		return fmt.Errorf("the tunnel failed to restart with the new settings — reverted: %w", err)
@@ -505,7 +541,7 @@ func applySpec(s TunnelSpec) error {
 // revertSpec restores a previous config file and brings the service back to the
 // state it was in before the edit.
 func revertSpec(path string, prev []byte, service string, wasActive bool) {
-	_ = os.WriteFile(path, prev, 0644)
+	_ = app.WriteFileAtomic(path, prev, 0644)
 	if wasActive {
 		_ = RestartService(service)
 	} else {
@@ -546,7 +582,7 @@ func SetCertificate(name, domain, email string) error {
 	if err != nil {
 		return err
 	}
-	if s.Role != "server" {
+	if !s.operationalServer() {
 		return fmt.Errorf("the certificate is a server-side setting — the client does not present one")
 	}
 	if !needsTLS(s.Transport) {

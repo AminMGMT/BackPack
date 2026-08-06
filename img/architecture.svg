@@ -19,7 +19,7 @@
   <!-- Iran server -->
   <rect x="172" y="78" width="248" height="150" rx="12" fill="#ffffff" stroke="#e8552d" stroke-width="1.5"/>
   <text x="296" y="102" text-anchor="middle" font-size="13" font-weight="700" fill="#e8552d">IRAN SERVER</text>
-  <text x="296" y="118" text-anchor="middle" font-size="10.5" fill="#6b7280">role: SERVER · exposes ports</text>
+  <text x="296" y="118" text-anchor="middle" font-size="10.5" fill="#6b7280">role: SERVER · public ingress</text>
   <rect x="190" y="132" width="212" height="82" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
   <text x="296" y="158" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1f2328">Forwarded ports · :443 :8443</text>
   <text x="296" y="180" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1f2328">Backpack engine</text>
@@ -28,7 +28,7 @@
   <!-- Kharej server -->
   <rect x="580" y="78" width="248" height="150" rx="12" fill="#ffffff" stroke="#8a94a6" stroke-width="1.5"/>
   <text x="704" y="102" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">KHAREJ / ABROAD</text>
-  <text x="704" y="118" text-anchor="middle" font-size="10.5" fill="#6b7280">role: CLIENT · dials out</text>
+  <text x="704" y="118" text-anchor="middle" font-size="10.5" fill="#6b7280">role: CLIENT · real-service side</text>
   <rect x="598" y="132" width="212" height="82" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
   <text x="704" y="166" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1f2328">Backpack engine</text>
   <text x="704" y="190" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1f2328">forward to the real service</text>
@@ -43,8 +43,8 @@
   <text x="500" y="156" text-anchor="middle" font-size="11.5" font-weight="600" fill="#e8552d">encrypted tunnel · one transport</text>
   <path d="M424 172 H576" stroke="#e8552d" stroke-width="2.5" fill="none" marker-start="url(#arrA)" marker-end="url(#arrA)"/>
   <path d="M576 196 H424" stroke="#8a94a6" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#arr)"/>
-  <text x="500" y="214" text-anchor="middle" font-size="10.5" fill="#6b7280">the client dials the server (kharej → Iran)</text>
+  <text x="500" y="214" text-anchor="middle" font-size="10.5" fill="#6b7280">Direct: Iran → Kharej · Reverse: Kharej → Iran</text>
   <path d="M828 172 H858" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#arr)"/>
 
-  <text x="500" y="290" text-anchor="middle" font-size="11" fill="#6b7280">Transports: TCP · TCP Mux · TCP + Stealth · UDP · UDP + KCP · WS · WS Mux · WSS · WSS Mux</text>
+  <text x="500" y="290" text-anchor="middle" font-size="11" fill="#6b7280">Transports: TCP · TCP Mux · Stealth · UDP · KCP · QUIC · WS · WS Mux · WSS · WSS Mux</text>
 </svg>

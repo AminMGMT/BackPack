@@ -1,5 +1,95 @@
 package config
 
+import (
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+// EngineType selects the implementation that owns an instance.  An empty
+// value is intentionally meaningful: it is the legacy spelling of reverse.
+type EngineType string
+
+const (
+	EngineReverse EngineType = "reverse"
+	// EngineForward keeps Backpack's application-level tunnel and selected
+	// transport, but reverses who establishes it: the Iran edge dials the
+	// Kharej origin.  It is intentionally distinct from EngineIPTables, which
+	// is a kernel-only DNAT engine and does not carry a Backpack transport.
+	EngineForward  EngineType = "forward"
+	EngineIPTables EngineType = "iptables"
+)
+
+const (
+	MaxPortsPerMapping  = 1024
+	MaxPortsPerInstance = 4096
+)
+
+// ForwardMapping is one offset-preserving direct forwarding rule.
+type ForwardMapping struct {
+	ListenAddress string   `toml:"listen_address" json:"listenAddress"`
+	ListenPorts   string   `toml:"listen_ports" json:"listenPorts"`
+	TargetAddress string   `toml:"target_address" json:"targetAddress"`
+	TargetPorts   string   `toml:"target_ports" json:"targetPorts"`
+	Protocols     []string `toml:"protocols" json:"protocols"`
+}
+
+type ForwardConfig struct {
+	Mappings []ForwardMapping `toml:"mappings" json:"mappings"`
+}
+
+// PortRange is the normalised inclusive form used by the netfilter engine.
+type PortRange struct{ Start, End uint16 }
+
+func (r PortRange) Len() int { return int(r.End-r.Start) + 1 }
+
+func ParsePortRange(raw string) (PortRange, error) {
+	parts := strings.Split(strings.TrimSpace(raw), "-")
+	if len(parts) < 1 || len(parts) > 2 {
+		return PortRange{}, fmt.Errorf("invalid port range %q", raw)
+	}
+	parse := func(s string) (uint16, error) {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < 1 || n > 65535 {
+			return 0, fmt.Errorf("invalid port %q", s)
+		}
+		return uint16(n), nil
+	}
+	lo, err := parse(parts[0])
+	if err != nil {
+		return PortRange{}, err
+	}
+	hi := lo
+	if len(parts) == 2 {
+		hi, err = parse(parts[1])
+		if err != nil {
+			return PortRange{}, err
+		}
+	}
+	if hi < lo {
+		return PortRange{}, fmt.Errorf("port range %q ends before it starts", raw)
+	}
+	return PortRange{Start: lo, End: hi}, nil
+}
+
+func (m ForwardMapping) Ranges() (PortRange, PortRange, error) {
+	l, err := ParsePortRange(m.ListenPorts)
+	if err != nil {
+		return PortRange{}, PortRange{}, fmt.Errorf("listen_ports: %w", err)
+	}
+	t, err := ParsePortRange(m.TargetPorts)
+	if err != nil {
+		return PortRange{}, PortRange{}, fmt.Errorf("target_ports: %w", err)
+	}
+	if l.Len() != t.Len() {
+		return PortRange{}, PortRange{}, fmt.Errorf("listen and target ranges must contain the same number of ports")
+	}
+	return l, t, nil
+}
+
 // TransportType defines the type of transport.
 type TransportType string
 
@@ -220,6 +310,10 @@ type ServerConfig struct {
 // ClientConfig represents the configuration for the client.
 type ClientConfig struct {
 	RemoteAddr string `toml:"remote_addr"`
+	// Ports is used only by the forward engine.  In that mode the dialling
+	// client is the Iran edge, so it also owns the public ingress listeners.
+	// Reverse client configs omit it and retain their historical meaning.
+	Ports []string `toml:"ports"`
 	// FallbackAddrs are additional server addresses tried in order whenever the
 	// primary cannot be reached (a filtered IP, a blocked port, a CDN edge).
 	FallbackAddrs    []string      `toml:"fallback_addrs"`
@@ -292,6 +386,12 @@ type ClientConfig struct {
 	// plain `tcp` transport on Linux, and only when the tunnel has no bandwidth
 	// limit — anything else quietly keeps the buffered path.
 	ZeroCopy bool `toml:"zero_copy"`
+	// The following ingress controls are meaningful on the dialling side only
+	// for EngineForward. They mirror the long-standing reverse server knobs.
+	AcceptUDP      bool `toml:"accept_udp"`
+	ProxyProtocol  bool `toml:"proxy_protocol"`
+	MaxConnections int  `toml:"max_connections"`
+	BandwidthMbps  int  `toml:"bandwidth_mbps"`
 
 	Preset string `toml:"preset"`
 	// LoadBalance spreads the pool's data connections over every configured
@@ -309,6 +409,172 @@ type ClientConfig struct {
 
 // Config represents the complete configuration, including both server and client settings.
 type Config struct {
-	Server ServerConfig `toml:"server"`
-	Client ClientConfig `toml:"client"`
+	Engine  EngineType    `toml:"engine"`
+	Server  ServerConfig  `toml:"server"`
+	Client  ClientConfig  `toml:"client"`
+	Forward ForwardConfig `toml:"forward"`
+
+	sections sectionPresence `toml:"-"`
+}
+
+type sectionPresence struct{ server, client, forward bool }
+
+// LoadFile is the canonical decoder. Besides decoding values it records table
+// presence, which is required to distinguish an absent table from an empty but
+// invalid one.
+func LoadFile(path string) (*Config, error) {
+	var c Config
+	md, err := toml.DecodeFile(path, &c)
+	if err != nil {
+		return &c, err
+	}
+	c.sections = sectionPresence{
+		server: md.IsDefined("server"), client: md.IsDefined("client"), forward: md.IsDefined("forward"),
+	}
+	if err := c.ValidateStructure(); err != nil {
+		return &c, err
+	}
+	return &c, nil
+}
+
+// EffectiveEngine preserves the meaning of every pre-engine configuration.
+func (c *Config) EffectiveEngine() EngineType {
+	if c.Engine == "" {
+		return EngineReverse
+	}
+	return c.Engine
+}
+
+func (c *Config) HasForward() bool { return c.sections.forward || len(c.Forward.Mappings) > 0 }
+func (c *Config) HasServer() bool  { return c.sections.server || c.Server.BindAddr != "" }
+func (c *Config) HasClient() bool  { return c.sections.client || c.Client.RemoteAddr != "" }
+
+// ValidateStructure validates the engine/section matrix and portable direct
+// mapping rules. It is deliberately side-effect free.
+func (c *Config) ValidateStructure() error {
+	hasServer, hasClient, hasForward := c.HasServer(), c.HasClient(), c.HasForward()
+	if hasServer && hasClient {
+		return fmt.Errorf("[server] and [client] cannot exist together")
+	}
+	if hasForward && (hasServer || hasClient) {
+		return fmt.Errorf("[forward] cannot exist with [server] or [client]")
+	}
+	switch c.Engine {
+	case "":
+		if hasForward {
+			return fmt.Errorf("[forward] requires engine = %q", EngineIPTables)
+		}
+		if hasServer == hasClient {
+			return fmt.Errorf("a reverse instance requires exactly one of [server] or [client]")
+		}
+	case EngineReverse:
+		if hasForward || hasServer == hasClient {
+			return fmt.Errorf("engine %q requires exactly one of [server] or [client]", EngineReverse)
+		}
+	case EngineForward:
+		if hasForward || hasServer == hasClient {
+			return fmt.Errorf("engine %q requires exactly one of [server] or [client]", EngineForward)
+		}
+		// Operational roles are deliberately used here: [client] is the Iran
+		// dialler and therefore owns ingress ports; [server] is the Kharej
+		// listener and never exposes ports itself.
+		if hasClient {
+			if strings.TrimSpace(c.Client.RemoteAddr) == "" {
+				return fmt.Errorf("engine %q [client] requires remote_addr", EngineForward)
+			}
+			if len(c.Client.Ports) == 0 {
+				return fmt.Errorf("engine %q Iran [client] requires at least one ingress port mapping", EngineForward)
+			}
+		} else if strings.TrimSpace(c.Server.BindAddr) == "" {
+			return fmt.Errorf("engine %q Kharej [server] requires bind_addr", EngineForward)
+		}
+	case EngineIPTables:
+		if !hasForward || hasServer || hasClient {
+			return fmt.Errorf("engine %q requires [forward] and no reverse section", EngineIPTables)
+		}
+	default:
+		return fmt.Errorf("unknown engine %q", c.Engine)
+	}
+	if c.EffectiveEngine() == EngineIPTables {
+		return ValidateForward(c.Forward)
+	}
+	return nil
+}
+
+func ValidateForward(f ForwardConfig) error {
+	if len(f.Mappings) == 0 {
+		return fmt.Errorf("[forward] requires at least one mapping")
+	}
+	total := 0
+	type tuple struct {
+		family, proto, addr string
+		ports               PortRange
+	}
+	var seen []tuple
+	for i, m := range f.Mappings {
+		prefix := fmt.Sprintf("forward mapping %d", i+1)
+		listen, target := net.ParseIP(strings.TrimSpace(m.ListenAddress)), net.ParseIP(strings.TrimSpace(m.TargetAddress))
+		if listen == nil {
+			return fmt.Errorf("%s: listen_address must be an explicit IPv4 or IPv6 address", prefix)
+		}
+		if target == nil {
+			return fmt.Errorf("%s: target_address must be an explicit IPv4 or IPv6 address", prefix)
+		}
+		lf, tf := "ipv6", "ipv6"
+		if listen.To4() != nil {
+			lf = "ipv4"
+		}
+		if target.To4() != nil {
+			tf = "ipv4"
+		}
+		if lf != tf {
+			return fmt.Errorf("%s: listen and target addresses must use the same family", prefix)
+		}
+		if target.IsUnspecified() || target.IsMulticast() || target.IsLoopback() || target.IsInterfaceLocalMulticast() || target.IsLinkLocalMulticast() {
+			return fmt.Errorf("%s: target_address must be a non-loopback unicast address", prefix)
+		}
+		if v4 := target.To4(); v4 != nil && v4.Equal(net.IPv4bcast) {
+			return fmt.Errorf("%s: IPv4 broadcast targets are not supported", prefix)
+		}
+		lr, _, err := m.Ranges()
+		if err != nil {
+			return fmt.Errorf("%s: %w", prefix, err)
+		}
+		if lr.Len() > MaxPortsPerMapping {
+			return fmt.Errorf("%s expands to %d ports; maximum per mapping is %d", prefix, lr.Len(), MaxPortsPerMapping)
+		}
+		total += lr.Len()
+		if total > MaxPortsPerInstance {
+			return fmt.Errorf("forward instance expands to %d ports; maximum is %d", total, MaxPortsPerInstance)
+		}
+		if len(m.Protocols) == 0 {
+			return fmt.Errorf("%s: at least one protocol is required", prefix)
+		}
+		protos := map[string]bool{}
+		for _, raw := range m.Protocols {
+			p := strings.ToLower(strings.TrimSpace(raw))
+			if p != "tcp" && p != "udp" {
+				return fmt.Errorf("%s: unsupported protocol %q (use tcp or udp)", prefix, raw)
+			}
+			if protos[p] {
+				return fmt.Errorf("%s: protocol %q is duplicated", prefix, p)
+			}
+			protos[p] = true
+			addr := listen.String()
+			wild := listen.IsUnspecified()
+			for _, old := range seen {
+				if old.family != lf || old.proto != p || old.ports.End < lr.Start || lr.End < old.ports.Start {
+					continue
+				}
+				if wild || old.addr == "*" || old.addr == addr {
+					return fmt.Errorf("%s overlaps an earlier %s mapping on %s ports %d-%d", prefix, p, lf, lr.Start, lr.End)
+				}
+			}
+			if wild {
+				addr = "*"
+			}
+			seen = append(seen, tuple{family: lf, proto: p, addr: addr, ports: lr})
+		}
+	}
+	return nil
 }

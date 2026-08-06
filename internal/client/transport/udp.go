@@ -15,14 +15,16 @@ import (
 )
 
 type UdpTransport struct {
-	config          *UdpConfig
-	parentctx       context.Context
-	state           clientState
-	logger          *logrus.Logger
-	restartMutex    sync.Mutex
-	poolConnections int32
-	loadConnections int32
-	controlFlow     chan struct{}
+	config           *UdpConfig
+	parentctx        context.Context
+	state            clientState
+	logger           *logrus.Logger
+	restartMutex     sync.Mutex
+	poolConnections  int32
+	loadConnections  int32
+	controlFlow      chan struct{}
+	forwardActive    int32
+	forwardBandwidth *forwardBandwidth
 }
 type UdpConfig struct {
 	RemoteAddr string
@@ -42,8 +44,12 @@ type UdpConfig struct {
 	// to the server and to the local backend. The kernel default is small enough
 	// that a datagram flood overruns it and drops packets before they are read;
 	// the preset's several MB is what carries a speed test without stalling.
-	SO_RCVBUF int
-	SO_SNDBUF int
+	SO_RCVBUF      int
+	SO_SNDBUF      int
+	Forward        bool
+	Ports          []string
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
@@ -52,12 +58,13 @@ func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 
 	// Initialize the TcpTransport struct
 	client := &UdpTransport{
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		config:           config,
+		parentctx:        parentCtx,
+		logger:           logger,
+		poolConnections:  0,
+		loadConnections:  0,
+		controlFlow:      make(chan struct{}, 100),
+		forwardBandwidth: newForwardBandwidth(config.BandwidthMbps),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -191,8 +198,12 @@ func (c *UdpTransport) channelDialer() {
 
 				c.config.TunnelStatus = "Connected (UDP)"
 
-				go c.poolMaintainer()
 				go c.channelHandler()
+				if c.config.Forward {
+					go c.startForwardUDPIngress()
+				} else {
+					go c.poolMaintainer()
+				}
 
 				return
 

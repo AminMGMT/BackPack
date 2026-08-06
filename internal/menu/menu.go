@@ -3,6 +3,7 @@
 package menu
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
 	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/optimize"
@@ -76,7 +78,7 @@ func Run() {
 			updateMenu()
 		case "9":
 			uninstallMenu()
-		case "10", "0":
+		case "10", "11", "0":
 			tui.Info("Goodbye!")
 			return
 		default:
@@ -101,9 +103,9 @@ func printUpdateBanner() {
 // printMenu renders the main menu: red numbers, white titles, gray descriptions.
 func printMenu() {
 	fmt.Println()
-	menuItem(1, "Setup Server", "Iran side — exposes ports to users")
-	menuItem(2, "Setup Client", "Kharej side — dials out to the Iran server")
-	menuItem(3, "Manage", "tunnels, ports, transport, status, health check")
+	menuItem(1, "Setup Server", "Iran side — exposes ports; Direct dials Kharej")
+	menuItem(2, "Setup Client", "Kharej side — Direct accepts, Reverse dials Iran")
+	menuItem(3, "Manage", "instances, ports, transport, status, health check")
 	menuItem(4, "Backup & Restore", "save or restore the full configuration")
 	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")
 	menuItem(6, "Optimize", "kernel & network tuning — BBR, buffers, limits")
@@ -1014,13 +1016,31 @@ func uninstallMenu() {
 		repo = app.InstallDir
 	}
 
+	var cleanupFailures []string
 	for _, t := range manage.List() {
-		_ = manage.Delete(t.Name)
+		if err := manage.Delete(t.Name); err != nil {
+			cleanupFailures = append(cleanupFailures, t.Name+": "+err.Error())
+		}
+	}
+	if err := engine.CleanupOrphans(context.Background(), app.ConfigDir, true); err != nil {
+		cleanupFailures = append(cleanupFailures, "orphan netfilter cleanup: "+err.Error())
+	}
+	if len(cleanupFailures) > 0 {
+		tui.Error("Uninstall stopped because owned netfilter rules could not be safely cleaned:")
+		for _, failure := range cleanupFailures {
+			fmt.Println("  " + failure)
+		}
+		tui.Warn("Configs and the binary were kept so cleanup can be retried.")
+		tui.PressEnter()
+		return
 	}
 	_ = webui.Disable()
 	_ = manage.DisableMonitorService()
 	_ = schedule.SetAutoRefresh(0)
 	_ = telegram.Disable()
+	if err := engine.RemoveRuntimeArtifacts(); err != nil {
+		tui.Warn("Could not remove the netfilter runtime lock: " + err.Error())
+	}
 	os.RemoveAll(app.ConfigDir)
 	if err := os.Remove(app.BinPath); err != nil {
 		tui.Warn("Could not remove binary at " + app.BinPath + " — remove it manually.")

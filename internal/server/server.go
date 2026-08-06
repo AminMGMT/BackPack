@@ -22,10 +22,11 @@ import (
 const acmeCacheDir = "/etc/backpack/acme"
 
 type Server struct {
-	config *config.ServerConfig
-	ctx    context.Context
-	cancel context.CancelFunc
-	logger *logrus.Logger
+	config  *config.ServerConfig
+	forward bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	logger  *logrus.Logger
 }
 
 func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
@@ -41,6 +42,16 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 		cancel: cancel,
 		logger: utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
 	}
+}
+
+// NewForwardOrigin builds the listening Kharej half of an application-level
+// forward tunnel. It uses the same transport listener and authentication as a
+// reverse server, but accepted data channels are dialled into local backends
+// instead of being paired with public ingress sockets.
+func NewForwardOrigin(cfg *config.ServerConfig, parentCtx context.Context) *Server {
+	s := NewServer(cfg, parentCtx)
+	s.forward = true
+	return s
 }
 
 func (s *Server) Start() {
@@ -82,6 +93,7 @@ func (s *Server) Start() {
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
 			Stealth: s.config.Transport == config.STEALTH,
+			Forward: s.forward,
 		}
 
 		tcpServer := transport.NewTCPServer(s.ctx, tcpConfig, s.logger)
@@ -152,6 +164,7 @@ func (s *Server) Start() {
 			SpoofSrcPool:     s.config.SpoofSrcPool,
 			SpoofPeerIP:      s.config.SpoofPeerIP,
 			SpoofInterface:   s.config.SpoofInterface,
+			Forward:          s.forward,
 		}
 
 		kcpServer := transport.NewKcpServer(s.ctx, kcpConfig, s.logger)
@@ -173,6 +186,7 @@ func (s *Server) Start() {
 			ProxyProtocol:  s.config.ProxyProtocol,
 			MaxConnections: s.config.MaxConnections,
 			BandwidthMbps:  s.config.BandwidthMbps,
+			Forward:        s.forward,
 		}
 
 		quicServer := transport.NewQuicServer(s.ctx, quicConfig, s.logger)
@@ -201,6 +215,7 @@ func (s *Server) Start() {
 			ProxyProtocol:    s.config.ProxyProtocol,
 			MaxConnections:   s.config.MaxConnections,
 			BandwidthMbps:    s.config.BandwidthMbps,
+			Forward:          s.forward,
 		}
 
 		tcpMuxServer := transport.NewTcpMuxServer(s.ctx, tcpMuxConfig, s.logger)
@@ -228,6 +243,7 @@ func (s *Server) Start() {
 
 			MaxConnections: s.config.MaxConnections,
 			BandwidthMbps:  s.config.BandwidthMbps,
+			Forward:        s.forward,
 		}
 
 		wsServer := transport.NewWSServer(s.ctx, wsConfig, s.logger)
@@ -260,6 +276,7 @@ func (s *Server) Start() {
 			ProxyProtocol:    s.config.ProxyProtocol,
 			MaxConnections:   s.config.MaxConnections,
 			BandwidthMbps:    s.config.BandwidthMbps,
+			Forward:          s.forward,
 		}
 
 		wsMuxServer := transport.NewWSMuxServer(s.ctx, wsMuxConfig, s.logger)
@@ -277,6 +294,7 @@ func (s *Server) Start() {
 			SnifferLog:  s.config.SnifferLog,
 			SO_RCVBUF:   s.config.SO_RCVBUF,
 			SO_SNDBUF:   s.config.SO_SNDBUF,
+			Forward:     s.forward,
 		}
 
 		udpServer := transport.NewUDPServer(s.ctx, udpConfig, s.logger)

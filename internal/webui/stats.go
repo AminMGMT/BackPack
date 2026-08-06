@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
@@ -104,16 +105,19 @@ type SystemStats struct {
 
 // TunnelInfo is one row for /api/tunnels.
 type TunnelInfo struct {
-	Name         string `json:"name"`
-	Role         string `json:"role"`
-	Transport    string `json:"transport"`
-	Addr         string `json:"addr"`
-	Ports        string `json:"ports"`
-	State        string `json:"state"`
-	Ping         int    `json:"ping"` // milliseconds, -1 = n/a
-	PeerLocation string `json:"peerLocation"`
-	PeerISP      string `json:"peerISP"`
-	BotRelay     bool   `json:"botRelay"` // has a hidden port used for the Telegram relay
+	Name         string                  `json:"name"`
+	Mode         string                  `json:"mode"`
+	Engine       string                  `json:"engine"`
+	Role         string                  `json:"role"`
+	Transport    string                  `json:"transport"`
+	Mappings     []config.ForwardMapping `json:"mappings"`
+	Addr         string                  `json:"addr"`
+	Ports        string                  `json:"ports"`
+	State        string                  `json:"state"`
+	Ping         int                     `json:"ping"` // milliseconds, -1 = n/a
+	PeerLocation string                  `json:"peerLocation"`
+	PeerISP      string                  `json:"peerISP"`
+	BotRelay     bool                    `json:"botRelay"` // has a hidden port used for the Telegram relay
 	// BotRelayPort is the loopback port that relay listens on. It is shown on
 	// its own, under its own name, rather than as the raw mapping: the mapping
 	// reads like something the operator set up and can therefore tidy away,
@@ -129,9 +133,11 @@ type TunnelInfo struct {
 	TunnelPort string `json:"tunnelPort"`
 
 	// From the tunnel's metrics snapshot (empty when none has been written yet).
-	Uptime   string `json:"uptime,omitempty"`
-	BytesIn  string `json:"bytesIn,omitempty"`
-	BytesOut string `json:"bytesOut,omitempty"`
+	Uptime     string `json:"uptime,omitempty"`
+	BytesIn    string `json:"bytesIn,omitempty"`
+	BytesOut   string `json:"bytesOut,omitempty"`
+	PacketsIn  uint64 `json:"packetsIn"`
+	PacketsOut uint64 `json:"packetsOut"`
 	// BytesTotal is the two added. The card shows all three on one line, and a
 	// sum of two already-formatted strings is not something the browser can do.
 	BytesTotal string `json:"bytesTotal,omitempty"`
@@ -426,8 +432,11 @@ func GatherTunnels() []TunnelInfo {
 			ports, relayPort, bot := splitBotRelay(t.Ports, "")
 			info := TunnelInfo{
 				Name:         t.Name,
-				Role:         t.Role,
+				Mode:         t.Mode,
+				Engine:       t.Engine,
+				Role:         t.DisplayRole(),
 				Transport:    t.Transport,
+				Mappings:     append([]config.ForwardMapping{}, t.Mappings...),
 				Addr:         t.Addr,
 				Ports:        ports,
 				BotRelay:     bot,
@@ -440,7 +449,15 @@ func GatherTunnels() []TunnelInfo {
 				Country:    manage.TunnelCountry(t.Name),
 				Ping:       -1,
 			}
-			if t.Role == "server" {
+			if t.KernelDirect() {
+				info.State = health[t.Name].State
+				var rendered []string
+				for _, m := range t.Mappings {
+					rendered = append(rendered, fmt.Sprintf("%s:%s → %s:%s (%s)", m.ListenAddress, m.ListenPorts, m.TargetAddress, m.TargetPorts, strings.ToUpper(strings.Join(m.Protocols, "+"))))
+				}
+				info.Ports = strings.Join(rendered, ", ")
+				info.TunnelPort = ""
+			} else if t.Role == "server" {
 				// Server (e.g. the Iran node): we can't ping our own bind_addr,
 				// but we can detect the connected client(s) — the kharej peers
 				// dialing in — and measure/geo-locate them. This gives the Iran
@@ -747,6 +764,8 @@ func fillMetrics(info *TunnelInfo, snap metrics.Snapshot) {
 	info.BytesIn = sysstat.HumanBytes(snap.BytesIn)
 	info.BytesOut = sysstat.HumanBytes(snap.BytesOut)
 	info.BytesTotal = sysstat.HumanBytes(snap.BytesIn + snap.BytesOut)
+	info.PacketsIn = snap.PacketsIn
+	info.PacketsOut = snap.PacketsOut
 	info.Rates = rates.sample(info.Name, snap)
 	info.Pool = snap.Pool
 	if snap.KCP != nil {
@@ -760,6 +779,9 @@ func fillMetrics(info *TunnelInfo, snap metrics.Snapshot) {
 func fillConfig(info *TunnelInfo, t manage.Tunnel) {
 	cfg, err := manage.LoadTunnelConfig(t.Name)
 	if err != nil {
+		return
+	}
+	if t.KernelDirect() {
 		return
 	}
 	if t.Role == "server" {
@@ -792,6 +814,11 @@ func fillConfig(info *TunnelInfo, t manage.Tunnel) {
 		info.Preset = manage.PresetValueLabel(cc.Preset)
 		info.LoadBalance = cc.LoadBalance
 		info.FallbackAddrs = cc.FallbackAddrs
+		if t.AppForward() {
+			info.MaxConnections = cc.MaxConnections
+			info.BandwidthMbps = cc.BandwidthMbps
+			info.ProxyProtocol = cc.ProxyProtocol
+		}
 	}
 }
 

@@ -34,6 +34,8 @@ type KcpTransport struct {
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
+	forwardSessions chan *smux.Session
+	forwardActive   int32
 }
 
 type KcpConfig struct {
@@ -83,6 +85,11 @@ type KcpConfig struct {
 	SpoofSrcPool   []string
 	SpoofPeerIP    string
 	SpoofInterface string
+	Forward        bool
+	Ports          []string
+	ProxyProtocol  bool
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 // transportLabel is what the panel and logs call this transport — XDI over ICMP
@@ -95,6 +102,10 @@ func (c *KcpTransport) transportLabel() string {
 		return "SPOOF"
 	}
 	return "KCP"
+}
+
+func (c *KcpTransport) rawForward() bool {
+	return c.config.Forward && (c.config.UseICMP || c.config.UseSpoof)
 }
 
 func (c *KcpConfig) settings() network.KCPSettings {
@@ -147,6 +158,7 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
+		forwardSessions: make(chan *smux.Session, max(1, config.ConnPoolSize)),
 	}
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
@@ -180,6 +192,7 @@ func (c *KcpTransport) Restart() {
 	if c.state.Cancel() != nil {
 		c.state.Cancel()()
 	}
+	metrics.ClearPeer()
 
 	c.state.CloseConn()
 
@@ -211,6 +224,16 @@ func (c *KcpTransport) Restart() {
 	// connection that is gone until the new run's first tick replaced them.
 	metrics.ClearPool()
 	drain(c.controlFlow)
+	for {
+		select {
+		case session := <-c.forwardSessions:
+			_ = session.Close()
+		default:
+			goto sessionsDrained
+		}
+	}
+sessionsDrained:
+	atomic.StoreInt32(&c.forwardActive, 0)
 
 	c.logger.SetLevel(level)
 
@@ -301,6 +324,19 @@ func (c *KcpTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			if c.rawForward() {
+				// Raw ICMP/spoof carriers cannot safely open several PacketConns
+				// with the same tunnel identity: the kernel may deliver a reply to
+				// the wrong socket. Reuse the authenticated control KCP session as
+				// the one long-lived SMUX carrier for every Direct stream.
+				c.state.SetConn(tunnelConn)
+				metrics.ReportPeer(tunnelConn.RemoteAddr().String())
+				c.config.TunnelStatus = "Connected (" + c.transportLabel() + ")"
+				atomic.AddInt32(&c.poolConnections, 1)
+				go c.handleSession(tunnelConn)
+				go startForwardIngress(c.state.Ctx(), c.config.Ports, c.config.MaxConnections, c.config.BandwidthMbps, c.config.ProxyProtocol, c.logger, c.state.Usage(), c.config.Sniffer, &c.forwardActive, c.openForwardKCPStream, func() { go c.Restart() })
+				return
+			}
 
 			c.state.SetConn(tunnelConn)
 			c.logger.Info("control channel established successfully")
@@ -309,6 +345,9 @@ func (c *KcpTransport) channelDialer() {
 
 			go c.poolMaintainer()
 			go c.channelHandler()
+			if c.config.Forward {
+				go startForwardIngress(c.state.Ctx(), c.config.Ports, c.config.MaxConnections, c.config.BandwidthMbps, c.config.ProxyProtocol, c.logger, c.state.Usage(), c.config.Sniffer, &c.forwardActive, c.openForwardKCPStream, func() { go c.Restart() })
+			}
 
 			return
 		}
@@ -487,7 +526,11 @@ func (c *KcpTransport) tunnelDialer() {
 	// materialises a session once it receives a packet from this socket. So
 	// every pool connection announces itself with the token, which both wakes
 	// the listener and authenticates the session before any data flows.
-	if err := utils.SendBinaryTransportString(tunnelConn, c.config.Token, utils.SG_TCP); err != nil {
+	signal := utils.SG_TCP
+	if c.config.Forward {
+		signal = utils.SG_ForwardTCP
+	}
+	if err := utils.SendBinaryTransportString(tunnelConn, c.config.Token, signal); err != nil {
 		c.logger.Errorf("failed to announce tunnel connection: %v", err)
 		tunnelConn.Close()
 		return
@@ -501,6 +544,12 @@ func (c *KcpTransport) tunnelDialer() {
 func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
 	defer func() {
 		atomic.AddInt32(&c.poolConnections, -1)
+		if c.rawForward() {
+			metrics.ClearPeer()
+			if c.state.Ctx().Err() == nil {
+				go c.Restart()
+			}
+		}
 	}()
 
 	// SMUX server
@@ -508,6 +557,17 @@ func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
 	if err != nil {
 		c.logger.Errorf("failed to create mux session: %v", err)
 		tunnelConn.Close()
+		return
+	}
+	if c.config.Forward {
+		select {
+		case c.forwardSessions <- session:
+		case <-c.state.Ctx().Done():
+			session.Close()
+			return
+		}
+		<-c.state.Ctx().Done()
+		session.Close()
 		return
 	}
 
@@ -531,6 +591,49 @@ func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
 			}
 
 			go c.localDialer(stream, remoteAddr)
+		}
+	}
+}
+
+func (c *KcpTransport) openForwardKCPStream(target string) (net.Conn, error) {
+	timer := time.NewTimer(c.config.DialTimeOut)
+	defer timer.Stop()
+	for {
+		select {
+		case <-c.state.Ctx().Done():
+			return nil, c.state.Ctx().Err()
+		case <-timer.C:
+			return nil, fmt.Errorf("no forward KCP session became ready")
+		case session := <-c.forwardSessions:
+			stream, err := session.OpenStream()
+			if err != nil {
+				session.Close()
+				if c.rawForward() {
+					go c.Restart()
+				} else {
+					go c.tunnelDialer()
+				}
+				continue
+			}
+			select {
+			case c.forwardSessions <- session:
+			default:
+			}
+			if err := utils.SendBinaryString(stream, target); err != nil {
+				stream.Close()
+				return nil, err
+			}
+			_ = stream.SetReadDeadline(time.Now().Add(c.config.DialTimeOut))
+			status, err := utils.ReceiveBinaryByte(stream)
+			_ = stream.SetReadDeadline(time.Time{})
+			if err != nil || status != utils.SG_ForwardOK {
+				stream.Close()
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("Kharej backend %q is unavailable or invalid", target)
+			}
+			return stream, nil
 		}
 	}
 }

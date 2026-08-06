@@ -35,7 +35,8 @@ type TcpTransport struct {
 	// handshake, so later attempts skip straight to the old one instead of
 	// spending a connection discovering it again. It is not reset on restart:
 	// an upgraded server means an upgraded binary, which means a new process.
-	legacyServer atomic.Bool
+	legacyServer     atomic.Bool
+	forwardBandwidth *forwardBandwidth
 }
 type TcpConfig struct {
 	RemoteAddr string
@@ -64,6 +65,16 @@ type TcpConfig struct {
 	// Stealth wraps every tunnel-carrying connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// Forward turns this dialler into the Iran edge: it keeps the ordinary
+	// authenticated control channel, owns the public ingress listeners, and
+	// checks out one authenticated, pre-warmed data connection per accepted
+	// user connection.
+	Forward        bool
+	Ports          []string
+	AcceptUDP      bool
+	ProxyProtocol  bool
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 // wrapStealth upgrades a freshly dialled tunnel connection to the Noise record
@@ -83,12 +94,13 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 
 	// Initialize the TcpTransport struct
 	client := &TcpTransport{
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		config:           config,
+		parentctx:        parentCtx,
+		logger:           logger,
+		poolConnections:  0,
+		loadConnections:  0,
+		controlFlow:      make(chan struct{}, 100),
+		forwardBandwidth: newForwardBandwidth(config.BandwidthMbps),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -98,20 +110,33 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 }
 
 func (c *TcpTransport) Start() {
+	ctx := c.state.Ctx()
+	usage := c.state.Usage()
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		go usage.Monitor()
 	}
 
 	c.config.TunnelStatus = "Disconnected (TCP)"
 
-	go c.channelDialer()
+	go c.channelDialer(ctx, usage)
 }
 func (c *TcpTransport) Restart() {
+	c.restartGeneration(nil)
+}
+
+// restartGeneration replaces only the generation that actually failed. An
+// error from a goroutine belonging to a previous run is expected while that
+// run drains and must never cancel the healthy run that replaced it.
+func (c *TcpTransport) restartGeneration(failed context.Context) {
 	if !c.restartMutex.TryLock() {
 		c.logger.Warn("client is already restarting")
 		return
 	}
 	defer c.restartMutex.Unlock()
+	if failed != nil && !c.state.IsCurrent(failed) {
+		c.logger.Debug("ignoring restart request from a retired client generation")
+		return
+	}
 
 	c.logger.Info("restarting client...")
 
@@ -164,7 +189,7 @@ func (c *TcpTransport) Restart() {
 	go c.Start()
 }
 
-func (c *TcpTransport) channelDialer() {
+func (c *TcpTransport) channelDialer(ctx context.Context, usage *web.Usage) {
 	c.logger.Info("attempting to establish a new control channel connection...")
 
 	// One backoff for this reconnect loop: retries start at the configured
@@ -173,11 +198,11 @@ func (c *TcpTransport) channelDialer() {
 
 	for {
 		select {
-		case <-c.state.Ctx().Done():
+		case <-ctx.Done():
 			return
 		default:
 			//set default behaviour of control channel to nodelay, also using default buffer parameters
-			rawConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := network.TcpDialerVia(ctx, c.config.Outbound, c.config.Endpoints.Current(), c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -185,7 +210,7 @@ func (c *TcpTransport) channelDialer() {
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
-				bo.Wait(c.state.Ctx())
+				bo.Wait(ctx)
 				continue
 			}
 
@@ -196,7 +221,7 @@ func (c *TcpTransport) channelDialer() {
 			if err != nil {
 				c.logger.Errorf("channel dialer: stealth handshake failed: %v", err)
 				rawConn.Close()
-				bo.Wait(c.state.Ctx())
+				bo.Wait(ctx)
 				continue
 			}
 
@@ -208,7 +233,7 @@ func (c *TcpTransport) channelDialer() {
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelTCPConn.Close()
-				bo.Wait(c.state.Ctx())
+				bo.Wait(ctx)
 				continue
 			}
 
@@ -216,7 +241,7 @@ func (c *TcpTransport) channelDialer() {
 			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(controlAckTimeout)); err != nil {
 				c.logger.Errorf("failed to set read deadline: %v", err)
 				tunnelTCPConn.Close()
-				bo.Wait(c.state.Ctx())
+				bo.Wait(ctx)
 				continue
 			}
 
@@ -230,7 +255,7 @@ func (c *TcpTransport) channelDialer() {
 					noteLegacyServer(c.logger, &c.legacyServer, signal)
 				}
 				tunnelTCPConn.Close() // Close connection on error or timeout
-				bo.Wait(c.state.Ctx())
+				bo.Wait(ctx)
 				continue
 			}
 			// Resetting the deadline (removes any existing deadline)
@@ -244,28 +269,102 @@ func (c *TcpTransport) channelDialer() {
 				// Before the control channel is published, so the pool
 				// connections poolMaintainer starts below already have it.
 				c.poolNonce.Set(nonce)
-				c.state.SetConn(tunnelTCPConn)
+				if !c.state.SetConnFor(ctx, tunnelTCPConn) {
+					tunnelTCPConn.Close()
+					return
+				}
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (TCP)"
-				go c.poolMaintainer()
-				go c.channelHandler()
+				go c.channelHandler(ctx, usage, tunnelTCPConn, nonce)
+				if c.config.Forward {
+					if nonce == "" {
+						c.logger.Error("forward mode requires the authenticated v2 control handshake; peer is too old")
+						tunnelTCPConn.Close()
+						bo.Wait(ctx)
+						continue
+					}
+					generation := ctx
+					pool := newForwardTCPPool(generation, max(1, c.config.ConnPoolSize), func(poolCtx context.Context) (net.Conn, error) {
+						return c.newForwardDataConn(poolCtx, generation, nonce)
+					})
+					pool.Start()
+					go c.startForwardTCPIngress(ctx, usage, pool)
+					return
+				}
+				go c.poolMaintainer(ctx, usage, nonce)
 
 				return
 
 			} else {
 				c.logger.Errorf("invalid token received (does not match the server's token). Retrying...")
 				tunnelTCPConn.Close() // Close connection if the token is invalid
-				bo.Wait(c.state.Ctx())
+				bo.Wait(ctx)
 				continue
 			}
 		}
 	}
 }
 
-func (c *TcpTransport) poolMaintainer() {
+// newForwardDataConn creates and authenticates one pre-warmed connection from
+// the Iran edge. The target is deliberately sent only when a user checks it
+// out, so one bounded pool can serve every configured mapping.
+func (c *TcpTransport) newForwardDataConn(ctx, generation context.Context, nonce string) (net.Conn, error) {
+	if nonce == "" || !c.state.IsCurrent(generation) {
+		return nil, fmt.Errorf("forward control channel is not ready")
+	}
+	raw, err := network.TcpDialerVia(ctx, c.config.Outbound, c.config.Endpoints.Next(), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 1, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	if err != nil {
+		return nil, fmt.Errorf("dial forward origin: %w", err)
+	}
+	conn, err := c.wrapStealth(raw)
+	if err != nil {
+		raw.Close()
+		return nil, fmt.Errorf("forward stealth handshake: %w", err)
+	}
+	fail := func(e error) (net.Conn, error) {
+		conn.Close()
+		return nil, e
+	}
+	if err := utils.SendBinaryTransportString(conn, nonce, utils.SG_ForwardTCP); err != nil {
+		return fail(fmt.Errorf("announce forward data connection: %w", err))
+	}
+	return conn, nil
+}
+
+// openForwardTCP checks out one authenticated, pre-warmed data connection and
+// completes the target handshake. The bounded worker pool absorbs connection
+// bursts without launching one expensive dial/Noise handshake per user at the
+// same instant.
+func (c *TcpTransport) openForwardTCP(ctx context.Context, pool *forwardTCPPool, target string) (net.Conn, error) {
+	conn, err := pool.Get(ctx, c.config.DialTimeOut)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(e error) (net.Conn, error) {
+		conn.Close()
+		return nil, e
+	}
+	if err := utils.SendBinaryString(conn, target); err != nil {
+		return fail(fmt.Errorf("send forward target: %w", err))
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(c.config.DialTimeOut)); err != nil {
+		return fail(err)
+	}
+	status, err := utils.ReceiveBinaryByte(conn)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fail(fmt.Errorf("receive forward-open result: %w", err))
+	}
+	if status != utils.SG_ForwardOK {
+		return fail(fmt.Errorf("Kharej backend %q is unavailable or invalid", target))
+	}
+	return conn, nil
+}
+
+func (c *TcpTransport) poolMaintainer(ctx context.Context, usage *web.Usage, nonce string) {
 	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
-		go c.tunnelDialer()
+		go c.tunnelDialer(ctx, usage, nonce)
 	}
 
 	// factors
@@ -294,7 +393,7 @@ func (c *TcpTransport) poolMaintainer() {
 
 	for {
 		select {
-		case <-c.state.Ctx().Done():
+		case <-ctx.Done():
 			return
 
 		case <-tickerPool.C:
@@ -328,7 +427,7 @@ func (c *TcpTransport) poolMaintainer() {
 				newPoolSize++
 
 				// Add a new connection to the pool
-				go c.tunnelDialer()
+				go c.tunnelDialer(ctx, usage, nonce)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -341,21 +440,21 @@ func (c *TcpTransport) poolMaintainer() {
 
 }
 
-func (c *TcpTransport) channelHandler() {
+func (c *TcpTransport) channelHandler(ctx context.Context, usage *web.Usage, control net.Conn, nonce string) {
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
 	go func() {
 		for {
 			select {
-			case <-c.state.Ctx().Done():
+			case <-ctx.Done():
 				return
 			default:
-				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
+				msg, err := utils.ReceiveBinaryByte(control)
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
-						go c.Restart()
+						go c.restartGeneration(ctx)
 					}
 					return
 				}
@@ -367,8 +466,8 @@ func (c *TcpTransport) channelHandler() {
 	// Main loop to listen for context cancellation or received messages
 	for {
 		select {
-		case <-c.state.Ctx().Done():
-			_ = utils.SendBinaryByte(c.state.Conn(), utils.SG_Closed)
+		case <-ctx.Done():
+			_ = utils.SendBinaryByte(control, utils.SG_Closed)
 			return
 
 		case msg := <-msgChan:
@@ -381,7 +480,7 @@ func (c *TcpTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					go c.tunnelDialer(ctx, usage, nonce)
 				}
 
 			case utils.SG_HB:
@@ -389,20 +488,20 @@ func (c *TcpTransport) channelHandler() {
 
 			case utils.SG_Closed:
 				c.logger.Warn("control channel has been closed by the server")
-				go c.Restart()
+				go c.restartGeneration(ctx)
 				return
 
 			case utils.SG_RTT:
-				err := utils.SendBinaryByte(c.state.Conn(), utils.SG_RTT)
+				err := utils.SendBinaryByte(control, utils.SG_RTT)
 				if err != nil {
 					c.logger.Error("failed to send RTT signal, restarting client: ", err)
-					go c.Restart()
+					go c.restartGeneration(ctx)
 					return
 				}
 
 			default:
 				c.logger.Errorf("unexpected response from channel: %v.", msg)
-				go c.Restart()
+				go c.restartGeneration(ctx)
 				return
 			}
 		}
@@ -410,14 +509,14 @@ func (c *TcpTransport) channelHandler() {
 }
 
 // Dialing to the tunnel server, chained functions, without retry
-func (c *TcpTransport) tunnelDialer() {
+func (c *TcpTransport) tunnelDialer(ctx context.Context, usage *web.Usage, nonce string) {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
 	// Next() rather than Current(): with load balancing enabled the pool
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
-	rawConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	rawConn, err := network.TcpDialerVia(ctx, c.config.Outbound, c.config.Endpoints.Next(), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Error("tunnel server dialer: ", err)
 
@@ -435,7 +534,7 @@ func (c *TcpTransport) tunnelDialer() {
 
 	// Say what this connection is, so the server admits it on the nonce rather
 	// than on the address it happened to dial out from.
-	if err := announcePoolConn(tcpConn, c.poolNonce.Get()); err != nil {
+	if err := announcePoolConn(tcpConn, nonce); err != nil {
 		c.logger.Debugf("tunnel dialer: failed to announce the pool connection: %v", err)
 		tcpConn.Close()
 		return
@@ -467,10 +566,10 @@ func (c *TcpTransport) tunnelDialer() {
 	switch transport {
 	case utils.SG_TCP:
 		// Dial local server using the received address
-		c.localDialer(tcpConn, resolvedAddr, port)
+		c.localDialer(ctx, usage, tcpConn, resolvedAddr, port)
 
 	case utils.SG_UDP:
-		UDPDialer(tcpConn, resolvedAddr, c.logger, c.state.Usage(), port, c.config.Sniffer)
+		UDPDialer(tcpConn, resolvedAddr, c.logger, usage, port, c.config.Sniffer)
 
 	default:
 		c.logger.Error("undefined transport. close the connection.")
@@ -478,7 +577,7 @@ func (c *TcpTransport) tunnelDialer() {
 	}
 }
 
-func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port int) {
+func (c *TcpTransport) localDialer(ctx context.Context, usage *web.Usage, tcpConn net.Conn, resolvedAddr string, port int) {
 	// Pick a healthy backend when several are configured; a single backend is
 	// returned unchanged, so ordinary tunnels are untouched.
 	resolvedAddr = backends.pick(resolvedAddr)
@@ -494,7 +593,7 @@ func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port i
 		recvBuf = c.config.SO_RCVBUF
 	}
 
-	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	localConnection, err := network.TcpDialer(ctx, resolvedAddr, c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
 	if err != nil {
 		localDial.Report(c.logger, resolvedAddr, err)
 		tcpConn.Close()
@@ -503,5 +602,5 @@ func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port i
 
 	c.logger.Debugf("connected to local address %s successfully", resolvedAddr)
 
-	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(tcpConn), localConnection, c.logger, c.state.Usage(), port, c.config.Sniffer)
+	handlers.TCPConnectionHandler(ctx, false, metrics.CountedConn(tcpConn), localConnection, c.logger, usage, port, c.config.Sniffer)
 }

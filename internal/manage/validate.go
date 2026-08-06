@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/backpack/backpack/internal/forwardmap"
 )
 
 // validPort reports whether s is a valid TCP/UDP port number.
@@ -82,6 +84,13 @@ func validatePortSpecs(ports []string) error {
 		if !validPortSpec(p) {
 			return fmt.Errorf("invalid port entry %q — use forms like 443, 400-450, 443=1.1.1.1:443", strings.TrimSpace(p))
 		}
+	}
+	return nil
+}
+
+func validateForwardPortSpecs(ports []string) error {
+	if _, err := forwardmap.Expand(ports); err != nil {
+		return fmt.Errorf("invalid Direct mapping: %w", err)
 	}
 	return nil
 }

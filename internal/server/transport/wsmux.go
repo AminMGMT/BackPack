@@ -83,6 +83,7 @@ type WsMuxConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	Forward       bool
 }
 
 func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logrus.Logger) *WsMuxTransport {
@@ -327,12 +328,16 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 				}
 
 				go s.channelHandler(g)
-				go s.parsePortMappings(g)
+				if !s.config.Forward {
+					go s.parsePortMappings(g)
+				}
 
 				s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
-				for i := 0; i < numCPU; i++ {
-					go s.handleLoop(g)
+				if !s.config.Forward {
+					for i := 0; i < numCPU; i++ {
+						go s.handleLoop(g)
+					}
 				}
 
 				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
@@ -342,6 +347,14 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 				if err != nil {
 					s.logger.Errorf("failed to create MUX session for connection %s: %v", conn.RemoteAddr().String(), err)
 					conn.Close()
+					return
+				}
+				if s.config.Forward {
+					if !s.controlChannel.IsSet() {
+						session.Close()
+						return
+					}
+					go s.handleForwardWSMuxSession(g, session)
 					return
 				}
 				select {
@@ -397,6 +410,17 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 	s.logger.Infof("shutting down the websocket server on %s", addr)
 	if err := server.Shutdown(context.Background()); err != nil {
 		s.logger.Errorf("Failed to gracefully shutdown the server: %v", err)
+	}
+}
+
+func (s *WsMuxTransport) handleForwardWSMuxSession(g *wsMuxGen, session *smux.Session) {
+	defer session.Close()
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		go handleForwardStream(g.ctx, stream, s.config.KeepAlive, s.logger, g.usageMonitor, s.config.Sniffer)
 	}
 }
 
@@ -476,12 +500,7 @@ func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 				continue
 			} else {
 				// Handle single local port case
-				port, err := strconv.Atoi(localPortOrRange)
-				if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-					localAddr = fmt.Sprintf(":%d", port)
-				} else {
-					localAddr = localPortOrRange // format ip:port=remoteAddress
-				}
+				localAddr = mappingListenAddress(localPortOrRange)
 			}
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)

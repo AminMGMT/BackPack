@@ -99,6 +99,26 @@ func TestRelayCarriesBothDirections(t *testing.T) {
 	}
 }
 
+func TestRelayCancellationClosesIdleConnections(t *testing.T) {
+	client, from := tcpPair(t)
+	to, backend := tcpPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		TCPConnectionHandler(ctx, false, from, to, quietLogger(), &web.Usage{}, 8080, false)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("idle relay did not stop when its generation was cancelled")
+	}
+	client.Close()
+	backend.Close()
+}
+
 // When either side goes away the handler closes both connections, so a forwarded
 // connection can never be left half open holding a socket open forever.
 func TestRelayClosesBothEnds(t *testing.T) {

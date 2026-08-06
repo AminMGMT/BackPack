@@ -15,10 +15,36 @@ func resetCounters(t *testing.T) {
 	t.Helper()
 	bytesIn.Store(0)
 	bytesOut.Store(0)
+	packetsIn.Store(0)
+	packetsOut.Store(0)
 	t.Cleanup(func() {
 		bytesIn.Store(0)
 		bytesOut.Store(0)
+		packetsIn.Store(0)
+		packetsOut.Store(0)
 	})
+}
+
+func TestCollectorReloadInSameProcessDoesNotDoubleCount(t *testing.T) {
+	resetCounters(t)
+	dir := t.TempDir()
+	first := NewCollector(dir, "t", "tcp", "server", nil, nil)
+	AddBytes(1000, 500)
+	if err := first.Write(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Config reloads happen inside the same process, so the package counters do
+	// not reset. The new collector must begin at their current offset.
+	second := NewCollector(dir, "t", "tcp", "server", nil, nil)
+	if got := second.Snapshot(); got.BytesIn != 1000 || got.BytesOut != 500 {
+		t.Fatalf("same-process reload doubled totals: %#v", got)
+	}
+	AddBytes(200, 100)
+	got := second.Snapshot()
+	if got.BytesIn != 1200 || got.BytesOut != 600 || got.PacketsIn != 2 || got.PacketsOut != 2 {
+		t.Fatalf("reload totals did not continue monotonically: %#v", got)
+	}
 }
 
 func TestTrafficResumesAfterRestart(t *testing.T) {

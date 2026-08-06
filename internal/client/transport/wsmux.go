@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,8 @@ type WsMuxTransport struct {
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
+	forwardSessions chan *smux.Session
+	forwardActive   int32
 }
 type WsMuxConfig struct {
 	RemoteAddr string
@@ -58,7 +61,12 @@ type WsMuxConfig struct {
 	// this machine: through a proxy, from a chosen source address or
 	// interface, under a routing mark. Nil dials directly. None of it is ever
 	// applied to the dial to the local backend — see network/outbound.go.
-	Outbound *network.Outbound
+	Outbound       *network.Outbound
+	Forward        bool
+	Ports          []string
+	ProxyProtocol  bool
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logrus.Logger) *WsMuxTransport {
@@ -81,6 +89,7 @@ func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logr
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
+		forwardSessions: make(chan *smux.Session, max(1, config.ConnPoolSize)),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -147,6 +156,16 @@ func (c *WsMuxTransport) Restart() {
 	// connection that is gone until the new run's first tick replaced them.
 	metrics.ClearPool()
 	drain(c.controlFlow)
+	for {
+		select {
+		case session := <-c.forwardSessions:
+			_ = session.Close()
+		default:
+			goto sessionsDrained
+		}
+	}
+sessionsDrained:
+	atomic.StoreInt32(&c.forwardActive, 0)
 
 	// set the log level again
 	c.logger.SetLevel(level)
@@ -186,6 +205,9 @@ func (c *WsMuxTransport) channelDialer() {
 
 			go c.poolMaintainer()
 			go c.channelHandler()
+			if c.config.Forward {
+				go startForwardIngress(c.state.Ctx(), c.config.Ports, c.config.MaxConnections, c.config.BandwidthMbps, c.config.ProxyProtocol, c.logger, c.state.Usage(), c.config.Sniffer, &c.forwardActive, c.openForwardWSMuxStream, func() { go c.Restart() })
+			}
 
 			return
 		}
@@ -368,6 +390,17 @@ func (c *WsMuxTransport) handleSession(tunnelConn *websocket.Conn) {
 		c.logger.Errorf("failed to create mux session: %v", err)
 		return
 	}
+	if c.config.Forward {
+		select {
+		case c.forwardSessions <- session:
+		case <-c.state.Ctx().Done():
+			session.Close()
+			return
+		}
+		<-c.state.Ctx().Done()
+		session.Close()
+		return
+	}
 
 	for {
 		select {
@@ -389,6 +422,45 @@ func (c *WsMuxTransport) handleSession(tunnelConn *websocket.Conn) {
 			}
 
 			go c.localDialer(stream, remoteAddr)
+		}
+	}
+}
+
+func (c *WsMuxTransport) openForwardWSMuxStream(target string) (net.Conn, error) {
+	timer := time.NewTimer(c.config.DialTimeOut)
+	defer timer.Stop()
+	for {
+		select {
+		case <-c.state.Ctx().Done():
+			return nil, c.state.Ctx().Err()
+		case <-timer.C:
+			return nil, fmt.Errorf("no forward websocket mux session became ready")
+		case session := <-c.forwardSessions:
+			stream, err := session.OpenStream()
+			if err != nil {
+				session.Close()
+				go c.tunnelDialer()
+				continue
+			}
+			select {
+			case c.forwardSessions <- session:
+			default:
+			}
+			if err := utils.SendBinaryString(stream, target); err != nil {
+				stream.Close()
+				return nil, err
+			}
+			_ = stream.SetReadDeadline(time.Now().Add(c.config.DialTimeOut))
+			status, err := utils.ReceiveBinaryByte(stream)
+			_ = stream.SetReadDeadline(time.Time{})
+			if err != nil || status != utils.SG_ForwardOK {
+				stream.Close()
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("Kharej backend %q is unavailable or invalid", target)
+			}
+			return stream, nil
 		}
 	}
 }

@@ -102,7 +102,7 @@ func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 		// has no address to probe, and probing a datagram tunnel's port over
 		// TCP would report a working tunnel as dead.
 		if t.Role != "client" {
-			http.Error(w, "the link test runs on the client (kharej) side — it is the side that dials out", http.StatusBadRequest)
+			http.Error(w, "the link test runs on the side that dials the tunnel (Iran for Direct, Kharej for Reverse)", http.StatusBadRequest)
 			return
 		}
 		if manage.IsDatagram(t.Transport) {

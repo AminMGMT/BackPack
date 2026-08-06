@@ -14,6 +14,7 @@ func TestResolveRemoteAddrSingle(t *testing.T) {
 		{"443", 443, "127.0.0.1:443"},
 		{"127.0.0.1:2096", 2096, "127.0.0.1:2096"},
 		{"10.0.0.5:8443", 8443, "10.0.0.5:8443"},
+		{"[2001:db8::10]:8443", 8443, "[2001:db8::10]:8443"},
 	} {
 		port, addr, err := ResolveRemoteAddr(c.in)
 		if err != nil {
