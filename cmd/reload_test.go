@@ -191,7 +191,7 @@ func TestPortsInUse(t *testing.T) {
 	server.Server.BindAddr = "0.0.0.0:3080"
 	server.Server.WebPort = 2060
 	got := portsInUse(server)
-	if len(got) != 2 || got[0] != "0.0.0.0:3080" || got[1] != ":2060" {
+	if len(got) != 2 || got[0] != (listenerBinding{network: "tcp", address: "0.0.0.0:3080"}) || got[1] != (listenerBinding{network: "tcp", address: ":2060"}) {
 		t.Fatalf("server ports = %v, want the bind address and the web port", got)
 	}
 
@@ -199,7 +199,7 @@ func TestPortsInUse(t *testing.T) {
 	client.Client.RemoteAddr = "example.com:3080"
 	client.Client.WebPort = 2061
 	got = portsInUse(client)
-	if len(got) != 1 || got[0] != ":2061" {
+	if len(got) != 1 || got[0] != (listenerBinding{network: "tcp", address: ":2061"}) {
 		t.Fatalf("client ports = %v, want only the web port", got)
 	}
 
@@ -208,6 +208,28 @@ func TestPortsInUse(t *testing.T) {
 	bare.Client.RemoteAddr = "example.com:3080"
 	if got := portsInUse(bare); len(got) != 0 {
 		t.Fatalf("a client with no web port reported %v", got)
+	}
+}
+
+func TestTunnelNetwork(t *testing.T) {
+	tests := []struct {
+		transport config.TransportType
+		want      string
+	}{
+		{config.TCP, "tcp"},
+		{config.TCPMUX, "tcp"},
+		{config.WS, "tcp"},
+		{config.WSMUX, "tcp"},
+		{config.UDP, "udp"},
+		{config.KCP, "udp"},
+		{config.QUIC, "udp"},
+		{config.XDI, ""},
+		{config.SPOOF, ""},
+	}
+	for _, tt := range tests {
+		if got := tunnelNetwork(tt.transport); got != tt.want {
+			t.Errorf("tunnelNetwork(%q) = %q, want %q", tt.transport, got, tt.want)
+		}
 	}
 }
 
@@ -222,7 +244,7 @@ func TestWaitForPorts(t *testing.T) {
 
 	// Held open: this cannot succeed, so it has to give up on the timeout.
 	start := time.Now()
-	waitForPorts(context.Background(), []string{addr})
+	waitForPorts(context.Background(), []listenerBinding{{network: "tcp", address: addr}})
 	held := time.Since(start)
 	ln.Close()
 	if held < portSettleTimeout {
@@ -231,8 +253,26 @@ func TestWaitForPorts(t *testing.T) {
 
 	// Now free: this should return almost immediately.
 	start = time.Now()
-	waitForPorts(context.Background(), []string{addr})
+	waitForPorts(context.Background(), []listenerBinding{{network: "tcp", address: addr}})
 	if free := time.Since(start); free > 2*time.Second {
 		t.Fatalf("took %v to notice a free port", free)
+	}
+}
+
+func TestWaitForUDPPort(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen UDP: %v", err)
+	}
+	binding := listenerBinding{network: "udp", address: pc.LocalAddr().String()}
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		pc.Close()
+	}()
+	start := time.Now()
+	waitForPorts(context.Background(), []listenerBinding{binding})
+	if waited := time.Since(start); waited < 150*time.Millisecond || waited > 2*time.Second {
+		t.Fatalf("waited %v for a UDP listener released after 200ms", waited)
 	}
 }
