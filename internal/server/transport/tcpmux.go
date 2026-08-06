@@ -601,12 +601,7 @@ func (s *TcpMuxTransport) parsePortMappings(g *tcpMuxGen) {
 				continue
 			} else {
 				// Handle single local port case
-				port, err := strconv.Atoi(localPortOrRange)
-				if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-					localAddr = fmt.Sprintf(":%d", port)
-				} else {
-					localAddr = localPortOrRange // format ip:port=remoteAddress
-				}
+				localAddr = mappingListenAddress(localPortOrRange)
 			}
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
