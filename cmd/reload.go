@@ -121,24 +121,30 @@ func awaitConfigChange(ctx context.Context, path string, current *config.Config)
 	}
 }
 
-// waitForPorts waits until every address given can be bound, so the tunnel
-// being started is not racing the one that just stopped for its own ports.
+type listenerBinding struct {
+	network string
+	address string
+}
+
+// waitForPorts waits until every address can be bound on the protocol the old
+// transport used, so the tunnel being started is not racing the one that just
+// stopped for its own ports.
 //
 // The listeners close as soon as their context ends, but nothing reports when
 // they have; the panel's HTTP server in particular is shut down gracefully and
 // takes a moment. Binding the address is the only direct evidence that it is
 // free, so that is what is checked — and if it never comes free, this gives up
 // and lets the listener report the real error rather than hanging here.
-func waitForPorts(ctx context.Context, addrs []string) {
-	deadline := time.Now().Add(portSettleTimeout)
-	for _, addr := range addrs {
-		if addr == "" {
+func waitForPorts(ctx context.Context, bindings []listenerBinding) {
+	for _, binding := range bindings {
+		if binding.address == "" {
 			continue
 		}
+		// Each listener gets the full settling budget. Sharing one deadline
+		// means a slow control port consumes all of the web port's wait too.
+		deadline := time.Now().Add(portSettleTimeout)
 		for time.Now().Before(deadline) {
-			ln, err := net.Listen("tcp", addr)
-			if err == nil {
-				ln.Close()
+			if bindingAvailable(binding) {
 				break
 			}
 			select {
@@ -150,6 +156,27 @@ func waitForPorts(ctx context.Context, addrs []string) {
 	}
 }
 
+func bindingAvailable(binding listenerBinding) bool {
+	switch binding.network {
+	case "udp":
+		pc, err := net.ListenPacket("udp", binding.address)
+		if err != nil {
+			return false
+		}
+		pc.Close()
+		return true
+	case "tcp":
+		ln, err := net.Listen("tcp", binding.address)
+		if err != nil {
+			return false
+		}
+		ln.Close()
+		return true
+	default:
+		return false
+	}
+}
+
 // portsInUse names the addresses a run binds that can be known from the
 // configuration alone — the tunnel's own listener and the per-tunnel web page.
 //
@@ -157,19 +184,35 @@ func waitForPorts(ctx context.Context, addrs []string) {
 // re-implementing the port-mapping parser, ranges and all, and they are the
 // listeners that close immediately anyway; it is the gracefully shut down HTTP
 // server that actually needs waiting for.
-func portsInUse(cfg *config.Config) []string {
-	var addrs []string
+func portsInUse(cfg *config.Config) []listenerBinding {
+	var bindings []listenerBinding
 	if cfg.Server.BindAddr != "" {
-		addrs = append(addrs, cfg.Server.BindAddr)
-		if cfg.Server.WebPort > 0 {
-			addrs = append(addrs, net.JoinHostPort("", itoa(cfg.Server.WebPort)))
+		network := tunnelNetwork(cfg.Server.Transport)
+		// XDI and spoof use raw sockets rather than a TCP/UDP listener that can
+		// be probed safely here. Their teardown is left to the transport.
+		if network != "" {
+			bindings = append(bindings, listenerBinding{network: network, address: cfg.Server.BindAddr})
 		}
-		return addrs
+		if cfg.Server.WebPort > 0 {
+			bindings = append(bindings, listenerBinding{network: "tcp", address: net.JoinHostPort("", itoa(cfg.Server.WebPort))})
+		}
+		return bindings
 	}
 	if cfg.Client.WebPort > 0 {
-		addrs = append(addrs, net.JoinHostPort("", itoa(cfg.Client.WebPort)))
+		bindings = append(bindings, listenerBinding{network: "tcp", address: net.JoinHostPort("", itoa(cfg.Client.WebPort))})
 	}
-	return addrs
+	return bindings
+}
+
+func tunnelNetwork(transport config.TransportType) string {
+	switch transport {
+	case config.UDP, config.KCP, config.QUIC:
+		return "udp"
+	case config.XDI, config.SPOOF:
+		return ""
+	default:
+		return "tcp"
+	}
 }
 
 func itoa(n int) string {
