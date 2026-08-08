@@ -1,4 +1,4 @@
-// Package app holds shared constants and paths used across the backpack
+// Package app holds shared constants and paths used across the fstunnel
 // management layer (menu, manage, telegram, schedule, optimize).
 package app
 
@@ -8,43 +8,43 @@ import (
 )
 
 const (
-	// Version of the backpack engine.
-	Version = "v1.7.0"
+	// Version of the fstunnel engine.
+	Version = "v1.1.1"
 
 	// RepoOwner/RepoName identify the GitHub repository used by the installer
 	// and the release-based updater.
-	RepoOwner = "AminMGMT"
-	RepoName  = "BackPack"
+	RepoOwner = "amirfste"
+	RepoName  = "fstunnel"
 
 	// InstallDir is where the release bundle lives on the VPS.
-	InstallDir = "/root/BackPack"
+	InstallDir = "/root/fstunnel"
 
 	// BackupDir is the default folder for configuration backups.
 	BackupDir = InstallDir + "/backups"
 
 	// ConfigDir is where per-tunnel TOML configs and runtime state live.
-	ConfigDir = "/etc/backpack"
+	ConfigDir = "/etc/fstunnel"
 
 	// ServiceDir is the systemd unit directory.
 	ServiceDir = "/etc/systemd/system"
 
 	// ServicePrefix is prepended to every tunnel systemd unit.
-	ServicePrefix = "backpack-"
+	ServicePrefix = "fstunnel-"
 
-	// BinPath is where the backpack binary is installed.
-	BinPath = "/usr/local/bin/backpack"
+	// BinPath is where the fstunnel binary is installed.
+	BinPath = "/usr/local/bin/fstunnel"
 
 	// TelegramConfig stores the telegram bot settings (JSON).
 	TelegramConfig = ConfigDir + "/telegram.json"
 
 	// AutoRefreshMarker is the cron comment tag for the global auto-refresh job.
-	AutoRefreshMarker = "backpack-auto-refresh"
+	AutoRefreshMarker = "fstunnel-auto-refresh"
 
 	// WebUIConfig stores the web panel settings (JSON).
 	WebUIConfig = ConfigDir + "/webui.json"
 
 	// WebUIService is the systemd unit that runs the web panel.
-	WebUIService = "backpack-webui.service"
+	WebUIService = "fstunnel-webui.service"
 
 	// WebUIPort is the default port the web panel listens on.
 	WebUIPort = 7777
@@ -52,11 +52,11 @@ const (
 	// MonitorService is the systemd unit that watches the tunnels and runs the
 	// Telegram bot and alerts. It is deliberately separate from the web panel:
 	// monitoring must not stop just because the panel is stopped.
-	MonitorService = "backpack-monitor.service"
+	MonitorService = "fstunnel-monitor.service"
 
 	// ProxyService is the systemd unit for the optional built-in SOCKS5/HTTP
 	// proxy, so a node can be its own backend instead of running a separate one.
-	ProxyService = "backpack-proxy.service"
+	ProxyService = "fstunnel-proxy.service"
 
 	// SocksInternalPort is the localhost port the built-in SOCKS5 proxy listens
 	// on. It is reachable from a peer only when exposed over a tunnel.
@@ -92,7 +92,7 @@ func SocksPortForToken(token string) int {
 	if token == "" {
 		return SocksInternalPort
 	}
-	sum := sha256.Sum256([]byte("backpack-socks-v1:" + token))
+	sum := sha256.Sum256([]byte("fstunnel-socks-v1:" + token))
 	// A 20000-wide window above the usual service range and below the
 	// ephemeral range, so it neither collides with a well-known port nor gets
 	// handed out to an outgoing connection.

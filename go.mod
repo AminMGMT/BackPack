@@ -1,4 +1,4 @@
-module github.com/backpack/backpack
+module github.com/fstunnel/fstunnel
 
 go 1.25.0
 
