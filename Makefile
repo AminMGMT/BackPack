@@ -1,5 +1,5 @@
-BIN      := backpack
-BIN_PATH := /usr/local/bin/backpack
+BIN      := fstunnel
+BIN_PATH := /usr/local/bin/fstunnel
 LDFLAGS  := -s -w
 
 .PHONY: all build install uninstall clean tidy run vendor release-linux release version
@@ -25,27 +25,27 @@ vendor:
 # Cross-compile static Linux binaries (no libc / no Go needed to run).
 release-linux:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/backpack-linux-amd64 .
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/backpack-linux-arm64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/fstunnel-linux-amd64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/fstunnel-linux-arm64 .
 
-# GitHub release assets: backpack_linux_<arch>.tar.gz, each containing a single
-# `backpack` binary. These are what install.sh and the in-app updater download.
+# GitHub release assets: fstunnel_linux_<arch>.tar.gz, each containing a single
+# `fstunnel` binary. These are what install.sh and the in-app updater download.
 release: version release-linux
 	mkdir -p release
-	cp dist/backpack-linux-amd64 dist/backpack && tar -czf release/backpack_linux_amd64.tar.gz -C dist backpack && rm dist/backpack
-	cp dist/backpack-linux-arm64 dist/backpack && tar -czf release/backpack_linux_arm64.tar.gz -C dist backpack && rm dist/backpack
+	cp dist/fstunnel-linux-amd64 dist/fstunnel && tar -czf release/fstunnel_linux_amd64.tar.gz -C dist fstunnel && rm dist/fstunnel
+	cp dist/fstunnel-linux-arm64 dist/fstunnel && tar -czf release/fstunnel_linux_arm64.tar.gz -C dist fstunnel && rm dist/fstunnel
 	@# A checksum file published beside the assets is what lets the installer and
 	@# the updater prove that a mirror handed them the real binary. Users on
 	@# restricted networks fetch these through third-party proxies, so this is
 	@# the only integrity check they get.
-	cd release && (sha256sum backpack_linux_*.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 backpack_linux_*.tar.gz > SHA256SUMS)
+	cd release && (sha256sum fstunnel_linux_*.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 fstunnel_linux_*.tar.gz > SHA256SUMS)
 	@echo "Release assets ready in ./release"
 	@cat release/SHA256SUMS
 
 install: build
 	install -m 0755 $(BIN) $(BIN_PATH)
-	mkdir -p /etc/backpack
-	@echo "Installed. Run: backpack"
+	mkdir -p /etc/fstunnel
+	@echo "Installed. Run: fstunnel"
 
 uninstall:
 	rm -f $(BIN_PATH)
