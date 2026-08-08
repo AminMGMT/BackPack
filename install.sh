@@ -56,7 +56,7 @@ verify_asset() {
 
   expected="$(grep -E "[[:space:]]\\*?${ASSET}$" "$sums" 2>/dev/null | awk '{print $1}' | head -1)"
   if [[ -z "$expected" ]]; then
-    warn "No checksum published for ${ASSET} — cannot verify this download."
+    warn "No checksum published for ${ASSET} �� cannot verify this download."
     return 1
   fi
 
