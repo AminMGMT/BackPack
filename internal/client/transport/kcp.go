@@ -34,6 +34,7 @@ type KcpTransport struct {
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
+	sessionSlots    *sessionSlots
 }
 
 type KcpConfig struct {
@@ -147,6 +148,7 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
+		sessionSlots:    newSessionSlots(muxPoolLimit(config.ConnPoolSize, config.MaxReceiveBuffer)),
 	}
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
@@ -316,6 +318,10 @@ func (c *KcpTransport) channelDialer() {
 }
 
 func (c *KcpTransport) poolMaintainer() {
+	maxPoolSize := c.sessionSlots.max()
+	if maxPoolSize < c.config.ConnPoolSize*poolGrowthLimit {
+		c.logger.Infof("automatic SMUX pool growth capped at %d sessions (receive buffer: %d bytes)", maxPoolSize, c.config.MaxReceiveBuffer)
+	}
 	for i := 0; i < c.config.ConnPoolSize; i++ { // initial pool filling
 		go c.tunnelDialer()
 	}
@@ -374,8 +380,8 @@ func (c *KcpTransport) poolMaintainer() {
 			metrics.ReportPool(poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, mbps)
 
 			// Dynamically adjust the pool size based on current connections
-			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrow(newPoolSize, c.config.ConnPoolSize)) ||
-				load.wantsMore(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize) {
+			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrowWithin(newPoolSize, c.config.ConnPoolSize, maxPoolSize)) ||
+				load.wantsMoreWithin(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, maxPoolSize) {
 				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections, mbps)
 				newPoolSize++
 
@@ -474,6 +480,12 @@ func (c *KcpTransport) channelHandler() {
 }
 
 func (c *KcpTransport) tunnelDialer() {
+	if !c.sessionSlots.tryAcquire() {
+		c.logger.Debugf("SMUX session limit reached (%d); skipping tunnel dial", c.sessionSlots.max())
+		return
+	}
+	defer c.sessionSlots.release()
+
 	addr := c.config.Endpoints.Next()
 	c.logger.Debugf("initiating new tunnel connection to address %s", addr)
 
