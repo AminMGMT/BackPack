@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -16,17 +15,8 @@ import (
 	"github.com/backpack/backpack/internal/schedule"
 )
 
-// backupMetaName is a synthetic entry stored inside the archive (not written to
-// disk on restore) that captures settings living outside ConfigDir — currently
-// the auto-refresh interval, which is kept in the crontab.
-const backupMetaName = ".backpack-backup.json"
-
 // backupMeta is the sidecar metadata embedded in every backup archive.
-type backupMeta struct {
-	Version          string `json:"version"`
-	Created          string `json:"created"`
-	AutoRefreshHours int    `json:"auto_refresh_hours"`
-}
+type backupMeta = archiveMetadata
 
 // RestoreResult summarises what a restore put back in place.
 type RestoreResult struct {
@@ -47,107 +37,26 @@ type RestoreResult struct {
 // recorded install path) plus a small sidecar capturing the auto-refresh
 // schedule, to w. It is the single source for both the CLI and web downloads.
 func WriteBackup(w io.Writer) error {
-	gz := gzip.NewWriter(w)
-	defer gz.Close()
-	tw := tar.NewWriter(gz)
-	defer tw.Close()
+	return writeBackupArchive(w, app.ConfigDir, currentBackupMeta())
+}
 
-	// Sidecar metadata for settings that don't live under ConfigDir.
-	meta := backupMeta{
+func currentBackupMeta() backupMeta {
+	return backupMeta{
 		Version:          app.Version,
 		Created:          time.Now().UTC().Format(time.RFC3339),
 		AutoRefreshHours: schedule.AutoRefreshHours(),
 	}
-	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
-	if err := tw.WriteHeader(&tar.Header{
-		Name: backupMetaName,
-		Mode: 0600,
-		Size: int64(len(metaJSON)),
-	}); err != nil {
-		return err
-	}
-	if _, err := tw.Write(metaJSON); err != nil {
-		return err
-	}
-
-	// Walk the config directory and add every file, preserving relative paths
-	// and permissions (so 0600 key/config files stay 0600 on restore).
-	root := app.ConfigDir
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = filepath.ToSlash(rel)
-		if info.IsDir() {
-			hdr.Name += "/"
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = io.Copy(tw, f)
-		return err
-	})
 }
 
 // backupRetention is how many backup archives are kept in the backup folder;
 // older ones are pruned automatically so backups never fill the disk.
 const backupRetention = 10
 
-// pruneBackups deletes all but the newest backupRetention archives in dir.
-func pruneBackups(dir string) {
-	matches, _ := filepath.Glob(filepath.Join(dir, "backpack-backup-*.tar.gz"))
-	if len(matches) <= backupRetention {
-		return
-	}
-	// Names are timestamped, so lexical order is chronological.
-	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
-	for _, old := range matches[backupRetention:] {
-		os.Remove(old)
-	}
-}
-
 // BackupToFile writes a timestamped backup archive into dir and returns its
 // path. dir is created if missing, and old archives beyond the retention limit
 // are pruned.
 func BackupToFile(dir string) (string, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	name := fmt.Sprintf("backpack-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
-	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return "", err
-	}
-	if err := WriteBackup(f); err != nil {
-		f.Close()
-		os.Remove(path)
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	pruneBackups(dir)
-	return path, nil
+	return publishBackupFile(dir, app.ConfigDir, currentBackupMeta(), backupRetention)
 }
 
 // Restore reads a backup archive produced by WriteBackup, extracts it into the
