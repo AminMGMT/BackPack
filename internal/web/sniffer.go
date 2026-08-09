@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	stdnet "net"
 	"net/http"
 	"os"
 	"sort"
@@ -56,7 +57,7 @@ type SystemStats struct {
 func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus *string, logger *logrus.Logger) *Usage {
 	ctx, cancel := context.WithCancel(shutdownCtx)
 	u := &Usage{
-		listenAddr:   listenAddr,
+		listenAddr:   localMonitorAddr(listenAddr),
 		shutdownCtx:  ctx,
 		cancelFunc:   cancel,
 		logger:       logger,
@@ -71,15 +72,12 @@ func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog str
 
 func (m *Usage) Monitor() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", m.handleIndex) // handle index
+	mux.HandleFunc("/", m.handleIndex)
 	mux.HandleFunc("/stats", m.statsHandler)
 	if m.sniffer {
 		mux.HandleFunc("/data", m.handleData) // New route for JSON data
 	}
-	m.server = &http.Server{
-		Addr:    m.listenAddr,
-		Handler: mux,
-	}
+	m.server = newMonitorHTTPServer(m.listenAddr, monitorHTTP(mux))
 
 	go func() {
 		<-m.shutdownCtx.Done()
@@ -120,17 +118,21 @@ func (m *Usage) Monitor() {
 var indexHTML embed.FS
 
 func (m *Usage) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
 	usageData := m.getUsageFromFile()
 	readableData := m.usageDataWithReadableUsage(usageData)
 
 	tmpl, err := template.ParseFS(indexHTML, "index.html")
 	if err != nil {
 		m.logger.Errorf("error parsing template: %v", err)
+		http.Error(w, "could not render monitor", http.StatusInternalServerError)
 		return
 	}
 
-	err = tmpl.Execute(w, readableData)
-	if err != nil {
+	if err := tmpl.Execute(w, readableData); err != nil {
 		m.logger.Errorf("error executing template: %v", err)
 	}
 }
@@ -149,12 +151,55 @@ func (m *Usage) statsHandler(w http.ResponseWriter, r *http.Request) {
 	stats, err := m.getSystemStats()
 	if err != nil {
 		m.logger.Error("Error fetching system stats:", err)
+		http.Error(w, "could not collect system stats", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		m.logger.Error("Error encoding JSON:", err)
+	}
+}
+
+func localMonitorAddr(addr string) string {
+	host, port, err := stdnet.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" {
+		return stdnet.JoinHostPort("127.0.0.1", port)
+	}
+	if ip := stdnet.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return stdnet.JoinHostPort("127.0.0.1", port)
+	}
+	return addr
+}
+
+func monitorHTTP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func newMonitorHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 }
 
