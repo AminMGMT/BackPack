@@ -99,13 +99,18 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 
 func (c *TcpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		usage := c.state.Usage()
+		c.state.Go(usage.Monitor)
 	}
 
 	c.config.TunnelStatus = "Disconnected (TCP)"
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
+
+func (c *TcpTransport) Stop() { c.state.Stop() }
+func (c *TcpTransport) Wait() { c.state.Wait() }
+
 func (c *TcpTransport) Restart() {
 	if !c.restartMutex.TryLock() {
 		c.logger.Warn("client is already restarting")
@@ -119,14 +124,9 @@ func (c *TcpTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
+	// Cancel the generation, close its control and pool connections, and wait
+	// until no old worker can observe the state published below.
+	c.state.StopAndWait()
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -161,7 +161,7 @@ func (c *TcpTransport) Restart() {
 	// set the log level again
 	c.logger.SetLevel(level)
 
-	go c.Start()
+	c.Start()
 }
 
 func (c *TcpTransport) channelDialer() {
@@ -244,12 +244,14 @@ func (c *TcpTransport) channelDialer() {
 				// Before the control channel is published, so the pool
 				// connections poolMaintainer starts below already have it.
 				c.poolNonce.Set(nonce)
-				c.state.SetConn(tunnelTCPConn)
+				if !c.state.SetConn(tunnelTCPConn) {
+					return
+				}
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (TCP)"
-				go c.poolMaintainer()
-				go c.channelHandler()
+				c.state.Go(c.poolMaintainer)
+				c.state.Go(c.channelHandler)
 
 				return
 
@@ -265,7 +267,7 @@ func (c *TcpTransport) channelDialer() {
 
 func (c *TcpTransport) poolMaintainer() {
 	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
-		go c.tunnelDialer()
+		c.state.Go(c.tunnelDialer)
 	}
 
 	// factors
@@ -328,7 +330,7 @@ func (c *TcpTransport) poolMaintainer() {
 				newPoolSize++
 
 				// Add a new connection to the pool
-				go c.tunnelDialer()
+				c.state.Go(c.tunnelDialer)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -345,7 +347,7 @@ func (c *TcpTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
+	c.state.Go(func() {
 		for {
 			select {
 			case <-c.state.Ctx().Done():
@@ -353,7 +355,7 @@ func (c *TcpTransport) channelHandler() {
 			default:
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if c.state.Ctx().Err() == nil && c.parentctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -362,7 +364,7 @@ func (c *TcpTransport) channelHandler() {
 				msgChan <- msg
 			}
 		}
-	}()
+	})
 
 	// Main loop to listen for context cancellation or received messages
 	for {
@@ -381,7 +383,7 @@ func (c *TcpTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					c.state.Go(c.tunnelDialer)
 				}
 
 			case utils.SG_HB:
@@ -432,6 +434,11 @@ func (c *TcpTransport) tunnelDialer() {
 		rawConn.Close()
 		return
 	}
+	untrack, ok := c.state.Track(tcpConn)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	// Say what this connection is, so the server admits it on the nonce rather
 	// than on the address it happened to dial out from.
@@ -470,7 +477,7 @@ func (c *TcpTransport) tunnelDialer() {
 		c.localDialer(tcpConn, resolvedAddr, port)
 
 	case utils.SG_UDP:
-		UDPDialer(tcpConn, resolvedAddr, c.logger, c.state.Usage(), port, c.config.Sniffer)
+		UDPDialer(c.state.Ctx(), tcpConn, resolvedAddr, c.logger, c.state.Usage(), port, c.config.Sniffer)
 
 	default:
 		c.logger.Error("undefined transport. close the connection.")

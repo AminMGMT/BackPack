@@ -2,9 +2,11 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/backpack/backpack/internal/web"
@@ -13,7 +15,7 @@ import (
 
 const BufferSize = 16 * 1024
 
-func UDPDialer(tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
+func UDPDialer(ctx context.Context, tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	remoteUDPAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
 		// One flow's bad target must not take the whole client down: drop this
@@ -30,6 +32,22 @@ func UDPDialer(tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *we
 	}
 
 	defer remoteConn.Close()
+	stop := make(chan struct{})
+	var stopWG sync.WaitGroup
+	stopWG.Add(1)
+	defer func() {
+		close(stop)
+		stopWG.Wait()
+	}()
+	go func() {
+		defer stopWG.Done()
+		select {
+		case <-ctx.Done():
+			remoteConn.Close()
+			tcp.Close()
+		case <-stop:
+		}
+	}()
 
 	done := make(chan struct{})
 

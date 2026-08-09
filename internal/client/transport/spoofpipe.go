@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils/network"
@@ -18,6 +19,7 @@ type SpoofPipeClient struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	logger *logrus.Logger
+	done   chan struct{}
 }
 
 // SpoofPipeConfig is shared by both ends. Carrier describes the spoof channel;
@@ -33,10 +35,11 @@ type SpoofPipeConfig struct {
 
 func NewSpoofPipeClient(parentCtx context.Context, config *SpoofPipeConfig, logger *logrus.Logger) *SpoofPipeClient {
 	ctx, cancel := context.WithCancel(parentCtx)
-	return &SpoofPipeClient{config: config, ctx: ctx, cancel: cancel, logger: logger}
+	return &SpoofPipeClient{config: config, ctx: ctx, cancel: cancel, logger: logger, done: make(chan struct{})}
 }
 
 func (c *SpoofPipeClient) Start() {
+	defer close(c.done)
 	retry := c.config.Retry
 	if retry <= 0 {
 		retry = 3 * time.Second
@@ -57,6 +60,7 @@ func (c *SpoofPipeClient) Start() {
 }
 
 func (c *SpoofPipeClient) Stop() { c.cancel() }
+func (c *SpoofPipeClient) Wait() { <-c.done }
 
 func (c *SpoofPipeClient) runOnce() error {
 	sa, err := net.ResolveIPAddr("ip4", c.config.ServerIP)
@@ -81,8 +85,14 @@ func (c *SpoofPipeClient) runOnce() error {
 
 	// Unblock the relay's reads when the run is cancelled.
 	stop := make(chan struct{})
-	defer close(stop)
+	var stopWG sync.WaitGroup
+	stopWG.Add(1)
+	defer func() {
+		close(stop)
+		stopWG.Wait()
+	}()
 	go func() {
+		defer stopWG.Done()
 		select {
 		case <-c.ctx.Done():
 		case <-stop:

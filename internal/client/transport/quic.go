@@ -109,13 +109,24 @@ func (c *QuicTransport) getQUICConn() *quic.Conn {
 
 func (c *QuicTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		usage := c.state.Usage()
+		c.state.Go(usage.Monitor)
 	}
 
 	c.config.TunnelStatus = "Disconnected (QUIC)"
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
+
+func (c *QuicTransport) Stop() {
+	c.state.Stop()
+	if qc := c.getQUICConn(); qc != nil {
+		_ = qc.CloseWithError(0, "client stopped")
+		c.setQUICConn(nil)
+	}
+}
+
+func (c *QuicTransport) Wait() { c.state.Wait() }
 
 func (c *QuicTransport) Restart() {
 	if !c.restartMutex.TryLock() {
@@ -130,19 +141,8 @@ func (c *QuicTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	c.state.CloseConn()
-	// Closing the QUIC connection tears down every stream it carries, including
-	// the pool, and releases the UDP socket underneath.
-	if qc := c.getQUICConn(); qc != nil {
-		_ = qc.CloseWithError(0, "restart")
-		c.setQUICConn(nil)
-	}
-
-	time.Sleep(2 * time.Second)
+	c.Stop()
+	c.Wait()
 
 	// The whole tunnel may have been shut down while this restart was waiting.
 	// Rebuilding from a finished parent context would bind and close for nothing.
@@ -163,7 +163,7 @@ func (c *QuicTransport) Restart() {
 
 	c.logger.SetLevel(level)
 
-	go c.Start()
+	c.Start()
 }
 
 func (c *QuicTransport) channelDialer() {
@@ -242,13 +242,17 @@ func (c *QuicTransport) channelDialer() {
 			}
 
 			c.setQUICConn(conn)
-			c.state.SetConn(control)
+			if !c.state.SetConn(control) {
+				_ = conn.CloseWithError(0, "generation stopped")
+				c.setQUICConn(nil)
+				return
+			}
 			c.logger.Info("control channel established successfully")
 
 			c.config.TunnelStatus = "Connected (QUIC)"
 
-			go c.poolMaintainer()
-			go c.channelHandler()
+			c.state.Go(c.poolMaintainer)
+			c.state.Go(c.channelHandler)
 
 			return
 		}
@@ -257,7 +261,7 @@ func (c *QuicTransport) channelDialer() {
 
 func (c *QuicTransport) poolMaintainer() {
 	for i := 0; i < c.config.ConnPoolSize; i++ { // initial pool filling
-		go c.tunnelDialer()
+		c.state.Go(c.tunnelDialer)
 	}
 
 	// factors
@@ -308,7 +312,7 @@ func (c *QuicTransport) poolMaintainer() {
 				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections, mbps)
 				newPoolSize++
 
-				go c.tunnelDialer()
+				c.state.Go(c.tunnelDialer)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -332,7 +336,7 @@ func (c *QuicTransport) controlDeadline() time.Duration {
 func (c *QuicTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
-	go func() {
+	c.state.Go(func() {
 		for {
 			select {
 			case <-c.state.Ctx().Done():
@@ -348,7 +352,7 @@ func (c *QuicTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if c.state.Ctx().Err() == nil && c.parentctx.Err() == nil {
 						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 							c.logger.Warn("no heartbeat from the server within the keepalive period, reconnecting")
 						} else {
@@ -361,7 +365,7 @@ func (c *QuicTransport) channelHandler() {
 				msgChan <- msg
 			}
 		}
-	}()
+	})
 
 	for {
 		select {
@@ -379,7 +383,7 @@ func (c *QuicTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					c.state.Go(c.tunnelDialer)
 				}
 
 			case utils.SG_HB:
@@ -413,6 +417,11 @@ func (c *QuicTransport) tunnelDialer() {
 		return
 	}
 	data := network.NewQUICStreamConn(stream, qc)
+	untrack, ok := c.state.Track(data)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	// Announce the stream with the token so the server can authenticate it and
 	// file it as a data stream.

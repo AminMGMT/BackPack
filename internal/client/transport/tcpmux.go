@@ -103,13 +103,17 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 
 func (c *TcpMuxTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		usage := c.state.Usage()
+		c.state.Go(usage.Monitor)
 	}
 
 	c.config.TunnelStatus = "Disconnected (TCPMUX)"
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
+
+func (c *TcpMuxTransport) Stop() { c.state.Stop() }
+func (c *TcpMuxTransport) Wait() { c.state.Wait() }
 
 func (c *TcpMuxTransport) Restart() {
 	if !c.restartMutex.TryLock() {
@@ -124,14 +128,7 @@ func (c *TcpMuxTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
+	c.state.StopAndWait()
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -167,7 +164,7 @@ func (c *TcpMuxTransport) Restart() {
 	// set the log level again
 	c.logger.SetLevel(level)
 
-	go c.Start()
+	c.Start()
 
 }
 
@@ -240,13 +237,15 @@ func (c *TcpMuxTransport) channelDialer() {
 				// Settled before the pool starts, so no session is ever built
 				// on a version the server has not confirmed.
 				c.setMuxVersion(muxVersion)
-				c.state.SetConn(tunnelConn)
+				if !c.state.SetConn(tunnelConn) {
+					return
+				}
 				c.logger.Infof("control channel established successfully (mux version %d)", c.muxVersion.Load())
 
 				c.config.TunnelStatus = "Connected (TCPMux)"
 
-				go c.poolMaintainer()
-				go c.channelHandler()
+				c.state.Go(c.poolMaintainer)
+				c.state.Go(c.channelHandler)
 
 				return
 			} else {
@@ -262,7 +261,7 @@ func (c *TcpMuxTransport) channelDialer() {
 
 func (c *TcpMuxTransport) poolMaintainer() {
 	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
-		go c.tunnelDialer()
+		c.state.Go(c.tunnelDialer)
 	}
 
 	// factors
@@ -325,7 +324,7 @@ func (c *TcpMuxTransport) poolMaintainer() {
 				newPoolSize++
 
 				// Add a new connection to the pool
-				go c.tunnelDialer()
+				c.state.Go(c.tunnelDialer)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -342,7 +341,7 @@ func (c *TcpMuxTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
+	c.state.Go(func() {
 		for {
 			select {
 			case <-c.state.Ctx().Done():
@@ -350,7 +349,7 @@ func (c *TcpMuxTransport) channelHandler() {
 			default:
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if c.state.Ctx().Err() == nil && c.parentctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -359,7 +358,7 @@ func (c *TcpMuxTransport) channelHandler() {
 				msgChan <- msg
 			}
 		}
-	}()
+	})
 
 	// Main loop to listen for context cancellation or received messages
 	for {
@@ -378,7 +377,7 @@ func (c *TcpMuxTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					c.state.Go(c.tunnelDialer)
 				}
 
 			case utils.SG_HB:
@@ -412,6 +411,11 @@ func (c *TcpMuxTransport) tunnelDialer() {
 
 		return
 	}
+	untrack, ok := c.state.Track(tunnelConn)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	// Say what this connection is, so the server admits it on the nonce rather
 	// than on the address it happened to dial out from.
@@ -438,6 +442,7 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 		c.logger.Errorf("failed to create mux session: %v", err)
 		return
 	}
+	defer session.Close()
 
 	for {
 		select {
@@ -458,7 +463,10 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 				continue
 			}
 
-			go c.localDialer(stream, remoteAddr)
+			if !c.state.Go(func() { c.localDialer(stream, remoteAddr) }) {
+				stream.Close()
+				return
+			}
 		}
 	}
 }
