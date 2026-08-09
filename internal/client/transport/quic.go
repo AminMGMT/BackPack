@@ -49,7 +49,6 @@ type QuicConfig struct {
 	Endpoints      *network.Endpoints
 	Token          string
 	SnifferLog     string
-	TunnelStatus   string
 	Sniffer        bool
 	KeepAlive      time.Duration
 	RetryInterval  time.Duration
@@ -91,7 +90,7 @@ func NewQuicClient(parentCtx context.Context, config *QuicConfig, logger *logrus
 	}
 	// Seed the first generation through the same path a restart uses, so there is
 	// only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger))
 	return client
 }
 
@@ -112,7 +111,7 @@ func (c *QuicTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (QUIC)"
+	c.state.Usage().SetTunnelStatus("Disconnected (QUIC)")
 
 	go c.channelDialer()
 }
@@ -154,8 +153,8 @@ func (c *QuicTransport) Restart() {
 
 	ctx, cancel := context.WithCancel(c.parentctx)
 
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.logger))
+	c.state.Usage().SetTunnelStatus("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	metrics.ClearPool()
@@ -245,7 +244,7 @@ func (c *QuicTransport) channelDialer() {
 			c.state.SetConn(control)
 			c.logger.Info("control channel established successfully")
 
-			c.config.TunnelStatus = "Connected (QUIC)"
+			c.state.Usage().SetTunnelStatus("Connected (QUIC)")
 
 			go c.poolMaintainer()
 			go c.channelHandler()

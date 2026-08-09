@@ -44,7 +44,6 @@ type TcpConfig struct {
 	Endpoints      *network.Endpoints
 	Token          string
 	SnifferLog     string
-	TunnelStatus   string
 	KeepAlive      time.Duration
 	RetryInterval  time.Duration
 	DialTimeOut    time.Duration
@@ -93,7 +92,7 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger))
 	return client
 }
 
@@ -102,7 +101,7 @@ func (c *TcpTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (TCP)"
+	c.state.Usage().SetTunnelStatus("Disconnected (TCP)")
 
 	go c.channelDialer()
 }
@@ -145,8 +144,8 @@ func (c *TcpTransport) Restart() {
 
 	// Publish the whole new generation at once: a reader must never see
 	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.logger))
+	c.state.Usage().SetTunnelStatus("")
 	// The next control channel issues its own nonce; carrying this one over
 	// would have the pool announcing a value the server has already forgotten.
 	c.poolNonce.Clear()
@@ -247,7 +246,7 @@ func (c *TcpTransport) channelDialer() {
 				c.state.SetConn(tunnelTCPConn)
 				c.logger.Info("control channel established successfully")
 
-				c.config.TunnelStatus = "Connected (TCP)"
+				c.state.Usage().SetTunnelStatus("Connected (TCP)")
 				go c.poolMaintainer()
 				go c.channelHandler()
 

@@ -51,7 +51,6 @@ type TcpMuxConfig struct {
 	Endpoints        *network.Endpoints
 	Token            string
 	SnifferLog       string
-	TunnelStatus     string
 	Nodelay          bool
 	Sniffer          bool
 	KeepAlive        time.Duration
@@ -97,7 +96,7 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger))
 	return client
 }
 
@@ -106,7 +105,7 @@ func (c *TcpMuxTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (TCPMUX)"
+	c.state.Usage().SetTunnelStatus("Disconnected (TCPMUX)")
 
 	go c.channelDialer()
 }
@@ -150,8 +149,8 @@ func (c *TcpMuxTransport) Restart() {
 
 	// Publish the whole new generation at once: a reader must never see
 	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.logger))
+	c.state.Usage().SetTunnelStatus("")
 	// The next control channel issues its own nonce; carrying this one over
 	// would have the pool announcing a value the server has already forgotten.
 	c.poolNonce.Clear()
@@ -243,7 +242,7 @@ func (c *TcpMuxTransport) channelDialer() {
 				c.state.SetConn(tunnelConn)
 				c.logger.Infof("control channel established successfully (mux version %d)", c.muxVersion.Load())
 
-				c.config.TunnelStatus = "Connected (TCPMux)"
+				c.state.Usage().SetTunnelStatus("Connected (TCPMux)")
 
 				go c.poolMaintainer()
 				go c.channelHandler()

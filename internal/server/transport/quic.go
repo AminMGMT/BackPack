@@ -55,7 +55,6 @@ type QuicTransport struct {
 
 type QuicConfig struct {
 	BindAddr      string
-	TunnelStatus  string
 	SnifferLog    string
 	Token         string
 	Ports         []string
@@ -105,7 +104,7 @@ func NewQuicServer(parentCtx context.Context, config *QuicConfig, logger *logrus
 		tunnelChannel:  make(chan net.Conn, config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 }
@@ -122,7 +121,7 @@ func (s *QuicTransport) Start() {
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
-	s.config.TunnelStatus = "Disconnected (QUIC)"
+	s.usageMonitor.SetTunnelStatus("Disconnected (QUIC)")
 
 	// handshakeChannel is local to this run: the accept loop publishes the
 	// control stream onto it, and channelHandshake below takes it. Keeping it off
@@ -142,7 +141,7 @@ func (s *QuicTransport) Start() {
 		s.logger.Info("control channel successfully established.")
 	}
 
-	s.config.TunnelStatus = "Connected (QUIC)"
+	s.usageMonitor.SetTunnelStatus("Connected (QUIC)")
 
 	numCPU := runtime.NumCPU()
 	if numCPU > 4 {
@@ -201,8 +200,8 @@ func (s *QuicTransport) Restart() {
 	// The peer is gone until a new control channel arrives; a stale address would
 	// be shown as if it were current.
 	metrics.ClearPeer()
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 
 	s.logger.SetLevel(level)
 

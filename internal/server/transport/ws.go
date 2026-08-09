@@ -56,7 +56,6 @@ type WsConfig struct {
 	ACMEDomain   string // non-empty switches to Let's Encrypt for this domain
 	ACMEEmail    string
 	ACMECacheDir string
-	TunnelStatus string
 	Token        string
 	SimpleAuth   bool
 	Ports        []string
@@ -88,7 +87,7 @@ func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 		tunnelChannel:  make(chan TunnelChannel, config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
@@ -113,7 +112,7 @@ func (s *WsTransport) Start() {
 		go g.usageMonitor.Monitor()
 	}
 
-	s.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", s.config.Mode)
+	s.usageMonitor.SetTunnelStatus(fmt.Sprintf("Disconnected (%s)", s.config.Mode))
 
 	go s.tunnelListener(g)
 
@@ -163,8 +162,8 @@ func (s *WsTransport) Restart() {
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
 	s.controlChannel.Clear()
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 
 	// set the log level again
 	s.logger.SetLevel(level)
@@ -307,7 +306,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 					go s.handleLoop(g)
 				}
 
-				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
+				s.usageMonitor.SetTunnelStatus(fmt.Sprintf("Connected (%s)", s.config.Mode))
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
 				wsConn := TunnelChannel{

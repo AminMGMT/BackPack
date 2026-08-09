@@ -58,7 +58,6 @@ type TcpConfig struct {
 	BindAddr      string
 	Token         string
 	SnifferLog    string
-	TunnelStatus  string
 	Ports         []string
 	Nodelay       bool
 	Sniffer       bool
@@ -98,7 +97,7 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 		// between the listener starting and channelHandshake reaching its
 		// select is held rather than dropped.
 		handshakeChannel: make(chan controlCandidate, 1),
-		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 		rtt:              0,
 	}
@@ -120,7 +119,7 @@ func (s *TcpTransport) Start() {
 		usageMonitor:     s.usageMonitor,
 	}
 
-	s.config.TunnelStatus = "Disconnected (TCP)"
+	s.usageMonitor.SetTunnelStatus("Disconnected (TCP)")
 
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
@@ -131,7 +130,7 @@ func (s *TcpTransport) Start() {
 	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
-		s.config.TunnelStatus = "Connected (TCP)"
+		s.usageMonitor.SetTunnelStatus("Connected (TCP)")
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -194,8 +193,8 @@ func (s *TcpTransport) Restart() {
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
 	s.handshakeChannel = make(chan controlCandidate, 1)
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 	s.controlChannel.Clear()
 	// The next run issues its own nonce, so connections still carrying this
 	// one must stop being accepted the moment the run ends.

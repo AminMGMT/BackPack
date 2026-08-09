@@ -65,7 +65,6 @@ type KcpTransport struct {
 
 type KcpConfig struct {
 	BindAddr         string
-	TunnelStatus     string
 	SnifferLog       string
 	Token            string
 	Ports            []string
@@ -178,7 +177,7 @@ func NewKcpServer(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 		handshakeChannel: make(chan net.Conn),
 		localChannel:     make(chan LocalTCPConn, config.ChannelSize),
 		reqNewConnChan:   make(chan struct{}, config.ChannelSize),
-		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 }
@@ -200,14 +199,14 @@ func (s *KcpTransport) Start() {
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
-	s.config.TunnelStatus = "Disconnected (" + s.transportLabel() + ")"
+	s.usageMonitor.SetTunnelStatus("Disconnected (" + s.transportLabel() + ")")
 
 	go s.tunnelListener(g)
 
 	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
-		s.config.TunnelStatus = "Connected (" + s.transportLabel() + ")"
+		s.usageMonitor.SetTunnelStatus("Connected (" + s.transportLabel() + ")")
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -273,8 +272,8 @@ func (s *KcpTransport) Restart() {
 	// The peer is gone until a new control channel arrives; a stale address
 	// would be shown as if it were current.
 	metrics.ClearPeer()
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 	// Stored atomically, like every other access: the goroutines of the run
 	// being replaced may still be counting while this resets them.
 	atomic.StoreInt32(&s.streamCounter, 0)

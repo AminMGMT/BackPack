@@ -64,7 +64,6 @@ type WsMuxConfig struct {
 	ACMEDomain       string // non-empty switches to Let's Encrypt for this domain
 	ACMEEmail        string
 	ACMECacheDir     string
-	TunnelStatus     string
 	Ports            []string
 	Nodelay          bool
 	Sniffer          bool
@@ -109,7 +108,7 @@ func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logr
 		reqNewConnChan: make(chan struct{}, config.ChannelSize),
 		streamCounter:  0,
 		sessionCounter: 0,
-		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
@@ -134,7 +133,7 @@ func (s *WsMuxTransport) Start() {
 		go g.usageMonitor.Monitor()
 	}
 
-	s.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", s.config.Mode)
+	s.usageMonitor.SetTunnelStatus(fmt.Sprintf("Disconnected (%s)", s.config.Mode))
 
 	go s.tunnelListener(g)
 
@@ -186,8 +185,8 @@ func (s *WsMuxTransport) Restart() {
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
 	s.controlChannel.Clear()
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 	// Stored atomically, like every other access: the goroutines of the run
 	// being replaced may still be counting while this resets them.
 	atomic.StoreInt32(&s.streamCounter, 0)
@@ -335,7 +334,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 					go s.handleLoop(g)
 				}
 
-				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
+				s.usageMonitor.SetTunnelStatus(fmt.Sprintf("Connected (%s)", s.config.Mode))
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
 				session, err := smux.Client(conn.NetConn(), s.smuxConfig)

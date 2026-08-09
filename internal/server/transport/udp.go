@@ -42,15 +42,14 @@ type UdpTransport struct {
 }
 
 type UdpConfig struct {
-	BindAddr     string
-	Token        string
-	SnifferLog   string
-	TunnelStatus string
-	Ports        []string
-	Sniffer      bool
-	Heartbeat    time.Duration // in seconds, for udp conn and control channel
-	ChannelSize  int
-	WebPort      int
+	BindAddr    string
+	Token       string
+	SnifferLog  string
+	Ports       []string
+	Sniffer     bool
+	Heartbeat   time.Duration // in seconds, for udp conn and control channel
+	ChannelSize int
+	WebPort     int
 	// SO_RCVBUF/SO_SNDBUF size the datagram sockets. The kernel default is a few
 	// hundred KB, which a datagram flood — a speed test, a busy game server —
 	// overruns in a blink, and the packets it cannot hold are dropped before any
@@ -75,7 +74,7 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 		activeConnections: map[string]*TunnelUDPConn{},
 		activeMu:          sync.Mutex{},
 		reqNewConnChan:    make(chan struct{}, config.ChannelSize),
-		usageMonitor:      web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:      web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		rtt:               0,
 	}
 
@@ -93,7 +92,7 @@ func (s *UdpTransport) Start() {
 		usageMonitor:   s.usageMonitor,
 	}
 
-	s.config.TunnelStatus = "Disconnected (UDP)"
+	s.usageMonitor.SetTunnelStatus("Disconnected (UDP)")
 
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
@@ -146,8 +145,8 @@ func (s *UdpTransport) Restart() {
 	// Re-initialize variables
 	s.tunnelChannel = make(chan *TunnelUDPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 	s.controlChannel.Clear()
 	s.activeConnections = map[string]*TunnelUDPConn{}
 	s.activeMu = sync.Mutex{}

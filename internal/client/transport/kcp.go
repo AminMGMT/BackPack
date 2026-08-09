@@ -43,7 +43,6 @@ type KcpConfig struct {
 	Endpoints        *network.Endpoints
 	Token            string
 	SnifferLog       string
-	TunnelStatus     string
 	Sniffer          bool
 	KeepAlive        time.Duration
 	RetryInterval    time.Duration
@@ -150,7 +149,7 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 	}
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger))
 	return client
 }
 
@@ -159,7 +158,7 @@ func (c *KcpTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (" + c.transportLabel() + ")"
+	c.state.Usage().SetTunnelStatus("Disconnected (" + c.transportLabel() + ")")
 
 	go c.channelDialer()
 }
@@ -202,8 +201,8 @@ func (c *KcpTransport) Restart() {
 
 	// Publish the whole new generation at once: a reader must never see
 	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.logger))
+	c.state.Usage().SetTunnelStatus("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	// The published pool figures belong to the run that just ended. Left
@@ -305,7 +304,7 @@ func (c *KcpTransport) channelDialer() {
 			c.state.SetConn(tunnelConn)
 			c.logger.Info("control channel established successfully")
 
-			c.config.TunnelStatus = "Connected (" + c.transportLabel() + ")"
+			c.state.Usage().SetTunnelStatus("Connected (" + c.transportLabel() + ")")
 
 			go c.poolMaintainer()
 			go c.channelHandler()

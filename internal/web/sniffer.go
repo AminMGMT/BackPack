@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -30,8 +31,12 @@ type Usage struct {
 	sniffer      bool
 	snifferLog   string
 	mu           sync.Mutex
-	totalTraffic uint64
-	tunnelStatus *string
+	fileMu       sync.Mutex
+	statsMu      sync.Mutex
+	totalTraffic atomic.Uint64
+	tunnelStatus atomic.Value
+	cachedStats  *SystemStats
+	statsAt      time.Time
 }
 
 type PortUsage struct {
@@ -53,20 +58,33 @@ type SystemStats struct {
 	AllConnections string `json:"allConnections"`
 }
 
-func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus *string, logger *logrus.Logger) *Usage {
+func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, logger *logrus.Logger) *Usage {
 	ctx, cancel := context.WithCancel(shutdownCtx)
 	u := &Usage{
-		listenAddr:   listenAddr,
-		shutdownCtx:  ctx,
-		cancelFunc:   cancel,
-		logger:       logger,
-		sniffer:      sniffer,
-		snifferLog:   snifferLog,
-		tunnelStatus: tunnelStatus,
-		mu:           sync.Mutex{},
-		totalTraffic: 0,
+		listenAddr:  listenAddr,
+		shutdownCtx: ctx,
+		cancelFunc:  cancel,
+		logger:      logger,
+		sniffer:     sniffer,
+		snifferLog:  snifferLog,
+		mu:          sync.Mutex{},
 	}
+	u.tunnelStatus.Store("")
 	return u
+}
+
+const systemStatsTTL = 5 * time.Second
+
+func (m *Usage) SetTunnelStatus(status string) {
+	m.tunnelStatus.Store(status)
+}
+
+func (m *Usage) loadTunnelStatus() string {
+	status := m.tunnelStatus.Load()
+	if status == nil {
+		return ""
+	}
+	return status.(string)
 }
 
 func (m *Usage) Monitor() {
@@ -102,7 +120,7 @@ func (m *Usage) Monitor() {
 			for {
 				select {
 				case <-ticker.C:
-					go m.saveUsageData()
+					m.saveUsageData()
 				case <-m.shutdownCtx.Done():
 					return
 				}
@@ -176,15 +194,22 @@ func (m *Usage) AddOrUpdatePort(port int, usage uint64) {
 }
 
 func (m *Usage) saveUsageData() {
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+
 	// Step 1: Load existing usage data from the JSON file
 	var existingUsageData []PortUsage
 	file, err := os.Open(m.snifferLog)
 	if err == nil {
 		// If the file exists, decode the JSON data into existingUsageData
-		defer file.Close()
-		err = json.NewDecoder(file).Decode(&existingUsageData)
-		if err != nil {
-			m.logger.Errorf("error decoding JSON data: %v", err)
+		decodeErr := json.NewDecoder(file).Decode(&existingUsageData)
+		closeErr := file.Close()
+		if decodeErr != nil {
+			m.logger.Errorf("error decoding JSON data: %v", decodeErr)
+			return
+		}
+		if closeErr != nil {
+			m.logger.Errorf("error closing JSON file: %v", closeErr)
 			return
 		}
 	} else if !os.IsNotExist(err) {
@@ -216,14 +241,14 @@ func (m *Usage) saveUsageData() {
 		}
 	}
 
-	m.totalTraffic = 0
-
 	// Step 4: Convert the map back to a slice
 	var mergedUsageData []PortUsage
+	var totalTraffic uint64
 	for _, usage := range usageMap {
 		mergedUsageData = append(mergedUsageData, usage)
-		m.totalTraffic += usage.Usage
+		totalTraffic += usage.Usage
 	}
+	m.totalTraffic.Store(totalTraffic)
 
 	// Step 5: Convert merged data to JSON
 	data, err := json.MarshalIndent(mergedUsageData, "", "  ")
@@ -240,6 +265,9 @@ func (m *Usage) saveUsageData() {
 }
 
 func (m *Usage) getUsageFromFile() []PortUsage {
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+
 	// Check if the file exists
 	if _, err := os.Stat(m.snifferLog); os.IsNotExist(err) {
 		// If the file does not exist, create it and write "null"
@@ -254,6 +282,9 @@ func (m *Usage) getUsageFromFile() []PortUsage {
 			m.logger.Errorf("error writing 'null' to the file: %v", err)
 			file.Close()
 			return nil
+		}
+		if err := file.Close(); err != nil {
+			m.logger.Errorf("error closing JSON file: %v", err)
 		}
 
 		return nil
@@ -347,6 +378,28 @@ func (m *Usage) convertBytesToReadable(bytes uint64) string {
 }
 
 func (m *Usage) getSystemStats() (*SystemStats, error) {
+	m.statsMu.Lock()
+	defer m.statsMu.Unlock()
+	if m.cachedStats != nil && time.Since(m.statsAt) < systemStatsTTL {
+		return m.statsSnapshot(m.cachedStats), nil
+	}
+	stats, err := m.collectSystemStats()
+	if err != nil {
+		return nil, err
+	}
+	m.cachedStats = stats
+	m.statsAt = time.Now()
+	return m.statsSnapshot(stats), nil
+}
+
+func (m *Usage) statsSnapshot(stats *SystemStats) *SystemStats {
+	copy := *stats
+	copy.TunnelStatus = m.loadTunnelStatus()
+	copy.TunnelTraffic = m.convertBytesToReadable(m.totalTraffic.Load())
+	return &copy
+}
+
+func (m *Usage) collectSystemStats() (*SystemStats, error) {
 
 	// Get initial network stats
 	initialStats, err := m.getNetworkStats()
@@ -367,6 +420,9 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	cpuPercent, err := cpu.Percent(0, false)
 	if err != nil {
 		return nil, err
+	}
+	if len(cpuPercent) == 0 {
+		return nil, fmt.Errorf("no CPU usage samples found")
 	}
 
 	// Get RAM usage
@@ -392,6 +448,9 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(netStats) == 0 {
+		return nil, fmt.Errorf("no network IO counters found")
+	}
 
 	// Get all active network connections (TCP, UDP, etc.)
 	connections, err := net.Connections("all")
@@ -400,11 +459,11 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	}
 
 	// Calculate upload and download speeds
-	uploadSpeed := float64(finalStats.BytesSent - initialStats.BytesSent)
-	downloadSpeed := float64(finalStats.BytesRecv - initialStats.BytesRecv)
+	uploadSpeed := float64(counterDelta(finalStats.BytesSent, initialStats.BytesSent))
+	downloadSpeed := float64(counterDelta(finalStats.BytesRecv, initialStats.BytesRecv))
 
 	stats := &SystemStats{
-		TunnelStatus:   *m.tunnelStatus,
+		TunnelStatus:   m.loadTunnelStatus(),
 		CPUUsage:       m.formatFloat(cpuPercent[0]),
 		RAMUsage:       m.convertBytesToReadable(memStats.Used),
 		DiskUsage:      m.convertBytesToReadable(diskStats.Used),
@@ -412,12 +471,19 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 		NetworkTraffic: m.convertBytesToReadable(netStats[0].BytesSent + netStats[0].BytesRecv),
 		DownloadSpeed:  m.formatSpeed(downloadSpeed),
 		UploadSpeed:    m.formatSpeed(uploadSpeed),
-		TunnelTraffic:  m.convertBytesToReadable(m.totalTraffic),
+		TunnelTraffic:  m.convertBytesToReadable(m.totalTraffic.Load()),
 		Sniffer:        map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
 		AllConnections: fmt.Sprintf("%d", len(connections)),
 	}
 
 	return stats, nil
+}
+
+func counterDelta(current, previous uint64) uint64 {
+	if current < previous {
+		return 0
+	}
+	return current - previous
 }
 
 func (m *Usage) formatSpeed(bytesPerSec float64) string {

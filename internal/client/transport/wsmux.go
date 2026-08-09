@@ -38,7 +38,6 @@ type WsMuxConfig struct {
 	Endpoints        *network.Endpoints
 	Token            string
 	SnifferLog       string
-	TunnelStatus     string
 	Nodelay          bool
 	Sniffer          bool
 	KeepAlive        time.Duration
@@ -85,7 +84,7 @@ func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logr
 
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger))
 	return client
 }
 
@@ -94,7 +93,7 @@ func (c *WsMuxTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", c.config.Mode)
+	c.state.Usage().SetTunnelStatus(fmt.Sprintf("Disconnected (%s)", c.config.Mode))
 
 	go c.channelDialer()
 }
@@ -138,8 +137,8 @@ func (c *WsMuxTransport) Restart() {
 
 	// Publish the whole new generation at once: a reader must never see
 	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.logger))
+	c.state.Usage().SetTunnelStatus("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	// The published pool figures belong to the run that just ended. Left
@@ -182,7 +181,7 @@ func (c *WsMuxTransport) channelDialer() {
 			c.state.SetWSConn(tunnelWSConn)
 			c.logger.Info("control channel established successfully")
 
-			c.config.TunnelStatus = fmt.Sprintf("Connected (%s)", c.config.Mode)
+			c.state.Usage().SetTunnelStatus(fmt.Sprintf("Connected (%s)", c.config.Mode))
 
 			go c.poolMaintainer()
 			go c.channelHandler()

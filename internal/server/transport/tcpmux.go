@@ -64,7 +64,6 @@ type TcpMuxTransport struct {
 
 type TcpMuxConfig struct {
 	BindAddr         string
-	TunnelStatus     string
 	SnifferLog       string
 	Token            string
 	Ports            []string
@@ -137,7 +136,7 @@ func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *lo
 		reqNewConnChan:   make(chan struct{}, config.ChannelSize),
 		streamCounter:    0,
 		sessionCounter:   0,
-		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
+		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, logger),
 		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
@@ -161,14 +160,14 @@ func (s *TcpMuxTransport) Start() {
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
-	s.config.TunnelStatus = "Disconnected (TCPMux)"
+	s.usageMonitor.SetTunnelStatus("Disconnected (TCPMux)")
 
 	go s.tunnelListener(g)
 
 	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
-		s.config.TunnelStatus = "Connected (TCPMux)"
+		s.usageMonitor.SetTunnelStatus("Connected (TCPMux)")
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -239,8 +238,8 @@ func (s *TcpMuxTransport) Restart() {
 	// one or the same build.
 	s.poolNonce.Clear()
 	s.muxVersion.Store(0)
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.logger)
+	s.usageMonitor.SetTunnelStatus("")
 	// Stored atomically, like every other access: the goroutines of the run
 	// being replaced may still be counting while this resets them.
 	atomic.StoreInt32(&s.streamCounter, 0)
