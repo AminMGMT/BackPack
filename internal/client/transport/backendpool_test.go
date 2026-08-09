@@ -1,7 +1,7 @@
 package transport
 
 import (
-	"sync"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -20,9 +20,10 @@ func TestBackendPoolSinglePassthrough(t *testing.T) {
 // Round-robin spreads over the healthy backends and skips a dropped one.
 func TestBackendGroupPickSkipsUnhealthy(t *testing.T) {
 	g := &backendGroup{
-		list:    []string{"a:1", "b:2", "c:3"},
-		healthy: []bool{true, false, true}, // b is down
-		fails:   make([]int, 3),
+		list:      []string{"a:1", "b:2", "c:3"},
+		healthy:   []bool{true, false, true}, // b is down
+		fails:     make([]int, 3),
+		lastCheck: time.Now(),
 	}
 	seen := map[string]int{}
 	for i := 0; i < 6; i++ {
@@ -38,20 +39,14 @@ func TestBackendGroupPickSkipsUnhealthy(t *testing.T) {
 
 // The health checker drops a backend after MaxFailed and restores it on recovery.
 func TestBackendHealthCheckDropsAndRestores(t *testing.T) {
-	// Substitute the probe: "down:0" always fails, everything else succeeds.
-	var mu sync.Mutex
 	downFails := 0
-	orig := backendProbe
-	backendProbe = func(addr string) bool {
-		mu.Lock()
-		defer mu.Unlock()
+	probe := func(addr string) bool {
 		if addr == "down:0" {
 			downFails++
 			return false
 		}
 		return true
 	}
-	defer func() { backendProbe = orig }()
 
 	g := &backendGroup{
 		list:    []string{"up:1", "down:0"},
@@ -60,19 +55,7 @@ func TestBackendHealthCheckDropsAndRestores(t *testing.T) {
 	}
 	// Run enough probe rounds by hand to cross the failure threshold.
 	for i := 0; i < backendMaxFailed; i++ {
-		for j, b := range g.list {
-			ok := backendProbe(b)
-			g.mu.Lock()
-			if ok {
-				g.healthy[j], g.fails[j] = true, 0
-			} else {
-				g.fails[j]++
-				if g.fails[j] >= backendMaxFailed {
-					g.healthy[j] = false
-				}
-			}
-			g.mu.Unlock()
-		}
+		g.check(probe)
 	}
 	g.mu.Lock()
 	dropped := !g.healthy[1] && g.healthy[0]
@@ -86,5 +69,35 @@ func TestBackendHealthCheckDropsAndRestores(t *testing.T) {
 			t.Fatalf("pick = %q, want only the healthy up:1", got)
 		}
 	}
-	_ = time.Now
+	g.check(func(string) bool { return true })
+	g.mu.Lock()
+	restored := g.healthy[1] && g.fails[1] == 0
+	g.mu.Unlock()
+	if !restored {
+		t.Fatal("recovered backend was not restored")
+	}
+}
+
+func TestBackendPoolRejectsEmptyListsWithoutPanic(t *testing.T) {
+	p := &backendPool{groups: map[string]*backendGroup{}}
+	if got := p.pick("||"); got != "||" {
+		t.Fatalf("empty backend list = %q, want original target", got)
+	}
+	if got := p.pick(" backend:1 || "); got != "backend:1" {
+		t.Fatalf("one valid backend = %q, want trimmed backend", got)
+	}
+	if len(p.groups) != 0 {
+		t.Fatalf("malformed/single targets created %d groups", len(p.groups))
+	}
+}
+
+func TestBackendPoolGroupCacheIsBounded(t *testing.T) {
+	p := &backendPool{groups: map[string]*backendGroup{}}
+	for i := 0; i < backendMaxGroups+50; i++ {
+		list := []string{fmt.Sprintf("a-%d:1", i), fmt.Sprintf("b-%d:2", i)}
+		p.group(fmt.Sprintf("group-%d", i), list)
+	}
+	if len(p.groups) != backendMaxGroups {
+		t.Fatalf("group cache size = %d, want %d", len(p.groups), backendMaxGroups)
+	}
 }

@@ -35,6 +35,8 @@ const (
 	backendCheckInterval = 10 * time.Second
 	backendProbeTimeout  = 3 * time.Second
 	backendMaxFailed     = 3 // consecutive failures before a backend is dropped
+	backendMaxGroups     = 256
+	backendMaxMembers    = 32
 )
 
 var backends = &backendPool{groups: map[string]*backendGroup{}}
@@ -50,46 +52,78 @@ func (p *backendPool) pick(target string) string {
 	if !strings.Contains(target, backendSep) {
 		return target
 	}
-	return p.group(target).pick()
+	list := splitBackends(target)
+	if len(list) == 0 {
+		return target
+	}
+	if len(list) == 1 {
+		return list[0]
+	}
+	if len(list) > backendMaxMembers {
+		list = list[:backendMaxMembers]
+	}
+	key := strings.Join(list, backendSep)
+	return p.group(key, list).pick()
 }
 
-// group returns the pool for a backend list, creating it (and its background
-// health checker) the first time the list is seen.
-func (p *backendPool) group(target string) *backendGroup {
+// group returns the pool for a canonical backend list. The cache is bounded:
+// targets can originate in forwarded traffic and must not permanently grow a
+// process-wide map.
+func (p *backendPool) group(target string, list []string) *backendGroup {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.groups == nil {
+		p.groups = make(map[string]*backendGroup)
+	}
 	if g, ok := p.groups[target]; ok {
+		g.lastUsed = time.Now()
 		return g
 	}
-	list := splitBackends(target)
+	if len(p.groups) >= backendMaxGroups {
+		var oldestKey string
+		var oldest time.Time
+		for key, candidate := range p.groups {
+			if oldestKey == "" || candidate.lastUsed.Before(oldest) {
+				oldestKey, oldest = key, candidate.lastUsed
+			}
+		}
+		delete(p.groups, oldestKey)
+	}
 	g := &backendGroup{
-		list:    list,
-		healthy: make([]bool, len(list)),
-		fails:   make([]int, len(list)),
+		list:     append([]string(nil), list...),
+		healthy:  make([]bool, len(list)),
+		fails:    make([]int, len(list)),
+		lastUsed: time.Now(),
 	}
 	for i := range g.healthy {
 		g.healthy[i] = true // optimistic until the first check proves otherwise
 	}
 	p.groups[target] = g
-	go g.run()
 	return g
 }
 
 type backendGroup struct {
-	list    []string
-	mu      sync.Mutex
-	healthy []bool
-	fails   []int
-	next    int
+	list      []string
+	mu        sync.Mutex
+	healthy   []bool
+	fails     []int
+	next      int
+	checking  bool
+	lastCheck time.Time
+	lastUsed  time.Time
 }
 
 // pick returns the next healthy backend, round-robin. If none are healthy it
 // still returns one (best effort) rather than dropping the connection — the
 // dial will fail and be reported, which is more useful than silence.
 func (g *backendGroup) pick() string {
+	g.scheduleCheck()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	n := len(g.list)
+	if n == 0 {
+		return ""
+	}
 	for i := 0; i < n; i++ {
 		idx := g.next % n
 		g.next++
@@ -102,35 +136,51 @@ func (g *backendGroup) pick() string {
 	return g.list[idx]
 }
 
-// run probes every backend on a timer, dropping one after backendMaxFailed
-// consecutive failures and restoring it the moment it answers again.
-func (g *backendGroup) run() {
-	probe := backendProbe
-	for {
-		for i, b := range g.list {
-			ok := probe(b)
-			g.mu.Lock()
-			if ok {
-				g.healthy[i], g.fails[i] = true, 0
-			} else {
-				g.fails[i]++
-				if g.fails[i] >= backendMaxFailed {
-					g.healthy[i] = false
-				}
+// scheduleCheck starts at most one short-lived health-check pass when the
+// group is actually used. Unlike the previous permanent goroutine, an evicted
+// or abandoned target becomes collectible after its current pass finishes.
+func (g *backendGroup) scheduleCheck() {
+	g.mu.Lock()
+	if g.checking || time.Since(g.lastCheck) < backendCheckInterval {
+		g.mu.Unlock()
+		return
+	}
+	g.checking = true
+	g.lastCheck = time.Now()
+	g.mu.Unlock()
+
+	go func() {
+		g.check(backendProbe)
+		g.mu.Lock()
+		g.checking = false
+		g.lastCheck = time.Now()
+		g.mu.Unlock()
+	}()
+}
+
+func (g *backendGroup) check(probe func(string) bool) {
+	for i, backend := range g.list {
+		ok := probe(backend)
+		g.mu.Lock()
+		if ok {
+			g.healthy[i], g.fails[i] = true, 0
+		} else {
+			g.fails[i]++
+			if g.fails[i] >= backendMaxFailed {
+				g.healthy[i] = false
 			}
-			g.mu.Unlock()
 		}
-		time.Sleep(backendCheckInterval)
+		g.mu.Unlock()
 	}
 }
 
-// backendProbe is a plain TCP connect; a variable so tests can substitute it.
-var backendProbe = func(addr string) bool {
+// backendProbe is a plain TCP connect.
+func backendProbe(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, backendProbeTimeout)
 	if err != nil {
 		return false
 	}
-	c.Close()
+	_ = c.Close()
 	return true
 }
 
