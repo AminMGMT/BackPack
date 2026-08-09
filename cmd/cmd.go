@@ -120,10 +120,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 
 		srv := server.NewServer(&cfg.Server, ctx) // server
 		reportZeroCopy(ctx)
-		go srv.Start()
-
-		// Wait for shutdown signal
-		<-ctx.Done()
+		srv.Start()
 		srv.Stop()
 		logger.Println("shutting down server...")
 	case "client":
@@ -136,10 +133,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 
 		clnt := client.NewClient(&cfg.Client, ctx) // client
 		reportZeroCopy(ctx)
-		go clnt.Start()
-
-		// Wait for shutdown signal
-		<-ctx.Done()
+		clnt.Start()
 		clnt.Stop()
 		logger.Println("shutting down client...")
 

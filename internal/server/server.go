@@ -2,11 +2,10 @@ package server
 
 import (
 	"context"
-	"net/http"
-	_ "net/http/pprof"
 	"time"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/server/transport"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
@@ -51,12 +50,15 @@ func (s *Server) Start() {
 	// is all an attacker needs to connect. Reach it over SSH instead:
 	//   ssh -L 6060:127.0.0.1:6060 root@server
 	if s.config.PPROF {
+		pprofDone := make(chan struct{})
 		go func() {
+			defer close(pprofDone)
 			s.logger.Info("pprof listening on 127.0.0.1:6060 (loopback only)")
-			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			if err := debugserver.Serve(s.ctx, "127.0.0.1:6060"); err != nil {
 				s.logger.Errorf("pprof server stopped: %v", err)
 			}
 		}()
+		defer func() { <-pprofDone }()
 	}
 
 	switch s.config.Transport {

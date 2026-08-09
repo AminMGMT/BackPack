@@ -10,11 +10,9 @@ import (
 	"github.com/backpack/backpack/config"
 
 	"github.com/backpack/backpack/internal/client/transport"
+	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
-
-	"net/http"
-	_ "net/http/pprof"
 
 	"github.com/sirupsen/logrus"
 )
@@ -48,12 +46,15 @@ func (c *Client) Start() {
 	// loopback: pprof is unauthenticated and its heap dump would expose the
 	// tunnel token. Reach it with `ssh -L 6061:127.0.0.1:6061 root@server`.
 	if c.config.PPROF {
+		pprofDone := make(chan struct{})
 		go func() {
+			defer close(pprofDone)
 			c.logger.Info("pprof listening on 127.0.0.1:6061 (loopback only)")
-			if err := http.ListenAndServe("127.0.0.1:6061", nil); err != nil {
+			if err := debugserver.Serve(c.ctx, "127.0.0.1:6061"); err != nil {
 				c.logger.Errorf("pprof server stopped: %v", err)
 			}
 		}()
+		defer func() { <-pprofDone }()
 	}
 
 	c.logger.Infof("client with remote address %s started successfully", c.config.RemoteAddr)
