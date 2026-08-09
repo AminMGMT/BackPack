@@ -2,30 +2,7 @@ package webui
 
 import (
 	"testing"
-	"time"
 )
-
-// Five failures lock the address out; a success wipes the slate.
-func TestLoginLimiter(t *testing.T) {
-	l := &loginLimiter{fails: map[string]int{}, until: map[string]time.Time{}}
-	ip := "203.0.113.9"
-
-	for i := 0; i < loginMaxFails-1; i++ {
-		l.fail(ip)
-		if b, _ := l.blocked(ip); b {
-			t.Fatalf("blocked after %d failures", i+1)
-		}
-	}
-	l.fail(ip)
-	if b, _ := l.blocked(ip); !b {
-		t.Fatal("not blocked after reaching the limit")
-	}
-
-	l.reset(ip)
-	if b, _ := l.blocked(ip); b {
-		t.Fatal("still blocked after reset")
-	}
-}
 
 // A code works exactly once; three wrong tries kill the pending login.
 func TestTwoFAStore(t *testing.T) {

@@ -2,7 +2,6 @@ package webui
 
 import (
 	"crypto/subtle"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,64 +10,6 @@ import (
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/telegram"
 )
-
-// --- login rate limiting -----------------------------------------------------
-
-// A wrong password already costs a one-second delay; this adds a ceiling: five
-// consecutive failures from one address block that address for ten minutes.
-// The panel sits on a public port on a server whose address gets scanned, and
-// an eight-digit password should not be brute-forceable just because nobody
-// was watching the log.
-const (
-	loginMaxFails    = 5
-	loginBlockPeriod = 10 * time.Minute
-)
-
-type loginLimiter struct {
-	mu    sync.Mutex
-	fails map[string]int
-	until map[string]time.Time
-}
-
-var limiter = &loginLimiter{fails: map[string]int{}, until: map[string]time.Time{}}
-
-// blocked reports whether ip is currently locked out, and for how much longer.
-func (l *loginLimiter) blocked(ip string) (bool, time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if t, ok := l.until[ip]; ok {
-		if left := time.Until(t); left > 0 {
-			return true, left
-		}
-		delete(l.until, ip)
-		delete(l.fails, ip)
-	}
-	return false, 0
-}
-
-func (l *loginLimiter) fail(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.fails[ip]++
-	if l.fails[ip] >= loginMaxFails {
-		l.until[ip] = time.Now().Add(loginBlockPeriod)
-	}
-}
-
-func (l *loginLimiter) reset(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.fails, ip)
-	delete(l.until, ip)
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
 
 // --- two-factor login --------------------------------------------------------
 
@@ -156,11 +97,7 @@ func (s *server) startTwoFA(w http.ResponseWriter) bool {
 		twoFA.cancel(token)
 		return false
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: pendingCookie, Value: token, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		MaxAge: int(twoFACodeTTL / time.Second),
-	})
+	s.setAuthCookie(w, pendingCookie, token, twoFACodeTTL)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(codePage("")))
 	return true
@@ -176,20 +113,19 @@ func (s *server) handleLogin2FA(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	r.ParseForm()
+	if !parseAuthForm(w, r) {
+		return
+	}
 	ok, dead := twoFA.verify(c.Value, strings.TrimSpace(r.FormValue("code")))
 	switch {
 	case ok:
-		http.SetCookie(w, &http.Cookie{Name: pendingCookie, Value: "", Path: "/", MaxAge: -1})
+		s.clearAuthCookie(w, pendingCookie)
 		tok := s.sessions.create(clientIP(r))
 		notifyLogin(r)
-		http.SetCookie(w, &http.Cookie{
-			Name: sessionCookie, Value: tok, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 3600,
-		})
+		s.setAuthCookie(w, sessionCookie, tok, 12*time.Hour)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case dead:
-		http.SetCookie(w, &http.Cookie{Name: pendingCookie, Value: "", Path: "/", MaxAge: -1})
+		s.clearAuthCookie(w, pendingCookie)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	default:
 		time.Sleep(1 * time.Second)

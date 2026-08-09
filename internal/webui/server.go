@@ -150,7 +150,8 @@ func (s *sessionStore) clear() {
 }
 
 type server struct {
-	sessions *sessionStore
+	sessions      *sessionStore
+	secureCookies bool
 }
 
 // password always reads the current password from disk, so a change made from
@@ -172,7 +173,7 @@ func Serve() error {
 	if err != nil {
 		return err
 	}
-	srv := &server{sessions: newSessionStore()}
+	srv := &server{sessions: newSessionStore(), secureCookies: cfg.HTTPS}
 
 	// The SOCKS5 relay, the watchdog, the Telegram bot and the alerts all
 	// deliberately run elsewhere — in the backpack-monitor service. See
@@ -222,12 +223,7 @@ func Serve() error {
 	mux.HandleFunc("/sw.js", handleServiceWorker)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
+	httpServer := newPanelHTTPServer(addr, securePanelHTTP(mux))
 	if !cfg.HTTPS {
 		return httpServer.ListenAndServe()
 	}
@@ -309,10 +305,12 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				int(left.Minutes())+1), http.StatusTooManyRequests)
 			return
 		}
-		r.ParseForm()
+		if !parseAuthForm(w, r) {
+			return
+		}
 		given := r.FormValue("password")
 		// Constant-time comparison + small delay to slow brute force.
-		if subtle.ConstantTimeCompare([]byte(given), []byte(s.password())) == 1 {
+		if passwordMatches(given, s.password()) {
 			limiter.reset(ip)
 			// With two-factor on, the password alone is only half the login.
 			if Load().TwoFA && telegramReady() {
@@ -324,16 +322,12 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 					http.StatusBadGateway)
 				return
 			}
+			if old, err := r.Cookie(sessionCookie); err == nil {
+				s.sessions.destroy(old.Value)
+			}
 			tok := s.sessions.create(ip)
 			notifyLogin(r)
-			http.SetCookie(w, &http.Cookie{
-				Name:     sessionCookie,
-				Value:    tok,
-				Path:     "/",
-				HttpOnly: true,
-				SameSite: http.SameSiteLaxMode,
-				MaxAge:   12 * 3600,
-			})
+			s.setAuthCookie(w, sessionCookie, tok, 12*time.Hour)
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
@@ -352,7 +346,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.sessions.destroy(c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	s.clearAuthCookie(w, sessionCookie)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -526,6 +520,16 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func randomHex(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("web panel: secure random source failed: " + err.Error())
+	}
 	return hex.EncodeToString(b)
+}
+
+func (s *server) setAuthCookie(w http.ResponseWriter, name, value string, ttl time.Duration) {
+	http.SetCookie(w, newAuthCookie(name, value, ttl, s.secureCookies))
+}
+
+func (s *server) clearAuthCookie(w http.ResponseWriter, name string) {
+	http.SetCookie(w, expiredAuthCookie(name, s.secureCookies))
 }
