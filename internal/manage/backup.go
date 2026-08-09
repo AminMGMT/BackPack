@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
@@ -150,8 +149,8 @@ func BackupToFile(dir string) (string, error) {
 	return path, nil
 }
 
-// Restore reads a backup archive produced by WriteBackup, extracts it into the
-// config directory (overwriting matching files, leaving others untouched), then
+// Restore validates a backup in a staging directory and atomically replaces
+// the configuration (preserving files not present in the archive), then
 // re-registers a systemd service for every tunnel it finds and starts them. It
 // also restores the auto-refresh schedule from the archive sidecar.
 //
@@ -160,91 +159,21 @@ func BackupToFile(dir string) (string, error) {
 func Restore(r io.Reader) (RestoreResult, error) {
 	var res RestoreResult
 
-	gz, err := gzip.NewReader(r)
+	archive, err := restoreArchive(
+		r,
+		app.ConfigDir,
+		filepath.Base(app.InstallPathFile),
+		filepath.Base(app.WebUIConfig),
+		filepath.Base(app.TelegramConfig),
+	)
 	if err != nil {
-		return res, fmt.Errorf("not a valid backup archive: %w", err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-
-	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return res, err
 	}
-
-	sawConfig := false
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return res, fmt.Errorf("reading archive: %w", err)
-		}
-
-		// Sidecar: parse for out-of-tree settings, never write it to disk.
-		if hdr.Name == backupMetaName {
-			var m backupMeta
-			if data, err := io.ReadAll(tr); err == nil {
-				_ = json.Unmarshal(data, &m)
-				res.AutoRefreshHours = m.AutoRefreshHours
-			}
-			continue
-		}
-
-		// Guard against path traversal (zip-slip): the cleaned target must stay
-		// inside ConfigDir.
-		clean := filepath.Clean(hdr.Name)
-		if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-			return res, fmt.Errorf("refusing unsafe path in archive: %q", hdr.Name)
-		}
-
-		// install_path is machine-specific — it records where install.sh cloned
-		// the repo on THIS host. Keep the local value if present; only fall back
-		// to the archived one when none exists, so restoring on a new server
-		// doesn't point the updater at a directory that isn't there.
-		if clean == filepath.Base(app.InstallPathFile) && fileExists(app.InstallPathFile) {
-			continue
-		}
-		target := filepath.Join(app.ConfigDir, clean)
-		if rel, err := filepath.Rel(app.ConfigDir, target); err != nil || strings.HasPrefix(rel, "..") {
-			return res, fmt.Errorf("refusing unsafe path in archive: %q", hdr.Name)
-		}
-
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return res, err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return res, err
-			}
-			mode := os.FileMode(hdr.Mode).Perm()
-			if mode == 0 {
-				mode = 0600
-			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-			if err != nil {
-				return res, err
-			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				return res, err
-			}
-			f.Close()
-			res.Files++
-
-			base := filepath.Base(target)
-			switch {
-			case base == filepath.Base(app.WebUIConfig):
-				res.WebUIConfig = true
-			case base == filepath.Base(app.TelegramConfig):
-				res.TelegramConfig = true
-			case strings.HasSuffix(base, ".toml"):
-				sawConfig = true
-			}
-		}
-	}
+	res.Files = archive.Files
+	res.WebUIConfig = archive.WebUIConfig
+	res.TelegramConfig = archive.TelegramConfig
+	res.AutoRefreshHours = archive.AutoRefreshHours
+	sawConfig := archive.SawConfig
 
 	if sawConfig {
 		// Re-register a systemd unit for every restored tunnel, then start them.
@@ -282,8 +211,10 @@ func Restore(r io.Reader) (RestoreResult, error) {
 	}
 
 	// Restore the auto-refresh schedule captured in the sidecar.
-	if res.AutoRefreshHours > 0 {
-		_ = schedule.SetAutoRefresh(res.AutoRefreshHours)
+	if archive.HasMetadata {
+		if err := schedule.SetAutoRefresh(res.AutoRefreshHours); err != nil {
+			return res, fmt.Errorf("configuration restored, but auto-refresh could not be updated: %w", err)
+		}
 	}
 
 	return res, nil
