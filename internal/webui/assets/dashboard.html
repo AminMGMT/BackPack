@@ -503,6 +503,88 @@
     border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;
     background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
   .logbtn:hover{background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35);color:var(--red-soft)}
+  /* Three buttons where there were two, so each one gets less room: the label
+     may shrink but never wraps, and the icon never squashes. */
+  .logbtn{min-width:0;padding:0 6px;white-space:nowrap}
+  .logbtn .ic{flex:none}
+
+  /* ---------- tunnel actions ----------
+     Start / Stop / Restart / Delete sit in their own band under the three view
+     buttons. They change the tunnel rather than open a screen, so they read
+     quieter until hovered — and Delete warms to the same fixed danger red the
+     sign-out row uses, because it is the one thing on the card that cannot be
+     undone. That red is deliberately not the accent: whatever colour the panel
+     is themed to, "this destroys something" should not be the ordinary one. */
+  .actbtns{display:flex;gap:6px;margin-top:8px}
+  .actbtn{display:flex;align-items:center;justify-content:center;gap:5px;flex:1;min-width:0;min-height:38px;
+    border-radius:10px;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;
+    background:rgba(255,255,255,.04);border:1px solid var(--stroke);color:var(--muted);transition:.2s}
+  .actbtn .ic{width:13px;height:13px;flex:none}
+  .actbtn:hover{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.32);color:var(--red-soft)}
+  .actbtn:disabled{opacity:.45;cursor:default}
+  .actbtn.danger:hover{background:rgba(255,69,58,.14);border-color:rgba(255,69,58,.35);color:#ff6b60}
+
+  /* Section actions — Add Tunnel and Restart all, where "monitoring only" used
+     to sit. The panel can do both now, so the line that apologised for it is
+     the line that does it. */
+  .secbtns{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .secbtns .btn-sm{display:inline-flex;align-items:center;gap:7px}
+  .secbtns .btn-sm .ic{width:15px;height:15px}
+  .btn-add{background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;color:#fff;
+    box-shadow:0 8px 20px rgba(var(--accent-rgb),.32)}
+  .btn-add:hover{background:linear-gradient(145deg,var(--red),var(--red-deep));transform:translateY(-1px)}
+
+  /* ---------- setup / edit forms ----------
+     Wider than the other dialogs because these are forms rather than one
+     question, and a two-column row is the difference between reading a form
+     and scrolling one. */
+  .modal .box.wide{width:min(94vw,560px)}
+  .frow{display:flex;flex-direction:column;gap:6px}
+  .frow > label{margin:0}
+  .frow .hint{font-size:11.5px;color:var(--muted2);line-height:1.5}
+  .modal .frow input,.modal .frow select{margin-bottom:0}
+  /* A field with a button welded to its right: the port dice, the token copy. */
+  .fjoin{display:flex;gap:8px;align-items:stretch}
+  .fjoin input{flex:1;min-width:0}
+  /* A 64-character token is read a character at a time when it is checked
+     against the other end, so it is set in the same monospace the logs use. */
+  #af-token{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;letter-spacing:.01em}
+  .fjoin .btn-sm{flex:none;display:inline-flex;align-items:center;gap:6px}
+  .fjoin .btn-sm .ic{width:15px;height:15px}
+  .fgrid{display:flex;flex-direction:column;gap:14px}
+  /* Rows appear and disappear with the side and the transport, and the layout
+     rules above set display, which outranks the browser's own [hidden]. So the
+     forms hide by class, loudly enough to win. */
+  .hide{display:none!important}
+  /* The two halves of the setup question: which side of the tunnel is this?
+     Answered before anything else, because every following field depends on
+     it — a client has no forwarded ports and a server has no address to dial. */
+  .sides{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .side{padding:18px 14px;border-radius:18px;cursor:pointer;text-align:center;transition:.22s;
+    background:rgba(255,255,255,.04);border:1px solid var(--stroke);color:var(--txt)}
+  .side:hover{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.34);transform:translateY(-2px)}
+  .side .sflag{font-size:26px;line-height:1;display:block;margin-bottom:8px}
+  .side .st{font-size:14px;font-weight:700;display:block}
+  .side .sd{font-size:11.5px;color:var(--muted);display:block;margin-top:4px;line-height:1.5}
+  /* The transport's own one-line description, under the picker that chose it —
+     the same sentence the CLI prints beside each entry. */
+  .tdesc{font-size:11.5px;color:var(--muted2);line-height:1.5;min-height:1px}
+  /* Fine Tune reuses the settings accordion wholesale, so "the advanced
+     settings" look and behave the same wherever they are opened from. */
+  .ftgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ftgrid .frow.full{grid-column:1/-1}
+  @media (max-width:520px){ .ftgrid{grid-template-columns:1fr} .sides{grid-template-columns:1fr} }
+
+  /* ---------- toast ----------
+     Start, Stop, Restart and Delete finish somewhere other than where they were
+     clicked — the card only catches up on the next poll — so each one says what
+     happened, briefly, and gets out of the way. */
+  .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);z-index:80;
+    max-width:min(92vw,460px);padding:12px 18px;border-radius:14px;font-size:13px;font-weight:600;
+    background:var(--bg2);border:1px solid var(--stroke);color:var(--txt);
+    box-shadow:0 18px 50px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s}
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+  .toast.err{border-color:rgba(255,69,58,.45);color:#ff6b60}
 
   /* Details modal: the numbers worth a look but not worth card space —
      the cards stay cut back to what you actually read. */
@@ -930,10 +1012,17 @@
   </div>
 
   <div class="sec"><h2 data-i18n>Tunnels</h2><span class="count" id="tsum">0</span>
-    <span class="count" style="margin-left:auto" title="Tunnels are created and managed from the CLI" data-i18n>monitoring only</span>
+    <!-- Where "monitoring only" used to be. The panel builds and drives tunnels
+         now, so the corner that said it could not is the corner that does. -->
+    <div class="secbtns">
+      <button class="btn-sm btn-add" onclick="openAdd()">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span data-i18n>Add Tunnel</span></button>
+      <button class="btn-sm" onclick="restartAllTunnels()">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg><span data-i18n>Restart all</span></button>
+    </div>
   </div>
   <div class="grid-tun" id="tunnels"></div>
-  <div class="empty" id="empty" style="display:none" data-i18n>No tunnels configured yet. Create one from the CLI menu (sudo backpack).</div>
+  <div class="empty" id="empty" style="display:none" data-i18n>No tunnels yet. Add one with the button above, or from the CLI menu (sudo backpack).</div>
 </div>
 
 <div class="modal" id="settings" onclick="if(event.target===this)closeSettings()">
@@ -1216,6 +1305,179 @@
   </div>
 </div>
 
+<!-- Add Tunnel — the CLI's Setup Server / Setup Client wizard as one form.
+     The wizard asks its questions one at a time because a terminal can only ask
+     one at a time; the order here is the wizard's order, and the answers go to
+     the same code. The side is asked first and on its own screen: a server and
+     a client are not the same form with two fields swapped — one exposes ports
+     and listens, the other dials out — so choosing is a step, not a toggle. -->
+<div class="modal" id="addtun" onclick="if(event.target===this)closeAdd()">
+  <div class="box wide" role="dialog" aria-modal="true" aria-labelledby="addtitle">
+    <h3 id="addtitle" data-i18n>Add Tunnel</h3>
+    <p id="addsub" data-i18n data-i18n-ph-only>Which side of the tunnel is this machine?</p>
+
+    <div class="sides" id="addsides">
+      <button class="side" onclick="pickSide('server')">
+        <span class="sflag">🇮🇷</span>
+        <span class="st" data-i18n>Iran — Server</span>
+        <span class="sd" data-i18n>The edge that exposes the ports. Clients dial in to it.</span>
+      </button>
+      <button class="side" onclick="pickSide('client')">
+        <span class="sflag">🌍</span>
+        <span class="st" data-i18n>Kharej — Client</span>
+        <span class="sd" data-i18n>The machine abroad. It dials out to the Iran server.</span>
+      </button>
+    </div>
+
+    <div class="fgrid hide" id="addform">
+      <div class="frow">
+        <label for="af-family" data-i18n>Transport family</label>
+        <select id="af-family" class="sel" onchange="fillTransports('a')"></select>
+      </div>
+      <div class="frow">
+        <label for="af-transport" data-i18n>Transport</label>
+        <select id="af-transport" class="sel" onchange="onTransport('a')"></select>
+        <div class="tdesc" id="af-tdesc"></div>
+      </div>
+      <div class="frow cli-only" id="af-addrrow">
+        <label for="af-addr" data-i18n>Server address</label>
+        <input id="af-addr" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="IP or domain of the Iran server">
+      </div>
+      <div class="frow">
+        <label for="af-name" data-i18n>Tunnel name</label>
+        <input id="af-name" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="letters, digits, dots and dashes">
+      </div>
+      <div class="frow">
+        <label for="af-port" data-i18n>Tunnel port</label>
+        <div class="fjoin">
+          <input id="af-port" inputmode="numeric" autocomplete="off" data-i18n-ph placeholder="e.g. 4443">
+          <button class="btn-sm srv-only" onclick="rollPort('af-port')" title="Suggest a free port">
+            <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 8h.01M16 8h.01M8 16h.01M16 16h.01M12 12h.01"/></svg>
+            <span data-i18n>Random</span></button>
+        </div>
+        <div class="hint cli-only" data-i18n>The same port the Iran server listens on.</div>
+      </div>
+      <div class="frow srv-only">
+        <label for="af-ports" data-i18n>Forwarded ports</label>
+        <div class="fjoin">
+          <input id="af-ports" autocomplete="off" spellcheck="false" data-i18n-ph
+                 placeholder="443,8080 or 443=127.0.0.1:2096">
+          <button class="btn-sm" onclick="rollPort('af-ports')" title="Suggest a free port">
+            <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 8h.01M16 8h.01M8 16h.01M16 16h.01M12 12h.01"/></svg>
+            <span data-i18n>Random</span></button>
+        </div>
+        <div class="hint" data-i18n>A bare port is forwarded to that same port on the kharej machine. Separate several with commas.</div>
+      </div>
+      <div class="frow">
+        <label for="af-token" data-i18n>Security token</label>
+        <div class="fjoin">
+          <input id="af-token" autocomplete="off" spellcheck="false">
+          <button class="btn-sm" id="af-tokenbtn" onclick="copyField('af-token',this)" data-i18n>Copy</button>
+        </div>
+        <div class="hint srv-only" data-i18n>Suggested for you — copy it, the kharej side needs the same one.</div>
+        <div class="hint cli-only" data-i18n>Paste the exact token the Iran server was set up with.</div>
+      </div>
+      <div class="frow">
+        <label for="af-preset" data-i18n>Performance preset</label>
+        <select id="af-preset" class="sel" onchange="onPreset('a')"></select>
+        <div class="tdesc" id="af-pdesc"></div>
+      </div>
+
+      <div class="acc">
+        <button class="acch" id="acch-aft" aria-expanded="false" aria-controls="accb-aft" onclick="toggleAcc('aft')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+          <span data-i18n>Fine Tune</span><span class="accnote" id="accnote-aft" data-i18n>preset defaults</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-aft" hidden>
+          <div class="hint" data-i18n>These start on the preset's own values. Change one and the tunnel is marked custom, so a later preset change cannot quietly overwrite it.</div>
+          <div class="ftgrid" id="af-tune"></div>
+        </div>
+      </div>
+
+      <label class="tg srv-only"><input type="checkbox" id="af-ipv6">
+        <span data-i18n>Listen on IPv6 as well</span></label>
+      <label class="tg srv-only" id="af-pprow"><input type="checkbox" id="af-pp">
+        <span data-i18n>PROXY protocol — send the real client IP to the service behind the tunnel</span></label>
+      <div class="hint srv-only" id="af-pphint" data-i18n>Only turn this on if that service is set to accept the PROXY protocol; if it is not, every connection breaks.</div>
+    </div>
+
+    <div class="msg" id="addmsg"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeAdd()" data-i18n>Cancel</button>
+      <button class="btn-primary hide" id="addsave" onclick="submitAdd()" data-i18n>Create tunnel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit — the CLI's edit screen for one tunnel. Everything in here is applied
+     in a single write and a single restart, and a tunnel that will not come up
+     on the new settings is put back on the old ones. -->
+<div class="modal" id="edittun" onclick="if(event.target===this)closeEdit()">
+  <div class="box wide" role="dialog" aria-modal="true" aria-labelledby="edittitle">
+    <h3 id="edittitle" data-i18n>Edit tunnel</h3>
+    <p data-i18n>Change one thing or all of them — the tunnel restarts once, and reverts if it will not come back up.</p>
+
+    <div class="fgrid hide" id="editform">
+      <div class="frow cli-only" id="ef-addrrow">
+        <label for="ef-addr" data-i18n>Server address</label>
+        <input id="ef-addr" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="frow">
+        <label for="ef-family" data-i18n>Transport family</label>
+        <select id="ef-family" class="sel" onchange="fillTransports('e')"></select>
+      </div>
+      <div class="frow">
+        <label for="ef-transport" data-i18n>Transport</label>
+        <select id="ef-transport" class="sel" onchange="onTransport('e')"></select>
+        <div class="tdesc" id="ef-tdesc"></div>
+        <div class="hint" data-i18n>Both ends must run the same transport — change the other side too.</div>
+      </div>
+      <div class="frow">
+        <label for="ef-port" data-i18n>Tunnel port</label>
+        <div class="fjoin">
+          <input id="ef-port" inputmode="numeric" autocomplete="off">
+          <button class="btn-sm srv-only" onclick="rollPort('ef-port')" title="Suggest a free port">
+            <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 8h.01M16 8h.01M8 16h.01M16 16h.01M12 12h.01"/></svg>
+            <span data-i18n>Random</span></button>
+        </div>
+      </div>
+      <div class="frow srv-only">
+        <label for="ef-ports" data-i18n>Forwarded ports</label>
+        <input id="ef-ports" autocomplete="off" spellcheck="false">
+        <div class="hint" data-i18n>A bare port is forwarded to that same port on the kharej machine. Separate several with commas.</div>
+      </div>
+      <div class="frow">
+        <label for="ef-preset" data-i18n>Performance preset</label>
+        <select id="ef-preset" class="sel" onchange="onPreset('e')"></select>
+        <div class="tdesc" id="ef-pdesc"></div>
+      </div>
+
+      <div class="acc">
+        <button class="acch" id="acch-eft" aria-expanded="false" aria-controls="accb-eft" onclick="toggleAcc('eft')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+          <span data-i18n>Fine Tune</span><span class="accnote" id="accnote-eft" data-i18n data-i18n-ph-only>current values</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-eft" hidden>
+          <div class="hint" data-i18n>These are what the tunnel runs now. Change one and it is marked custom, so a later preset change cannot quietly overwrite it.</div>
+          <div class="ftgrid" id="ef-tune"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="msg" id="editmsg"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeEdit()" data-i18n>Cancel</button>
+      <button class="btn-primary" id="editsave" onclick="submitEdit()" data-i18n>Save changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
 <div class="modal" id="details" onclick="if(event.target===this)closeDetails()">
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="dettitle">
     <h3 id="dettitle" data-i18n>Details</h3>
@@ -1377,8 +1639,6 @@ const FA={
   "loading…":"در حال بارگذاری…",
   "Loading…":"در حال بارگذاری…",
   "Update now":"همین حالا به‌روزرسانی کن",
-  "monitoring only":"فقط پایش",
-  "No tunnels configured yet. Create one from the CLI menu (sudo backpack).":"هنوز تونلی ساخته نشده. از منوی خط فرمان بساز (sudo backpack).",
   "Check GitHub for the latest version.":"آخرین نسخه را از گیت‌هاب بررسی کن.",
   "Stable — finished releases only (recommended)":"پایدار — فقط نسخه‌های نهایی (پیشنهادی)",
   "Beta — also installs pre-releases":"بتا — نسخه‌های آزمایشی را هم نصب می‌کند",
@@ -1493,6 +1753,136 @@ const FA={
   "ONLINE":"آنلاین",
   "OFFLINE":"آفلاین",
   "STOPPED":"متوقف",
+  // ---- tunnel management: setup, edit and the card actions ----
+  "Add Tunnel":"افزودن تونل",
+  "Restart all":"ری‌استارت همه",
+  "No tunnels yet. Add one with the button above, or from the CLI menu (sudo backpack).":
+    "هنوز تونلی نداری. با دکمهٔ بالا یکی بساز، یا از منوی خط فرمان (sudo backpack).",
+  "Edit":"ویرایش","Start":"شروع","Stop":"توقف","Restart":"ری‌استارت","Delete":"حذف",
+  "Which side of the tunnel is this machine?":"این دستگاه کدام سمت تونل است؟",
+  "Iran — Server":"ایران — سرور",
+  "The edge that exposes the ports. Clients dial in to it.":"سمتی که پورت‌ها را باز می‌کند؛ کلاینت‌ها به آن وصل می‌شوند.",
+  "Kharej — Client":"خارج — کلاینت",
+  "The machine abroad. It dials out to the Iran server.":"دستگاه خارج از کشور؛ خودش به سرور ایران وصل می‌شود.",
+  "Iran side — this machine exposes the ports; the kharej machine dials in.":
+    "سمت ایران — این دستگاه پورت‌ها را باز می‌کند و دستگاه خارج به آن وصل می‌شود.",
+  "Kharej side — this machine dials out to the Iran server.":"سمت خارج — این دستگاه به سرور ایران وصل می‌شود.",
+  "Transport family":"خانوادهٔ ترنسپورت",
+  "Tunnel port":"پورت تونل",
+  "Server address":"آدرس سرور",
+  "IP or domain of the Iran server":"آی‌پی یا دامنهٔ سرور ایران",
+  "Tunnel name":"نام تونل",
+  "letters, digits, dots and dashes":"حروف، ارقام، نقطه و خط تیره",
+  "e.g. 4443":"مثلاً ۴۴۴۳",
+  "Random":"تصادفی",
+  "The same port the Iran server listens on.":"همان پورتی که سرور ایران روی آن گوش می‌دهد.",
+  "Forwarded ports":"پورت‌های فوروارد",
+  "443,8080 or 443=127.0.0.1:2096":"۴۴۳,۸۰۸۰ یا 443=127.0.0.1:2096",
+  "A bare port is forwarded to that same port on the kharej machine. Separate several with commas.":
+    "پورت خالی به همان پورت روی دستگاه خارج فوروارد می‌شود. چندتا را با ویرگول جدا کن.",
+  "Security token":"توکن امنیتی",
+  "Suggested for you — copy it, the kharej side needs the same one.":
+    "برایت پیشنهاد شد — کپی‌اش کن، سمت خارج به همین توکن نیاز دارد.",
+  "Paste the exact token the Iran server was set up with.":"دقیقاً همان توکنی را بگذار که سرور ایران با آن ساخته شده.",
+  "Copied!":"کپی شد!",
+  "Performance preset":"پروفایل کارایی",
+  "Fine Tune":"تنظیم دقیق",
+  "preset defaults":"مقادیر پیش‌فرض پروفایل",
+  "current values":"مقادیر فعلی",
+  "custom — preset no longer applies":"سفارشی — دیگر تابع پروفایل نیست",
+  "These start on the preset's own values. Change one and the tunnel is marked custom, so a later preset change cannot quietly overwrite it.":
+    "اینها از مقادیر خود پروفایل شروع می‌شوند. اگر یکی را عوض کنی تونل سفارشی می‌شود تا تغییر بعدی پروفایل بی‌سروصدا رویش ننویسد.",
+  "These are what the tunnel runs now. Change one and it is marked custom, so a later preset change cannot quietly overwrite it.":
+    "اینها همان چیزی است که تونل الان اجرا می‌کند. اگر یکی را عوض کنی سفارشی می‌شود تا تغییر بعدی پروفایل بی‌سروصدا رویش ننویسد.",
+  "Custom — leave the current values":"سفارشی — مقادیر فعلی دست‌نخورده بماند",
+  "The values already on this tunnel are kept.":"مقادیری که همین حالا روی تونل است حفظ می‌شود.",
+  "Listen on IPv6 as well":"روی IPv6 هم گوش بده",
+  "PROXY protocol — send the real client IP to the service behind the tunnel":
+    "پروتکل PROXY — آی‌پی واقعی کاربر را به سرویس پشت تونل بفرست",
+  "Only turn this on if that service is set to accept the PROXY protocol; if it is not, every connection breaks.":
+    "فقط وقتی روشن کن که آن سرویس روی پذیرش پروتکل PROXY تنظیم شده باشد؛ وگرنه همهٔ اتصال‌ها خراب می‌شود.",
+  "Cancel":"انصراف",
+  "Create tunnel":"ساخت تونل",
+  "Creating the tunnel…":"در حال ساخت تونل…",
+  "Tunnel created and running.":"تونل ساخته شد و در حال اجراست.",
+  "Tunnel created, but it did not start — open its logs.":"تونل ساخته شد ولی بالا نیامد — لاگش را ببین.",
+  "The tunnel could not be created.":"تونل ساخته نشد.",
+  "Could not reach the panel.":"دسترسی به پنل ممکن نشد.",
+  "Could not find a free port to suggest.":"پورت آزادی برای پیشنهاد پیدا نشد.",
+  "Edit tunnel":"ویرایش تونل",
+  "Change one thing or all of them — the tunnel restarts once, and reverts if it will not come back up.":
+    "یکی را عوض کن یا همه را — تونل یک بار ری‌استارت می‌شود و اگر بالا نیامد به تنظیمات قبلی برمی‌گردد.",
+  "Both ends must run the same transport — change the other side too.":
+    "هر دو سر باید یک ترنسپورت داشته باشند — سمت دیگر را هم عوض کن.",
+  "Save changes":"ذخیرهٔ تغییرات",
+  "Nothing has been changed yet.":"هنوز چیزی عوض نشده.",
+  "Applying — the tunnel restarts once…":"در حال اعمال — تونل یک بار ری‌استارت می‌شود…",
+  "Saved — the tunnel restarted on the new settings.":"ذخیره شد — تونل با تنظیمات جدید بالا آمد.",
+  "The change was refused.":"تغییر پذیرفته نشد.",
+  "Could not load this tunnel.":"این تونل بارگذاری نشد.",
+  "Its config and its service are removed. This cannot be undone.":"کانفیگ و سرویسش پاک می‌شود. برگشت‌پذیر نیست.",
+  "Tunnel started.":"تونل شروع شد.",
+  "Tunnel stopped.":"تونل متوقف شد.",
+  "Tunnel restarted.":"تونل ری‌استارت شد.",
+  "Tunnel deleted.":"تونل حذف شد.",
+  "That did not work.":"انجام نشد.",
+  "Done.":"انجام شد.",
+  "There are no tunnels to restart.":"تونلی برای ری‌استارت نیست.",
+  "Restart every tunnel on this server?":"همهٔ تونل‌های این سرور ری‌استارت شوند؟",
+  "Restarting every tunnel…":"در حال ری‌استارت همهٔ تونل‌ها…",
+  "Every tunnel restarted.":"همهٔ تونل‌ها ری‌استارت شدند.",
+  "Restarted":"ری‌استارت‌شده","failed":"ناموفق",
+  // The transport families, the transports and the presets, worded exactly as
+  // the CLI menu words them. They arrive from the server in English — the two
+  // menus are one list, defined once in Go — so the translation happens here,
+  // keyed by that English. A transport added there and not added here still
+  // appears; it simply reads in English until a line is added.
+  "reliable and simple — the safe default":"ساده و مطمئن — انتخاب امن پیش‌فرض",
+  "lower latency, better on lossy or throttled links":"تأخیر کمتر، بهتر روی لینک‌های پرافت یا محدودشده",
+  "looks like normal web traffic — CDN friendly":"شبیه ترافیک عادی وب — سازگار با CDN",
+  "newer ideas, still being proven — not for production yet":"ایده‌های تازه که هنوز اثبات نشده‌اند — فعلاً برای محیط واقعی نه",
+  "plain & fast — start here if unsure":"ساده و سریع — اگر مطمئن نیستی از همین شروع کن",
+  "many streams over few connections — multiplexed":"چند جریان روی چند اتصال کم — مالتی‌پلکس",
+  "encrypted with no fingerprint — hardest to detect, for heavy filtering":
+    "رمزنگاری‌شده و بدون اثر انگشت — سخت‌ترین برای شناسایی، مناسب فیلترینگ شدید",
+  "raw datagrams — for UDP-based services":"دیتاگرام خام — برای سرویس‌های مبتنی بر UDP",
+  "reliable UDP with error correction — best on lossy links":"UDP مطمئن با تصحیح خطا — بهترین روی لینک‌های پرافت",
+  "encrypted TLS 1.3 streams over UDP — self-tuning, great under loss":
+    "جریان‌های رمزنگاری‌شدهٔ TLS 1.3 روی UDP — خودتنظیم، عالی در شرایط افت بسته",
+  "WebSocket — HTTP camouflage, CDN friendly":"وب‌سوکت — استتار HTTP، سازگار با CDN",
+  "WebSocket — multiplexed":"وب‌سوکت — مالتی‌پلکس",
+  "secure WebSocket — TLS encrypted":"وب‌سوکت امن — رمزنگاری TLS",
+  "TLS WebSocket — multiplexed":"وب‌سوکت TLS — مالتی‌پلکس",
+  "tunnels inside ping packets, for networks that filter UDP/TCP but not ICMP — Linux, needs root":
+    "تونل داخل بسته‌های پینگ، برای شبکه‌هایی که UDP/TCP را فیلتر می‌کنند ولی ICMP را نه — لینوکس، نیازمند روت",
+  "forges the source of raw IP packets, for a path that filters on the real flow — Linux, needs root; prove it on your route":
+    "منبع بسته‌های خام IP را جعل می‌کند، برای مسیری که روی جریان واقعی فیلتر می‌کند — لینوکس، نیازمند روت؛ اول روی مسیر خودت امتحانش کن",
+  "light on CPU and RAM — best for small or shared VPS":"کم‌مصرف از نظر پردازنده و حافظه — مناسب سرور کوچک یا اشتراکی",
+  "recommended — the tuned default for Iran to abroad links":"پیشنهادی — پیش‌فرض تنظیم‌شده برای مسیر ایران به خارج",
+  "maximum throughput, noticeably more CPU — for strong servers":"بیشترین توان عبوری با پردازندهٔ محسوس بیشتر — برای سرورهای قوی",
+  // Fine Tune field labels — rendered from the script, translated on the sweep
+  // that follows.
+  "Keepalive period (seconds)":"دورهٔ keepalive (ثانیه)",
+  "Heartbeat interval (seconds, 0 disables)":"فاصلهٔ heartbeat (ثانیه، ۰ یعنی خاموش)",
+  "Channel size":"اندازهٔ کانال",
+  "Connection pool size":"اندازهٔ استخر اتصال",
+  "Log level":"سطح لاگ",
+  "Mux connections / sessions":"اتصال‌ها / نشست‌های Mux",
+  "Mux version (1 or 2)":"نسخهٔ Mux (۱ یا ۲)",
+  "Mux frame size":"اندازهٔ فریم Mux",
+  "Mux receive buffer":"بافر دریافت Mux",
+  "Mux stream buffer":"بافر استریم Mux",
+  "KCP MTU (bytes)":"MTU مربوط به KCP (بایت)",
+  "KCP interval (ms)":"بازهٔ KCP (میلی‌ثانیه)",
+  "KCP send window (packets)":"پنجرهٔ ارسال KCP (بسته)",
+  "KCP receive window (packets)":"پنجرهٔ دریافت KCP (بسته)",
+  "FEC data shards (0 disables)":"شاردهای دادهٔ FEC (۰ یعنی خاموش)",
+  "FEC parity shards":"شاردهای توازن FEC",
+  "TCP_NODELAY — lower latency":"TCP_NODELAY — تأخیر کمتر",
+  "Write logs as JSON (for log collectors)":"نوشتن لاگ به صورت JSON (برای جمع‌آورنده‌های لاگ)",
+  "Aggressive pool":"استخر تهاجمی",
+  "Accept UDP traffic over the TCP transport":"پذیرش ترافیک UDP روی ترنسپورت TCP",
+  "Zero-copy forwarding (experimental)":"فوروارد zero-copy (آزمایشی)",
 };
 let LANG=localStorage.getItem('bp_lang')==='fa'?'fa':'en';
 
@@ -1611,6 +2001,11 @@ const ICON={
   logs:'<svg class="ic" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>',
   bot:'<svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V5M9 3h6M9 13h.01M15 13h.01M8 19v2M16 19v2"/></svg>',
   info:'<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+  edit:'<svg class="ic" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>',
+  start:'<svg class="ic" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>',
+  stop:'<svg class="ic" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  restart:'<svg class="ic" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>',
+  trash:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
 };
 const COUNTRIES=[
   ['','—'],['DE','Germany'],['NL','Netherlands'],['FR','France'],['GB','United Kingdom'],
@@ -1865,8 +2260,15 @@ function buildCard(t){
       <div class="r full peerrow" style="display:none"><div class="k" data-i18n>Peer</div><div class="v peer"></div></div>
     </div>
     <div class="cardbtns">
-      <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} Logs</button>
-      <button class="logbtn" onclick="openDetails('${n}')" aria-label="View details for ${n}">${ICON.info} Details</button>
+      <button class="logbtn" onclick="openEdit('${n}')" aria-label="Edit ${n}">${ICON.edit} <span data-i18n>Edit</span></button>
+      <button class="logbtn" onclick="openLogs('${n}')" aria-label="View logs for ${n}">${ICON.logs} <span data-i18n>Logs</span></button>
+      <button class="logbtn" onclick="openDetails('${n}')" aria-label="View details for ${n}">${ICON.info} <span data-i18n>Details</span></button>
+    </div>
+    <div class="cardbtns actbtns">
+      <button class="actbtn" onclick="tunnelAction('${n}','start',this)" aria-label="Start ${n}">${ICON.start} <span data-i18n>Start</span></button>
+      <button class="actbtn" onclick="tunnelAction('${n}','stop',this)" aria-label="Stop ${n}">${ICON.stop} <span data-i18n>Stop</span></button>
+      <button class="actbtn" onclick="tunnelAction('${n}','restart',this)" aria-label="Restart ${n}">${ICON.restart} <span data-i18n>Restart</span></button>
+      <button class="actbtn danger" onclick="tunnelAction('${n}','delete',this)" aria-label="Delete ${n}">${ICON.trash} <span data-i18n>Delete</span></button>
     </div>`;
   return el;
 }
@@ -1973,6 +2375,436 @@ async function loadTunnels(){
       if(t) { $('detbody').innerHTML=renderDetails(t); relang(); }
     }
   }catch(e){}
+}
+
+// ---- tunnel management -----------------------------------------------------
+// The CLI's Setup Server / Setup Client wizard, its edit screen and its four
+// service actions. Nothing is decided here: every form posts to /api/tunnel/*,
+// which hands the answers to the same manage code `sudo backpack` calls, so a
+// tunnel built in the browser is byte-for-byte a tunnel built in the terminal.
+
+// A card action finishes somewhere other than where it was clicked — the card
+// only catches up on the next poll — so each one says what happened and leaves.
+let toastTimer=null;
+function toast(text,isErr){
+  const t=$('toast');
+  t.textContent=text;
+  t.className='toast on'+(isErr?' err':'');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){ t.className='toast'+(isErr?' err':''); },3600);
+}
+
+// The transport families and the presets are served rather than written into
+// this page: a transport added to the CLI menu then appears here on its own,
+// and the two can never describe different things.
+let TOPTS=null;
+async function tunnelOptions(){
+  if(!TOPTS) TOPTS=await (await fetch('/api/tunnel/options')).json();
+  return TOPTS;
+}
+function transportEntry(value){
+  if(!TOPTS) return null;
+  for(const f of TOPTS.families) for(const e of f.entries) if(e.value===value) return e;
+  return null;
+}
+function familyIndexOf(value){
+  if(!TOPTS) return 0;
+  for(let i=0;i<TOPTS.families.length;i++)
+    if(TOPTS.families[i].entries.some(e=>e.value===value)) return i;
+  return 0;
+}
+// Mirrors of the Go predicates, kept beside the fields they gate: a mux knob on
+// a plain TCP tunnel is a box that does nothing, and a form full of those is
+// how people end up tuning the wrong thing.
+function isMuxT(t){ return ['tcpmux','wsmux','wssmux','kcp','xdi','spoof'].indexOf(t)>=0; }
+function isKCPT(t){ return ['kcp','xdi','spoof'].indexOf(t)>=0; }
+function supportsPPT(t){ return ['tcp','tcpmux','kcp','wsmux','wssmux','stealth','quic','spoof'].indexOf(t)>=0; }
+
+// The advanced settings, in the order the CLI asks them. `when` decides whether
+// a knob means anything for this tunnel; everything without one always applies.
+const FT_FIELDS=[
+  {k:'keepAlive',       t:'int', label:'Keepalive period (seconds)'},
+  {k:'heartbeat',       t:'int', label:'Heartbeat interval (seconds, 0 disables)'},
+  {k:'channelSize',     t:'int', label:'Channel size', when:c=>c.role==='server'},
+  {k:'connectionPool',  t:'int', label:'Connection pool size', when:c=>c.role==='client'},
+  {k:'logLevel',        t:'sel', label:'Log level', opts:['info','debug','warn','error']},
+  {k:'muxCon',          t:'int', label:'Mux connections / sessions', when:c=>isMuxT(c.transport)},
+  {k:'muxVersion',      t:'int', label:'Mux version (1 or 2)', when:c=>isMuxT(c.transport)},
+  {k:'muxFrameSize',    t:'int', label:'Mux frame size', when:c=>isMuxT(c.transport)},
+  {k:'muxRecvBuffer',   t:'int', label:'Mux receive buffer', when:c=>isMuxT(c.transport)},
+  {k:'muxStreamBuffer', t:'int', label:'Mux stream buffer', when:c=>isMuxT(c.transport)},
+  {k:'kcpMTU',          t:'int', label:'KCP MTU (bytes)', when:c=>isKCPT(c.transport)},
+  {k:'kcpInterval',     t:'int', label:'KCP interval (ms)', when:c=>isKCPT(c.transport)},
+  {k:'kcpSndWnd',       t:'int', label:'KCP send window (packets)', when:c=>isKCPT(c.transport)},
+  {k:'kcpRcvWnd',       t:'int', label:'KCP receive window (packets)', when:c=>isKCPT(c.transport)},
+  {k:'kcpDataShards',   t:'int', label:'FEC data shards (0 disables)', when:c=>isKCPT(c.transport)},
+  {k:'kcpParityShards', t:'int', label:'FEC parity shards', when:c=>isKCPT(c.transport)},
+  {k:'nodelay',         t:'bool',label:'TCP_NODELAY — lower latency'},
+  {k:'logJSON',         t:'bool',label:'Write logs as JSON (for log collectors)'},
+  {k:'aggressivePool',  t:'bool',label:'Aggressive pool', when:c=>c.role==='client'},
+  {k:'acceptUDP',       t:'bool',label:'Accept UDP traffic over the TCP transport', when:c=>c.role==='server'&&c.transport==='tcp'},
+  {k:'zeroCopy',        t:'bool',label:'Zero-copy forwarding (experimental)', when:c=>c.transport==='tcp'},
+];
+// The three knobs whose zero is an answer rather than a blank: no heartbeat, no
+// error correction. Everywhere else a zero means "the preset's value".
+const FT_ZERO_OK=['heartbeat','kcpDataShards','kcpParityShards'];
+
+// renderTune draws the fields that apply to this tunnel and fills them with the
+// given values. The box remembers whether anything was touched: an untouched
+// drawer sends nothing, so a tunnel keeps its preset instead of being marked
+// custom by having been looked at.
+function renderTune(box,ctx,tune){
+  tune=tune||{};
+  box.innerHTML='';
+  box.dataset.dirty='0';
+  FT_FIELDS.forEach(function(f){
+    if(f.when&&!f.when(ctx)) return;
+    const row=document.createElement('div');
+    row.className='frow'+(f.t==='bool'?' full':'');
+    const v=tune[f.k];
+    if(f.t==='bool'){
+      row.innerHTML='<label class="tg"><input type="checkbox" data-k="'+f.k+'"'+(v?' checked':'')+
+        '><span data-i18n>'+f.label+'</span></label>';
+    }else if(f.t==='sel'){
+      row.innerHTML='<label data-i18n>'+f.label+'</label><select class="sel" data-k="'+f.k+'">'+
+        f.opts.map(o=>'<option value="'+o+'"'+(v===o?' selected':'')+'>'+o+'</option>').join('')+'</select>';
+    }else{
+      row.innerHTML='<label data-i18n>'+f.label+'</label>'+
+        '<input inputmode="numeric" autocomplete="off" data-k="'+f.k+'" value="'+(v||0)+'">';
+    }
+    box.appendChild(row);
+  });
+  const touched=function(){ box.dataset.dirty='1'; setTuneNote(box.id[0],true); };
+  box.oninput=touched; box.onchange=touched;
+  relang();
+}
+function readTune(box){
+  const out={};
+  box.querySelectorAll('[data-k]').forEach(function(el){
+    const k=el.dataset.k;
+    if(el.type==='checkbox') out[k]=el.checked;
+    else if(el.tagName==='SELECT') out[k]=el.value;
+    else out[k]=parseInt(el.value,10)||0;
+  });
+  return out;
+}
+// A zero the operator did not choose is dropped, so the preset's number fills
+// it — the same rule the server applies to what it receives.
+function tuneKeep(vals){
+  const out={};
+  Object.keys(vals).forEach(function(k){
+    const v=vals[k];
+    if(typeof v==='boolean'||typeof v==='string'||v>0||FT_ZERO_OK.indexOf(k)>=0) out[k]=v;
+  });
+  return out;
+}
+function setTuneNote(p,custom){
+  const el=$(p==='a'?'accnote-aft':'accnote-eft');
+  el.textContent=T(custom?'custom — preset no longer applies':(p==='a'?'preset defaults':'current values'));
+}
+
+// ---- the two forms, which share every field they have in common -------------
+// p is 'a' for Add and 'e' for Edit; the ids differ only by that letter.
+let addRole='server', editName=null, editOrig=null;
+function formRole(p){ return p==='a'?addRole:(editOrig?editOrig.role:'server'); }
+
+function fillFamilies(p,selected){
+  const sel=$(p+'f-family');
+  sel.innerHTML='';
+  TOPTS.families.forEach(function(f,i){
+    const o=document.createElement('option');
+    o.value=String(i); o.textContent=f.label+' — '+T(f.desc);
+    sel.appendChild(o);
+  });
+  sel.value=String(selected||0);
+}
+// skipTune is for the edit dialog, which draws the drawer itself from what the
+// tunnel actually runs. Without it the refresh below would race that render and
+// could land the preset's numbers on a hand-tuned tunnel.
+function fillTransports(p,selected,skipTune){
+  const fi=parseInt($(p+'f-family').value,10)||0;
+  const sel=$(p+'f-transport');
+  sel.innerHTML='';
+  ((TOPTS.families[fi]||{}).entries||[]).forEach(function(e){
+    const o=document.createElement('option');
+    o.value=e.value; o.textContent=e.label;
+    sel.appendChild(o);
+  });
+  if(selected) sel.value=selected;
+  onTransport(p,skipTune);
+}
+async function onTransport(p,skipTune){
+  const e=transportEntry($(p+'f-transport').value);
+  $(p+'f-tdesc').textContent=e?T(e.desc):'';
+  if(p==='a'){
+    // The PROXY header has nowhere to live on a plain websocket or raw UDP
+    // tunnel, so the question is not asked there rather than asked and ignored.
+    const ok=supportsPPT($('af-transport').value)&&addRole==='server';
+    $('af-pprow').classList.toggle('hide',!ok);
+    $('af-pphint').classList.toggle('hide',!ok);
+  }
+  if(!skipTune) await refreshTune(p);
+}
+function fillPresets(p,current){
+  const sel=$(p+'f-preset');
+  sel.innerHTML='';
+  // A tunnel tuned by hand has no preset. Editing it must not force one on it,
+  // so "leave as it is" is an option — and the default one.
+  if(p==='e'&&!current){
+    const o=document.createElement('option');
+    o.value=''; o.textContent=T('Custom — leave the current values');
+    sel.appendChild(o);
+  }
+  (TOPTS.presets||[]).forEach(function(pr){
+    const o=document.createElement('option');
+    o.value=pr.value; o.textContent=pr.label;
+    sel.appendChild(o);
+  });
+  sel.value=current||'';
+  onPreset(p,true);
+}
+async function onPreset(p,initial){
+  const sel=$(p+'f-preset');
+  const pr=(TOPTS.presets||[]).find(x=>x.value===sel.value);
+  $(p+'f-pdesc').textContent=pr?T(pr.desc):T('The values already on this tunnel are kept.');
+  // Choosing a preset means choosing its numbers, so the drawer goes back to
+  // them — anything typed before was tuning for the profile just replaced.
+  if(!initial) await resetTune(p);
+}
+
+async function tuneDefaults(p){
+  const preset=$(p+'f-preset').value||(editOrig&&editOrig.preset)||'turbo';
+  const q='preset='+encodeURIComponent(preset)+'&role='+encodeURIComponent(formRole(p))+
+          '&transport='+encodeURIComponent($(p+'f-transport').value);
+  return await (await fetch('/api/tunnel/defaults?'+q)).json();
+}
+// resetTune throws away what is in the drawer and shows the preset's own
+// numbers; refreshTune keeps the answers that are still meaningful and fills
+// the newly-relevant fields from the preset — what a transport change needs.
+async function resetTune(p){
+  const box=$(p+'f-tune');
+  try{
+    renderTune(box,{role:formRole(p),transport:$(p+'f-transport').value},await tuneDefaults(p));
+    setTuneNote(p,false);
+  }catch(e){}
+}
+async function refreshTune(p){
+  const box=$(p+'f-tune');
+  try{
+    const d=await tuneDefaults(p);
+    const had=box.querySelector('[data-k]')?tuneKeep(readTune(box)):null;
+    const dirty=box.dataset.dirty==='1';
+    renderTune(box,{role:formRole(p),transport:$(p+'f-transport').value},had?Object.assign({},d,had):d);
+    box.dataset.dirty=dirty?'1':'0';
+    setTuneNote(p,dirty);
+  }catch(e){}
+}
+
+// ---- add ---------------------------------------------------------------------
+async function openAdd(){
+  const msg=$('addmsg'); msg.className='msg'; msg.textContent='';
+  $('addsides').classList.remove('hide');
+  $('addform').classList.add('hide');
+  $('addsave').classList.add('hide');
+  $('addsub').textContent=T('Which side of the tunnel is this machine?');
+  $('addtun').classList.add('on');
+  try{ await tunnelOptions(); }
+  catch(e){ msg.className='msg err'; msg.textContent=T('Could not reach the panel.'); }
+}
+function closeAdd(){ $('addtun').classList.remove('on'); }
+
+async function pickSide(role){
+  addRole=role;
+  const msg=$('addmsg'); msg.className='msg'; msg.textContent='';
+  $('addsides').classList.add('hide');
+  $('addform').classList.remove('hide');
+  $('addsave').classList.remove('hide');
+  $('addsub').textContent=T(role==='server'
+    ? 'Iran side — this machine exposes the ports; the kharej machine dials in.'
+    : 'Kharej side — this machine dials out to the Iran server.');
+  document.querySelectorAll('#addform .srv-only').forEach(el=>el.classList.toggle('hide',role!=='server'));
+  document.querySelectorAll('#addform .cli-only').forEach(el=>el.classList.toggle('hide',role!=='client'));
+
+  $('af-name').value=''; $('af-port').value=''; $('af-ports').value=''; $('af-addr').value='';
+  $('af-ipv6').checked=false; $('af-pp').checked=false;
+  // Empty the drawer before anything refills it. refreshTune deliberately keeps
+  // the answers already in there — that is what a transport change needs — so a
+  // drawer left over from the last time this dialog was opened would carry that
+  // tunnel's numbers, and its "custom" mark, into a brand new one.
+  $('af-tune').innerHTML=''; $('af-tune').dataset.dirty='0';
+  // The preset is chosen before the transport list is built, because building
+  // that list fills the Fine Tune drawer and the drawer's numbers come from the
+  // preset. The other order shows the wrong tunnel's defaults for one beat.
+  fillFamilies('a',0);
+  fillPresets('a','turbo');
+  fillTransports('a');
+  // The server suggests the token and the client is asked for it: they must be
+  // the same string, and only one end can be the one that invents it.
+  $('af-token').value='';
+  if(role==='server'){
+    try{ $('af-token').value=(await (await fetch('/api/tunnel/suggest?what=token')).json()).token||''; }catch(e){}
+  }
+  closeAcc('aft');
+  relang();
+}
+
+async function rollPort(id){
+  try{
+    const p=(await (await fetch('/api/tunnel/suggest?what=port')).json()).port;
+    if(!p) return;
+    const el=$(id);
+    // A forwarded-ports field is a list, so a suggestion joins it rather than
+    // wiping what is already there.
+    const list=id.endsWith('-ports');
+    const cur=(el.value||'').trim();
+    el.value=list&&cur?cur.replace(/,\s*$/,'')+', '+p:String(p);
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+  }catch(e){ toast(T('Could not find a free port to suggest.'),true); }
+}
+async function copyField(id,btn){
+  const el=$(id);
+  if(!el||!el.value) return;
+  await copyText(el.value);
+  const was=btn.textContent;
+  btn.textContent=T('Copied!');
+  setTimeout(function(){ btn.textContent=was; },1300);
+}
+
+async function submitAdd(){
+  const msg=$('addmsg'), btn=$('addsave');
+  msg.className='msg'; msg.textContent=T('Creating the tunnel…');
+  btn.disabled=true;
+  const tuneBox=$('af-tune');
+  const body={
+    role:addRole,
+    transport:$('af-transport').value,
+    name:$('af-name').value.trim(),
+    tunnelPort:$('af-port').value.trim(),
+    serverAddr:addRole==='client'?$('af-addr').value.trim():'',
+    token:$('af-token').value.trim(),
+    ports:addRole==='server'?$('af-ports').value.trim():'',
+    preset:$('af-preset').value,
+    ipv6:addRole==='server'&&$('af-ipv6').checked,
+    proxyProtocol:addRole==='server'&&$('af-pp').checked,
+    tune:tuneBox.dataset.dirty==='1'?readTune(tuneBox):null,
+  };
+  try{
+    const r=await fetch('/api/tunnel/create',
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=(await r.text()).trim();
+    if(!r.ok){ msg.className='msg err'; msg.textContent=text||T('The tunnel could not be created.'); btn.disabled=false; return; }
+    let res={}; try{ res=JSON.parse(text); }catch(e){}
+    closeAdd();
+    // A tunnel whose port is taken is created and does not start. Saying so is
+    // the difference between a fixable mistake and a card that is simply red.
+    toast(res.active?T('Tunnel created and running.')
+                    :T('Tunnel created, but it did not start — open its logs.'),!res.active);
+    loadTunnels();
+  }catch(e){ msg.className='msg err'; msg.textContent=T('Could not reach the panel.'); }
+  btn.disabled=false;
+}
+
+// ---- edit --------------------------------------------------------------------
+async function openEdit(name){
+  const msg=$('editmsg'); msg.className='msg'; msg.textContent=T('Loading…');
+  $('editform').classList.add('hide');
+  $('edittitle').textContent=T('Edit tunnel')+' · '+name;
+  $('edittun').classList.add('on');
+  try{
+    await tunnelOptions();
+    const r=await fetch('/api/tunnel/settings?name='+encodeURIComponent(name));
+    if(!r.ok) throw new Error(await r.text());
+    const s=await r.json();
+    editName=name; editOrig=s;
+
+    document.querySelectorAll('#editform .srv-only').forEach(el=>el.classList.toggle('hide',s.role!=='server'));
+    document.querySelectorAll('#editform .cli-only').forEach(el=>el.classList.toggle('hide',s.role!=='client'));
+
+    $('ef-addr').value=s.serverHost||'';
+    $('ef-port').value=s.tunnelPort||'';
+    $('ef-ports').value=(s.ports||[]).join(', ');
+    // Cleared first, for the same reason the setup form clears it: what is
+    // still in the drawer belongs to whichever tunnel was edited last.
+    $('ef-tune').innerHTML=''; $('ef-tune').dataset.dirty='0';
+    fillFamilies('e',familyIndexOf(s.transport));
+    fillPresets('e',s.preset||'');
+    fillTransports('e',s.transport,true);
+    // The drawer opens on what the tunnel actually runs, not on a preset's idea
+    // of it — a hand-tuned tunnel would otherwise show numbers it does not use.
+    renderTune($('ef-tune'),{role:s.role,transport:s.transport},s.tune);
+    setTuneNote('e',false);
+    closeAcc('eft');
+    msg.textContent='';
+    $('editform').classList.remove('hide');
+    relang();
+  }catch(e){
+    msg.className='msg err';
+    msg.textContent=(e&&e.message)?String(e.message).trim():T('Could not load this tunnel.');
+  }
+}
+function closeEdit(){ $('edittun').classList.remove('on'); editName=null; editOrig=null; }
+
+async function submitEdit(){
+  if(!editName||!editOrig) return;
+  const msg=$('editmsg'), btn=$('editsave'), s=editOrig, tuneBox=$('ef-tune');
+  const body={name:editName};
+  // Only what actually changed is sent: an unchanged field left in the request
+  // would count as a change and restart the tunnel for nothing.
+  if(s.role==='client'&&$('ef-addr').value.trim()!==(s.serverHost||'')) body.serverAddr=$('ef-addr').value.trim();
+  if($('ef-port').value.trim()!==(s.tunnelPort||'')) body.tunnelPort=$('ef-port').value.trim();
+  if(s.role==='server'&&$('ef-ports').value.trim()!==(s.ports||[]).join(', ')) body.ports=$('ef-ports').value.trim();
+  if($('ef-transport').value!==s.transport) body.transport=$('ef-transport').value;
+  if($('ef-preset').value&&$('ef-preset').value!==s.preset) body.preset=$('ef-preset').value;
+  if(tuneBox.dataset.dirty==='1') body.tune=readTune(tuneBox);
+  if(Object.keys(body).length===1){
+    msg.className='msg'; msg.textContent=T('Nothing has been changed yet.');
+    return;
+  }
+  msg.className='msg'; msg.textContent=T('Applying — the tunnel restarts once…');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/tunnel/edit',
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=(await r.text()).trim();
+    if(!r.ok){ msg.className='msg err'; msg.textContent=text||T('The change was refused.'); btn.disabled=false; return; }
+    closeEdit();
+    toast(T('Saved — the tunnel restarted on the new settings.'));
+    loadTunnels();
+  }catch(e){ msg.className='msg err'; msg.textContent=T('Could not reach the panel.'); }
+  btn.disabled=false;
+}
+
+// ---- start / stop / restart / delete ------------------------------------------
+const ACTION_DONE={start:'Tunnel started.',stop:'Tunnel stopped.',restart:'Tunnel restarted.',delete:'Tunnel deleted.'};
+async function tunnelAction(name,action,btn){
+  if(action==='delete'&&!confirm(T('Delete')+' "'+name+'"?\n'+
+      T('Its config and its service are removed. This cannot be undone.'))) return;
+  const row=btn?btn.parentElement:null;
+  const buttons=row?Array.from(row.querySelectorAll('button')):[];
+  buttons.forEach(b=>b.disabled=true);
+  try{
+    const r=await fetch('/api/tunnel/action',{method:'POST',body:new URLSearchParams({name:name,action:action})});
+    const text=(await r.text()).trim();
+    if(!r.ok) toast(text||T('That did not work.'),true);
+    else toast(T(ACTION_DONE[action]||'Done.'));
+  }catch(e){ toast(T('Could not reach the panel.'),true); }
+  buttons.forEach(b=>b.disabled=false);
+  loadTunnels();
+}
+async function restartAllTunnels(){
+  if(!lastTunnels.length){ toast(T('There are no tunnels to restart.'),true); return; }
+  if(!confirm(T('Restart every tunnel on this server?'))) return;
+  toast(T('Restarting every tunnel…'));
+  try{
+    const r=await fetch('/api/tunnel/action',{method:'POST',body:new URLSearchParams({action:'restartall'})});
+    const text=(await r.text()).trim();
+    if(!r.ok){ toast(text||T('That did not work.'),true); return; }
+    let res={}; try{ res=JSON.parse(text); }catch(e){}
+    const failed=res.failed||0;
+    toast(failed?T('Restarted')+' '+(res.restarted||0)+', '+T('failed')+' '+failed:
+                 T('Every tunnel restarted.')+' ('+(res.restarted||0)+')',!!failed);
+  }catch(e){ toast(T('Could not reach the panel.'),true); }
+  loadTunnels();
 }
 
 let logTimer=null, logName=null, logRaw='';
@@ -2635,7 +3467,10 @@ const ACC_SECTIONS=['update','access','security','telegram','backup'];
 // together brings back the scrolling this replaced.
 function toggleAcc(id){
   const wasOpen=!$('accb-'+id).hidden;
-  ACC_SECTIONS.forEach(closeAcc);
+  // Fine Tune, in the setup and edit dialogs, is built from this same accordion
+  // but is not one of the Settings sections: closing those from there would be
+  // shutting sections in a dialog that is not even on screen.
+  if(ACC_SECTIONS.indexOf(id)>=0) ACC_SECTIONS.forEach(closeAcc); else closeAcc(id);
   if(!wasOpen) openAcc(id);
 }
 // Open by animating height from 0 to the content's own height, then releasing to
@@ -2712,7 +3547,7 @@ async function savePassword(){
   }catch(e){ msg.className='msg err'; msg.textContent='Network error.'; }
 }
 
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeSupport();closeDetails();closeHealth();closeAlerts();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSettings();closeSupport();closeDetails();closeHealth();closeAlerts();closeAdd();closeEdit();}});
 
 // ---- starfield backdrop ----
 // A 16-bit-style twinkling starfield with the odd shooting star, drawn behind

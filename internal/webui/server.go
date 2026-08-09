@@ -178,9 +178,10 @@ func Serve() error {
 	// deliberately run elsewhere — in the backpack-monitor service. See
 	// internal/monitor for why.
 
-	// The panel is a monitoring dashboard: live stats, tunnel state and logs.
-	// Tunnels are created and managed from the CLI; the only mutating actions
-	// here are panel-scoped (password, port, self-update).
+	// The panel shows live stats, tunnel state and logs, and — through the
+	// /api/tunnel/* endpoints below — creates, edits and drives tunnels the same
+	// way the CLI menu does. Every mutating endpoint sits behind a browser
+	// session; the remote access token reaches the read-only ones only.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
 	mux.HandleFunc("/login2fa", srv.handleLogin2FA)
@@ -192,6 +193,15 @@ func Serve() error {
 	mux.HandleFunc("/api/tunnels", srv.requireReadAuth(srv.handleTunnels))
 	mux.HandleFunc("/metrics", srv.requireReadAuth(srv.handlePrometheus))
 	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
+	// Tunnel management — the CLI's setup wizard, edit screen and service
+	// actions, reachable from the browser.
+	mux.HandleFunc("/api/tunnel/options", srv.requireAuth(srv.handleTunnelOptions))
+	mux.HandleFunc("/api/tunnel/suggest", srv.requireAuth(srv.handleTunnelSuggest))
+	mux.HandleFunc("/api/tunnel/defaults", srv.requireAuth(srv.handleTunnelDefaults))
+	mux.HandleFunc("/api/tunnel/create", srv.requireAuth(srv.handleTunnelCreate))
+	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
+	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
+	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
 	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))

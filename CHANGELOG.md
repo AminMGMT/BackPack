@@ -2,13 +2,39 @@
 
 All notable changes to Backpack are documented here.
 
-## Unreleased
+## v1.7.1 — 2026-08-10
 
-This one is about the UDP side of the engine: the three transports that carry
-their data in datagrams — udp, kcp (and xdi, which is kcp over ICMP) — plus quic,
-which joins them.
+Two halves. The web panel stops being a window and becomes a way to work: it
+creates, edits and drives tunnels itself, so the CLI is a choice rather than the
+only door. The other half is the UDP side of the engine: the three transports
+that carry their data in datagrams — udp, kcp (and xdi, which is kcp over ICMP) —
+plus quic, which joins them.
 
 ### Added
+- **The web panel builds and manages tunnels.** It used to say "monitoring
+  only" in the corner of the Tunnels heading, and it meant it: every tunnel was
+  created, edited and restarted from the CLI over SSH. That corner now holds
+  **Add Tunnel** and **Restart all**.
+
+  Add Tunnel asks which side this machine is — Iran (server) or kharej (client) —
+  and then asks the setup wizard's own questions, in the wizard's own order:
+  transport family, transport, name, tunnel port, forwarded ports, token,
+  performance preset, Fine Tune, IPv6 and PROXY protocol. The port fields carry a
+  button that suggests a free four-digit port, the token is generated for the
+  server side and copyable in one click, and Fine Tune opens on the preset's own
+  numbers, marking the tunnel custom only if one of them is actually changed.
+
+  Every card gained an **Edit** button beside Logs and Details, and a row of
+  **Start / Stop / Restart / Delete** beneath them. Edit changes the server
+  address, the transport, the tunnel port, the forwarded ports, the preset and
+  the advanced settings — all of it applied in one write and one restart, and
+  reverted to the previous config if the tunnel does not come back up.
+
+  None of this is a second implementation. The transport and preset menus are
+  served from the same tables the CLI menu reads, and every form posts to
+  `manage`, so a tunnel built in the browser is the same file as one built in the
+  terminal. The endpoints sit behind a panel session; the read-only remote token
+  still cannot change anything.
 - **QUIC is available as a transport.** It carries the tunnel inside QUIC
   streams over UDP: its own TLS 1.3, its own stream multiplexing, congestion
   control and loss recovery, so every byte is encrypted and there is nothing to

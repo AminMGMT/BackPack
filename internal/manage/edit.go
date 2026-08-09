@@ -346,15 +346,26 @@ func SetFallbackAddrs(name string, addrs []string) error {
 // Both ends must use the same transport, so the peer has to be switched too.
 func ChangeTransport(name, transport string) error {
 	transport = strings.ToLower(strings.TrimSpace(transport))
-	if !validTransport(transport) {
-		return fmt.Errorf("unknown transport %q", transport)
-	}
 	s, err := LoadSpec(name)
 	if err != nil {
 		return err
 	}
 	if s.Transport == transport {
 		return fmt.Errorf("this tunnel already uses %s", transport)
+	}
+	if err := switchTransport(&s, transport); err != nil {
+		return err
+	}
+	return applySpec(s)
+}
+
+// switchTransport moves a spec onto a different carrier, filling in whatever
+// the new one needs and cannot inherit. It does not write anything: the caller
+// decides when the spec is complete enough to save, which is what lets the
+// panel change the transport and the ports in a single restart.
+func switchTransport(s *TunnelSpec, transport string) error {
+	if !validTransport(transport) {
+		return fmt.Errorf("unknown transport %q", transport)
 	}
 	s.Transport = transport
 
@@ -383,13 +394,13 @@ func ChangeTransport(name, transport string) error {
 		if !validPreset(preset) {
 			preset = PresetTurbo
 		}
-		applyKCPPreset(&s, preset)
+		applyKCPPreset(s, preset)
 	}
 	// accept_udp is only meaningful on the plain TCP transport.
 	if transport != "tcp" {
 		s.AcceptUDP = false
 	}
-	return applySpec(s)
+	return nil
 }
 
 // SetLoadBalance turns load balancing across the configured server addresses
