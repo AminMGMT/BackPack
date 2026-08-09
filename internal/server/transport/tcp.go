@@ -494,6 +494,8 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 // the pool is full.
 func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
 	select {
+	case <-g.ctx.Done():
+		conn.Close()
 	case g.tunnelChannel <- conn:
 	default: // The channel is full, do nothing
 		s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
@@ -661,8 +663,9 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 			}
 			conn = s.limits.wrap(conn)
 
+			incoming := newLocalTCPConn(conn, remoteAddr, s.limits)
 			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- incoming:
 
 				select {
 				case g.reqNewConnChan <- struct{}{}:
@@ -676,14 +679,25 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 
 			default: // channel is full, discard the connection
 				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
-				s.limits.release()
-				conn.Close()
+				incoming.closeAndRelease()
 			}
 		}
 	}
 }
 
 func (s *TcpTransport) handleLoop(g *tcpGen) {
+	defer drainLocalTCP(g.localChannel)
+	defer func() {
+		for {
+			select {
+			case conn := <-g.tunnelChannel:
+				conn.Close()
+			default:
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -691,35 +705,31 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 		case localConn := <-g.localChannel:
 		loop:
 			for {
-				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-					s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
-					localConn.conn.Close()
-					// The slot this connection took on accept is only freed by the
-					// handler goroutine, which never runs when the connection times
-					// out waiting to be paired. Without this a tunnel with a
-					// connection limit loses a slot for every timeout until it can
-					// accept nothing at all.
-					s.limits.release()
-					break loop
-				}
-
 				select {
 				case <-g.ctx.Done():
+					localConn.closeAndRelease()
 					return
+				case <-localConn.expiry():
+					break loop
 
 				case tunnelConn := <-g.tunnelChannel:
+					if !localConn.claim() {
+						tunnelConn.Close()
+						break loop
+					}
 					// Send the target addr over the connection
 					if err := utils.SendBinaryTransportString(tunnelConn, localConn.remoteAddr, utils.SG_TCP); err != nil {
 						s.logger.Errorf("%v", err)
 						tunnelConn.Close()
-						continue loop
+						localConn.closeAndRelease()
+						break loop
 					}
 
 					// Handle data exchange between connections
 					go func(localConn LocalTCPConn, tunnelConn net.Conn) {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
-						defer s.limits.release()
+						defer localConn.closeAndRelease()
 						handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, localConn.conn, metrics.CountedConn(tunnelConn), s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 					}(localConn, tunnelConn)
 					break loop

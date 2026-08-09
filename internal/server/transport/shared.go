@@ -105,12 +105,6 @@ type TunnelChannel struct { // for websocket
 	mu   *sync.Mutex
 }
 
-type LocalTCPConn struct {
-	conn        net.Conn
-	remoteAddr  string
-	timeCreated int64
-}
-
 type LocalAcceptUDPConn struct {
 	timeCreated int64
 	payload     chan []byte
