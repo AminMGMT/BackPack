@@ -179,6 +179,7 @@ func (c *WsMuxTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			tunnelWSConn.SetReadLimit(1)
 			c.state.SetWSConn(tunnelWSConn)
 			c.logger.Info("control channel established successfully")
 
@@ -281,7 +282,7 @@ func (c *WsMuxTransport) channelHandler() {
 				return
 
 			default:
-				_, msg, err := c.state.WSConn().ReadMessage()
+				messageType, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
 					if c.state.Cancel() != nil {
 						c.logger.Error("failed to read from channel connection. ", err)
@@ -289,7 +290,18 @@ func (c *WsMuxTransport) channelHandler() {
 					}
 					return
 				}
-				msgChan <- msg[0]
+				signal, err := utils.DecodeWebSocketSignal(messageType, msg)
+				if err != nil {
+					c.logger.Warnf("invalid WebSocket control frame: %v", err)
+					c.state.WSConn().Close()
+					go c.Restart()
+					return
+				}
+				select {
+				case msgChan <- signal:
+				case <-c.state.Ctx().Done():
+					return
+				}
 			}
 		}
 	}()

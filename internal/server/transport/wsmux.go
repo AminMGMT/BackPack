@@ -214,7 +214,7 @@ func (s *WsMuxTransport) channelHandler(g *wsMuxGen) {
 				return
 
 			default:
-				_, msg, err := s.controlChannel.Get().ReadMessage()
+				messageType, msg, err := s.controlChannel.Get().ReadMessage()
 				// Exit if there's an error
 				if err != nil {
 					if s.cancel != nil {
@@ -223,7 +223,18 @@ func (s *WsMuxTransport) channelHandler(g *wsMuxGen) {
 					}
 					return
 				}
-				messageChan <- msg[0]
+				signal, err := utils.DecodeWebSocketSignal(messageType, msg)
+				if err != nil {
+					s.logger.Warnf("invalid WebSocket control frame: %v", err)
+					s.controlChannel.Close()
+					go s.Restart()
+					return
+				}
+				select {
+				case messageChan <- signal:
+				case <-g.ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -279,7 +290,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:   16 * 1024,
 		WriteBufferSize:  16 * 1024,
-		HandshakeTimeout: 45 * time.Second,
+		HandshakeTimeout: 10 * time.Second,
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},
@@ -287,8 +298,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 
 	// Create an HTTP server
 	server := &http.Server{
-		Addr:        addr,
-		IdleTimeout: -1,
+		Addr: addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			s.logger.Tracef("received http request from %s", r.RemoteAddr)
 
@@ -309,6 +319,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			}
 
 			if r.URL.Path == "/channel" {
+				conn.SetReadLimit(1)
 				if s.controlChannel.IsSet() {
 					s.logger.Warn("new control channel requested.")
 					s.controlChannel.Close()
@@ -353,6 +364,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			}
 		}),
 	}
+	hardenWebSocketHTTPServer(server)
 
 	if s.config.Mode == config.WSMUX {
 		go func() {

@@ -187,7 +187,7 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 				return
 
 			default:
-				_, msg, err := s.controlChannel.Get().ReadMessage()
+				messageType, msg, err := s.controlChannel.Get().ReadMessage()
 				// Exit if there's an error
 				if err != nil {
 					if s.cancel != nil {
@@ -196,7 +196,18 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 					}
 					return
 				}
-				messageChan <- msg[0]
+				signal, err := utils.DecodeWebSocketSignal(messageType, msg)
+				if err != nil {
+					s.logger.Warnf("invalid WebSocket control frame: %v", err)
+					s.controlChannel.Close()
+					go s.Restart()
+					return
+				}
+				select {
+				case messageChan <- signal:
+				case <-g.ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -252,7 +263,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:   16 * 1024,
 		WriteBufferSize:  16 * 1024,
-		HandshakeTimeout: 45 * time.Second,
+		HandshakeTimeout: 10 * time.Second,
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},
@@ -260,8 +271,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 
 	// Create an HTTP server
 	server := &http.Server{
-		Addr:        addr,
-		IdleTimeout: -1,
+		Addr: addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			s.logger.Tracef("received http request from %s", r.RemoteAddr)
 
@@ -282,6 +292,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 			}
 
 			if r.URL.Path == "/channel" {
+				conn.SetReadLimit(1)
 				if s.controlChannel.IsSet() {
 					s.logger.Warn("new control channel requested.")
 					s.controlChannel.Close()
@@ -310,6 +321,10 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 				s.config.TunnelStatus = fmt.Sprintf("Connected (%s)", s.config.Mode)
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
+				// Relay writes are 16 KiB; leave headroom for compatibility while
+				// preventing one authenticated peer from forcing an unbounded
+				// ReadMessage allocation.
+				conn.SetReadLimit(64 << 10)
 				wsConn := TunnelChannel{
 					conn: conn,
 					ping: make(chan struct{}),
@@ -326,6 +341,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 			}
 		}),
 	}
+	hardenWebSocketHTTPServer(server)
 
 	if s.config.Mode == config.WS {
 		go func() {
