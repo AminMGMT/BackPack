@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
 	"github.com/backpack/backpack/internal/tui"
@@ -84,6 +85,38 @@ func chooseTransport() string {
 	}
 }
 
+// chooseConnectionMode is deliberately shown after the concrete transport
+// choice. Both modes use that exact transport; only the side that initiates
+// the tunnel changes.
+func chooseConnectionMode(transport string) string {
+	idx := tui.ChooseOpt("Connection mode:", []tui.Option{
+		{
+			Title: "Direct",
+			Desc:  "Iran initiates the selected " + strings.ToUpper(transport) + " tunnel toward Kharej",
+		},
+		{
+			Title: "Reverse",
+			Desc:  "Kharej initiates the selected " + strings.ToUpper(transport) + " tunnel toward Iran (legacy)",
+		},
+	})
+	switch idx {
+	case 0:
+		return "direct"
+	case 1:
+		return "reverse"
+	default:
+		return ""
+	}
+}
+
+func forwardTransportReady(transport string) bool {
+	switch transport {
+	case "tcp", "stealth", "tcpmux", "kcp", "xdi", "spoof", "quic", "ws", "wss", "wsmux", "wssmux", "udp":
+		return true
+	}
+	return false
+}
+
 // choosePreset asks for the performance profile. Turbo is preselected because
 // it reproduces exactly what earlier versions called "Best Performance".
 func choosePreset() string {
@@ -113,7 +146,7 @@ func applyManualTuning(s *TunnelSpec) {
 	} else {
 		s.LogFormat = ""
 	}
-	if s.Role == "server" {
+	if s.operationalServer() {
 		s.ChannelSize = tui.PromptInt("Channel size", s.ChannelSize)
 		if s.Transport == "tcp" {
 			s.AcceptUDP = tui.Confirm("Accept UDP traffic over the TCP transport (accept_udp)", s.AcceptUDP)
@@ -319,7 +352,7 @@ func askSpoof(s *TunnelSpec) {
 	// The server cannot learn the client's real address from the forged packets,
 	// so it must be told it. The client already knows the server's real address
 	// from the tunnel address it dialled.
-	if s.Role == "server" {
+	if s.operationalServer() {
 		tui.Info("The client forges its source, so the server cannot see where to send")
 		tui.Info("replies. Enter the client's REAL public IPv4 address.")
 		for {
@@ -449,15 +482,30 @@ func uniqueName(name string) string {
 func SetupServer() {
 	tui.Clear()
 	tui.Title("Setup Server")
-	tui.Warn("Iran side — reverse tunnel that exposes ports on this machine.")
+	tui.Warn("Iran side — exposes ports with either direct forwarding or a reverse tunnel.")
 	fmt.Println()
 
 	transport := chooseTransport()
 	if transport == "" {
 		return
 	}
-
+	mode := chooseConnectionMode(transport)
+	if mode == "" {
+		return
+	}
 	s := TunnelSpec{Role: "server", Transport: transport}
+	if mode == "direct" {
+		s.Engine = config.EngineForward
+		// Forward adapters are enabled only after their carrier-specific E2E
+		// test exists. This avoids writing a service that can start but cannot
+		// carry the user's traffic while the remaining adapters are developed.
+		if !forwardTransportReady(transport) {
+			tui.Warn("Direct direction for " + strings.ToUpper(transport) + " is still being integrated and is not enabled in this build.")
+			tui.Warn("No configuration was written. Reverse remains available and unchanged.")
+			tui.PressEnter()
+			return
+		}
+	}
 
 	port := tui.Prompt("Tunnel (control) port: ")
 	if !validPort(port) {
@@ -465,13 +513,23 @@ func SetupServer() {
 		tui.PressEnter()
 		return
 	}
-	// Binding the IPv6 wildcard accepts IPv4 as well on a normal dual-stack
-	// host, so this is "IPv6 too" rather than "IPv6 instead".
-	bind := "0.0.0.0"
-	if tui.Confirm("Listen on IPv6 as well", false) {
-		bind = "::"
+	if mode == "direct" {
+		remoteHost := strings.TrimSpace(tui.Prompt("Kharej server address (IP or domain): "))
+		if remoteHost == "" {
+			tui.Error("Kharej server address is required.")
+			tui.PressEnter()
+			return
+		}
+		s.RemoteAddr = net.JoinHostPort(strings.Trim(remoteHost, "[]"), port)
+	} else {
+		// Binding the IPv6 wildcard accepts IPv4 as well on a normal dual-stack
+		// host, so this is "IPv6 too" rather than "IPv6 instead".
+		bind := "0.0.0.0"
+		if tui.Confirm("Listen on IPv6 as well", false) {
+			bind = "::"
+		}
+		s.BindAddr = net.JoinHostPort(bind, port)
 	}
-	s.BindAddr = net.JoinHostPort(bind, port)
 
 	defaultName := "server-" + port
 	s.Name = uniqueName(tui.PromptDefault("Tunnel name", defaultName))
@@ -505,9 +563,16 @@ func SetupServer() {
 		tui.PressEnter()
 		return
 	}
+	if mode == "direct" {
+		if err := validateForwardPortSpecs(s.Ports); err != nil {
+			tui.Error(err.Error())
+			tui.PressEnter()
+			return
+		}
+	}
 	showForwardTargets(s.Ports)
 
-	if needsTLS(transport) && !setupServerTLS(&s) {
+	if mode == "reverse" && needsTLS(transport) && !setupServerTLS(&s) {
 		return
 	}
 	askSimpleAuth(&s, transport)
@@ -528,11 +593,19 @@ func SetupServer() {
 func SetupClient() {
 	tui.Clear()
 	tui.Title("Setup Client")
-	tui.Warn("Kharej side — reverse tunnel that dials out to the Iran server.")
+	tui.Warn("Kharej side — listens for Direct, or dials Iran for Reverse.")
 	fmt.Println()
 
 	transport := chooseTransport()
 	if transport == "" {
+		return
+	}
+	mode := chooseConnectionMode(transport)
+	if mode == "" {
+		return
+	}
+	if mode == "direct" {
+		setupForwardOrigin(transport)
 		return
 	}
 
@@ -654,9 +727,55 @@ func SetupClient() {
 	finishSetup(s)
 }
 
+// setupForwardOrigin configures the Kharej listener for Direct mode. The
+// geographic name remains "Client" in the UI, but engine=forward makes its
+// operational TOML role [server]: it accepts the selected transport and dials
+// the local backend named by each Iran-side ingress connection.
+func setupForwardOrigin(transport string) {
+	if !forwardTransportReady(transport) {
+		tui.Warn("Direct direction for " + strings.ToUpper(transport) + " is still being integrated and is not enabled in this build.")
+		tui.Warn("No configuration was written. Reverse remains available and unchanged.")
+		tui.PressEnter()
+		return
+	}
+
+	s := TunnelSpec{Role: "client", Transport: transport, Engine: config.EngineForward}
+	port := tui.Prompt("Tunnel (control) port to listen on: ")
+	if !validPort(port) {
+		tui.Error("Invalid port.")
+		tui.PressEnter()
+		return
+	}
+	bind := "0.0.0.0"
+	if tui.Confirm("Listen on IPv6 as well", false) {
+		bind = "::"
+	}
+	s.BindAddr = net.JoinHostPort(bind, port)
+	s.Name = uniqueName(tui.PromptDefault("Tunnel name", "client-"+port))
+	tui.Info("Enter the SAME token configured on the Iran server.")
+	s.Token = tui.PromptDefault("Security token", "backpack")
+
+	if needsTLS(transport) && !setupServerTLS(&s) {
+		return
+	}
+	askSimpleAuth(&s, transport)
+	askSpoof(&s)
+	ApplyPreset(&s, choosePreset())
+	if tui.Confirm("Fine-tune the advanced settings by hand", false) {
+		applyManualTuning(&s)
+	}
+	finishSetup(s)
+}
+
 // finishSetup persists the tunnel, applies system-level tuning, and reports
 // the result.
 func finishSetup(s TunnelSpec) {
+	if err := s.Validate(); err != nil {
+		tui.Error("Configuration is invalid: " + err.Error())
+		tui.Warn("Nothing was installed or changed on the system.")
+		tui.PressEnter()
+		return
+	}
 	tui.Info("Applying system network optimizations...")
 	optimize.ApplyQuiet()
 

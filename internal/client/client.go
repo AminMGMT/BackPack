@@ -21,10 +21,11 @@ import (
 
 // Client encapsulates the client configuration and state
 type Client struct {
-	config *config.ClientConfig
-	ctx    context.Context
-	cancel context.CancelFunc
-	logger *logrus.Logger
+	config  *config.ClientConfig
+	forward bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	logger  *logrus.Logger
 }
 
 func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
@@ -40,6 +41,14 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 		cancel: cancel,
 		logger: utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
 	}
+}
+
+// NewForwardEdge builds the dialling Iran half. Unlike a reverse client it
+// also owns the public ingress listeners declared in ClientConfig.Ports.
+func NewForwardEdge(cfg *config.ClientConfig, parentCtx context.Context) *Client {
+	c := NewClient(cfg, parentCtx)
+	c.forward = true
+	return c
 }
 
 // Run starts the client and begins dialing the tunnel server
@@ -106,7 +115,13 @@ func (c *Client) Start() {
 			Outbound:       outbound,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth: c.config.Transport == config.STEALTH,
+			Stealth:        c.config.Transport == config.STEALTH,
+			Forward:        c.forward,
+			Ports:          append([]string(nil), c.config.Ports...),
+			AcceptUDP:      c.config.AcceptUDP,
+			ProxyProtocol:  c.config.ProxyProtocol,
+			MaxConnections: c.config.MaxConnections,
+			BandwidthMbps:  c.config.BandwidthMbps,
 		}
 		tcpClient := transport.NewTCPClient(c.ctx, tcpConfig, c.logger)
 		go tcpClient.Start()
@@ -133,6 +148,11 @@ func (c *Client) Start() {
 			SO_RCVBUF:        c.config.SO_RCVBUF,
 			SO_SNDBUF:        c.config.SO_SNDBUF,
 			Outbound:         outbound,
+			Forward:          c.forward,
+			Ports:            append([]string(nil), c.config.Ports...),
+			ProxyProtocol:    c.config.ProxyProtocol,
+			MaxConnections:   c.config.MaxConnections,
+			BandwidthMbps:    c.config.BandwidthMbps,
 		}
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
@@ -209,6 +229,11 @@ func (c *Client) Start() {
 			SpoofSrcPool:     c.config.SpoofSrcPool,
 			SpoofPeerIP:      c.config.SpoofPeerIP,
 			SpoofInterface:   c.config.SpoofInterface,
+			Forward:          c.forward,
+			Ports:            append([]string(nil), c.config.Ports...),
+			ProxyProtocol:    c.config.ProxyProtocol,
+			MaxConnections:   c.config.MaxConnections,
+			BandwidthMbps:    c.config.BandwidthMbps,
 		}
 		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
 		go kcpClient.Start()
@@ -228,6 +253,11 @@ func (c *Client) Start() {
 			AggressivePool: c.config.AggressivePool,
 			SO_RCVBUF:      c.config.SO_RCVBUF,
 			SO_SNDBUF:      c.config.SO_SNDBUF,
+			Forward:        c.forward,
+			Ports:          append([]string(nil), c.config.Ports...),
+			ProxyProtocol:  c.config.ProxyProtocol,
+			MaxConnections: c.config.MaxConnections,
+			BandwidthMbps:  c.config.BandwidthMbps,
 		}
 		quicClient := transport.NewQuicClient(c.ctx, quicConfig, c.logger)
 		go quicClient.Start()
@@ -250,6 +280,10 @@ func (c *Client) Start() {
 			AggressivePool: c.config.AggressivePool,
 			EdgeIP:         c.config.EdgeIP,
 			Outbound:       outbound,
+			Forward:        c.forward,
+			Ports:          append([]string(nil), c.config.Ports...),
+			MaxConnections: c.config.MaxConnections,
+			BandwidthMbps:  c.config.BandwidthMbps,
 		}
 		WsClient := transport.NewWSClient(c.ctx, WsConfig, c.logger)
 		go WsClient.Start()
@@ -276,6 +310,11 @@ func (c *Client) Start() {
 			AggressivePool:   c.config.AggressivePool,
 			EdgeIP:           c.config.EdgeIP,
 			Outbound:         outbound,
+			Forward:          c.forward,
+			Ports:            append([]string(nil), c.config.Ports...),
+			ProxyProtocol:    c.config.ProxyProtocol,
+			MaxConnections:   c.config.MaxConnections,
+			BandwidthMbps:    c.config.BandwidthMbps,
 		}
 		wsMuxClient := transport.NewWSMuxClient(c.ctx, wsMuxConfig, c.logger)
 		go wsMuxClient.Start()
@@ -294,6 +333,10 @@ func (c *Client) Start() {
 			AggressivePool: c.config.AggressivePool,
 			SO_RCVBUF:      c.config.SO_RCVBUF,
 			SO_SNDBUF:      c.config.SO_SNDBUF,
+			Forward:        c.forward,
+			Ports:          append([]string(nil), c.config.Ports...),
+			MaxConnections: c.config.MaxConnections,
+			BandwidthMbps:  c.config.BandwidthMbps,
 		}
 		udpClient := transport.NewUDPClient(c.ctx, udpConfig, c.logger)
 		go udpClient.Start()

@@ -38,8 +38,9 @@ type QuicTransport struct {
 	// connMu guards quicConn, the connection this run opens its streams on. It is
 	// replaced on every restart, so a data stream is always opened on the current
 	// connection rather than a torn-down one.
-	connMu   sync.Mutex
-	quicConn *quic.Conn
+	connMu        sync.Mutex
+	quicConn      *quic.Conn
+	forwardActive int32
 }
 
 type QuicConfig struct {
@@ -59,6 +60,11 @@ type QuicConfig struct {
 	AggressivePool bool
 	SO_RCVBUF      int
 	SO_SNDBUF      int
+	Forward        bool
+	Ports          []string
+	ProxyProtocol  bool
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 func (c *QuicConfig) settings() network.QUICSettings {
@@ -158,6 +164,7 @@ func (c *QuicTransport) Restart() {
 	c.config.TunnelStatus = ""
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	atomic.StoreInt32(&c.forwardActive, 0)
 	metrics.ClearPool()
 	drain(c.controlFlow)
 
@@ -247,12 +254,45 @@ func (c *QuicTransport) channelDialer() {
 
 			c.config.TunnelStatus = "Connected (QUIC)"
 
-			go c.poolMaintainer()
 			go c.channelHandler()
+			if c.config.Forward {
+				go startForwardIngress(c.state.Ctx(), c.config.Ports, c.config.MaxConnections, c.config.BandwidthMbps, c.config.ProxyProtocol, c.logger, c.state.Usage(), c.config.Sniffer, &c.forwardActive, c.openForwardQUICStream, func() { go c.Restart() })
+			} else {
+				go c.poolMaintainer()
+			}
 
 			return
 		}
 	}
+}
+
+func (c *QuicTransport) openForwardQUICStream(target string) (net.Conn, error) {
+	qc := c.getQUICConn()
+	if qc == nil {
+		return nil, fmt.Errorf("forward QUIC connection is not ready")
+	}
+	stream, err := qc.OpenStreamSync(c.state.Ctx())
+	if err != nil {
+		return nil, err
+	}
+	data := network.NewQUICStreamConn(stream, qc)
+	fail := func(err error) (net.Conn, error) { data.Close(); return nil, err }
+	if err := utils.SendBinaryTransportString(data, c.config.Token, utils.SG_ForwardTCP); err != nil {
+		return fail(err)
+	}
+	if err := utils.SendBinaryString(data, target); err != nil {
+		return fail(err)
+	}
+	_ = data.SetReadDeadline(time.Now().Add(c.config.DialTimeOut))
+	status, err := utils.ReceiveBinaryByte(data)
+	_ = data.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fail(err)
+	}
+	if status != utils.SG_ForwardOK {
+		return fail(fmt.Errorf("Kharej backend %q is unavailable or invalid", target))
+	}
+	return data, nil
 }
 
 func (c *QuicTransport) poolMaintainer() {

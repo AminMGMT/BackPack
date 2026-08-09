@@ -87,6 +87,7 @@ type TcpMuxConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	Forward       bool
 }
 
 // setMuxVersion records the version this run agreed on. A legacy client cannot
@@ -169,6 +170,10 @@ func (s *TcpMuxTransport) Start() {
 
 	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (TCPMux)"
+		go s.channelHandler(g)
+		if s.config.Forward {
+			return
+		}
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -176,8 +181,6 @@ func (s *TcpMuxTransport) Start() {
 		}
 
 		go s.parsePortMappings(g)
-		go s.channelHandler(g)
-
 		s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 		for i := 0; i < numCPU; i++ {
@@ -462,9 +465,33 @@ func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
 		}
 		s.deliverTunnelConn(g, conn)
 
+	case ann.signal == utils.SG_ForwardTCP:
+		if !s.config.Forward || !s.controlChannel.IsSet() || !s.poolNonce.Verify(ann.payload) {
+			s.logger.Warnf("invalid forward mux session from %s", conn.RemoteAddr())
+			conn.Close()
+			return
+		}
+		go s.handleForwardMuxConn(g, conn)
+
 	default:
 		s.logger.Warnf("unexpected announcement %d from %s, discarding", ann.signal, conn.RemoteAddr())
 		conn.Close()
+	}
+}
+
+func (s *TcpMuxTransport) handleForwardMuxConn(g *tcpMuxGen, conn net.Conn) {
+	session, err := smux.Client(conn, s.smuxCfg())
+	if err != nil {
+		conn.Close()
+		return
+	}
+	defer session.Close()
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		go handleForwardStream(g.ctx, stream, s.config.KeepAlive, s.logger, g.usageMonitor, s.config.Sniffer)
 	}
 }
 
@@ -601,12 +628,7 @@ func (s *TcpMuxTransport) parsePortMappings(g *tcpMuxGen) {
 				continue
 			} else {
 				// Handle single local port case
-				port, err := strconv.Atoi(localPortOrRange)
-				if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-					localAddr = fmt.Sprintf(":%d", port)
-				} else {
-					localAddr = localPortOrRange // format ip:port=remoteAddress
-				}
+				localAddr = mappingListenAddress(localPortOrRange)
 			}
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)

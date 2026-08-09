@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 	"github.com/sirupsen/logrus"
 )
@@ -58,6 +59,7 @@ type UdpConfig struct {
 	// keeps the tunnel carrying traffic under load instead of stalling.
 	SO_RCVBUF int
 	SO_SNDBUF int
+	Forward   bool
 }
 
 func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
@@ -222,7 +224,9 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 		established = true
 
 		go s.tunnelListener(g)
-		go s.parsePortMappings(g)
+		if !s.config.Forward {
+			go s.parsePortMappings(g)
+		}
 		go s.channelHandler(g)
 	}
 }
@@ -422,7 +426,15 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 
 			s.activeMu.Unlock()
 
-			if string(buf[:n]) != s.config.Token { // For new connections, validate the token
+			forwardTarget := ""
+			if s.config.Forward {
+				token, target, err := utils.DecodeForwardUDP(buf[:n])
+				if err != nil || !tokenMatches(token, s.config.Token) {
+					s.logger.Errorf("invalid forward UDP announcement from %s", addr.String())
+					continue
+				}
+				forwardTarget = target
+			} else if string(buf[:n]) != s.config.Token { // For new reverse connections, validate the token
 				s.logger.Errorf("invalid token received from %s", addr.String())
 				continue
 			}
@@ -445,7 +457,12 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 			s.activeConnections[key] = &tunnelConn
 			s.activeMu.Unlock()
 
-			// Send the new tunnel connection to the tunnel channel
+			if s.config.Forward {
+				go s.handleForwardUDP(g, &tunnelConn, forwardTarget)
+				continue
+			}
+
+			// Send the new reverse tunnel connection to the tunnel channel
 			select {
 			case g.tunnelChannel <- &tunnelConn:
 				go s.keepAlive(g, &tunnelConn)
@@ -456,6 +473,76 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 				close(tunnelConn.payload)
 				delete(s.activeConnections, key)
 			}
+		}
+	}
+}
+
+func (s *UdpTransport) handleForwardUDP(g *udpGen, tunnel *TunnelUDPConn, target string) {
+	defer func() {
+		s.activeMu.Lock()
+		key := tunnel.addr.String()
+		if s.activeConnections[key] == tunnel {
+			delete(s.activeConnections, key)
+			close(tunnel.payload)
+		}
+		s.activeMu.Unlock()
+	}()
+	_, resolved, err := network.ResolveRemoteAddr(target)
+	if err != nil {
+		_, _ = tunnel.listener.WriteToUDP([]byte{utils.SG_ForwardError}, tunnel.addr)
+		return
+	}
+	// UDP has no connection probe that proves an application is healthy. Match
+	// reverse mode's documented behaviour and use the first configured backend.
+	resolved = strings.TrimSpace(strings.Split(resolved, "|")[0])
+	backendAddr, err := net.ResolveUDPAddr("udp", resolved)
+	if err != nil {
+		_, _ = tunnel.listener.WriteToUDP([]byte{utils.SG_ForwardError}, tunnel.addr)
+		return
+	}
+	backend, err := net.DialUDP("udp", nil, backendAddr)
+	if err != nil {
+		_, _ = tunnel.listener.WriteToUDP([]byte{utils.SG_ForwardError}, tunnel.addr)
+		return
+	}
+	s.applyBuffers(backend)
+	defer backend.Close()
+	if _, err := tunnel.listener.WriteToUDP([]byte{utils.SG_ForwardOK}, tunnel.addr); err != nil {
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-g.ctx.Done():
+				return
+			case payload, ok := <-tunnel.payload:
+				if !ok {
+					return
+				}
+				_ = backend.SetWriteDeadline(time.Now().Add(60 * time.Second))
+				if _, err := backend.Write(payload); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	buf := make([]byte, 64*1024)
+	for {
+		_ = backend.SetReadDeadline(time.Now().Add(60 * time.Second))
+		n, err := backend.Read(buf)
+		if err != nil {
+			return
+		}
+		if _, err := tunnel.listener.WriteToUDP(buf[:n], tunnel.addr); err != nil {
+			return
+		}
+		select {
+		case <-done:
+			return
+		default:
 		}
 	}
 }
@@ -536,12 +623,7 @@ func (s *UdpTransport) parsePortMappings(g *udpGen) {
 				continue
 			} else {
 				// Handle single local port case
-				port, err := strconv.Atoi(localPortOrRange)
-				if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-					localAddr = fmt.Sprintf(":%d", port)
-				} else {
-					localAddr = localPortOrRange // format ip:port=remoteAddress
-				}
+				localAddr = mappingListenAddress(localPortOrRange)
 			}
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)

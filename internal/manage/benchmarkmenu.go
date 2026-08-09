@@ -19,9 +19,9 @@ func LinkTest() {
 
 	clients := clientTunnels()
 	if len(clients) == 0 {
-		tui.Info("No client tunnels found on this server.")
-		tui.Warn("Run this on the abroad (kharej) side — it is the side that dials")
-		tui.Warn("out, so it is the side that can measure the link.")
+		tui.Info("No dialling tunnels found on this server.")
+		tui.Warn("Run this on the side that initiates the tunnel: Iran for Direct,")
+		tui.Warn("or Kharej for Reverse.")
 		tui.PressEnter()
 		return
 	}

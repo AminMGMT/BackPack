@@ -1,9 +1,13 @@
 package manage
 
 import (
+	"context"
+	"strings"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
 	"github.com/backpack/backpack/internal/metrics"
 )
 
@@ -61,6 +65,30 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 	case !h.Active:
 		h.State, h.Detail = "stopped", "service is not running"
 	default:
+		if t.Engine == string(config.EngineIPTables) {
+			cfg, err := config.LoadFile(app.ConfigPath(t.Name))
+			if err != nil {
+				h.State, h.Detail = "offline", "configuration is unreadable: "+err.Error()
+				return h
+			}
+			p, err := engine.Resolve(cfg)
+			if err != nil {
+				h.State, h.Detail = "offline", err.Error()
+				return h
+			}
+			eh, err := p.Health(context.Background(), engine.Request{ConfigPath: app.ConfigPath(t.Name), Config: cfg})
+			if err != nil || !eh.Ready {
+				h.State = "offline"
+				if err != nil {
+					h.Detail = err.Error()
+				} else {
+					h.Detail = eh.Detail + ": " + strings.Join(eh.Drift, "; ")
+				}
+				return h
+			}
+			h.Connected, h.State, h.Detail = true, "online", eh.Detail
+			return h
+		}
 		h.Connected = tunnelHealthy(t, pairs)
 		// tunnelHealthy answers the watchdog's question — "is this worth
 		// restarting?" — and for a datagram server it deliberately says yes
@@ -75,6 +103,13 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 		if isDatagram(t.Transport) && t.Role == "server" {
 			if connected, known := datagramServerPeer(app.ConfigDir, t.Name); known {
 				h.Connected = connected
+			}
+		}
+		if t.AppForward() && isRawDatagram(t.Transport) && t.Role == "client" {
+			if connected, known := datagramServerPeer(app.ConfigDir, t.Name); known {
+				h.Connected = connected
+			} else {
+				h.Connected = false
 			}
 		}
 		if h.Connected {

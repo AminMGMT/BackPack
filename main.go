@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/backpack/backpack/cmd"
 	"github.com/backpack/backpack/internal/app"
@@ -97,10 +96,16 @@ func runEngine(configPath string) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	go cmd.Run(configPath, ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cmd.Run(configPath, ctx)
+	}()
 
 	<-sigChan
 	cancel()
-	time.Sleep(1 * time.Second)
+	// Engine shutdown owns the ordered quiesce, final counter scrape and
+	// cleanup. Do not let the process exit until that sequence has completed.
+	<-done
 	logger.Info("backpack engine stopped")
 }

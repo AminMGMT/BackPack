@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,14 +21,16 @@ import (
 )
 
 type WsTransport struct {
-	config          *WsConfig
-	parentctx       context.Context
-	state           clientState
-	logger          *logrus.Logger
-	restartMutex    sync.Mutex
-	poolConnections int32
-	loadConnections int32
-	controlFlow     chan struct{}
+	config           *WsConfig
+	parentctx        context.Context
+	state            clientState
+	logger           *logrus.Logger
+	restartMutex     sync.Mutex
+	poolConnections  int32
+	loadConnections  int32
+	controlFlow      chan struct{}
+	forwardActive    int32
+	forwardBandwidth *forwardBandwidth
 }
 type WsConfig struct {
 	RemoteAddr string
@@ -52,7 +55,11 @@ type WsConfig struct {
 	// this machine: through a proxy, from a chosen source address or
 	// interface, under a routing mark. Nil dials directly. None of it is ever
 	// applied to the dial to the local backend — see network/outbound.go.
-	Outbound *network.Outbound
+	Outbound       *network.Outbound
+	Forward        bool
+	Ports          []string
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
@@ -61,12 +68,13 @@ func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 
 	// Initialize the TcpTransport struct
 	client := &WsTransport{
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		config:           config,
+		parentctx:        parentCtx,
+		logger:           logger,
+		poolConnections:  0,
+		loadConnections:  0,
+		controlFlow:      make(chan struct{}, 100),
+		forwardBandwidth: newForwardBandwidth(config.BandwidthMbps),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -129,6 +137,7 @@ func (c *WsTransport) Restart() {
 	c.config.TunnelStatus = ""
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	atomic.StoreInt32(&c.forwardActive, 0)
 	drain(c.controlFlow)
 
 	// set the log level again
@@ -166,12 +175,80 @@ func (c *WsTransport) channelDialer() {
 
 			c.config.TunnelStatus = fmt.Sprintf("Connected (%s)", c.config.Mode)
 
-			go c.poolMaintainer()
 			go c.channelHandler()
+			if c.config.Forward {
+				go c.startForwardWSIngress()
+			} else {
+				go c.poolMaintainer()
+			}
 
 			return
 		}
 	}
+}
+
+func (c *WsTransport) startForwardWSIngress() {
+	mappings, err := expandForwardTCPMappings(c.config.Ports)
+	if err != nil {
+		c.logger.Errorf("invalid forward ingress mappings: %v", err)
+		go c.Restart()
+		return
+	}
+	for _, mapping := range mappings {
+		mapping := mapping
+		go func() {
+			listener, err := net.Listen("tcp", mapping.listen)
+			if err != nil {
+				c.logger.Errorf("failed to listen on forward ingress %s: %v", mapping.listen, err)
+				go c.Restart()
+				return
+			}
+			defer listener.Close()
+			go func() { <-c.state.Ctx().Done(); _ = listener.Close() }()
+			c.logger.Infof("forward ingress listening on %s -> Kharej %s", listener.Addr(), mapping.target)
+			for {
+				local, err := listener.Accept()
+				if err != nil {
+					if c.state.Ctx().Err() != nil {
+						return
+					}
+					continue
+				}
+				if !acquireForwardConnection(&c.forwardActive, c.config.MaxConnections) {
+					local.Close()
+					continue
+				}
+				go c.handleForwardWSIngress(local, mapping.target)
+			}
+		}()
+	}
+}
+
+func (c *WsTransport) handleForwardWSIngress(local net.Conn, target string) {
+	defer atomic.AddInt32(&c.forwardActive, -1)
+	local = c.forwardBandwidth.wrap(local)
+	wsConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 1024*1024, 1024*1024)
+	if err != nil {
+		local.Close()
+		return
+	}
+	fail := func() { wsConn.Close(); local.Close() }
+	if err := wsConn.WriteMessage(websocket.TextMessage, []byte(target)); err != nil {
+		fail()
+		return
+	}
+	_ = wsConn.SetReadDeadline(time.Now().Add(c.config.DialTimeOut))
+	_, ack, err := wsConn.ReadMessage()
+	_ = wsConn.SetReadDeadline(time.Time{})
+	if err != nil || len(ack) != 1 || ack[0] != utils.SG_ForwardOK {
+		fail()
+		return
+	}
+	port := 0
+	if addr, ok := local.LocalAddr().(*net.TCPAddr); ok {
+		port = addr.Port
+	}
+	handlers.WSConnectionHandler(c.state.Ctx(), wsConn, local, c.logger, c.state.Usage(), port, c.config.Sniffer)
 }
 
 func (c *WsTransport) poolMaintainer() {

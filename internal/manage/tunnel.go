@@ -1,24 +1,54 @@
 package manage
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/engine"
+	"github.com/backpack/backpack/internal/instanceid"
 )
 
 // Tunnel is a discovered tunnel derived from a config file on disk.
 type Tunnel struct {
 	Name      string
+	Mode      string // "reverse" or "direct"; derived from engine metadata
+	Engine    string // effective engine, including the legacy reverse default
 	Role      string // "server" or "client"
 	Transport string
 	Addr      string   // bind_addr (server) or remote_addr (client)
 	Ports     []string // server only
+	Mappings  []config.ForwardMapping
 	Service   string
+}
+
+// KernelDirect reports the standalone netfilter engine. Application-forward
+// instances also have mode=direct, but still have a role, transport and peer;
+// treating every direct mode as iptables breaks their management/UI paths.
+func (t Tunnel) KernelDirect() bool { return t.Engine == string(config.EngineIPTables) }
+
+// AppForward reports the application tunnel whose dial direction is reversed.
+func (t Tunnel) AppForward() bool { return t.Engine == string(config.EngineForward) }
+
+// DisplayRole preserves the geographic Server/Client language used by setup:
+// Iran is Server and Kharej is Client. EngineForward deliberately swaps the
+// operational TOML sections, but exposing that implementation detail in the
+// panel and management menu makes the same machine appear to change roles.
+func (t Tunnel) DisplayRole() string {
+	if t.AppForward() {
+		switch t.Role {
+		case "client":
+			return "server"
+		case "server":
+			return "client"
+		}
+	}
+	return t.Role
 }
 
 // List scans the config directory and returns all tunnels, sorted by name.
@@ -26,13 +56,19 @@ func List() []Tunnel {
 	var tunnels []Tunnel
 	matches, _ := filepath.Glob(app.ConfigDir + "/*.toml")
 	for _, path := range matches {
-		var cfg config.Config
-		if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		cfg, err := config.LoadFile(path)
+		if err != nil {
 			continue
 		}
 		name := strings.TrimSuffix(filepath.Base(path), ".toml")
-		t := Tunnel{Name: name, Service: app.ServiceName(name)}
+		meta, err := engine.MetadataFor(cfg)
+		if err != nil {
+			continue
+		}
+		t := Tunnel{Name: name, Service: app.ServiceName(name), Mode: meta.Mode, Engine: meta.Name}
 		switch {
+		case cfg.EffectiveEngine() == config.EngineIPTables:
+			t.Mappings = append([]config.ForwardMapping(nil), cfg.Forward.Mappings...)
 		case cfg.Server.BindAddr != "":
 			t.Role = "server"
 			t.Transport = string(cfg.Server.Transport)
@@ -42,6 +78,9 @@ func List() []Tunnel {
 			t.Role = "client"
 			t.Transport = string(cfg.Client.Transport)
 			t.Addr = cfg.Client.RemoteAddr
+			if cfg.EffectiveEngine() == config.EngineForward {
+				t.Ports = append([]string(nil), cfg.Client.Ports...)
+			}
 		default:
 			continue
 		}
@@ -55,20 +94,47 @@ func List() []Tunnel {
 // than the summary List gives — preset, limits, certificate, fallbacks — read
 // it through this rather than parsing the TOML themselves.
 func LoadTunnelConfig(name string) (config.Config, error) {
-	var cfg config.Config
-	_, err := toml.DecodeFile(app.ConfigPath(name), &cfg)
-	return cfg, err
+	cfg, err := config.LoadFile(app.ConfigPath(name))
+	if err != nil {
+		return config.Config{}, err
+	}
+	return *cfg, nil
 }
 
 // Delete removes a tunnel: stops/disables the service, deletes the unit,
 // config, any per-tunnel refresh script, and reloads systemd.
 func Delete(name string) error {
 	service := app.ServiceName(name)
+	cfg, cfgErr := config.LoadFile(app.ConfigPath(name))
 	if IsActive(service) || IsEnabled(service) {
 		_ = DisableService(service)
 	}
+	if cfgErr == nil {
+		if p, err := engine.Resolve(cfg); err == nil {
+			if err = p.Cleanup(context.Background(), engine.Request{ConfigPath: app.ConfigPath(name), Config: cfg}); err != nil {
+				return fmt.Errorf("cleanup %s before delete: %w", name, err)
+			}
+		}
+	} else if _, identityErr := os.Stat(instanceid.Path(app.ConfigPath(name))); identityErr == nil {
+		// A direct config may be corrupt or already missing while its generation
+		// is still live. Persistent identity metadata is sufficient for the
+		// engine's ownership-safe cleanup path.
+		p, err := engine.Get(config.EngineIPTables)
+		if err == nil {
+			err = p.Cleanup(context.Background(), engine.Request{ConfigPath: app.ConfigPath(name)})
+		}
+		if err != nil {
+			return fmt.Errorf("cleanup unreadable direct instance %s: %w", name, err)
+		}
+	}
+	id, _ := instanceid.Resolve(app.ConfigPath(name), false)
 	removeUnit(name)
 	os.Remove(app.ConfigPath(name))
+	os.Remove(filepath.Join(app.ConfigDir, name+".metrics.json"))
+	os.Remove(instanceid.Path(app.ConfigPath(name)))
+	if id.InstanceID != "" {
+		os.Remove(filepath.Join(app.ConfigDir, "forward-state", id.InstanceID+".json"))
+	}
 	deleteTunnelMeta(name)
 	return DaemonReload()
 }

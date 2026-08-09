@@ -33,6 +33,7 @@ type kcpGen struct {
 	localChannel     chan LocalTCPConn
 	reqNewConnChan   chan struct{}
 	usageMonitor     *web.Usage
+	forwardReady     chan struct{}
 }
 
 // KcpTransport is the server side of the KCP transport: a reliable,
@@ -44,23 +45,26 @@ type kcpGen struct {
 // or a path where the return route is asymmetric. Forward error correction
 // repairs losses without waiting a full round trip for a retransmit.
 type KcpTransport struct {
-	config           *KcpConfig
-	smuxConfig       *smux.Config
-	kcpSettings      network.KCPSettings
-	parentctx        context.Context
-	ctx              context.Context
-	cancel           context.CancelFunc
-	logger           *logrus.Logger
-	tunnelChannel    chan *smux.Session
-	handshakeChannel chan net.Conn
-	localChannel     chan LocalTCPConn
-	reqNewConnChan   chan struct{}
-	controlChannel   netControl
-	usageMonitor     *web.Usage
-	restartMutex     sync.Mutex
-	streamCounter    int32
-	sessionCounter   int32
-	limits           *limiter
+	config            *KcpConfig
+	smuxConfig        *smux.Config
+	kcpSettings       network.KCPSettings
+	parentctx         context.Context
+	ctx               context.Context
+	cancel            context.CancelFunc
+	logger            *logrus.Logger
+	tunnelChannel     chan *smux.Session
+	handshakeChannel  chan net.Conn
+	localChannel      chan LocalTCPConn
+	reqNewConnChan    chan struct{}
+	controlChannel    netControl
+	usageMonitor      *web.Usage
+	restartMutex      sync.Mutex
+	streamCounter     int32
+	sessionCounter    int32
+	limits            *limiter
+	forwardReady      chan struct{}
+	forwardMu         sync.Mutex
+	forwardRawSession *smux.Session
 }
 
 type KcpConfig struct {
@@ -110,6 +114,7 @@ type KcpConfig struct {
 	SpoofSrcPool   []string
 	SpoofPeerIP    string
 	SpoofInterface string
+	Forward        bool
 }
 
 // transportLabel is what the panel and logs call this transport — XDI when it
@@ -123,6 +128,10 @@ func (s *KcpTransport) transportLabel() string {
 		return "SPOOF"
 	}
 	return "KCP"
+}
+
+func (s *KcpTransport) rawForward() bool {
+	return s.config.Forward && (s.config.UseICMP || s.config.UseSpoof)
 }
 
 func (c *KcpConfig) settings() network.KCPSettings {
@@ -180,6 +189,7 @@ func NewKcpServer(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 		reqNewConnChan:   make(chan struct{}, config.ChannelSize),
 		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
+		forwardReady:     make(chan struct{}, 1),
 	}
 }
 
@@ -195,6 +205,7 @@ func (s *KcpTransport) Start() {
 		localChannel:     s.localChannel,
 		reqNewConnChan:   s.reqNewConnChan,
 		usageMonitor:     s.usageMonitor,
+		forwardReady:     s.forwardReady,
 	}
 
 	if s.config.WebPort > 0 {
@@ -203,11 +214,23 @@ func (s *KcpTransport) Start() {
 	s.config.TunnelStatus = "Disconnected (" + s.transportLabel() + ")"
 
 	go s.tunnelListener(g)
+	if s.rawForward() {
+		select {
+		case <-g.forwardReady:
+			s.config.TunnelStatus = "Connected (" + s.transportLabel() + ")"
+		case <-g.ctx.Done():
+		}
+		return
+	}
 
 	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (" + s.transportLabel() + ")"
+		go s.channelHandler(g)
+		if s.config.Forward {
+			return
+		}
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -215,8 +238,6 @@ func (s *KcpTransport) Start() {
 		}
 
 		go s.parsePortMappings(g)
-		go s.channelHandler(g)
-
 		s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 		for i := 0; i < numCPU; i++ {
@@ -244,6 +265,12 @@ func (s *KcpTransport) Restart() {
 	if s.controlChannel.IsSet() {
 		s.controlChannel.Close()
 	}
+	s.forwardMu.Lock()
+	if s.forwardRawSession != nil {
+		_ = s.forwardRawSession.Close()
+		s.forwardRawSession = nil
+	}
+	s.forwardMu.Unlock()
 
 	time.Sleep(2 * time.Second)
 
@@ -268,6 +295,7 @@ func (s *KcpTransport) Restart() {
 	s.tunnelChannel = make(chan *smux.Session, s.config.ChannelSize)
 	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
 	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
+	s.forwardReady = make(chan struct{}, 1)
 	s.handshakeChannel = make(chan net.Conn)
 	s.controlChannel.Clear()
 	// The peer is gone until a new control channel arrives; a stale address
@@ -452,6 +480,20 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 		}
 		// The control channel carries small, latency-critical signals.
 		session.SetACKNoDelay(true)
+		if s.rawForward() {
+			muxSession, err := smux.Client(session, s.smuxConfig)
+			if err != nil {
+				session.Close()
+				return
+			}
+			metrics.ReportPeer(session.RemoteAddr().String())
+			select {
+			case g.forwardReady <- struct{}{}:
+			default:
+			}
+			s.adoptRawForwardSession(g, muxSession)
+			return
+		}
 
 		// A control claim while one is already established means the client
 		// restarted on its own and re-dialed, while this run never noticed
@@ -498,10 +540,52 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 			muxSession.Close()
 		}
 
+	case utils.SG_ForwardTCP:
+		if !s.config.Forward || !s.controlChannel.IsSet() {
+			s.logger.Warnf("invalid forward KCP session from %s", session.RemoteAddr())
+			session.Close()
+			return
+		}
+		muxSession, err := smux.Client(session, s.smuxConfig)
+		if err != nil {
+			session.Close()
+			return
+		}
+		go s.handleForwardKCPSession(g, muxSession)
+
 	default:
 		s.logger.Warnf("unexpected announcement signal %v from %s", signal, session.RemoteAddr())
 		session.Close()
 	}
+}
+
+func (s *KcpTransport) handleForwardKCPSession(g *kcpGen, session *smux.Session) {
+	defer session.Close()
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			return
+		}
+		go handleForwardStream(g.ctx, stream, 75*time.Second, s.logger, g.usageMonitor, s.config.Sniffer)
+	}
+}
+
+func (s *KcpTransport) adoptRawForwardSession(g *kcpGen, session *smux.Session) {
+	s.forwardMu.Lock()
+	old := s.forwardRawSession
+	s.forwardRawSession = session
+	s.forwardMu.Unlock()
+	if old != nil && old != session {
+		_ = old.Close()
+	}
+	go func() {
+		s.handleForwardKCPSession(g, session)
+		s.forwardMu.Lock()
+		if s.forwardRawSession == session {
+			s.forwardRawSession = nil
+		}
+		s.forwardMu.Unlock()
+	}()
 }
 
 func (s *KcpTransport) parsePortMappings(g *kcpGen) {
@@ -572,12 +656,7 @@ func (s *KcpTransport) parsePortMappings(g *kcpGen) {
 				continue
 			}
 
-			port, err := strconv.Atoi(localPortOrRange)
-			if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-				localAddr = fmt.Sprintf(":%d", port)
-			} else {
-				localAddr = localPortOrRange // format ip:port=remoteAddress
-			}
+			localAddr = mappingListenAddress(localPortOrRange)
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}

@@ -41,7 +41,9 @@ type TcpMuxTransport struct {
 	// handshake, so later attempts skip straight to the old one instead of
 	// spending a connection discovering it again. It is not reset on restart:
 	// an upgraded server means an upgraded binary, which means a new process.
-	legacyServer atomic.Bool
+	legacyServer    atomic.Bool
+	forwardSessions chan *smux.Session
+	forwardActive   int32
 }
 
 type TcpMuxConfig struct {
@@ -71,7 +73,12 @@ type TcpMuxConfig struct {
 	// this machine: through a proxy, from a chosen source address or
 	// interface, under a routing mark. Nil dials directly. None of it is ever
 	// applied to the dial to the local backend — see network/outbound.go.
-	Outbound *network.Outbound
+	Outbound       *network.Outbound
+	Forward        bool
+	Ports          []string
+	ProxyProtocol  bool
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
@@ -93,6 +100,7 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
+		forwardSessions: make(chan *smux.Session, max(1, config.ConnPoolSize)),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -163,6 +171,16 @@ func (c *TcpMuxTransport) Restart() {
 	// connection that is gone until the new run's first tick replaced them.
 	metrics.ClearPool()
 	drain(c.controlFlow)
+	for {
+		select {
+		case session := <-c.forwardSessions:
+			_ = session.Close()
+		default:
+			goto sessionsDrained
+		}
+	}
+sessionsDrained:
+	atomic.StoreInt32(&c.forwardActive, 0)
 
 	// set the log level again
 	c.logger.SetLevel(level)
@@ -244,9 +262,18 @@ func (c *TcpMuxTransport) channelDialer() {
 				c.logger.Infof("control channel established successfully (mux version %d)", c.muxVersion.Load())
 
 				c.config.TunnelStatus = "Connected (TCPMux)"
+				if c.config.Forward && nonce == "" {
+					c.logger.Error("forward mode requires the authenticated v2 control handshake; peer is too old")
+					tunnelConn.Close()
+					bo.Wait(c.state.Ctx())
+					continue
+				}
 
 				go c.poolMaintainer()
 				go c.channelHandler()
+				if c.config.Forward {
+					go startForwardIngress(c.state.Ctx(), c.config.Ports, c.config.MaxConnections, c.config.BandwidthMbps, c.config.ProxyProtocol, c.logger, c.state.Usage(), c.config.Sniffer, &c.forwardActive, c.openForwardMuxStream, func() { go c.Restart() })
+				}
 
 				return
 			} else {
@@ -415,7 +442,11 @@ func (c *TcpMuxTransport) tunnelDialer() {
 
 	// Say what this connection is, so the server admits it on the nonce rather
 	// than on the address it happened to dial out from.
-	if err := announcePoolConn(tunnelConn, c.poolNonce.Get()); err != nil {
+	signal := utils.SG_Pool
+	if c.config.Forward {
+		signal = utils.SG_ForwardTCP
+	}
+	if err := utils.SendBinaryTransportString(tunnelConn, c.poolNonce.Get(), signal); err != nil {
 		c.logger.Debugf("tunnel dialer: failed to announce the pool connection: %v", err)
 		tunnelConn.Close()
 		return
@@ -436,6 +467,17 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 	session, err := smux.Server(tunnelConn, c.smuxCfg())
 	if err != nil {
 		c.logger.Errorf("failed to create mux session: %v", err)
+		return
+	}
+	if c.config.Forward {
+		select {
+		case c.forwardSessions <- session:
+		case <-c.state.Ctx().Done():
+			session.Close()
+			return
+		}
+		<-c.state.Ctx().Done()
+		session.Close()
 		return
 	}
 
@@ -459,6 +501,45 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 			}
 
 			go c.localDialer(stream, remoteAddr)
+		}
+	}
+}
+
+func (c *TcpMuxTransport) openForwardMuxStream(target string) (net.Conn, error) {
+	deadline := time.NewTimer(c.config.DialTimeOut)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-c.state.Ctx().Done():
+			return nil, c.state.Ctx().Err()
+		case <-deadline.C:
+			return nil, fmt.Errorf("no forward mux session became ready")
+		case session := <-c.forwardSessions:
+			stream, err := session.OpenStream()
+			if err != nil {
+				session.Close()
+				go c.tunnelDialer()
+				continue
+			}
+			select {
+			case c.forwardSessions <- session:
+			default:
+			}
+			if err := utils.SendBinaryString(stream, target); err != nil {
+				stream.Close()
+				return nil, err
+			}
+			_ = stream.SetReadDeadline(time.Now().Add(c.config.DialTimeOut))
+			status, err := utils.ReceiveBinaryByte(stream)
+			_ = stream.SetReadDeadline(time.Time{})
+			if err != nil || status != utils.SG_ForwardOK {
+				stream.Close()
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("Kharej backend %q is unavailable or invalid", target)
+			}
+			return stream, nil
 		}
 	}
 }

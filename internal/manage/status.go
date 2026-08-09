@@ -55,7 +55,7 @@ func StatusLive() {
 
 // printStatusTable prints a formatted table of tunnel states.
 func printStatusTable(tunnels []Tunnel) {
-	header := fmt.Sprintf("%-16s %-8s %-8s %-8s %s", "NAME", "ROLE", "TRANSP", "STATE", "PORTS / REMOTE")
+	header := fmt.Sprintf("%-16s %-8s %-10s %-8s %s", "NAME", "MODE", "ENGINE", "STATE", "PORTS / REMOTE")
 	fmt.Println(tui.Bold + header + tui.Reset)
 	fmt.Println(strings.Repeat("─", 72))
 
@@ -67,11 +67,18 @@ func printStatusTable(tunnels []Tunnel) {
 		state := colorPad(tui.Color(color, plainState), plainState, 8)
 
 		detail := t.Addr
-		if t.Role == "server" && len(t.Ports) > 0 {
+		if t.KernelDirect() {
+			var maps []string
+			for _, m := range t.Mappings {
+				maps = append(maps, fmt.Sprintf("%s:%s->%s:%s", m.ListenAddress, m.ListenPorts, m.TargetAddress, m.TargetPorts))
+			}
+			detail = strings.Join(maps, ",")
+		}
+		if (t.Role == "server" || (t.AppForward() && t.Role == "client")) && len(t.Ports) > 0 {
 			detail = strings.Join(t.Ports, ",")
 		}
-		fmt.Printf("%-16s %-8s %-8s %s %s\n",
-			truncate(t.Name, 16), t.Role, t.Transport, state, detail)
+		fmt.Printf("%-16s %-8s %-10s %s %s\n",
+			truncate(t.Name, 16), t.Mode, t.Engine, state, detail)
 	}
 }
 

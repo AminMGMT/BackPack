@@ -78,6 +78,10 @@ type TcpConfig struct {
 	// Stealth wraps every accepted tunnel connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// Forward makes this listener the Kharej origin of a forward tunnel. The
+	// control channel is unchanged; data connections are opened by the Iran
+	// peer and carry their backend target immediately.
+	Forward bool
 }
 
 func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -132,6 +136,14 @@ func (s *TcpTransport) Start() {
 
 	if s.controlChannel.IsSet() {
 		s.config.TunnelStatus = "Connected (TCP)"
+		go s.channelHandler(g)
+
+		if s.config.Forward {
+			// The forward origin owns no public ingress ports and never asks the
+			// dialler for pool connections. Each Iran-side ingress opens and
+			// authenticates its own data connection when needed.
+			return
+		}
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -139,8 +151,6 @@ func (s *TcpTransport) Start() {
 		}
 
 		go s.parsePortMappings(g)
-		go s.channelHandler(g)
-
 		s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
 
 		for i := 0; i < numCPU; i++ {
@@ -444,10 +454,31 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 		}
 		s.deliverTunnelConn(g, conn)
 
+	case ann.signal == utils.SG_ForwardTCP:
+		if !s.config.Forward {
+			s.logger.Warnf("forward data connection sent to a reverse instance from %s", conn.RemoteAddr())
+			conn.Close()
+			return
+		}
+		if !s.controlChannel.IsSet() || !s.poolNonce.Verify(ann.payload) {
+			s.logger.Warnf("forward data connection from %s presented an invalid run nonce", conn.RemoteAddr())
+			conn.Close()
+			return
+		}
+		go s.handleForwardTCP(g, conn)
+
 	default:
 		s.logger.Warnf("unexpected announcement %d from %s, discarding", ann.signal, conn.RemoteAddr())
 		conn.Close()
 	}
+}
+
+// handleForwardTCP completes the forward-open handshake, dials the backend on
+// this Kharej machine, and only then acknowledges the Iran-side ingress. The
+// target is bounded by the binary framing and is resolved with the same rules
+// as reverse mode (a bare port means 127.0.0.1:<port>).
+func (s *TcpTransport) handleForwardTCP(g *tcpGen, tunnelConn net.Conn) {
+	handleForwardStream(g.ctx, tunnelConn, s.config.KeepAlive, s.logger, g.usageMonitor, s.config.Sniffer)
 }
 
 // admitControlChannel verifies a peer claiming the control channel, answers it,
@@ -577,12 +608,7 @@ func (s *TcpTransport) parsePortMappings(g *tcpGen) {
 				continue
 			} else {
 				// Handle single local port case
-				port, err := strconv.Atoi(localPortOrRange)
-				if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-					localAddr = fmt.Sprintf(":%d", port)
-				} else {
-					localAddr = localPortOrRange // format ip:port=remoteAddress
-				}
+				localAddr = mappingListenAddress(localPortOrRange)
 			}
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
