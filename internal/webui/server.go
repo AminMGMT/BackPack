@@ -254,13 +254,14 @@ func Serve() error {
 		}
 		settings.CertFile, settings.KeyFile = certFile, keyFile
 	}
-	tlsCfg, err := network.HTTPSConfig(settings, func(format string, a ...any) {
+	tlsLease, err := network.HTTPSConfig(settings, func(format string, a ...any) {
 		log.Printf(format, a...)
 	})
 	if err != nil {
 		return fmt.Errorf("web panel TLS: %w", err)
 	}
-	httpServer.TLSConfig = tlsCfg
+	defer tlsLease.Close()
+	httpServer.TLSConfig = tlsLease.Config
 	return httpServer.ListenAndServeTLS("", "")
 }
 

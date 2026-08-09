@@ -341,11 +341,12 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 		// Built before the goroutine starts so a bad certificate or an
 		// unwritable ACME cache is reported here, at startup, instead of
 		// surfacing later as handshake failures on a listener that is up.
-		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
+		tlsLease, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
 		if err != nil {
 			s.logger.Fatalf("failed to set up TLS on %s: %v", addr, err)
 		}
-		server.TLSConfig = tlsCfg
+		defer tlsLease.Close()
+		server.TLSConfig = tlsLease.Config
 
 		go func() {
 			s.logger.Infof("wss server starting, listening on %s", addr)

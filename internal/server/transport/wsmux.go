@@ -367,11 +367,12 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 	} else {
 		// Built up front so a certificate problem fails at startup rather than
 		// per-handshake on a listener that is already accepting.
-		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
+		tlsLease, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
 		if err != nil {
 			s.logger.Fatalf("failed to set up TLS on %s: %v", addr, err)
 		}
-		server.TLSConfig = tlsCfg
+		defer tlsLease.Close()
+		server.TLSConfig = tlsLease.Config
 
 		go func() {
 			s.logger.Infof("%s server starting, listening on %s", s.config.Mode, addr)
