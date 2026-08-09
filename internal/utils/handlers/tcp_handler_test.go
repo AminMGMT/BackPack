@@ -129,6 +129,35 @@ func TestRelayClosesBothEnds(t *testing.T) {
 	}
 }
 
+// Cancellation is the shutdown path used by transport restarts and config
+// reloads. It must interrupt two idle Reads; waiting for traffic or for a peer
+// to close would leave the previous generation alive indefinitely.
+func TestRelayCancellationClosesBothEnds(t *testing.T) {
+	client, from := tcpPair(t)
+	to, backend := tcpPair(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		TCPConnectionHandler(ctx, false, from, to, quietLogger(), &web.Usage{}, 8080, false)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an idle relay ignored context cancellation")
+	}
+
+	for name, conn := range map[string]net.Conn{"client": client, "backend": backend} {
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		if _, err := conn.Read(make([]byte, 1)); err == nil {
+			t.Errorf("%s side stayed open after cancellation", name)
+		}
+	}
+}
+
 // assertReceives reads exactly len(want) bytes from c and compares them.
 func assertReceives(t *testing.T, c net.Conn, want []byte, direction string) {
 	t.Helper()

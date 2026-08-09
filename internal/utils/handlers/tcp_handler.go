@@ -12,8 +12,6 @@ import (
 )
 
 func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
-	done := make(chan struct{})
-
 	// Write Proxy Protocol V2 Header
 	if proxyProtocol {
 		err := WriteProxyProtocol(from, to)
@@ -25,19 +23,35 @@ func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn
 		}
 	}
 
+	// Both copies must run independently so cancellation is observed even when
+	// the connection is completely idle. Running one direction synchronously
+	// used to postpone the ctx select until that Read returned, which meant a
+	// reload could leave an old forwarded connection alive indefinitely.
+	done := make(chan struct{}, 2)
 	go func() {
-		defer close(done)
 		transferData(from, to, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
+	}()
+	go func() {
+		transferData(to, from, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
 	}()
 
-	transferData(to, from, logger, usage, remotePort, sniffer)
-
+	completed := 0
 	select {
 	case <-ctx.Done():
-		from.Close()
-		to.Close()
-		return
 	case <-done:
+		completed = 1
+	}
+
+	// Closing both sides interrupts the other copy. Wait for it to return before
+	// releasing the caller's connection quota; no relay goroutine from this
+	// connection is allowed to outlive the handler.
+	from.Close()
+	to.Close()
+	for completed < 2 {
+		<-done
+		completed++
 	}
 }
 
