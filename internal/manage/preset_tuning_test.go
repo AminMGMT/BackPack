@@ -106,3 +106,18 @@ func TestPresetFECOverheadDoesNotGrowWithSpeed(t *testing.T) {
 			tur.KCPParityShards, agg.KCPParityShards)
 	}
 }
+
+func TestPresetResourceFootprintsAreBounded(t *testing.T) {
+	for _, preset := range []string{PresetBalance, PresetTurbo, PresetAggressive} {
+		s := presetOf(t, preset)
+		if footprint := s.ConnectionPool * s.MuxRecvBuffer; footprint > 64<<20 {
+			t.Errorf("%s SMUX receive-window footprint = %d MiB, want <= 64 MiB", preset, footprint>>20)
+		}
+		if s.ChannelSize > 4096 {
+			t.Errorf("%s channel_size = %d, want <= 4096", preset, s.ChannelSize)
+		}
+		if s.SoRcvBuf > 4<<20 || s.SoSndBuf > 4<<20 {
+			t.Errorf("%s socket buffers = %d/%d, want <= 4 MiB", preset, s.SoRcvBuf, s.SoSndBuf)
+		}
+	}
+}

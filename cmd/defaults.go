@@ -16,7 +16,7 @@ import (
 
 const ( // Default values
 	defaultToken          = "backpack"
-	defaultChannelSize    = 2048
+	defaultChannelSize    = 1024
 	defaultRetryInterval  = 3 // only for client
 	defaultConnectionPool = 8
 	defaultLogLevel       = "info"
@@ -147,6 +147,9 @@ func applyDefaults(cfg *config.Config) {
 	// Mux concurrancy
 	if cfg.Server.MuxCon < 1 {
 		cfg.Server.MuxCon = defaultMuxCon
+	}
+	for _, warning := range enforceResourceLimits(cfg) {
+		logger.Warn(warning)
 	}
 
 	warnUnusedStreamBuffer(cfg)
