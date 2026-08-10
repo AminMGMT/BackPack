@@ -15,6 +15,7 @@ Detailed pages for each part of Backpack. Start with the
 - [When a server is filtered, blocked, or dirty](filtered-or-dirty-ip.md)
 - [Choosing a transport (Link Test)](choosing-a-transport.md)
 - [Performance presets](performance-presets.md)
+- [TCP MSS clamp](mss-clamp.md)
 - [Real client IP (PROXY protocol)](real-client-ip.md)
 - [Forwarded UDP](forwarded-udp.md)
 

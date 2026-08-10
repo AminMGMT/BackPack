@@ -280,6 +280,7 @@ Each item has its own page under [`docs/`](docs/) — click through for the deta
 - **[When a server is filtered or dirty](docs/filtered-or-dirty-ip.md)** — what to do
 - **[Choosing a transport](docs/choosing-a-transport.md)** — Link Test and what to pick
 - **[Performance presets](docs/performance-presets.md)** — Balance / Turbo / Aggressive
+- **[TCP MSS clamp](docs/mss-clamp.md)** — when the path drops full-sized packets
 - **[Real client IP](docs/real-client-ip.md)** — PROXY protocol v2
 
 **Monitoring**

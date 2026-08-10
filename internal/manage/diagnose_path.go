@@ -160,6 +160,64 @@ func pingOK(host string, payload int) bool {
 // the paths where 12 bytes is the difference.
 func safeMSS(mtu int) int { return mtu - 20 - 32 }
 
+// minPathMTU is the smallest IPv4 datagram every path is required to carry.
+const minPathMTU = 576
+
+// The range an MSS clamp has to fall inside, shared by the check that names a
+// value and the setting that applies it.
+//
+// The floor is derived rather than picked, so that every number pathMTUCheck
+// can print is a number SetMSS will accept. Those two drifting apart is the
+// worst failure available here: a diagnostic that names the fix and a tunnel
+// that then refuses it leaves the operator with nowhere to go, which is how
+// this fault wasted an afternoon in the first place.
+//
+// The ceiling is the textbook maximum for a 1500-byte Ethernet MTU less a bare
+// IPv4 and TCP header. A clamp above it can never bind on an ordinary link, so
+// accepting one would only ever mean accepting a typo.
+var (
+	minMSS = safeMSS(minPathMTU) // 524
+	maxMSS = 1500 - 20 - 20      // 1460
+)
+
+// pathMTUCheck turns a measured path MTU and the segment size the tunnel is
+// actually sending into the line the operator reads.
+//
+// It is kept pure and apart from the measurement so the one property that must
+// hold — that any clamp it prints is one SetMSS accepts — can be tested across
+// the whole range the probe can report, rather than only on the paths someone
+// happened to have.
+func pathMTUCheck(g string, mtu, negotiated int) Check {
+	clamp := safeMSS(mtu)
+	switch {
+	case negotiated > clamp && clamp < minMSS:
+		// Below what IPv4 guarantees every route carries. No clamp rescues
+		// this: the value it would need is one no TCP stack is obliged to
+		// accept, and the tunnel would crawl even if both ends took it. Saying
+		// so beats printing a number the tunnel will refuse.
+		return Check{Group: g, Name: "Path MTU", Level: CheckFail,
+			Detail: fmt.Sprintf("path carries only %d bytes, below the %d every IPv4 route must — too small to tunnel over", mtu, minPathMTU),
+			Fix:    "this is a fault in the route rather than in the tunnel — look for a broken tunnel or VPN in front of it"}
+
+	case negotiated > clamp:
+		// The measured limit is below what the sockets are already sending.
+		// Nothing reports this on its own: the oversized segments are dropped
+		// without an ICMP reply, so the kernel keeps sending them and the
+		// tunnel keeps looking healthy while every real transfer stalls.
+		return Check{Group: g, Name: "Path MTU", Level: CheckFail,
+			Detail: fmt.Sprintf("path carries %d bytes but the tunnel sends segments of %d — larger packets are being dropped silently", mtu, negotiated),
+			Fix:    fmt.Sprintf("set the MSS clamp to %d on both ends — Edit → TCP MSS clamp, or Fine Tune in the panel", clamp)}
+
+	case mtu < 1500:
+		return Check{Group: g, Name: "Path MTU", Level: CheckOK,
+			Detail: fmt.Sprintf("%d (below 1500, and the tunnel is already inside it at mss %d)", mtu, negotiated)}
+
+	default:
+		return Check{Group: g, Name: "Path MTU", Level: CheckOK,
+			Detail: fmt.Sprintf("%d, full-sized packets get through", mtu)}
+	}
+}
+
 // pathChecks measures what the tunnel could not say about itself: how much of
 // the pool is really there, and whether the path can carry a full-sized packet.
 func pathChecks(g string, t Tunnel) []Check {
@@ -227,23 +285,7 @@ func pathChecks(g string, t Tunnel) []Check {
 		}
 	}
 
-	switch {
-	case negotiated > 0 && negotiated > safeMSS(mtu):
-		// The measured limit is below what the sockets are already sending.
-		// Nothing reports this on its own: the oversized segments are dropped
-		// without an ICMP reply, so the kernel keeps sending them and the
-		// tunnel keeps looking healthy while every real transfer stalls.
-		out = append(out, Check{Group: g, Name: "Path MTU", Level: CheckFail,
-			Detail: fmt.Sprintf("path carries %d bytes but the tunnel sends segments of %d — larger packets are being dropped silently", mtu, negotiated),
-			Fix:    fmt.Sprintf("set mss = %d on both ends and restart them", safeMSS(mtu))})
-	case mtu < 1500:
-		out = append(out, Check{Group: g, Name: "Path MTU", Level: CheckOK,
-			Detail: fmt.Sprintf("%d (below 1500, and the tunnel is already inside it at mss %d)", mtu, negotiated)})
-	default:
-		out = append(out, Check{Group: g, Name: "Path MTU", Level: CheckOK,
-			Detail: fmt.Sprintf("%d, full-sized packets get through", mtu)})
-	}
-	return out
+	return append(out, pathMTUCheck(g, mtu, negotiated))
 }
 
 // saturatingSub avoids a wild figure when a connection is replaced between the

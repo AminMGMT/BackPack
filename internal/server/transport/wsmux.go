@@ -80,6 +80,10 @@ type WsMuxConfig struct {
 	WebPort          int
 	Mode             config.TransportType // ws or wss
 	ProxyProtocol    bool
+	// MSS caps the largest TCP segment the accepted tunnel connections send.
+	// Zero leaves it to the kernel, which is the default; it is set where the
+	// path silently drops full-sized packets. See manage.SetMSS.
+	MSS int
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
@@ -355,13 +359,31 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 		}),
 	}
 
+	// Built here rather than left to ListenAndServe, for the reason spelled out
+	// in the ws transport: the socket that call opens carries none of the
+	// tunnel's options, which is what made the MSS clamp a setting this
+	// transport accepted and then ignored.
+	ln, err := network.ListenWithBuffers(
+		"tcp",
+		addr,
+		0, // the websocket transports have never pinned the socket buffers
+		0,
+		s.config.MSS,
+		s.config.KeepAlive,
+		!s.config.Nodelay,
+	)
+	if err != nil {
+		s.logger.Fatalf("failed to listen on %s: %v", addr, err)
+		return
+	}
+
 	if s.config.Mode == config.WSMUX {
 		go func() {
 			s.logger.Infof("%s server starting, listening on %s", s.config.Mode, addr)
 			if !s.controlChannel.IsSet() {
 				s.logger.Infof("waiting for %s control channel connection", s.config.Mode)
 			}
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
 			}
 		}()
@@ -370,6 +392,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 		// per-handshake on a listener that is already accepting.
 		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
 		if err != nil {
+			ln.Close()
 			s.logger.Fatalf("failed to set up TLS on %s: %v", addr, err)
 		}
 		server.TLSConfig = tlsCfg
@@ -381,7 +404,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			}
 			// Empty paths: the certificate comes from TLSConfig.GetCertificate,
 			// so renewal needs no restart.
-			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			if err := server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
 			}
 		}()

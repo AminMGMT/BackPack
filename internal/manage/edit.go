@@ -456,6 +456,45 @@ func SetLimits(name string, maxConns, bandwidthMbps int) error {
 	return applySpec(s)
 }
 
+// mssLabel renders an MSS clamp the way the menus and the panel read it.
+func mssLabel(mss int) string {
+	if mss <= 0 {
+		return "automatic"
+	}
+	return fmt.Sprintf("%d bytes", mss)
+}
+
+// SetMSS clamps the largest TCP payload the tunnel puts in one packet. Zero —
+// the default — hands the decision back to the kernel.
+//
+// This is the one knob the path-MTU check names outright, and until now there
+// was nowhere to turn it. Where a path carries less than a full-sized packet and
+// drops the oversized ones without an ICMP reply, nothing on either machine
+// learns: the handshake and the heartbeats are small enough to arrive, so the
+// tunnel comes up and stays up while every real transfer stalls on the first
+// full segment. Clamping the segment size is the whole fix, and it has to be
+// done at both ends — each end clamps only what it sends.
+//
+// No preset sets it, and a preset change leaves it alone: it describes the path
+// the tunnel crosses, not how hard the tunnel is being pushed.
+func SetMSS(name string, mss int) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if isDatagram(s.Transport) {
+		return fmt.Errorf("%s carries datagrams, not TCP segments — size its packets with the KCP MTU instead", s.Transport)
+	}
+	if mss != 0 && (mss < minMSS || mss > maxMSS) {
+		return fmt.Errorf("an MSS clamp must be between %d and %d bytes, or 0 to let the kernel choose", minMSS, maxMSS)
+	}
+	if s.MSS == mss {
+		return fmt.Errorf("the MSS clamp is already %s", mssLabel(mss))
+	}
+	s.MSS = mss
+	return applySpec(s)
+}
+
 // ChangePreset re-applies a whole performance profile to an existing tunnel.
 // Every tuning field is rewritten from the preset; the identity of the tunnel
 // (name, token, ports, addresses, certificates) is untouched.

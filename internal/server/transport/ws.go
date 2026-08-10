@@ -69,6 +69,10 @@ type WsConfig struct {
 	WebPort      int
 	Mode         config.TransportType // ws or wss
 
+	// MSS caps the largest TCP segment the accepted tunnel connections send.
+	// Zero leaves it to the kernel, which is the default; it is set where the
+	// path silently drops full-sized packets. See manage.SetMSS.
+	MSS int
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
@@ -328,13 +332,33 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 		}),
 	}
 
+	// The listener is built here rather than left to ListenAndServe, which
+	// opens a plain socket with none of the tunnel's options on it. That is
+	// what made the MSS clamp a no-op on this transport: the config carried it,
+	// the config file showed it, and nothing ever put it on a socket — so a
+	// path that drops full-sized packets stayed broken after the operator had
+	// applied the fix the diagnostics asked for.
+	ln, err := network.ListenWithBuffers(
+		"tcp",
+		addr,
+		0, // the websocket transports have never pinned the socket buffers
+		0,
+		s.config.MSS,
+		s.config.KeepAlive,
+		!s.config.Nodelay,
+	)
+	if err != nil {
+		s.logger.Fatalf("failed to listen on %s: %v", addr, err)
+		return
+	}
+
 	if s.config.Mode == config.WS {
 		go func() {
 			s.logger.Infof("ws server starting, listening on %s", addr)
 			if !s.controlChannel.IsSet() {
 				s.logger.Info("waiting for ws control channel connection")
 			}
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
 			}
 		}()
@@ -344,6 +368,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 		// surfacing later as handshake failures on a listener that is up.
 		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
 		if err != nil {
+			ln.Close()
 			s.logger.Fatalf("failed to set up TLS on %s: %v", addr, err)
 		}
 		server.TLSConfig = tlsCfg
@@ -356,7 +381,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 			// Empty paths: the certificate comes from TLSConfig.GetCertificate,
 			// which is what allows a renewed certificate to be picked up
 			// without restarting the tunnel.
-			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			if err := server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
 			}
 		}()

@@ -128,10 +128,18 @@ func editPortsMenu(name string) {
 				tui.Info("Real client IP        : " + onOff(spec.ProxyProtocol))
 			}
 			tui.Info("Limits                : " + limitsSummary(spec))
+			if !isDatagram(spec.Transport) {
+				tui.Info("TCP MSS clamp         : " + mssLabel(spec.MSS))
+			}
 			if needsTLS(spec.Transport) {
 				tui.Info("Certificate           : " + certSummary(spec))
 			}
 			fmt.Println()
+			// Options and handlers are built side by side rather than dispatched
+			// through a switch on a fixed index: two of these entries only exist
+			// for some transports, and a numbered switch has to be re-counted
+			// every time one is added — which is how an entry ends up running the
+			// action below it.
 			opts := []tui.Option{
 				{Title: "Change tunnel port", Desc: "the control-channel port clients dial"},
 				{Title: "Change forwarded ports", Desc: "the ports exposed to users"},
@@ -140,64 +148,71 @@ func editPortsMenu(name string) {
 				{Title: "Real client IP", Desc: "send the user's real IP so panels can limit devices"},
 				{Title: "Limits", Desc: "cap connections and bandwidth for this tunnel"},
 			}
+			actions := []func(){
+				func() { changeTunnelPort(name, spec) },
+				func() { changeForwardedPorts(name, spec) },
+				func() { changeTunnelTransport(name, spec) },
+				func() { changeTunnelPreset(name, spec) },
+				func() { toggleProxyProtocol(name, spec) },
+				func() { editLimits(name, spec) },
+			}
+			if !isDatagram(spec.Transport) {
+				opts = append(opts, tui.Option{
+					Title: "TCP MSS clamp",
+					Desc:  "cap the segment size when the path cannot carry full-sized packets",
+				})
+				actions = append(actions, func() { editMSS(name, spec) })
+			}
 			if needsTLS(spec.Transport) {
 				opts = append(opts, tui.Option{
 					Title: "Certificate",
 					Desc:  "self-signed, or a real one from Let's Encrypt (needs a domain)",
 				})
+				actions = append(actions, func() { editCertificate(name, spec) })
 			}
 			idx := tui.ChooseOpt("Choose:", opts)
-			switch idx {
-			case 0:
-				changeTunnelPort(name, spec)
-			case 1:
-				changeForwardedPorts(name, spec)
-			case 2:
-				changeTunnelTransport(name, spec)
-			case 3:
-				changeTunnelPreset(name, spec)
-			case 4:
-				toggleProxyProtocol(name, spec)
-			case 5:
-				editLimits(name, spec)
-			case 6:
-				if needsTLS(spec.Transport) {
-					editCertificate(name, spec)
-				}
-			default:
+			if idx < 0 || idx >= len(actions) {
 				return
 			}
+			actions[idx]()
 		} else {
 			tui.Info("Server address : " + spec.RemoteAddr)
 			tui.Info("Transport      : " + transportLabel(spec.Transport))
 			tui.Info("Backup servers : " + fallbackSummary(spec.FallbackAddrs))
 			tui.Info("Preset         : " + presetLabel(spec.Preset))
 			tui.Info("Load balancing : " + onOff(spec.LoadBalance))
+			if !isDatagram(spec.Transport) {
+				tui.Info("TCP MSS clamp  : " + mssLabel(spec.MSS))
+			}
 			fmt.Println()
-			idx := tui.ChooseOpt("Choose:", []tui.Option{
+			opts := []tui.Option{
 				{Title: "Change server tunnel port", Desc: "must match the server side"},
 				{Title: "Change server address", Desc: "IP or domain of the Iran server"},
 				{Title: "Change transport", Desc: "switch carrier — keeps the token"},
 				{Title: "Backup server addresses", Desc: "auto-failover when the main IP gets blocked"},
 				{Title: "Change performance preset", Desc: "Balance, Turbo or Aggressive"},
 				{Title: "Load balancing", Desc: "use all backup addresses at once, not just as spares"},
-			})
-			switch idx {
-			case 0:
-				changeTunnelPort(name, spec)
-			case 1:
-				changeClientHost(name, spec)
-			case 2:
-				changeTunnelTransport(name, spec)
-			case 3:
-				changeFallbackAddrs(name, spec)
-			case 4:
-				changeTunnelPreset(name, spec)
-			case 5:
-				toggleLoadBalance(name, spec)
-			default:
+			}
+			actions := []func(){
+				func() { changeTunnelPort(name, spec) },
+				func() { changeClientHost(name, spec) },
+				func() { changeTunnelTransport(name, spec) },
+				func() { changeFallbackAddrs(name, spec) },
+				func() { changeTunnelPreset(name, spec) },
+				func() { toggleLoadBalance(name, spec) },
+			}
+			if !isDatagram(spec.Transport) {
+				opts = append(opts, tui.Option{
+					Title: "TCP MSS clamp",
+					Desc:  "cap the segment size when the path cannot carry full-sized packets",
+				})
+				actions = append(actions, func() { editMSS(name, spec) })
+			}
+			idx := tui.ChooseOpt("Choose:", opts)
+			if idx < 0 || idx >= len(actions) {
 				return
 			}
+			actions[idx]()
 		}
 	}
 }
@@ -387,6 +402,44 @@ func editLimits(name string, spec TunnelSpec) {
 		return
 	}
 	tui.Success("Limits updated and the tunnel restarted.")
+	tui.PressEnter()
+}
+
+// editMSS sets the tunnel's TCP segment clamp — the fix the path-MTU check in
+// Diagnose asks for, and the reason this entry exists at all.
+func editMSS(name string, spec TunnelSpec) {
+	fmt.Println()
+	tui.Title("TCP MSS clamp for " + name)
+	fmt.Println()
+	tui.Warn("The largest TCP payload this tunnel will put in a single packet.")
+	tui.Warn("Leave it at 0 unless something has told you otherwise — the kernel")
+	tui.Warn("normally works this out for itself and gets it right.")
+	fmt.Println()
+	tui.Error("Set it when Diagnose reports the path MTU as smaller than the segments")
+	tui.Error("the tunnel is sending. That fault is silent by nature: the oversized")
+	tui.Error("packets are dropped with no ICMP reply, so the tunnel connects, stays")
+	tui.Error("up and looks healthy while every real transfer stalls. Diagnose prints")
+	tui.Error("the exact number to enter here.")
+	fmt.Println()
+	tui.Warn("Each end clamps only what IT sends, so put the SAME value on both.")
+	fmt.Println()
+	tui.Info("Currently : " + mssLabel(spec.MSS))
+	fmt.Println()
+
+	mss := tui.PromptInt("MSS in bytes (0 = automatic)", spec.MSS)
+	if mss == spec.MSS {
+		tui.Info("Nothing changed.")
+		tui.PressEnter()
+		return
+	}
+	if err := SetMSS(name, mss); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("MSS clamp set to " + mssLabel(mss) + " and the tunnel restarted.")
+	tui.Warn("Set the same value on the OTHER side too — its packets are still")
+	tui.Warn("full-sized until you do, and those are the ones being dropped.")
 	tui.PressEnter()
 }
 

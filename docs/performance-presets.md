@@ -16,5 +16,9 @@ file limits).
 **Edit → Change performance preset**. Configs written before presets existed
 carry no preset field and are left exactly as they are.
 
+The [TCP MSS clamp](mss-clamp.md) is not one of these values and a preset change
+leaves it alone: it describes the path the tunnel crosses rather than how hard
+the tunnel is being pushed.
+
 ---
 [← Back to the main README](../README.md)

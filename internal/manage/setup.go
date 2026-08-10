@@ -123,6 +123,16 @@ func applyManualTuning(s *TunnelSpec) {
 		s.ConnectionPool = tui.PromptInt("Connection pool size", s.ConnectionPool)
 		s.AggressivePool = tui.Confirm("Enable aggressive pool", s.AggressivePool)
 	}
+	// The MSS clamp is deliberately not part of any preset: it describes the
+	// path the tunnel crosses, not how hard the tunnel is being pushed. There is
+	// nothing to guess at either — Diagnose measures the path and prints the
+	// number — so it stays at 0 until something has measured it.
+	if !isDatagram(s.Transport) {
+		tui.Warn("MSS caps the largest TCP segment the tunnel sends. Keep it at 0")
+		tui.Warn("unless Diagnose reports that the path cannot carry full-sized")
+		tui.Warn("packets — it prints the value, and both ends need the same one.")
+		s.MSS = tui.PromptInt("TCP MSS clamp (bytes, 0 = automatic)", s.MSS)
+	}
 	if isMux(s.Transport) {
 		s.MuxCon = tui.PromptInt("Mux connections/sessions", s.MuxCon)
 		s.MuxVersion = tui.PromptInt("Mux version (1 or 2)", s.MuxVersion)

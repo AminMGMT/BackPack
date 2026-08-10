@@ -1867,6 +1867,7 @@ const FA={
   "Channel size":"اندازهٔ کانال",
   "Connection pool size":"اندازهٔ استخر اتصال",
   "Log level":"سطح لاگ",
+  "TCP MSS clamp (bytes, 0 = automatic)":"محدودکنندهٔ MSS در TCP (بایت، ۰ یعنی خودکار)",
   "Mux connections / sessions":"اتصال‌ها / نشست‌های Mux",
   "Mux version (1 or 2)":"نسخهٔ Mux (۱ یا ۲)",
   "Mux frame size":"اندازهٔ فریم Mux",
@@ -2418,6 +2419,7 @@ function familyIndexOf(value){
 // how people end up tuning the wrong thing.
 function isMuxT(t){ return ['tcpmux','wsmux','wssmux','kcp','xdi','spoof'].indexOf(t)>=0; }
 function isKCPT(t){ return ['kcp','xdi','spoof'].indexOf(t)>=0; }
+function isDatagramT(t){ return ['udp','kcp','xdi','quic','spoof'].indexOf(t)>=0; }
 function supportsPPT(t){ return ['tcp','tcpmux','kcp','wsmux','wssmux','stealth','quic','spoof'].indexOf(t)>=0; }
 
 // The advanced settings, in the order the CLI asks them. `when` decides whether
@@ -2428,6 +2430,10 @@ const FT_FIELDS=[
   {k:'channelSize',     t:'int', label:'Channel size', when:c=>c.role==='server'},
   {k:'connectionPool',  t:'int', label:'Connection pool size', when:c=>c.role==='client'},
   {k:'logLevel',        t:'sel', label:'Log level', opts:['info','debug','warn','error']},
+  // The one field here that is not a performance dial. Diagnose measures the
+  // path MTU and names the value to put in it; a datagram transport has no TCP
+  // segments to clamp, so it is not offered one.
+  {k:'mss',             t:'int', label:'TCP MSS clamp (bytes, 0 = automatic)', when:c=>!isDatagramT(c.transport)},
   {k:'muxCon',          t:'int', label:'Mux connections / sessions', when:c=>isMuxT(c.transport)},
   {k:'muxVersion',      t:'int', label:'Mux version (1 or 2)', when:c=>isMuxT(c.transport)},
   {k:'muxFrameSize',    t:'int', label:'Mux frame size', when:c=>isMuxT(c.transport)},
@@ -2445,9 +2451,12 @@ const FT_FIELDS=[
   {k:'acceptUDP',       t:'bool',label:'Forward UDP as well as TCP on the exposed ports', when:c=>c.role==='server'},
   {k:'zeroCopy',        t:'bool',label:'Zero-copy forwarding (experimental)', when:c=>c.transport==='tcp'},
 ];
-// The three knobs whose zero is an answer rather than a blank: no heartbeat, no
-// error correction. Everywhere else a zero means "the preset's value".
-const FT_ZERO_OK=['heartbeat','kcpDataShards','kcpParityShards'];
+// The knobs whose zero is an answer rather than a blank: no heartbeat, no error
+// correction, no clamp. Everywhere else a zero means "the preset's value".
+const FT_ZERO_OK=['heartbeat','kcpDataShards','kcpParityShards','mss'];
+// Knobs that describe the path rather than the performance profile, and so are
+// carried across a preset change instead of being reset with the rest.
+const FT_PATH=['mss'];
 
 // renderTune draws the fields that apply to this tunnel and fills them with the
 // given values. The box remembers whether anything was touched: an untouched
@@ -2584,7 +2593,14 @@ async function tuneDefaults(p){
 async function resetTune(p){
   const box=$(p+'f-tune');
   try{
-    renderTune(box,{role:formRole(p),transport:$(p+'f-transport').value},await tuneDefaults(p));
+    const d=await tuneDefaults(p);
+    // …except for the path-level knobs. An MSS clamp is not something the
+    // preset chose, so resetting it to automatic here would quietly undo the
+    // one fix the path-MTU check asks for, on a form the operator opened to
+    // change something else entirely.
+    const had=box.querySelector('[data-k]')?readTune(box):((p==='e'&&editOrig&&editOrig.tune)||{});
+    FT_PATH.forEach(function(k){ if(k in had) d[k]=had[k]; });
+    renderTune(box,{role:formRole(p),transport:$(p+'f-transport').value},d);
     setTuneNote(p,false);
   }catch(e){}
 }

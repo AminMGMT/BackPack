@@ -101,6 +101,13 @@ type FineTune struct {
 	LogLevel  string `json:"logLevel"`
 	LogJSON   bool   `json:"logJSON"`
 
+	// MSS caps the largest TCP segment the tunnel sends. Zero — the default —
+	// leaves it to the kernel. No preset sets it and a preset change does not
+	// clear it: it belongs to the path, not to the performance profile. It is
+	// carried on every tunnel but only means anything on the TCP-based
+	// transports, so the form hides it elsewhere. See SetMSS.
+	MSS int `json:"mss"`
+
 	ChannelSize int  `json:"channelSize"` // server
 	AcceptUDP   bool `json:"acceptUDP"`   // server
 
@@ -132,6 +139,7 @@ func tuneOf(s TunnelSpec) FineTune {
 		Heartbeat:       s.Heartbeat,
 		LogLevel:        s.LogLevel,
 		LogJSON:         s.LogFormat == "json",
+		MSS:             s.MSS,
 		ChannelSize:     s.ChannelSize,
 		AcceptUDP:       s.AcceptUDP,
 		ConnectionPool:  s.ConnectionPool,
@@ -181,9 +189,13 @@ func (f FineTune) apply(s *TunnelSpec) {
 	setInt(&s.KCPSndWnd, f.KCPSndWnd)
 	setInt(&s.KCPRcvWnd, f.KCPRcvWnd)
 	// FEC shards may legitimately be set to zero (error correction off), so
-	// they are copied as given rather than through setInt.
+	// they are copied as given rather than through setInt. The MSS clamp is the
+	// same shape of answer: zero means "let the kernel choose", which is a
+	// setting rather than a blank, and clearing the box has to be able to
+	// restore it.
 	s.KCPDataShards = f.KCPDataShards
 	s.KCPParityShards = f.KCPParityShards
+	s.MSS = f.MSS
 
 	switch strings.ToLower(strings.TrimSpace(f.LogLevel)) {
 	case "debug", "info", "warn", "error":

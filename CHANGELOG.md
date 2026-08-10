@@ -2,6 +2,39 @@
 
 All notable changes to Backpack are documented here.
 
+## Unreleased
+
+### Fixed
+- **The MSS clamp the diagnostics ask for can now be set, and now does
+  something.** Health Check measures the path MTU and, where the path carries
+  less than the tunnel is sending, prints the exact fix: `set mss = 1208 on both
+  ends`. There was nowhere to do it. The setting existed in the config format
+  and in the engine, but no menu, no wizard question and no panel field ever
+  wrote it — so the one fault in this system that reports itself precisely was
+  also the one with no way to act on the report short of hand-editing a TOML
+  file the CLI would rewrite.
+
+  It is now **Edit → TCP MSS clamp** in the menu, a question in the manual
+  tuning step of both setup wizards, and a field in the panel's Fine Tune
+  drawer. It is offered only on the transports that carry TCP segments; a
+  datagram transport is sized by its KCP MTU instead.
+
+  Setting it was only half the problem. On `ws`, `wss`, `wsmux` and `wssmux` the
+  value was accepted, written to the config and then dropped on the floor: those
+  transports opened their sockets through `http.ListenAndServe` and a dialer
+  that passed a hardcoded zero, so nothing ever reached `TCP_MAXSEG`. A clamp
+  applied to a wss tunnel — the transport most of these paths use — changed
+  nothing at all, which is the worse failure of the two, because the config then
+  agrees with you. All four now build their listener and their dials with the
+  tunnel's own options, as the `tcp` and `tcpmux` transports already did.
+
+  Two smaller things came with it. The clamp survives a preset change, in the
+  menu and in the panel both — it describes the path, not how hard the tunnel is
+  being pushed, and resetting it with the rest of the tuning would have silently
+  undone the fix. And the check no longer prints a number the tunnel would
+  refuse: on a path below the 576 bytes IPv4 requires, no clamp helps, so it
+  says the route is at fault instead of naming a value nothing will accept.
+
 ## v1.7.1 — 2026-08-10
 
 Two halves. The web panel stops being a window and becomes a way to work: it

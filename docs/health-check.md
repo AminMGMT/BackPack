@@ -7,6 +7,8 @@ prints a concrete fix under each problem it finds. It verifies:
 - the web panel is running,
 - every tunnel's state,
 - real **TCP reachability** (not just whether systemd is happy),
+- whether the path can carry a full-sized packet — see
+  [TCP MSS clamp](mss-clamp.md) for the setting it names when it cannot,
 - TLS certificate expiry, and
 - token strength.
 
