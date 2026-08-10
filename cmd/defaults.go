@@ -153,6 +153,56 @@ func applyDefaults(cfg *config.Config) {
 	checkOutbound(cfg)
 	checkXdi(cfg)
 	checkSpoof(cfg)
+	checkPck(cfg)
+}
+
+// checkPck refuses a pck tunnel that cannot work, and validates the flag cycle
+// so a typo is named here rather than silently falling back to the default deep
+// inside the carrier.
+//
+// Everything else about the transport configures itself: the interface, the
+// local address and the next hop are read from the routing and neighbour
+// tables. What cannot be worked out is whether the process is allowed to open a
+// packet socket at all, and that is what this checks.
+func checkPck(cfg *config.Config) {
+	if cfg.Server.Transport != config.PCK && cfg.Client.Transport != config.PCK {
+		return
+	}
+	if runtime.GOOS != "linux" {
+		logger.Fatalf("the pck transport is only available on Linux (it needs a packet socket)")
+	}
+	if os.Geteuid() != 0 {
+		logger.Fatalf("the pck transport needs a packet socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+	}
+
+	pc := cfg.Server.PckConfig
+	if cfg.Client.Transport == config.PCK {
+		pc = cfg.Client.PckConfig
+	}
+	if _, err := network.ParseTCPFlagList(pc.PckFlags); err != nil {
+		logger.Fatalf("invalid pck_flags: %v", err)
+	}
+	if pc.PckGatewayMAC != "" {
+		if _, err := net.ParseMAC(pc.PckGatewayMAC); err != nil {
+			logger.Fatalf("invalid pck_gateway_mac %q: %v", pc.PckGatewayMAC, err)
+		}
+	}
+	if pc.PckInterface != "" {
+		if _, err := net.InterfaceByName(pc.PckInterface); err != nil {
+			logger.Fatalf("pck_interface %q does not exist on this machine: %v", pc.PckInterface, err)
+		}
+	}
+
+	// The kernel answers segments arriving for a port it is not listening on
+	// with a RST, and that RST looks to any device in between like the flow
+	// ending. The carrier installs a rule to drop them; without iptables it
+	// cannot, and the tunnel becomes one that works and then intermittently
+	// does not, for no visible reason. That is worth saying out loud.
+	if _, err := exec.LookPath("iptables"); err != nil {
+		logger.Warn("the pck transport needs the iptables binary to stop the kernel resetting its own flow, and it was not found. The tunnel will run, but expect it to drop under load or after a pause. Install iptables.")
+	} else {
+		logger.Info("pck: rules dropping the kernel's RSTs and keeping the flow out of conntrack are installed on start and removed on stop.")
+	}
 }
 
 // checkSpoof refuses a spoof tunnel that cannot possibly work, before it tries,

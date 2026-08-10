@@ -14,6 +14,7 @@ measures your route and recommends one. See
 | TCP | TCP | — | ✅ | — |
 | TCP Mux | TCP | — | ✅ | — |
 | **TCP + Stealth** | TCP | ✅ (Noise) | ✅ | — |
+| **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root |
 | UDP | UDP | — | — | UDP open |
 | **UDP + KCP** | UDP | ✅ (token key) | ✅ | UDP open |
 | WS | WebSocket | — | — | — |
@@ -52,6 +53,22 @@ without the token cannot even complete the handshake: the server replies with
 nothing, so a port scan finds a dead port rather than a service. Reach for it
 where filtering is heavy and you want the connection itself to be unremarkable.
 Costs a little more CPU than plain TCP for the encryption.
+
+### TCP + PCK
+A TCP transport that **does not use the kernel's TCP stack**. It builds its own
+segments and reads the replies straight off the network device, upstream of
+connection tracking and of every netfilter chain — so the machinery that would
+normally reset, throttle or drop a long-lived TCP flow has nothing to act on.
+
+Nothing is forged: the addresses and ports are real and the replies route
+normally. What does not exist is the connection — no handshake, no socket, no
+kernel state — while the segments themselves carry the timestamps, sequence
+numbers and window a real one would. KCP underneath supplies the reliability the
+absent stack would have.
+
+Reach for it when a plain TCP tunnel connects and then dies, stalls or is
+throttled for no reason the logs can explain. Linux only, needs root, and both
+ends must be on it. See [TCP + PCK](tcp-pck.md).
 
 ---
 

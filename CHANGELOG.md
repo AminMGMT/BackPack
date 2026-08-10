@@ -4,6 +4,49 @@ All notable changes to Backpack are documented here.
 
 ## Unreleased
 
+### Added
+- **TCP + PCK — a TCP transport that does not use the kernel's TCP stack.**
+  Setup → TCP → TCP + PCK. Linux, root, and both ends must be on it.
+
+  The problem it is for is the one where a plain TCP tunnel connects and then
+  dies, stalls or is throttled, and nothing in any log says why. The cause in
+  those cases is usually something acting on the *connection* rather than on the
+  packets: connection tracking holding state, a netfilter rule matching the flow,
+  a middlebox that recognised the transfer once it got going. Every one of those
+  levers is attached to the kernel's TCP stack, so this transport does not use
+  it. Receive is a packet socket, which taps the device driver upstream of
+  conntrack, of every netfilter chain and of reverse-path filtering; send builds
+  the frame and hands it to the same driver, falling back to a raw IP socket on a
+  link with no L2 header to build. KCP above supplies the reliability the absent
+  stack would have, so the presets, error correction and encryption are the ones
+  the `kcp` transport already uses.
+
+  **It forges nothing.** The source address is the machine's real one and the
+  ports are real, so replies route normally and none of the proving that
+  [IP Spoofing](docs/transports.md) needs applies here. What does not exist is
+  the connection — no handshake, no socket, no kernel state on either host —
+  while the segments carry what a real one's do: timestamps on every one,
+  sequence and acknowledgement numbers that track the bytes actually exchanged, a
+  normal window, DSCP marking, and a flag pattern the operator can vary. Those
+  are not decoration; a segment with no options, an acknowledgement of zero or a
+  source port equal to its destination is classifiable on the header alone, and
+  the tunnel would go on working perfectly while being trivially picked out.
+
+  There is nothing to configure. The reference implementation this takes its
+  approach from asks for the interface, the local address and the gateway's MAC,
+  and spends a page of its README explaining how to find each; all three are in
+  the routing and neighbour tables, so they are read. The `pck_interface` and
+  `pck_gateway_mac` keys exist only to correct a wrong guess on an unusual host.
+
+  Two firewall rules are installed on start and removed on stop: one dropping the
+  kernel's RSTs for the tunnel's port — the kernel is not listening there, so it
+  answers every arriving segment with one, and to a stateful device in between
+  that RST is the connection ending — and one keeping the pseudo-flows out of
+  conntrack. They are tagged `backpack-pck-<port>`. Without `iptables` the tunnel
+  runs and is unreliable, and says so at startup. The client's source port is
+  derived from the token rather than picked at random, so a reconnect reuses the
+  rule instead of adding one. See [docs/tcp-pck.md](docs/tcp-pck.md).
+
 ### Fixed
 - **The MSS clamp the diagnostics ask for can now be set, and now does
   something.** Health Check measures the path MTU and, where the path carries

@@ -16,6 +16,7 @@ Detailed pages for each part of Backpack. Start with the
 - [Choosing a transport (Link Test)](choosing-a-transport.md)
 - [Performance presets](performance-presets.md)
 - [TCP MSS clamp](mss-clamp.md)
+- [TCP + PCK](tcp-pck.md)
 - [Real client IP (PROXY protocol)](real-client-ip.md)
 - [Forwarded UDP](forwarded-udp.md)
 

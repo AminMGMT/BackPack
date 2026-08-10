@@ -156,7 +156,8 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			"KCP repairs losses with error correction instead of waiting for retransmits, which is exactly this problem")
 		r.Caveats = append(r.Caveats,
 			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing",
-			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning")
+			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning",
+			"and if UDP itself is the problem here, TCP + PCK carries the same KCP inside TCP-shaped packets built below the kernel — Linux and root on both ends")
 
 	case q.LossPercent() >= 2:
 		r.Transport, r.Label = "kcp", "UDP + KCP"
@@ -165,7 +166,8 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			"KCP's error correction recovers those losses without a full round trip")
 		r.Caveats = append(r.Caveats,
 			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing",
-			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning")
+			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning",
+			"and if UDP itself is the problem here, TCP + PCK carries the same KCP inside TCP-shaped packets built below the kernel — Linux and root on both ends")
 
 	case q.Jitter > q.Avg/3:
 		r.Transport, r.Label = "tcpmux", "TCP Mux"

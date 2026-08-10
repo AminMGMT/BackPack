@@ -91,6 +91,14 @@ func udpPortInUse(port string) bool {
 // TunnelPortInUse reports whether a tunnel's control port is already taken,
 // checking the protocol that transport actually listens on.
 func TunnelPortInUse(transport, port string) bool {
+	// pck is the one transport that binds nothing: its segments are read off
+	// the wire rather than delivered by the kernel. It still needs the TCP port
+	// to itself, though — a real listener there would receive the tunnel's
+	// segments too and answer them, which is exactly the interference the
+	// carrier goes to lengths to suppress from the kernel itself.
+	if transport == "pck" {
+		return PortInUse(port)
+	}
 	if isDatagram(transport) {
 		return udpPortInUse(port)
 	}

@@ -87,7 +87,7 @@ func (s *Server) Start() {
 		tcpServer := transport.NewTCPServer(s.ctx, tcpConfig, s.logger)
 		go tcpServer.Start()
 
-	case config.KCP, config.XDI, config.SPOOF:
+	case config.KCP, config.XDI, config.SPOOF, config.PCK:
 		// The spoof transport in pipe mode is a bare datagram relay for
 		// WireGuard, not a KCP tunnel — handle it separately and stop here.
 		if s.config.Transport == config.SPOOF && s.config.SpoofPipe {
@@ -153,6 +153,10 @@ func (s *Server) Start() {
 			SpoofSrcPool:     s.config.SpoofSrcPool,
 			SpoofPeerIP:      s.config.SpoofPeerIP,
 			SpoofInterface:   s.config.SpoofInterface,
+			UsePck:           s.config.Transport == config.PCK,
+			PckInterface:     s.config.PckInterface,
+			PckGatewayMAC:    s.config.PckGatewayMAC,
+			PckFlags:         s.config.PckFlags,
 		}
 
 		kcpServer := transport.NewKcpServer(s.ctx, kcpConfig, s.logger)

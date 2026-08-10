@@ -281,6 +281,7 @@ Each item has its own page under [`docs/`](docs/) — click through for the deta
 - **[Choosing a transport](docs/choosing-a-transport.md)** — Link Test and what to pick
 - **[Performance presets](docs/performance-presets.md)** — Balance / Turbo / Aggressive
 - **[TCP MSS clamp](docs/mss-clamp.md)** — when the path drops full-sized packets
+- **[TCP + PCK](docs/tcp-pck.md)** — TCP without the kernel's TCP stack
 - **[Real client IP](docs/real-client-ip.md)** — PROXY protocol v2
 
 **Monitoring**

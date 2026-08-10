@@ -34,6 +34,7 @@ var transportGroups = []struct {
 		{"TCP", "plain & fast — start here if unsure", "tcp"},
 		{"TCP Mux", "many streams over few connections — multiplexed", "tcpmux"},
 		{"TCP + Stealth", "encrypted with no fingerprint — hardest to detect, for heavy filtering", "stealth"},
+		{"TCP + PCK", "builds its own TCP packets, below the kernel — for a path where a normal TCP flow is reset or throttled; Linux, needs root", "pck"},
 	}},
 	{"UDP", "lower latency, better on lossy or throttled links", []transportEntry{
 		{"UDP", "raw datagrams — for UDP-based services", "udp"},
@@ -296,6 +297,78 @@ func promptACMEDomain(currentDomain, currentEmail string) (domain, email string,
 	return domain, email, true
 }
 
+// askPck collects the packet-level TCP carrier's settings, and is a no-op for
+// every other transport.
+//
+// There is deliberately almost nothing to collect. paqet, which this transport
+// takes its approach from, asks for the interface, the local address and the
+// gateway's MAC and devotes a page of its README to finding each; all three are
+// already in the routing and neighbour tables, so they are read rather than
+// asked for. What is left is one genuine choice — what the flags on the wire
+// look like — and an escape hatch for the host where the lookup guesses wrong.
+func askPck(s *TunnelSpec) {
+	if s.Transport != "pck" {
+		return
+	}
+	fmt.Println()
+	tui.Warn("TCP + PCK builds and reads its own TCP packets instead of using the")
+	tui.Warn("kernel's TCP stack. Nothing is forged — the address and ports are")
+	tui.Warn("real — but no socket, no handshake and no connection state exist, so")
+	tui.Warn("connection tracking and netfilter have nothing to act on.")
+	tui.Warn("Linux only, needs root, and BOTH ends must be on this transport.")
+	fmt.Println()
+	tui.Info("The interface, local address and next hop are read from this machine's")
+	tui.Info("own routing table — there is nothing to enter for them.")
+	fmt.Println()
+
+	// The default is what bulk data carries, and it is right until a specific
+	// path is known to match on it, so the question leads with that.
+	tui.Info("TCP flags stamped on the tunnel's packets. Vary them only if the path")
+	tui.Info("is known to match on the pattern; each end decides its own.")
+	opts := network.SuggestedTCPFlagCycles()
+	menu := make([]tui.Option, len(opts))
+	for i, o := range opts {
+		menu[i] = tui.Option{Title: o.Value, Desc: o.Desc}
+	}
+	if i := tui.ChooseOpt("Flag pattern:", menu); i > 0 {
+		s.PckFlags = strings.Split(opts[i].Value, ",")
+	} else {
+		s.PckFlags = nil // the default, left out of the config entirely
+	}
+
+	fmt.Println()
+	if tui.Confirm("Override the automatic interface / gateway detection", false) {
+		tui.Warn("Leave either empty to keep the automatic answer for it.")
+		if names := routableInterfaces(); len(names) > 0 {
+			tui.Info("Interfaces: " + strings.Join(names, ", "))
+		}
+		for {
+			raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+			if raw == "" {
+				break
+			}
+			if _, err := net.InterfaceByName(raw); err != nil {
+				tui.Error(fmt.Sprintf("no such interface: %v", err))
+				continue
+			}
+			s.PckInterface = raw
+			break
+		}
+		for {
+			raw := strings.TrimSpace(tui.PromptDefault("Gateway MAC", ""))
+			if raw == "" {
+				break
+			}
+			if _, err := net.ParseMAC(raw); err != nil {
+				tui.Error(fmt.Sprintf("not a MAC address: %v", err))
+				continue
+			}
+			s.PckGatewayMAC = raw
+			break
+		}
+	}
+}
+
 // askSpoof collects the IP-spoofing carrier's settings. It runs on both ends
 // for the spoof transport and is a no-op for every other transport.
 //
@@ -527,6 +600,8 @@ func SetupServer() {
 
 	askSpoof(&s)
 
+	askPck(&s)
+
 	askProxyProtocol(&s)
 
 	ApplyPreset(&s, choosePreset())
@@ -580,6 +655,8 @@ func SetupClient() {
 	askSimpleAuth(&s, transport)
 
 	askSpoof(&s)
+
+	askPck(&s)
 
 	// Proxy, interface pinning, and backup addresses are connectivity options
 	// that most tunnels never need. Gate them behind one confirm so the common

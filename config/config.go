@@ -38,6 +38,17 @@ const (
 	// only works where the upstream network does not drop forged-source packets
 	// (no BCP38 egress filtering) — which must be proven on the real route.
 	SPOOF TransportType = "spoof"
+	// PCK carries the KCP transport inside TCP segments this process builds and
+	// reads through a packet socket, instead of through the kernel's TCP stack.
+	// It is a TCP transport in everything the wire can see — real source
+	// address, real ports, a header with the options and numbering a Linux
+	// stack produces — but no socket, no handshake and no connection state
+	// exist on either host, so nothing in netfilter or connection tracking is
+	// in a position to interfere with it. That is the point: on a path where a
+	// kernel TCP flow is reset, throttled or dropped, this one is not visible
+	// to the machinery doing it. KCP above supplies the reliability the absent
+	// stack would have. Linux only, and needs root or CAP_NET_RAW.
+	PCK TransportType = "pck"
 )
 
 // KCPConfig holds the tuning of the KCP transport: a reliable, retransmitting
@@ -145,6 +156,29 @@ type SpoofConfig struct {
 	SpoofPipeAddr string `toml:"spoof_pipe_addr"`
 }
 
+// PckConfig holds the packet-level TCP carrier's settings. Every field is
+// optional: the transport works out its own egress from the route to the peer,
+// and the defaults are what an ordinary data-carrying connection looks like.
+// They exist to correct a wrong guess on an unusual host, not to be filled in.
+type PckConfig struct {
+	// PckInterface pins the carrier to a named egress device. Empty — the
+	// normal case — lets the route to the peer choose, which is right on every
+	// host with one uplink and on most with several.
+	PckInterface string `toml:"pck_interface"`
+	// PckGatewayMAC is the next hop's hardware address, used when frames are
+	// injected at the link layer. Empty means read it from the kernel's
+	// neighbour table, which is where it already is. Set it only where that
+	// lookup is wrong — some virtualised networks answer ARP with an address
+	// the hypervisor then rewrites.
+	PckGatewayMAC string `toml:"pck_gateway_mac"`
+	// PckFlags is the cycle of TCP flag combinations stamped on outgoing
+	// segments, one per packet, spelled as in tcpdump: ["PA"] is push+ack, the
+	// flags bulk data carries and the default. A longer cycle varies the
+	// pattern for a path that matches on it. Both ends may differ — each side
+	// only decides what it sends.
+	PckFlags []string `toml:"pck_flags"`
+}
+
 // ServerConfig represents the configuration for the server.
 type ServerConfig struct {
 	BindAddr         string        `toml:"bind_addr"`
@@ -220,6 +254,9 @@ type ServerConfig struct {
 	// Embedded so the spoof_* keys sit at the top level too. Only used when
 	// transport = "spoof".
 	SpoofConfig
+	// Embedded so the pck_* keys sit at the top level too. Only used when
+	// transport = "pck".
+	PckConfig
 }
 
 // ForwardsUDP reports whether the forwarded ports should carry UDP as well as
@@ -323,6 +360,9 @@ type ClientConfig struct {
 	// Embedded so the spoof_* keys sit at the top level too. Only used when
 	// transport = "spoof".
 	SpoofConfig
+	// Embedded so the pck_* keys sit at the top level too. Only used when
+	// transport = "pck".
+	PckConfig
 }
 
 // Config represents the complete configuration, including both server and client settings.

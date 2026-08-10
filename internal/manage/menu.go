@@ -6,6 +6,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/tui"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // stateLabel returns a themed running/stopped label for a service.
@@ -131,6 +132,9 @@ func editPortsMenu(name string) {
 			if !isDatagram(spec.Transport) {
 				tui.Info("TCP MSS clamp         : " + mssLabel(spec.MSS))
 			}
+			if spec.Transport == "pck" {
+				tui.Info("TCP packet flags      : " + pckFlagSummary(spec.PckFlags))
+			}
 			if needsTLS(spec.Transport) {
 				tui.Info("Certificate           : " + certSummary(spec))
 			}
@@ -163,6 +167,13 @@ func editPortsMenu(name string) {
 				})
 				actions = append(actions, func() { editMSS(name, spec) })
 			}
+			if spec.Transport == "pck" {
+				opts = append(opts, tui.Option{
+					Title: "TCP packet flags",
+					Desc:  "what this end's packets say in the flag field",
+				})
+				actions = append(actions, func() { editPckFlags(name, spec) })
+			}
 			if needsTLS(spec.Transport) {
 				opts = append(opts, tui.Option{
 					Title: "Certificate",
@@ -183,6 +194,9 @@ func editPortsMenu(name string) {
 			tui.Info("Load balancing : " + onOff(spec.LoadBalance))
 			if !isDatagram(spec.Transport) {
 				tui.Info("TCP MSS clamp  : " + mssLabel(spec.MSS))
+			}
+			if spec.Transport == "pck" {
+				tui.Info("Packet flags   : " + pckFlagSummary(spec.PckFlags))
 			}
 			fmt.Println()
 			opts := []tui.Option{
@@ -207,6 +221,13 @@ func editPortsMenu(name string) {
 					Desc:  "cap the segment size when the path cannot carry full-sized packets",
 				})
 				actions = append(actions, func() { editMSS(name, spec) })
+			}
+			if spec.Transport == "pck" {
+				opts = append(opts, tui.Option{
+					Title: "TCP packet flags",
+					Desc:  "what this end's packets say in the flag field",
+				})
+				actions = append(actions, func() { editPckFlags(name, spec) })
 			}
 			idx := tui.ChooseOpt("Choose:", opts)
 			if idx < 0 || idx >= len(actions) {
@@ -402,6 +423,44 @@ func editLimits(name string, spec TunnelSpec) {
 		return
 	}
 	tui.Success("Limits updated and the tunnel restarted.")
+	tui.PressEnter()
+}
+
+// editPckFlags changes the TCP flags the packet carrier stamps on what it
+// sends.
+func editPckFlags(name string, spec TunnelSpec) {
+	fmt.Println()
+	tui.Title("TCP packet flags for " + name)
+	fmt.Println()
+	tui.Warn("What the flag field of this tunnel's packets says. The default is")
+	tui.Warn("push+ack, which is what a connection carrying data sends, and it is")
+	tui.Warn("the right answer unless the path is known to match on the pattern.")
+	fmt.Println()
+	tui.Info("Each end decides only its OWN packets, so this need not match the")
+	tui.Info("other side and changing it here cannot strand the peer.")
+	fmt.Println()
+	tui.Info("Currently : " + pckFlagSummary(spec.PckFlags))
+	fmt.Println()
+
+	opts := network.SuggestedTCPFlagCycles()
+	menu := make([]tui.Option, len(opts))
+	for i, o := range opts {
+		menu[i] = tui.Option{Title: o.Value, Desc: o.Desc}
+	}
+	i := tui.ChooseOpt("Flag pattern:", menu)
+	if i < 0 {
+		return
+	}
+	var flags []string
+	if i > 0 {
+		flags = strings.Split(opts[i].Value, ",")
+	}
+	if err := SetPckFlags(name, flags); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("Flags set to " + pckFlagSummary(flags) + " and the tunnel restarted.")
 	tui.PressEnter()
 }
 

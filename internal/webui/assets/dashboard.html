@@ -1853,6 +1853,9 @@ const FA={
   "WebSocket — multiplexed":"وب‌سوکت — مالتی‌پلکس",
   "secure WebSocket — TLS encrypted":"وب‌سوکت امن — رمزنگاری TLS",
   "TLS WebSocket — multiplexed":"وب‌سوکت TLS — مالتی‌پلکس",
+  "TCP + PCK":"TCP + PCK",
+  "builds its own TCP packets, below the kernel — for a path where a normal TCP flow is reset or throttled; Linux, needs root":
+    "بسته‌های TCP خودش را می‌سازد، زیر لایهٔ کرنل — برای مسیری که جریان عادی TCP در آن ریست یا محدود می‌شود؛ لینوکس، نیازمند روت",
   "tunnels inside ping packets, for networks that filter UDP/TCP but not ICMP — Linux, needs root":
     "تونل داخل بسته‌های پینگ، برای شبکه‌هایی که UDP/TCP را فیلتر می‌کنند ولی ICMP را نه — لینوکس، نیازمند روت",
   "forges the source of raw IP packets, for a path that filters on the real flow — Linux, needs root; prove it on your route":
@@ -2417,10 +2420,12 @@ function familyIndexOf(value){
 // Mirrors of the Go predicates, kept beside the fields they gate: a mux knob on
 // a plain TCP tunnel is a box that does nothing, and a form full of those is
 // how people end up tuning the wrong thing.
-function isMuxT(t){ return ['tcpmux','wsmux','wssmux','kcp','xdi','spoof'].indexOf(t)>=0; }
-function isKCPT(t){ return ['kcp','xdi','spoof'].indexOf(t)>=0; }
-function isDatagramT(t){ return ['udp','kcp','xdi','quic','spoof'].indexOf(t)>=0; }
-function supportsPPT(t){ return ['tcp','tcpmux','kcp','wsmux','wssmux','stealth','quic','spoof'].indexOf(t)>=0; }
+function isMuxT(t){ return ['tcpmux','wsmux','wssmux','kcp','xdi','spoof','pck'].indexOf(t)>=0; }
+function isKCPT(t){ return ['kcp','xdi','spoof','pck'].indexOf(t)>=0; }
+// pck builds its own TCP segments, so like the datagram carriers it has no
+// kernel socket: nothing here can be probed as TCP or clamped with an MSS.
+function isDatagramT(t){ return ['udp','kcp','xdi','quic','spoof','pck'].indexOf(t)>=0; }
+function supportsPPT(t){ return ['tcp','tcpmux','kcp','wsmux','wssmux','stealth','quic','spoof','pck'].indexOf(t)>=0; }
 
 // The advanced settings, in the order the CLI asks them. `when` decides whether
 // a knob means anything for this tunnel; everything without one always applies.

@@ -83,6 +83,13 @@ type KcpConfig struct {
 	SpoofSrcPool   []string
 	SpoofPeerIP    string
 	SpoofInterface string
+	// UsePck carries the session inside TCP segments built and read through a
+	// packet socket (the pck transport). Only the packet layer differs; nothing
+	// is forged. See settings().
+	UsePck        bool
+	PckInterface  string
+	PckGatewayMAC string
+	PckFlags      []string
 }
 
 // transportLabel is what the panel and logs call this transport — XDI over ICMP
@@ -93,6 +100,9 @@ func (c *KcpTransport) transportLabel() string {
 	}
 	if c.config.UseSpoof {
 		return "SPOOF"
+	}
+	if c.config.UsePck {
+		return "PCK"
 	}
 	return "KCP"
 }
@@ -112,6 +122,19 @@ func (c *KcpConfig) settings() network.KCPSettings {
 		SO_RCVBUF:    c.SO_RCVBUF,
 		SO_SNDBUF:    c.SO_SNDBUF,
 		UseICMP:      c.UseICMP,
+	}
+	if c.UsePck {
+		// The flag cycle is validated at load time (checkPck); an unparseable
+		// one here falls back to the default rather than killing the tunnel.
+		flags, err := network.ParseTCPFlagList(c.PckFlags)
+		if err != nil {
+			flags, _ = network.ParseTCPFlagList(nil)
+		}
+		s.Pck = &network.PcapCarrier{
+			Interface:  c.PckInterface,
+			GatewayMAC: c.PckGatewayMAC,
+			Flags:      flags,
+		}
 	}
 	if c.UseSpoof {
 		// Profile is validated at load time (checkSpoof); default to udp here.

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net"
+	"strconv"
 
 	"github.com/xtaci/kcp-go/v5"
 	"golang.org/x/crypto/pbkdf2"
@@ -40,6 +41,12 @@ type KCPSettings struct {
 	// source is forged — the "IP Spoofing" transport. Like UseICMP it swaps only
 	// the packet layer; everything above is unchanged. See spoofconn_linux.go.
 	Spoof *SpoofCarrier
+	// Pck, when set, carries the KCP session inside TCP segments this process
+	// builds and reads through a packet socket — the "TCP + PCK" transport.
+	// Again only the packet layer differs. Unlike Spoof it forges no address:
+	// the source is this machine's real one, so the server learns each client
+	// from the wire exactly as a UDP socket would. See pckconn_linux.go.
+	Pck *PcapCarrier
 }
 
 // SpoofCarrier is the IP-spoofing carrier's tuning, passed down to the raw
@@ -72,6 +79,11 @@ func (s KCPSettings) effectiveMTU() int {
 			over = d
 		}
 		return s.MTU - over
+	}
+	if s.Pck != nil {
+		// The IP and TCP headers plus the timestamp option. The Ethernet header
+		// is outside the IP MTU and so is not counted.
+		return s.MTU - pckOverhead
 	}
 	return s.MTU
 }
@@ -157,6 +169,31 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 		return listener, nil
 	}
 
+	// The pck carrier is a PacketConn like the others, so KCP is handed it and
+	// serves ordinary sessions over it. The bind address supplies the port the
+	// tunnel's segments are addressed to; no socket is bound to it, because the
+	// packets are read off the wire rather than delivered by the kernel.
+	if s.Pck != nil {
+		carrier := *s.Pck
+		carrier.Token = token
+		if carrier.Port == 0 {
+			carrier.Port = portOf(bindAddr)
+		}
+		if carrier.Port == 0 {
+			return nil, fmt.Errorf("pck: the tunnel port could not be read from %q", bindAddr)
+		}
+		conn, err := newPckConn(true, carrier.Port, carrier)
+		if err != nil {
+			return nil, err
+		}
+		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("pck: failed to start the KCP listener: %w", err)
+		}
+		return listener, nil
+	}
+
 	listener, err := kcp.ListenWithOptions(bindAddr, block, s.DataShards, s.ParityShards)
 	if err != nil {
 		return nil, fmt.Errorf("kcp: failed to listen on %s: %w", bindAddr, err)
@@ -222,6 +259,32 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 			conn.Close()
 			return nil, fmt.Errorf("spoof: failed to open the KCP session: %w", err)
 		}
+	} else if s.Pck != nil {
+		// The client addresses its segments to the server's real address and
+		// the tunnel port, and sends from an ephemeral port of its own.
+		ipAddr, err := hostToIPAddr(remoteAddr)
+		if err != nil {
+			return nil, err
+		}
+		carrier := *s.Pck
+		carrier.Token = token
+		carrier.PeerIP = ipAddr.IP.String()
+		if carrier.Port == 0 {
+			carrier.Port = portOf(remoteAddr)
+		}
+		if carrier.Port == 0 {
+			return nil, fmt.Errorf("pck: the tunnel port could not be read from %q", remoteAddr)
+		}
+		conn, err := newPckConn(false, carrier.Port, carrier)
+		if err != nil {
+			return nil, err
+		}
+		session, err = kcp.NewConn2(&net.UDPAddr{IP: ipAddr.IP, Port: int(carrier.Port)},
+			block, s.DataShards, s.ParityShards, conn)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("pck: failed to open the KCP session: %w", err)
+		}
 	} else {
 		session, err = kcp.DialWithOptions(remoteAddr, block, s.DataShards, s.ParityShards)
 		if err != nil {
@@ -242,4 +305,19 @@ func hostToIPAddr(remoteAddr string) (*net.IPAddr, error) {
 		host = h
 	}
 	return net.ResolveIPAddr("ip4", host)
+}
+
+// portOf returns the port of a "host:port" address, or 0 when there is none.
+// The pck carrier uses it to take the tunnel port straight from the address the
+// operator configured, so a capture shows the port they expect.
+func portOf(addr string) uint16 {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 1 || n > 65535 {
+		return 0
+	}
+	return uint16(n)
 }

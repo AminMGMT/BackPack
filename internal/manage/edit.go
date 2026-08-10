@@ -11,6 +11,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // loadServerSpec reconstructs a server tunnel's spec from its config file so it
@@ -78,6 +79,9 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		SpoofInterface:  sc.SpoofInterface,
 		SpoofPipe:       sc.SpoofPipe,
 		SpoofPipeAddr:   sc.SpoofPipeAddr,
+		PckInterface:    sc.PckInterface,
+		PckGatewayMAC:   sc.PckGatewayMAC,
+		PckFlags:        sc.PckFlags,
 	}, nil
 }
 
@@ -144,6 +148,9 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		SpoofInterface:  cc.SpoofInterface,
 		SpoofPipe:       cc.SpoofPipe,
 		SpoofPipeAddr:   cc.SpoofPipeAddr,
+		PckInterface:    cc.PckInterface,
+		PckGatewayMAC:   cc.PckGatewayMAC,
+		PckFlags:        cc.PckFlags,
 	}, nil
 }
 
@@ -492,6 +499,41 @@ func SetMSS(name string, mss int) error {
 		return fmt.Errorf("the MSS clamp is already %s", mssLabel(mss))
 	}
 	s.MSS = mss
+	return applySpec(s)
+}
+
+// pckFlagSummary renders the flag cycle for the Edit header.
+func pckFlagSummary(flags []string) string {
+	if len(flags) == 0 {
+		return strings.Join(network.DefaultTCPFlagList(), ", ") + " (default)"
+	}
+	return strings.Join(flags, ", ")
+}
+
+// SetPckFlags replaces the TCP flag cycle the packet carrier stamps on what it
+// sends. An empty list restores the default.
+//
+// It is a one-sided setting: each end decides only what its own packets look
+// like, so the two need not match and changing it here does not strand the
+// peer. That is the whole reason it is safe to offer as a live edit.
+func SetPckFlags(name string, flags []string) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if s.Transport != "pck" {
+		return fmt.Errorf("TCP packet flags apply to the pck transport only")
+	}
+	var clean []string
+	for _, f := range flags {
+		if f = strings.TrimSpace(strings.ToUpper(f)); f != "" {
+			clean = append(clean, f)
+		}
+	}
+	if _, err := network.ParseTCPFlagList(clean); err != nil {
+		return err
+	}
+	s.PckFlags = clean
 	return applySpec(s)
 }
 
