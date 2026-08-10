@@ -78,14 +78,18 @@ func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 func (c *WsTransport) Start() {
 	// for  webui
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		usage := c.state.Usage()
+		c.state.Go(usage.Monitor)
 	}
 
 	c.config.TunnelStatus = fmt.Sprintf("Disconnected (%s)", c.config.Mode)
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 
 }
+func (c *WsTransport) Stop() { c.state.Stop() }
+func (c *WsTransport) Wait() { c.state.Wait() }
+
 func (c *WsTransport) Restart() {
 	if !c.restartMutex.TryLock() {
 		c.logger.Warn("client is already restarting")
@@ -99,14 +103,7 @@ func (c *WsTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
+	c.state.StopAndWait()
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -134,7 +131,7 @@ func (c *WsTransport) Restart() {
 	// set the log level again
 	c.logger.SetLevel(level)
 
-	go c.Start()
+	c.Start()
 }
 
 func (c *WsTransport) channelDialer() {
@@ -161,13 +158,15 @@ func (c *WsTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
-			c.state.SetWSConn(tunnelWSConn)
+			if !c.state.SetWSConn(tunnelWSConn) {
+				return
+			}
 			c.logger.Info("control channel established successfully")
 
 			c.config.TunnelStatus = fmt.Sprintf("Connected (%s)", c.config.Mode)
 
-			go c.poolMaintainer()
-			go c.channelHandler()
+			c.state.Go(c.poolMaintainer)
+			c.state.Go(c.channelHandler)
 
 			return
 		}
@@ -176,7 +175,7 @@ func (c *WsTransport) channelDialer() {
 
 func (c *WsTransport) poolMaintainer() {
 	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
-		go c.tunnelDialer()
+		c.state.Go(c.tunnelDialer)
 	}
 
 	// factors
@@ -226,7 +225,7 @@ func (c *WsTransport) poolMaintainer() {
 				newPoolSize++
 
 				// Add a new connection to the pool
-				go c.tunnelDialer()
+				c.state.Go(c.tunnelDialer)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -243,7 +242,7 @@ func (c *WsTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
+	c.state.Go(func() {
 		for {
 			select {
 			case <-c.state.Ctx().Done():
@@ -252,7 +251,7 @@ func (c *WsTransport) channelHandler() {
 			default:
 				_, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if c.state.Ctx().Err() == nil && c.parentctx.Err() == nil {
 						c.logger.Error("failed to read from channel connection. ", err)
 						go c.Restart()
 					}
@@ -262,7 +261,7 @@ func (c *WsTransport) channelHandler() {
 				msgChan <- msg[0]
 			}
 		}
-	}()
+	})
 
 	// Main loop to listen for context cancellation or received messages
 	for {
@@ -280,7 +279,7 @@ func (c *WsTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					c.state.Go(c.tunnelDialer)
 				}
 
 			case utils.SG_HB:
@@ -321,6 +320,11 @@ func (c *WsTransport) tunnelDialer() {
 
 		return
 	}
+	untrack, ok := c.state.Track(tunnelConn)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
@@ -21,10 +22,13 @@ import (
 
 // Client encapsulates the client configuration and state
 type Client struct {
-	config *config.ClientConfig
-	ctx    context.Context
-	cancel context.CancelFunc
-	logger *logrus.Logger
+	config  *config.ClientConfig
+	ctx     context.Context
+	cancel  context.CancelFunc
+	logger  *logrus.Logger
+	started chan struct{}
+	done    chan struct{}
+	start   sync.Once
 }
 
 func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
@@ -35,15 +39,21 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	handlers.SetZeroCopy(cfg.ZeroCopy)
 	return &Client{
-		config: cfg,
-		ctx:    ctx,
-		cancel: cancel,
-		logger: utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
+		config:  cfg,
+		ctx:     ctx,
+		cancel:  cancel,
+		logger:  utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 }
 
 // Run starts the client and begins dialing the tunnel server
 func (c *Client) Start() {
+	c.start.Do(func() { close(c.started) })
+	defer close(c.done)
+	var stop func()
+	var wait func()
 	// Profiling endpoint, off unless explicitly enabled in the config. Bound to
 	// loopback: pprof is unauthenticated and its heap dump would expose the
 	// tunnel token. Reach it with `ssh -L 6061:127.0.0.1:6061 root@server`.
@@ -109,7 +119,8 @@ func (c *Client) Start() {
 			Stealth: c.config.Transport == config.STEALTH,
 		}
 		tcpClient := transport.NewTCPClient(c.ctx, tcpConfig, c.logger)
-		go tcpClient.Start()
+		tcpClient.Start()
+		stop, wait = tcpClient.Stop, tcpClient.Wait
 
 	case config.TCPMUX:
 		tcpMuxConfig := &transport.TcpMuxConfig{
@@ -135,7 +146,8 @@ func (c *Client) Start() {
 			Outbound:         outbound,
 		}
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
-		go tcpMuxClient.Start()
+		tcpMuxClient.Start()
+		stop, wait = tcpMuxClient.Stop, tcpMuxClient.Wait
 
 	case config.KCP, config.XDI, config.SPOOF:
 		// The spoof transport in pipe mode is a bare datagram relay for
@@ -165,7 +177,9 @@ func (c *Client) Start() {
 				PipeAddr: pipeAddr,
 				Retry:    time.Duration(c.config.RetryInterval) * time.Second,
 			}
-			go transport.NewSpoofPipeClient(c.ctx, pipeCfg, c.logger).Start()
+			pipeClient := transport.NewSpoofPipeClient(c.ctx, pipeCfg, c.logger)
+			go pipeClient.Start()
+			stop, wait = pipeClient.Stop, pipeClient.Wait
 			break
 		}
 
@@ -211,7 +225,8 @@ func (c *Client) Start() {
 			SpoofInterface:   c.config.SpoofInterface,
 		}
 		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
-		go kcpClient.Start()
+		kcpClient.Start()
+		stop, wait = kcpClient.Stop, kcpClient.Wait
 
 	case config.QUIC:
 		quicConfig := &transport.QuicConfig{
@@ -230,7 +245,8 @@ func (c *Client) Start() {
 			SO_SNDBUF:      c.config.SO_SNDBUF,
 		}
 		quicClient := transport.NewQuicClient(c.ctx, quicConfig, c.logger)
-		go quicClient.Start()
+		quicClient.Start()
+		stop, wait = quicClient.Stop, quicClient.Wait
 
 	case config.WS, config.WSS:
 		WsConfig := &transport.WsConfig{
@@ -252,7 +268,8 @@ func (c *Client) Start() {
 			Outbound:       outbound,
 		}
 		WsClient := transport.NewWSClient(c.ctx, WsConfig, c.logger)
-		go WsClient.Start()
+		WsClient.Start()
+		stop, wait = WsClient.Stop, WsClient.Wait
 
 	case config.WSMUX, config.WSSMUX:
 		wsMuxConfig := &transport.WsMuxConfig{
@@ -278,7 +295,8 @@ func (c *Client) Start() {
 			Outbound:         outbound,
 		}
 		wsMuxClient := transport.NewWSMuxClient(c.ctx, wsMuxConfig, c.logger)
-		go wsMuxClient.Start()
+		wsMuxClient.Start()
+		stop, wait = wsMuxClient.Stop, wsMuxClient.Wait
 
 	case config.UDP:
 		udpConfig := &transport.UdpConfig{
@@ -296,13 +314,18 @@ func (c *Client) Start() {
 			SO_SNDBUF:      c.config.SO_SNDBUF,
 		}
 		udpClient := transport.NewUDPClient(c.ctx, udpConfig, c.logger)
-		go udpClient.Start()
+		udpClient.Start()
+		stop, wait = udpClient.Stop, udpClient.Wait
 
 	default:
 		c.logger.Fatal("invalid transport type: ", c.config.Transport)
 	}
 
 	<-c.ctx.Done()
+	if stop != nil {
+		stop()
+		wait()
+	}
 
 	c.logger.Info("all workers stopped successfully")
 
@@ -312,6 +335,11 @@ func (c *Client) Start() {
 func (c *Client) Stop() {
 	if c.cancel != nil {
 		c.cancel()
+	}
+	select {
+	case <-c.started:
+		<-c.done
+	default:
 	}
 }
 

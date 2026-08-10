@@ -68,13 +68,17 @@ func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 
 func (c *UdpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		usage := c.state.Usage()
+		c.state.Go(usage.Monitor)
 	}
 
 	c.config.TunnelStatus = "Disconnected (UDP)"
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
+
+func (c *UdpTransport) Stop() { c.state.Stop() }
+func (c *UdpTransport) Wait() { c.state.Wait() }
 
 func (c *UdpTransport) Restart() {
 	if !c.restartMutex.TryLock() {
@@ -89,14 +93,7 @@ func (c *UdpTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
+	c.state.StopAndWait()
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -124,7 +121,7 @@ func (c *UdpTransport) Restart() {
 	// set the log level again
 	c.logger.SetLevel(level)
 
-	go c.Start()
+	c.Start()
 
 }
 
@@ -186,13 +183,15 @@ func (c *UdpTransport) channelDialer() {
 			tunnelTCPConn.SetReadDeadline(time.Time{})
 
 			if message == c.config.Token {
-				c.state.SetConn(tunnelTCPConn)
+				if !c.state.SetConn(tunnelTCPConn) {
+					return
+				}
 				c.logger.Info("control channel established successfully")
 
 				c.config.TunnelStatus = "Connected (UDP)"
 
-				go c.poolMaintainer()
-				go c.channelHandler()
+				c.state.Go(c.poolMaintainer)
+				c.state.Go(c.channelHandler)
 
 				return
 
@@ -208,7 +207,7 @@ func (c *UdpTransport) channelDialer() {
 
 func (c *UdpTransport) poolMaintainer() {
 	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
-		go c.tunnelDialer()
+		c.state.Go(c.tunnelDialer)
 	}
 
 	// factors
@@ -258,7 +257,7 @@ func (c *UdpTransport) poolMaintainer() {
 				newPoolSize++
 
 				// Add a new connection to the pool
-				go c.tunnelDialer()
+				c.state.Go(c.tunnelDialer)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -275,7 +274,7 @@ func (c *UdpTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
+	c.state.Go(func() {
 		for {
 			select {
 			case <-c.state.Ctx().Done():
@@ -283,7 +282,7 @@ func (c *UdpTransport) channelHandler() {
 			default:
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if c.state.Ctx().Err() == nil && c.parentctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -292,7 +291,7 @@ func (c *UdpTransport) channelHandler() {
 				msgChan <- msg
 			}
 		}
-	}()
+	})
 
 	// Main loop to listen for context cancellation or received messages
 	for {
@@ -311,7 +310,7 @@ func (c *UdpTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					c.state.Go(c.tunnelDialer)
 				}
 
 			case utils.SG_HB:
@@ -373,24 +372,17 @@ func (c *UdpTransport) tunnelDialer() {
 		c.logger.Error("failed to connect to server:", err)
 		return
 	}
+	untrack, ok := c.state.Track(tunConn)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	c.applyBuffers(tunConn)
 
 	defer tunConn.Close()
 
-	done := make(chan struct{})
-
-	// Start handleTunnelConn in a goroutine
-	go func() {
-		c.handleTunnelConn(tunConn)
-		close(done) // Signal that handleTunnelConn is done
-	}()
-
-	// Wait for either handleTunnelConn to finish or the context to be done
-	select {
-	case <-done:
-	case <-c.state.Ctx().Done():
-	}
+	c.handleTunnelConn(tunConn)
 }
 
 func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
@@ -459,6 +451,11 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 		c.logger.Errorf("failed to dial remote UDP address: %v", err)
 		return
 	}
+	untrack, ok := c.state.Track(remoteConn)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	c.applyBuffers(remoteConn)
 

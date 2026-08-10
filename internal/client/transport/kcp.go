@@ -156,13 +156,17 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 
 func (c *KcpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		usage := c.state.Usage()
+		c.state.Go(usage.Monitor)
 	}
 
 	c.config.TunnelStatus = "Disconnected (" + c.transportLabel() + ")"
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
+
+func (c *KcpTransport) Stop() { c.state.Stop() }
+func (c *KcpTransport) Wait() { c.state.Wait() }
 
 func (c *KcpTransport) Restart() {
 	if !c.restartMutex.TryLock() {
@@ -177,13 +181,7 @@ func (c *KcpTransport) Restart() {
 	level := c.logger.Level
 	c.logger.SetLevel(logrus.FatalLevel)
 
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
+	c.state.StopAndWait()
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -214,7 +212,7 @@ func (c *KcpTransport) Restart() {
 
 	c.logger.SetLevel(level)
 
-	go c.Start()
+	c.Start()
 }
 
 // dial opens one KCP session.
@@ -302,13 +300,15 @@ func (c *KcpTransport) channelDialer() {
 				continue
 			}
 
-			c.state.SetConn(tunnelConn)
+			if !c.state.SetConn(tunnelConn) {
+				return
+			}
 			c.logger.Info("control channel established successfully")
 
 			c.config.TunnelStatus = "Connected (" + c.transportLabel() + ")"
 
-			go c.poolMaintainer()
-			go c.channelHandler()
+			c.state.Go(c.poolMaintainer)
+			c.state.Go(c.channelHandler)
 
 			return
 		}
@@ -317,7 +317,7 @@ func (c *KcpTransport) channelDialer() {
 
 func (c *KcpTransport) poolMaintainer() {
 	for i := 0; i < c.config.ConnPoolSize; i++ { // initial pool filling
-		go c.tunnelDialer()
+		c.state.Go(c.tunnelDialer)
 	}
 
 	// factors
@@ -379,7 +379,7 @@ func (c *KcpTransport) poolMaintainer() {
 				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections, mbps)
 				newPoolSize++
 
-				go c.tunnelDialer()
+				c.state.Go(c.tunnelDialer)
 			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
 				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
 				newPoolSize--
@@ -404,7 +404,7 @@ func (c *KcpTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
 	// Goroutine to handle the blocking ReceiveBinaryByte
-	go func() {
+	c.state.Go(func() {
 		for {
 			select {
 			case <-c.state.Ctx().Done():
@@ -422,7 +422,7 @@ func (c *KcpTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if c.state.Ctx().Err() == nil && c.parentctx.Err() == nil {
 						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 							c.logger.Warn("no heartbeat from the server within the keepalive period, reconnecting")
 						} else {
@@ -435,7 +435,7 @@ func (c *KcpTransport) channelHandler() {
 				msgChan <- msg
 			}
 		}
-	}()
+	})
 
 	for {
 		select {
@@ -453,7 +453,7 @@ func (c *KcpTransport) channelHandler() {
 
 				default:
 					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
+					c.state.Go(c.tunnelDialer)
 				}
 
 			case utils.SG_HB:
@@ -482,6 +482,11 @@ func (c *KcpTransport) tunnelDialer() {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 		return
 	}
+	untrack, ok := c.state.Track(tunnelConn)
+	if !ok {
+		return
+	}
+	defer untrack()
 
 	// KCP has no connection handshake of its own: the server's listener only
 	// materialises a session once it receives a packet from this socket. So
@@ -502,7 +507,6 @@ func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
 	defer func() {
 		atomic.AddInt32(&c.poolConnections, -1)
 	}()
-
 	// SMUX server
 	session, err := smux.Server(tunnelConn, c.smuxConfig)
 	if err != nil {
@@ -510,6 +514,7 @@ func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
 		tunnelConn.Close()
 		return
 	}
+	defer session.Close()
 
 	for {
 		select {
@@ -530,7 +535,10 @@ func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
 				continue
 			}
 
-			go c.localDialer(stream, remoteAddr)
+			if !c.state.Go(func() { c.localDialer(stream, remoteAddr) }) {
+				stream.Close()
+				return
+			}
 		}
 	}
 }
