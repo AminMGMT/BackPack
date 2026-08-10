@@ -320,6 +320,8 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 			return
 		}
 		select {
+		case <-g.ctx.Done():
+			stream.Close()
 		case g.tunnelChannel <- wrapped:
 		default:
 			s.logger.Warnf("tunnel channel is full, discarding data stream from %s", conn.RemoteAddr())
@@ -522,13 +524,13 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 			}
 			conn = s.limits.wrap(conn)
 
+			incoming := newLocalTCPConn(conn, remoteAddr, s.limits)
 			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- incoming:
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
 			default: // channel is full, discard the connection
 				s.logger.Warnf("local listener channel is full, discarding TCP connection from %s", tcpConn.LocalAddr().String())
-				s.limits.release()
-				conn.Close()
+				incoming.closeAndRelease()
 			}
 		}
 	}
@@ -537,19 +539,24 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 // handleLoop pairs each accepted local connection with a data stream, asking the
 // client to open one if the pool has run dry, then forwards between the two.
 func (s *QuicTransport) handleLoop(g *quicGen) {
+	defer drainLocalTCP(g.localChannel)
+	defer func() {
+		for {
+			select {
+			case stream := <-g.tunnelChannel:
+				stream.Close()
+			default:
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
 
 		case localConn := <-g.localChannel:
-			if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
-				localConn.conn.Close()
-				s.limits.release()
-				continue
-			}
-
 			// Ask the client to open a fresh stream so the pool stays topped up;
 			// a warm one already waiting is taken straight off the channel.
 			select {
@@ -568,27 +575,29 @@ func (s *QuicTransport) pairLocalConn(g *quicGen, localConn LocalTCPConn) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			localConn.conn.Close()
-			s.limits.release()
+			localConn.closeAndRelease()
+			return
+
+		case <-localConn.expiry():
 			return
 
 		case stream := <-g.tunnelChannel:
+			if !localConn.claim() {
+				stream.Close()
+				return
+			}
 			// Tell the client which backend this stream is for.
 			if err := utils.SendBinaryString(stream, localConn.remoteAddr); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)
 				stream.Close()
-				// That stream is gone; ask for another and try again.
-				select {
-				case g.reqNewConnChan <- struct{}{}:
-				default:
-				}
-				continue
+				localConn.closeAndRelease()
+				return
 			}
 
 			go func() {
 				// Free the connection slot once the transfer ends, or the limit
 				// would fill up permanently.
-				defer s.limits.release()
+				defer localConn.closeAndRelease()
 				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, localConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 			}()
 			return

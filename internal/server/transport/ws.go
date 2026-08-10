@@ -316,6 +316,8 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 					mu:   &sync.Mutex{},
 				}
 				select {
+				case <-g.ctx.Done():
+					conn.Close()
 				case g.tunnelChannel <- wsConn:
 					go s.keepAlive(g, &wsConn)
 					s.logger.Debugf("websocket connection accepted from %s", conn.RemoteAddr().String())
@@ -534,8 +536,9 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 			}
 			conn = s.limits.wrap(conn)
 
+			incoming := newLocalTCPConn(conn, remoteAddr, s.limits)
 			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- incoming:
 
 				select {
 				case g.reqNewConnChan <- struct{}{}:
@@ -549,14 +552,25 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 
 			default: // channel is full, discard the connection
 				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
-				s.limits.release()
-				conn.Close()
+				incoming.closeAndRelease()
 			}
 		}
 	}
 }
 
 func (s *WsTransport) handleLoop(g *wsGen) {
+	defer drainLocalTCP(g.localChannel)
+	defer func() {
+		for {
+			select {
+			case tunnel := <-g.tunnelChannel:
+				tunnel.conn.Close()
+			default:
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -564,28 +578,30 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 		case localConn := <-g.localChannel:
 		loop:
 			for {
-				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-					s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
-					localConn.conn.Close()
-					break loop
-				}
-
 				select {
 				case <-g.ctx.Done():
+					localConn.closeAndRelease()
 					return
+				case <-localConn.expiry():
+					break loop
 				case tunnelConnection := <-g.tunnelChannel:
+					if !localConn.claim() {
+						tunnelConnection.conn.Close()
+						break loop
+					}
 					close(tunnelConnection.ping)
 					tunnelConnection.mu.Lock()
 					if err := tunnelConnection.conn.WriteMessage(websocket.TextMessage, []byte(localConn.remoteAddr)); err != nil {
 						s.logger.Debugf("%v", err) // failed to send port number
 						tunnelConnection.conn.Close()
-						continue loop
+						localConn.closeAndRelease()
+						break loop
 					}
 					// Handle data exchange between connections
 					go func(tunnelConn TunnelChannel, localConn LocalTCPConn) {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
-						defer s.limits.release()
+						defer localConn.closeAndRelease()
 						handlers.WSConnectionHandler(g.ctx, tunnelConn.conn, localConn.conn, s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 					}(tunnelConnection, localConn)
 					break loop

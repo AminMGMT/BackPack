@@ -492,6 +492,8 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 			return
 		}
 		select {
+		case <-g.ctx.Done():
+			muxSession.Close()
 		case g.tunnelChannel <- muxSession: // ok
 		default:
 			s.logger.Warnf("tunnel listener channel is full, discarding KCP session from %s", session.RemoteAddr())
@@ -638,11 +640,13 @@ func (s *KcpTransport) acceptLocalConn(g *kcpGen, listener net.Listener, remoteA
 			}
 			conn = s.limits.wrap(conn)
 
+			atomic.AddInt32(&s.streamCounter, 1)
+			incoming := newCountedLocalTCPConn(conn, remoteAddr, s.limits, func() {
+				atomic.AddInt32(&s.streamCounter, -1)
+			})
 			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			case g.localChannel <- incoming:
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
-
-				atomic.AddInt32(&s.streamCounter, 1)
 
 				if atomic.LoadInt32(&s.streamCounter) >= atomic.LoadInt32(&s.sessionCounter)*int32(s.config.MuxCon) {
 					s.logger.Tracef("stream counter: %v, session counter: %v", atomic.LoadInt32(&s.streamCounter), atomic.LoadInt32(&s.sessionCounter))
@@ -656,14 +660,25 @@ func (s *KcpTransport) acceptLocalConn(g *kcpGen, listener net.Listener, remoteA
 
 			default: // channel is full, discard the connection
 				s.logger.Warnf("local listener channel is full, discarding TCP connection from %s", tcpConn.LocalAddr().String())
-				s.limits.release()
-				conn.Close()
+				incoming.closeAndRelease()
 			}
 		}
 	}
 }
 
 func (s *KcpTransport) handleLoop(g *kcpGen) {
+	defer drainLocalTCP(g.localChannel)
+	defer func() {
+		for {
+			select {
+			case session := <-g.tunnelChannel:
+				session.Close()
+			default:
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -680,60 +695,57 @@ func (s *KcpTransport) handleLoop(g *kcpGen) {
 func (s *KcpTransport) handleSession(g *kcpGen, session *smux.Session) {
 	counter := make(chan struct{}, s.config.MuxCon)
 	defer session.Close()
-	defer close(counter)
 
 	for {
-		// +1 for mux connection counter
-		counter <- struct{}{}
+		select {
+		case counter <- struct{}{}:
+		case <-g.ctx.Done():
+			return
+		}
 
 		select {
 		case <-g.ctx.Done():
+			<-counter
 			return
 
 		case incomingConn := <-g.localChannel:
-			if time.Now().UnixMilli()-incomingConn.timeCreated > 3000 { // 3000ms
-				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-incomingConn.timeCreated)
-				incomingConn.conn.Close()
-
-				atomic.AddInt32(&s.streamCounter, -1)
+			if !incomingConn.claim() {
 				<-counter
 				continue
 			}
 
 			stream, err := session.OpenStream()
 			if err != nil {
-				s.handleSessionError(g, &incomingConn, err)
+				incomingConn.closeAndRelease()
+				s.handleSessionError(g, err)
 				return
 			}
 
 			// Send the target port over the tunnel connection
 			if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)
-				// Put local connection back to local channel
-				g.localChannel <- incomingConn
+				stream.Close()
+				incomingConn.closeAndRelease()
+				<-counter
 				continue
 			}
 
 			// Handle data exchange between connections
-			go func() {
+			go func(incomingConn LocalTCPConn, stream net.Conn) {
 				// Free the connection slot once the transfer ends, or the
 				// limit would fill up permanently.
-				defer s.limits.release()
+				defer incomingConn.closeAndRelease()
 				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
-				atomic.AddInt32(&s.streamCounter, -1)
 				<-counter // read signal from the channel
-			}()
+			}(incomingConn, stream)
 		}
 	}
 }
 
-func (s *KcpTransport) handleSessionError(g *kcpGen, incomingConn *LocalTCPConn, err error) {
+func (s *KcpTransport) handleSessionError(g *kcpGen, err error) {
 	s.logger.Tracef("failed to handle session: %v", err)
 
 	atomic.AddInt32(&s.sessionCounter, -1)
-
-	// Put local connection back to local channel
-	g.localChannel <- *incomingConn
 
 	select {
 	case g.reqNewConnChan <- struct{}{}:
