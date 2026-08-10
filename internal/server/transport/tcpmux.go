@@ -35,15 +35,19 @@ type tcpMuxGen struct {
 }
 
 type TcpMuxTransport struct {
+	// The status shown in the panel. Behind a lock because the run being
+	// replaced and the run replacing it both write it. See tunnelStatus.
+	status tunnelStatus
 	config *TcpMuxConfig
 	// muxV1/muxV2 are both built up front so that settling the version costs
 	// nothing per connection; muxVersion says which one this run agreed on.
-	muxV1            *smux.Config
-	muxV2            *smux.Config
-	muxVersion       atomic.Int32
-	parentctx        context.Context
-	ctx              context.Context
-	cancel           context.CancelFunc
+	muxV1      *smux.Config
+	muxV2      *smux.Config
+	muxVersion atomic.Int32
+	parentctx  context.Context
+	// The current run. Replaced by Restart while the previous run's
+	// goroutines are still reading it, so it lives behind a lock.
+	run              runState
 	logger           *logrus.Logger
 	tunnelChannel    chan *smux.Session
 	handshakeChannel chan controlCandidate
@@ -64,7 +68,6 @@ type TcpMuxTransport struct {
 
 type TcpMuxConfig struct {
 	BindAddr         string
-	TunnelStatus     string
 	SnifferLog       string
 	Token            string
 	Ports            []string
@@ -129,8 +132,6 @@ func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *lo
 		muxV2:            network.SmuxConfig(2, muxSettings),
 		config:           config,
 		parentctx:        parentCtx,
-		ctx:              ctx,
-		cancel:           cancel,
 		logger:           logger,
 		tunnelChannel:    make(chan *smux.Session, config.ChannelSize),
 		handshakeChannel: make(chan controlCandidate, 1),
@@ -138,38 +139,49 @@ func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *lo
 		reqNewConnChan:   make(chan struct{}, config.ChannelSize),
 		streamCounter:    0,
 		sessionCounter:   0,
-		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
+
+	// Built after the transport exists, because it needs a getter for the
+	// status rather than a pointer into it.
+	server.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, server.status.get, logger)
+
+	// The first run is installed the same way every later one is, so there is
+	// only one path that ever writes it.
+	server.run.set(ctx, cancel)
 
 	return server
 }
 
+// Start brings up the first run. Every later one comes from Restart, which
+// builds its own generation and hands it straight to start — so the fields read
+// here are written once, by the constructor, before any other goroutine exists.
 func (s *TcpMuxTransport) Start() {
-	// The state of this run. Restart replaces these fields for the next
-	// one, so they are read once here and carried from goroutine to
-	// goroutine; a goroutine that outlives its run keeps what it started
-	// with instead of reading whatever the next run has installed.
-	g := &tcpMuxGen{
-		ctx:              s.ctx,
+	s.start(&tcpMuxGen{
+		ctx:              s.run.context(),
 		tunnelChannel:    s.tunnelChannel,
 		handshakeChannel: s.handshakeChannel,
 		localChannel:     s.localChannel,
 		reqNewConnChan:   s.reqNewConnChan,
 		usageMonitor:     s.usageMonitor,
-	}
+	})
+}
 
+// start runs one generation of the transport. Everything it needs is in g:
+// nothing in here reaches back for a field that the next Restart is entitled to
+// replace while this run is still using it.
+func (s *TcpMuxTransport) start(g *tcpMuxGen) {
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
-	s.config.TunnelStatus = "Disconnected (TCPMux)"
+	s.status.set("Disconnected (TCPMux)")
 
 	go s.tunnelListener(g)
 
 	s.channelHandshake(g)
 
 	if s.controlChannel.IsSet() {
-		s.config.TunnelStatus = "Connected (TCPMux)"
+		s.status.set("Connected (TCPMux)")
 
 		numCPU := runtime.NumCPU()
 		if numCPU > 4 {
@@ -196,9 +208,7 @@ func (s *TcpMuxTransport) Restart() {
 	defer s.restartMutex.Unlock()
 
 	s.logger.Info("restarting server...")
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.run.stop()
 
 	// for removing timeout logs
 	level := s.logger.Level
@@ -225,14 +235,24 @@ func (s *TcpMuxTransport) Restart() {
 	}
 
 	ctx, cancel := context.WithCancel(s.parentctx)
-	s.ctx = ctx
-	s.cancel = cancel
+	s.run.set(ctx, cancel)
+
+	// The next run's state, built here and handed straight to start(). It used
+	// to be written onto the transport for start() to read back, which is a
+	// value published by one goroutine and read by another with nothing
+	// ordering them — the same shape as the ctx/cancel race the detector caught
+	// on kcp.go, and present on every one of these fields. Passing it removes
+	// the shared field rather than locking it.
+	g := &tcpMuxGen{
+		ctx:              ctx,
+		tunnelChannel:    make(chan *smux.Session, s.config.ChannelSize),
+		handshakeChannel: make(chan controlCandidate, 1),
+		localChannel:     make(chan LocalTCPConn, s.config.ChannelSize),
+		reqNewConnChan:   make(chan struct{}, s.config.ChannelSize),
+		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
+	}
 
 	// Re-initialize variables
-	s.tunnelChannel = make(chan *smux.Session, s.config.ChannelSize)
-	s.localChannel = make(chan LocalTCPConn, s.config.ChannelSize)
-	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
-	s.handshakeChannel = make(chan controlCandidate, 1)
 	s.controlChannel.Clear()
 	// The next run issues its own nonce, so connections still carrying this
 	// one must stop being accepted the moment the run ends. The mux version is
@@ -240,8 +260,7 @@ func (s *TcpMuxTransport) Restart() {
 	// one or the same build.
 	s.poolNonce.Clear()
 	s.muxVersion.Store(0)
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.status.set("")
 	// Stored atomically, like every other access: the goroutines of the run
 	// being replaced may still be counting while this resets them.
 	atomic.StoreInt32(&s.streamCounter, 0)
@@ -250,7 +269,7 @@ func (s *TcpMuxTransport) Restart() {
 	// set the log level again
 	s.logger.SetLevel(level)
 
-	go s.Start()
+	go s.start(g)
 }
 
 // channelHandshake waits for a connection that has already proved it holds the
@@ -296,7 +315,16 @@ func (s *TcpMuxTransport) channelHandler(g *tcpMuxGen) {
 	go func() {
 		message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
 		if err != nil {
-			if s.cancel != nil {
+			// A generation that has already been cancelled must not ask for a
+			// restart. It used to test s.cancel != nil, which the constructor
+			// makes true before this code can run — so the guard was always
+			// open, and every goroutine dying during a teardown queued another
+			// restart of a tunnel that was on its way down. Asking the
+			// generation's own context is both the real question and a read
+			// nobody else writes: Restart replaces s.cancel while these
+			// goroutines are still running, which is the data race the CI
+			// detector caught on this line.
+			if g.ctx.Err() == nil {
 				s.logger.Error("failed to read from channel connection. ", err)
 				go s.Restart()
 			}

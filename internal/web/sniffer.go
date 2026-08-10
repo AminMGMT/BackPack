@@ -31,7 +31,10 @@ type Usage struct {
 	snifferLog   string
 	mu           sync.Mutex
 	totalTraffic uint64
-	tunnelStatus *string
+	// A getter rather than a *string: the transport rewrites its status from
+	// one goroutine while this one reads it, and a pointer hands out no way to
+	// synchronise the two. See transport.tunnelStatus.
+	tunnelStatus func() string
 }
 
 type PortUsage struct {
@@ -53,7 +56,7 @@ type SystemStats struct {
 	AllConnections string `json:"allConnections"`
 }
 
-func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus *string, logger *logrus.Logger) *Usage {
+func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus func() string, logger *logrus.Logger) *Usage {
 	ctx, cancel := context.WithCancel(shutdownCtx)
 	u := &Usage{
 		listenAddr:   listenAddr,
@@ -404,7 +407,7 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	downloadSpeed := float64(finalStats.BytesRecv - initialStats.BytesRecv)
 
 	stats := &SystemStats{
-		TunnelStatus:   *m.tunnelStatus,
+		TunnelStatus:   m.status(),
 		CPUUsage:       m.formatFloat(cpuPercent[0]),
 		RAMUsage:       m.convertBytesToReadable(memStats.Used),
 		DiskUsage:      m.convertBytesToReadable(diskStats.Used),
@@ -444,4 +447,13 @@ func (m *Usage) getNetworkStats() (*net.IOCountersStat, error) {
 		return nil, fmt.Errorf("no network IO counters found")
 	}
 	return &ioCounters[0], nil
+}
+
+// status reads the transport's current status, tolerating a nil getter so a
+// data store built without one still serves.
+func (m *Usage) status() string {
+	if m.tunnelStatus == nil {
+		return ""
+	}
+	return m.tunnelStatus()
 }

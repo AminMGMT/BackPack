@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"net"
 	"sync"
 	"time"
@@ -132,4 +133,75 @@ func (c *wsControl) Close() {
 	if conn := c.Get(); conn != nil {
 		conn.Close()
 	}
+}
+
+// runState holds the context of the run a transport is currently on.
+//
+// Restart cancels the old one, builds a new pair and installs it — and then
+// starts the next run in a fresh goroutine, which reads the field back to seed
+// its generation. Those two are not ordered against each other: the mutex that
+// serialises Restart against Restart is released before the new run has read
+// anything, so a second restart can be writing the field while the first one's
+// Start is still reading it. That is the race the CI detector reported against
+// the KCP transport, and every other transport in this package has the same
+// pair of fields written the same way.
+//
+// It is behind a lock for exactly the reason netControl above is: one value
+// replaced by one goroutine while several others are looking at it.
+type runState struct {
+	mu     sync.RWMutex
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// set installs the context of a new run, replacing whatever was there.
+func (r *runState) set(ctx context.Context, cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ctx, r.cancel = ctx, cancel
+}
+
+// context returns the current run's context. Callers seed a generation from it
+// once and then use the copy, so a later restart cannot move the context out
+// from under a goroutine mid-run.
+func (r *runState) context() context.Context {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ctx
+}
+
+// stop cancels the current run if there is one.
+func (r *runState) stop() {
+	r.mu.RLock()
+	cancel := r.cancel
+	r.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// tunnelStatus is the one-line state a transport publishes for the panel.
+//
+// It has two writers that genuinely overlap: Restart clears it, and the run it
+// is replacing sets it as that run starts and again when its control channel
+// comes up. Restart cancels the old run and then sleeps two seconds before
+// clearing, which is ample time for the cancelled run to finish its handshake
+// and write "Connected" — so the two collide on a plain string field. Nothing
+// reads it unless the sniffer is on, which is why it has gone unnoticed; a
+// write against a write is a race whether or not anybody is reading.
+type tunnelStatus struct {
+	mu sync.RWMutex
+	s  string
+}
+
+func (t *tunnelStatus) set(v string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.s = v
+}
+
+func (t *tunnelStatus) get() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.s
 }

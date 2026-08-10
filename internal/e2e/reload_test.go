@@ -138,8 +138,18 @@ log_level = "error"
 
 func writeTunnelConfig(t *testing.T, path, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
+	// Written to a temporary file and renamed into place, because the tunnel is
+	// watching this path while the test rewrites it. os.WriteFile truncates and
+	// then writes, so a watcher that looks in between sees a file that is empty
+	// or half a table — which the engine correctly refuses to parse and says so,
+	// loudly, in a log somebody then has to explain. Rename is atomic on POSIX:
+	// the watcher sees either the old file or the new one.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatalf("rename %s -> %s: %v", tmp, path, err)
 	}
 	// The watcher identifies a version of the file by size and modification
 	// time; a coarse filesystem clock can report the same pair for two writes

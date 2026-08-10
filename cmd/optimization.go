@@ -86,7 +86,14 @@ func ApplyTCPTuning() {
 			rLimit.Cur = 1048576
 			err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 			if err != nil {
-				logger.Errorf("Error setting Rlimit: %v", err)
+				// Expected wherever the process is not privileged — an
+				// unprivileged container, a CI runner, a hardened host. The
+				// tunnel runs perfectly well on the limit it already has, so
+				// this is a warning about a tuning step that did not happen,
+				// not an error about something that went wrong. Logging it at
+				// ERROR is how a log full of harmless red teaches people to
+				// stop reading it.
+				logger.Warnf("could not raise the file descriptor limit (%v) — continuing on the current limit of %d", err, rLimit.Cur)
 			} else {
 				logger.Debugf("Successfully set file descriptor limit to: %d", rLimit.Cur)
 			}

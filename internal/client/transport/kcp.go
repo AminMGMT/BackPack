@@ -24,6 +24,9 @@ import (
 // server over UDP and carries SMUX streams inside a reliable KCP session, so
 // the tunnel survives paths where a long-lived TCP connection would stall.
 type KcpTransport struct {
+	// The status shown in the panel. Behind a lock because the run being
+	// replaced and the run replacing it both write it. See tunnelStatus.
+	status          tunnelStatus
 	config          *KcpConfig
 	smuxConfig      *smux.Config
 	kcpSettings     network.KCPSettings
@@ -43,7 +46,6 @@ type KcpConfig struct {
 	Endpoints        *network.Endpoints
 	Token            string
 	SnifferLog       string
-	TunnelStatus     string
 	Sniffer          bool
 	KeepAlive        time.Duration
 	RetryInterval    time.Duration
@@ -173,7 +175,7 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 	}
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, client.status.get, logger))
 	return client
 }
 
@@ -182,7 +184,7 @@ func (c *KcpTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (" + c.transportLabel() + ")"
+	c.status.set("Disconnected (" + c.transportLabel() + ")")
 
 	go c.channelDialer()
 }
@@ -225,8 +227,8 @@ func (c *KcpTransport) Restart() {
 
 	// Publish the whole new generation at once: a reader must never see
 	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.status.get, c.logger))
+	c.status.set("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	// The published pool figures belong to the run that just ended. Left
@@ -328,7 +330,7 @@ func (c *KcpTransport) channelDialer() {
 			c.state.SetConn(tunnelConn)
 			c.logger.Info("control channel established successfully")
 
-			c.config.TunnelStatus = "Connected (" + c.transportLabel() + ")"
+			c.status.set("Connected (" + c.transportLabel() + ")")
 
 			go c.poolMaintainer()
 			go c.channelHandler()

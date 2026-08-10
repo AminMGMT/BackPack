@@ -105,3 +105,25 @@ func drain(ch chan struct{}) {
 		}
 	}
 }
+
+// tunnelStatus is the one-line state a transport publishes for the panel.
+// Written as a run starts and again when its control channel comes up, and
+// cleared by Restart — three writers across two generations that overlap, on
+// what was a plain string field. clientState above exists for exactly this
+// reason; the status was simply left out of it.
+type tunnelStatus struct {
+	mu sync.RWMutex
+	s  string
+}
+
+func (t *tunnelStatus) set(v string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.s = v
+}
+
+func (t *tunnelStatus) get() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.s
+}

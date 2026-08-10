@@ -26,10 +26,14 @@ type udpGen struct {
 }
 
 type UdpTransport struct {
-	config            *UdpConfig
-	parentctx         context.Context
-	ctx               context.Context
-	cancel            context.CancelFunc
+	// The status shown in the panel. Behind a lock because the run being
+	// replaced and the run replacing it both write it. See tunnelStatus.
+	status    tunnelStatus
+	config    *UdpConfig
+	parentctx context.Context
+	// The current run. Replaced by Restart while the previous run's
+	// goroutines are still reading it, so it lives behind a lock.
+	run               runState
 	logger            *logrus.Logger
 	tunnelChannel     chan *TunnelUDPConn
 	activeConnections map[string]*TunnelUDPConn
@@ -42,15 +46,14 @@ type UdpTransport struct {
 }
 
 type UdpConfig struct {
-	BindAddr     string
-	Token        string
-	SnifferLog   string
-	TunnelStatus string
-	Ports        []string
-	Sniffer      bool
-	Heartbeat    time.Duration // in seconds, for udp conn and control channel
-	ChannelSize  int
-	WebPort      int
+	BindAddr    string
+	Token       string
+	SnifferLog  string
+	Ports       []string
+	Sniffer     bool
+	Heartbeat   time.Duration // in seconds, for udp conn and control channel
+	ChannelSize int
+	WebPort     int
 	// SO_RCVBUF/SO_SNDBUF size the datagram sockets. The kernel default is a few
 	// hundred KB, which a datagram flood — a speed test, a busy game server —
 	// overruns in a blink, and the packets it cannot hold are dropped before any
@@ -68,32 +71,42 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 	server := &UdpTransport{
 		config:            config,
 		parentctx:         parentCtx,
-		ctx:               ctx,
-		cancel:            cancel,
 		logger:            logger,
 		tunnelChannel:     make(chan *TunnelUDPConn, config.ChannelSize),
 		activeConnections: map[string]*TunnelUDPConn{},
 		activeMu:          sync.Mutex{},
 		reqNewConnChan:    make(chan struct{}, config.ChannelSize),
-		usageMonitor:      web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger),
 		rtt:               0,
 	}
 
+	// Built after the transport exists, because it needs a getter for the
+	// status rather than a pointer into it.
+	server.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, server.status.get, logger)
+
+	// The first run is installed the same way every later one is, so there is
+	// only one path that ever writes it.
+	server.run.set(ctx, cancel)
+
 	return server
 }
+
+// Start brings up the first run. Every later one comes from Restart, which
+// builds its own generation and hands it straight to start — so the fields read
+// here are written once, by the constructor, before any other goroutine exists.
 func (s *UdpTransport) Start() {
-	// The state of this run. Restart replaces these fields for the next
-	// one, so they are read once here and carried from goroutine to
-	// goroutine; a goroutine that outlives its run keeps what it started
-	// with instead of reading whatever the next run has installed.
-	g := &udpGen{
-		ctx:            s.ctx,
+	s.start(&udpGen{
+		ctx:            s.run.context(),
 		tunnelChannel:  s.tunnelChannel,
 		reqNewConnChan: s.reqNewConnChan,
 		usageMonitor:   s.usageMonitor,
-	}
+	})
+}
 
-	s.config.TunnelStatus = "Disconnected (UDP)"
+// start runs one generation of the transport. Everything it needs is in g:
+// nothing in here reaches back for a field that the next Restart is entitled to
+// replace while this run is still using it.
+func (s *UdpTransport) start(g *udpGen) {
+	s.status.set("Disconnected (UDP)")
 
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
@@ -115,9 +128,7 @@ func (s *UdpTransport) Restart() {
 	level := s.logger.Level
 	s.logger.SetLevel(logrus.FatalLevel)
 
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.run.stop()
 
 	// Close open connection
 	if s.controlChannel.IsSet() {
@@ -140,14 +151,23 @@ func (s *UdpTransport) Restart() {
 	}
 
 	ctx, cancel := context.WithCancel(s.parentctx)
-	s.ctx = ctx
-	s.cancel = cancel
+	s.run.set(ctx, cancel)
+
+	// The next run's state, built here and handed straight to start(). It used
+	// to be written onto the transport for start() to read back, which is a
+	// value published by one goroutine and read by another with nothing
+	// ordering them — the same shape as the ctx/cancel race the detector caught
+	// on kcp.go, and present on every one of these fields. Passing it removes
+	// the shared field rather than locking it.
+	g := &udpGen{
+		ctx:            ctx,
+		tunnelChannel:  make(chan *TunnelUDPConn, s.config.ChannelSize),
+		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
+		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
+	}
 
 	// Re-initialize variables
-	s.tunnelChannel = make(chan *TunnelUDPConn, s.config.ChannelSize)
-	s.reqNewConnChan = make(chan struct{}, s.config.ChannelSize)
-	s.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, &s.config.TunnelStatus, s.logger)
-	s.config.TunnelStatus = ""
+	s.status.set("")
 	s.controlChannel.Clear()
 	s.activeConnections = map[string]*TunnelUDPConn{}
 	s.activeMu = sync.Mutex{}
@@ -155,7 +175,7 @@ func (s *UdpTransport) Restart() {
 	// set the log level again
 	s.logger.SetLevel(level)
 
-	go s.Start()
+	go s.start(g)
 }
 
 func (s *UdpTransport) channelHandshake(g *udpGen) {
@@ -283,7 +303,16 @@ func (s *UdpTransport) channelHandler(g *udpGen) {
 			default:
 				message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
 				if err != nil {
-					if s.cancel != nil {
+					// A generation that has already been cancelled must not ask for a
+					// restart. It used to test s.cancel != nil, which the constructor
+					// makes true before this code can run — so the guard was always
+					// open, and every goroutine dying during a teardown queued another
+					// restart of a tunnel that was on its way down. Asking the
+					// generation's own context is both the real question and a read
+					// nobody else writes: Restart replaces s.cancel while these
+					// goroutines are still running, which is the data race the CI
+					// detector caught on this line.
+					if g.ctx.Err() == nil {
 						s.logger.Error("failed to read from channel connection. ", err)
 						go s.Restart()
 					}

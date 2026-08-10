@@ -25,6 +25,9 @@ import (
 // supplies the TLS 1.3, the multiplexing, the congestion control and the loss
 // recovery, so there is no smux and no KCP-style tuning to keep in step.
 type QuicTransport struct {
+	// The status shown in the panel. Behind a lock because the run being
+	// replaced and the run replacing it both write it. See tunnelStatus.
+	status          tunnelStatus
 	config          *QuicConfig
 	quicSettings    network.QUICSettings
 	parentctx       context.Context
@@ -49,7 +52,6 @@ type QuicConfig struct {
 	Endpoints      *network.Endpoints
 	Token          string
 	SnifferLog     string
-	TunnelStatus   string
 	Sniffer        bool
 	KeepAlive      time.Duration
 	RetryInterval  time.Duration
@@ -91,7 +93,7 @@ func NewQuicClient(parentCtx context.Context, config *QuicConfig, logger *logrus
 	}
 	// Seed the first generation through the same path a restart uses, so there is
 	// only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, &config.TunnelStatus, logger))
+	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, client.status.get, logger))
 	return client
 }
 
@@ -112,7 +114,7 @@ func (c *QuicTransport) Start() {
 		go c.state.Usage().Monitor()
 	}
 
-	c.config.TunnelStatus = "Disconnected (QUIC)"
+	c.status.set("Disconnected (QUIC)")
 
 	go c.channelDialer()
 }
@@ -154,8 +156,8 @@ func (c *QuicTransport) Restart() {
 
 	ctx, cancel := context.WithCancel(c.parentctx)
 
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, &c.config.TunnelStatus, c.logger))
-	c.config.TunnelStatus = ""
+	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.status.get, c.logger))
+	c.status.set("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	metrics.ClearPool()
@@ -245,7 +247,7 @@ func (c *QuicTransport) channelDialer() {
 			c.state.SetConn(control)
 			c.logger.Info("control channel established successfully")
 
-			c.config.TunnelStatus = "Connected (QUIC)"
+			c.status.set("Connected (QUIC)")
 
 			go c.poolMaintainer()
 			go c.channelHandler()

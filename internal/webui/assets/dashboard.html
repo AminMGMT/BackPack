@@ -29,8 +29,46 @@
     /* Green is reserved for one meaning only: a tunnel that is up. Amber marks
        one that is down. Nothing decorative uses either. */
     --green:#30d158; --amber:#ff9f0a;
-    --txt:#f5f5f7; --muted:#9a9aa0; --muted2:#636366;
+    --txt:#f5f5f7; --muted:#9a9aa0;
+    /* #636366 measured 3.3:1 against the panel's surfaces — under the 4.5:1 a
+       reader needs for text this size, and it was carrying the hint lines: the
+       one-sentence explanations under a field, the transport descriptions, the
+       timestamps on alerts. Exactly the copy that matters to somebody who does
+       not already know what the control does, set in the dimmest colour on the
+       page at 11px. #83838a measures 4.8:1 on a card and is still visibly
+       quieter than --muted, which is the whole job of the token. */
+    --muted2:#83838a;
     --radius:22px;
+
+    /* One motion vocabulary for the whole panel, so nothing has to guess.
+       The curve is a strong ease-out: it starts fast, which is what makes an
+       interface feel like it heard you. Its opposite, ease-in, delays the first
+       few frames — exactly the ones being watched — and reads as sluggish at
+       the same duration, so it is not used anywhere here.
+       The durations are the ceilings this panel holds to: a press is felt
+       rather than seen, a hover is a colour settling, and nothing that is not a
+       sheet or a drawer runs past 300ms. */
+    --ease-out:cubic-bezier(.16,1,.3,1);
+    --ease-in-out:cubic-bezier(.77,0,.175,1);
+    --t-press:140ms;
+    --t-hover:180ms;
+    --t-pop:220ms;
+    /* The page's own entrance. It was 600ms on four surfaces and 500ms on the
+       tunnel cards — the same animation at two speeds for no reason anybody
+       could have given. 400ms is one number, and it is the one that fits: with
+       the 45ms stagger the last card used to settle at 825ms, which is a page
+       still assembling itself long after it is readable. */
+    --t-rise:400ms;
+    /* The overshoot the settings accordion opens on. Three copies of this curve
+       existed, one of them inside a JavaScript string. */
+    --ease-spring:cubic-bezier(.34,1.4,.64,1);
+    /* The transition every interactive surface uses. Named properties, never
+       `all`: `all` transitions whatever happens to change, which on a card with
+       a backdrop filter means the browser watches and interpolates properties
+       nobody intended to animate. */
+    --t-ui:background var(--t-hover) ease,border-color var(--t-hover) ease,
+           color var(--t-hover) ease,box-shadow var(--t-hover) ease,
+           transform var(--t-press) var(--ease-out);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{-webkit-text-size-adjust:100%}
@@ -100,9 +138,62 @@
   .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
   button{font-family:inherit;touch-action:manipulation}
   :focus-visible{outline:2px solid var(--red);outline-offset:3px;border-radius:10px}
+  /* Off-screen until tabbed to, which is the only moment it is of use. Not
+     display:none — that would take it out of the tab order and leave it no way
+     to be reached at all. */
+  .skiplink{position:fixed;top:10px;left:10px;z-index:300;transform:translateY(-200%);
+    padding:10px 16px;border-radius:12px;font-size:13px;font-weight:600;text-decoration:none;
+    background:var(--bg2);color:var(--txt);border:1px solid var(--stroke);
+    transition:transform var(--t-pop) var(--ease-out)}
+  .skiplink:focus{transform:none}
+
+  /* ---------- interaction layer ----------
+     Every pressable thing in the panel, in one place, for two reasons.
+
+     The first is that none of them used to answer a press. There were
+     twenty-seven hover rules and not one :active, so on a phone — where hover
+     does not exist — tapping Start, Restart or Delete produced no acknowledgement
+     at all until the request came back. A 3% scale for 140ms is not decoration:
+     it is the interface saying it heard you, and its absence is why a panel can
+     feel unresponsive while being perfectly fast.
+
+     The second is that the lift-on-hover effects were not gated. A touch device
+     fires :hover on tap and leaves it there, so every card and button the
+     operator touched stayed raised until something else was touched. Putting
+     every movement behind (hover:hover) and (pointer:fine) means the phone gets
+     the press feedback and the desktop gets both. */
+  .menubtn,.menuitem,.logout,.iconbtn,.modal .actions button,.acch,.btn-sm,
+  .updpill,.logbtn,.actbtn,.side,.close,.wal,.pwa-acts button,.pwa-x,.swatch,.supportfab{
+    -webkit-tap-highlight-color:transparent;
+  }
+  .menubtn:active,.menuitem:active,.logout:active,.iconbtn:active,
+  .modal .actions button:active,.acch:active,.btn-sm:active,.updpill:active,
+  .logbtn:active,.actbtn:active,.side:active,.close:active,.wal:active,
+  .pwa-acts button:active,.pwa-x:active{
+    transform:scale(.97);
+  }
+  /* A disabled control must not answer, or the feedback becomes a lie. */
+  .btn-sm:disabled:active,.actbtn:disabled:active,.pwa-acts button:disabled:active{transform:none}
+  /* These two carry a transform of their own at rest, so their pressed state is
+     written relative to it rather than replacing it with a bare scale. */
+  .swatch:active{transform:scale(1.04)}
+  .supportfab:active{transform:translateY(0) scale(.94)}
+
+  @media (hover:hover) and (pointer:fine){
+    .menuitem:hover .chev{transform:translateX(2px)}
+    .swatch:hover{transform:scale(1.15)}
+    .logout:hover,.iconbtn:hover,.btn-primary:hover,.updpill:hover,.btn-add:hover{transform:translateY(-1px)}
+    .side:hover{transform:translateY(-2px)}
+    .pill:hover{transform:translateY(-3px)}
+    .meter:hover,.tun:hover{transform:translateY(-4px)}
+    .supportfab:hover{transform:translateY(-2px) scale(1.05)}
+    /* The elevation that goes with the lift. Kept with it rather than with the
+       resting shadow, so a card that cannot lift does not gain a shadow that
+       says it did. */
+    .meter:hover,.tun:hover{box-shadow:0 2px 6px rgba(0,0,0,.28),0 20px 48px rgba(0,0,0,.30)}
+  }
   /* elevation scale for depth (skill: consistent shadow scale) */
   header,.meter,.pill,.tun{box-shadow:0 1px 2px rgba(0,0,0,.22),0 10px 30px rgba(0,0,0,.20)}
-  .meter:hover,.tun:hover{box-shadow:0 2px 6px rgba(0,0,0,.28),0 20px 48px rgba(0,0,0,.30)}
   ::selection{background:rgba(var(--accent-rgb),.35)}
 
   /* ---------- header ---------- */
@@ -118,7 +209,7 @@
     padding:16px 20px;margin-bottom:22px;
     background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
     backdrop-filter:blur(26px) saturate(160%);-webkit-backdrop-filter:blur(26px) saturate(160%);
-    animation:rise .6s cubic-bezier(.16,1,.3,1) both;
+    animation:rise var(--t-rise) var(--ease-out) both;
   }
   .brand{display:flex;align-items:center;gap:12px}
   .mark{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;color:#fff;
@@ -139,7 +230,7 @@
      unlabelled glyph competing for the same strip. */
   .menubtn{position:relative;display:inline-flex;align-items:center;gap:8px;min-height:44px;
     padding:0 15px;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--txt);
-    background:rgba(255,255,255,.05);border:1px solid var(--stroke);transition:.22s}
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);transition:var(--t-ui)}
   .menubtn:hover{background:rgba(var(--accent-rgb),.16);border-color:rgba(var(--accent-rgb),.34);color:var(--red-soft)}
   .menubtn[aria-expanded="true"]{background:rgba(var(--accent-rgb),.2);border-color:rgba(var(--accent-rgb),.4);color:var(--red-soft)}
   .menubtn .ic{width:17px;height:17px}
@@ -166,8 +257,44 @@
      the machine's facts in a tidy grid, then the destinations as rows that
      reveal a chevron on hover, and a log-out in the danger colour. Its children
      stagger in on open — the CSS echo of the source's staggerChildren. */
+  /* The menu grew from nowhere and vanished into nothing: opening staggered its
+     rows in, closing set hidden=true between one frame and the next. A surface
+     that shows you it arrived and not that it left is the half of the gesture
+     you feel as abrupt, and it is the half nobody writes.
+     Both ends now collapse toward the button that owns the menu — placeMenu()
+     already knows which corner that is, so the origin follows it rather than
+     guessing. The scale is small on purpose: this element carries a backdrop
+     filter, and a large transform on one of those is where Safari drops the
+     blur mid-animation. Two per cent is enough to read as growing from the
+     trigger and small enough not to. */
+  /* Both halves of the gesture are the same transition, on the same two
+     properties, toward the same corner.
+     They were not. The entrance was a keyframe and the exit a transition, and a
+     keyframe stops existing the moment its selector stops matching — so closing
+     the menu while it was still opening removed the animation, snapped the panel
+     to full size, and only then began shrinking it. A visible jump, in the one
+     interaction where the user is most likely to change their mind mid-motion.
+     A transition has no such edge: interrupt it and it retargets from wherever
+     it currently is. @starting-style is what lets the entry be one, with no
+     class to add on the next frame and no JS to get wrong. A browser too old for
+     it ignores the rule and the menu appears instantly — which is what it did
+     before any of this, so there is nothing to regress. */
+  .menu{transform-origin:top right;opacity:1;transform:scale(1);
+    transition:opacity 200ms ease,transform 200ms var(--ease-out)}
+  [dir="rtl"] .menu{transform-origin:top left}
+  @starting-style{
+    .menu:not([hidden]){opacity:0;transform:scale(.98)}
+  }
+  /* Out faster than in: the system responding should never take as long as the
+     person deciding. 150ms is inside the 180ms closeMenu() waits before it sets
+     hidden, so the panel is always gone before it is removed. */
+  .menu.closing{opacity:0;transform:scale(.98);pointer-events:none;
+    transition:opacity 150ms ease,transform 150ms var(--ease-out)}
+  /* The rows only stagger on the way in. On the way out the panel leaves as one
+     object — a nine-step exit is the slowest possible way to dismiss something. */
+  .menu.closing > *{animation:none!important}
   @keyframes mp-in{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
-  .menu:not([hidden]) > *{animation:mp-in .34s cubic-bezier(.16,1,.3,1) both}
+  .menu:not([hidden]) > *{animation:mp-in .34s var(--ease-out) both}
   .menu:not([hidden]) > *:nth-child(1){animation-delay:.02s}
   .menu:not([hidden]) > *:nth-child(2){animation-delay:.06s}
   .menu:not([hidden]) > *:nth-child(3){animation-delay:.10s}
@@ -204,13 +331,13 @@
      appears on hover. */
   .menuitem{display:flex;align-items:center;gap:12px;width:100%;min-height:42px;padding:0 12px;
     border:0;border-radius:10px;background:none;color:var(--muted);font-size:13.5px;font-weight:600;
-    cursor:pointer;text-align:left;transition:.16s;font-family:inherit}
+    cursor:pointer;text-align:left;transition:var(--t-ui);font-family:inherit}
   .menuitem:hover{background:rgba(var(--accent-rgb),.14);color:var(--red-soft)}
   .menuitem .ic{width:18px;height:18px;flex:none;color:currentColor}
   .menuitem .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .menuitem .chev{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round;opacity:0;transition:opacity .16s,transform .16s}
-  .menuitem:hover .chev{opacity:1;transform:translateX(2px)}
+  .menuitem:hover .chev{opacity:1}
   .menuitem.mp-logout{color:var(--red-soft);margin-top:6px}
   .menuitem.mp-logout:hover{background:rgba(255,69,58,.14);color:#ff6b60}
   .menucount{font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;
@@ -219,7 +346,6 @@
   .accentname{font-size:12px;color:var(--muted);min-width:76px;text-align:right}
   .swatch{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;
     padding:0;transition:transform .15s,border-color .15s;position:relative}
-  .swatch:hover{transform:scale(1.15)}
   .swatch[aria-pressed="true"]{border-color:#fff;transform:scale(1.1)}
 
   .menusep{height:1px;margin:6px 8px;background:rgba(255,255,255,.12)}
@@ -234,11 +360,11 @@
   .menuscrim[hidden]{display:none}
   .logout{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 16px;border-radius:12px;
     font-size:13px;font-weight:600;cursor:pointer;
-    background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.22s}
-  .logout:hover{background:rgba(var(--accent-rgb),.22);transform:translateY(-1px)}
+    background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:var(--t-ui)}
+  .logout:hover{background:rgba(var(--accent-rgb),.22)}
   .iconbtn{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;cursor:pointer;
-    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
-  .iconbtn:hover{background:rgba(255,255,255,.1);transform:translateY(-1px);color:var(--red-soft)}
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:var(--t-ui)}
+  .iconbtn:hover{background:rgba(255,255,255,.1);color:var(--red-soft)}
   .iconbtn .ic{width:20px;height:20px}
 
   /* ---------- centered modal (settings) ---------- */
@@ -246,25 +372,24 @@
     background:rgba(0,0,0,.55);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .3s}
   .modal.on{opacity:1;pointer-events:auto}
   .modal .box{width:min(92vw,400px);background:var(--bg2);border:1px solid var(--stroke);border-radius:22px;
-    padding:26px;box-shadow:0 30px 80px rgba(0,0,0,.6);transform:translateY(14px) scale(.98);transition:transform .3s cubic-bezier(.16,1,.3,1)}
+    padding:26px;box-shadow:0 30px 80px rgba(0,0,0,.6);transform:translateY(14px) scale(.98);transition:transform .3s var(--ease-out)}
   .modal.on .box{transform:none}
   .modal h3{font-size:17px;font-weight:700;margin-bottom:4px}
   .modal p{font-size:12.5px;color:var(--muted);margin-bottom:18px}
   .modal label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
   .modal input{width:100%;padding:13px 15px;font-size:15px;color:var(--txt);background:rgba(255,255,255,.05);
-    border:1px solid var(--stroke);border-radius:12px;outline:none;transition:.2s;margin-bottom:14px}
+    border:1px solid var(--stroke);border-radius:12px;outline:none;transition:border-color var(--t-hover) ease,box-shadow var(--t-hover) ease;margin-bottom:14px}
   .modal input:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18)}
   .modal .msg{font-size:12.5px;min-height:18px;margin-bottom:10px}
   /* Matches the CLI, where a success line is bold white and only an error is
      colored — green here would be a second meaning for the status color. */
   .modal .msg.err{color:var(--red-soft)} .modal .msg.ok{color:var(--txt);font-weight:600}
   .modal .actions{display:flex;gap:10px}
-  .modal .actions button{flex:1;min-height:46px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;transition:.22s}
+  .modal .actions button{flex:1;min-height:46px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;transition:var(--t-ui)}
   .btn-ghost{background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt)}
   .btn-ghost:hover{background:rgba(255,255,255,.1)}
   .btn-primary{background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;color:#fff;
     box-shadow:0 8px 22px rgba(var(--accent-rgb),.35)}
-  .btn-primary:hover{transform:translateY(-1px)}
   .divider{height:1px;background:var(--stroke);margin:16px 0}
 
   .langrow{display:flex;align-items:center;gap:12px;margin-bottom:14px}
@@ -284,7 +409,7 @@
   .acc:has(.acch[aria-expanded="true"]){border-color:rgba(var(--accent-rgb),.32);background:rgba(var(--accent-rgb),.04)}
   .acch{display:flex;align-items:center;gap:11px;width:100%;min-height:52px;padding:0 14px;
     border:0;background:none;color:var(--txt);font-size:13.5px;font-weight:600;
-    cursor:pointer;text-align:left;transition:.16s}
+    cursor:pointer;text-align:left;transition:var(--t-ui)}
   .acch:hover{background:rgba(var(--accent-rgb),.1)}
   .acch[aria-expanded="true"]{background:rgba(var(--accent-rgb),.12);color:var(--red-soft)}
   .acch .ic{width:17px;height:17px;flex:none;color:var(--muted)}
@@ -293,7 +418,11 @@
      enough to choose by. */
   .accnote{margin-left:auto;font-size:11.5px;font-weight:400;color:var(--muted);
     text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .acch .chev{width:16px;height:16px;flex:none;color:var(--muted);transition:transform .42s cubic-bezier(.34,1.56,.64,1)}
+  /* 420ms was long enough to still be turning after the drawer had finished
+     opening, which reads as the chevron lagging behind rather than belonging to
+     the same gesture. 240ms with a gentler overshoot keeps the spring feel and
+     lands with the height. */
+  .acch .chev{width:16px;height:16px;flex:none;color:var(--muted);transition:transform .24s var(--ease-spring)}
   .acch[aria-expanded="true"] .chev{transform:rotate(180deg);color:var(--red-soft)}
   /* One vertical rhythm inside every drawer: the gap between rows equals the
      padding above the first row and below the last, so the spacing reads as a
@@ -301,7 +430,7 @@
      ad-hoc ones (inline and from .modal input/label/.msg) are neutralised here
      so the flex gap is the only thing setting the spacing. */
   .accb{display:flex;flex-direction:column;gap:12px;padding:12px 14px;border-top:1px solid var(--stroke);
-    overflow:hidden;transition:height .5s cubic-bezier(.34,1.56,.64,1)}
+    overflow:hidden;transition:height .32s var(--ease-spring)}
   .accb[hidden]{display:none}
   .modal .accb > *{margin-top:0!important;margin-bottom:0!important}
   @media (prefers-reduced-motion:reduce){ .accb{transition:none} .acch .chev{transition:none} }
@@ -311,7 +440,7 @@
   .upd{display:flex;align-items:center;gap:12px}
   .upd .umsg{font-size:12.5px;color:var(--muted);flex:1}
   .btn-sm{min-height:40px;padding:0 16px;border-radius:11px;font-size:13px;font-weight:600;cursor:pointer;flex:none;
-    background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:.2s}
+    background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.3);color:var(--red-soft);transition:var(--t-ui)}
   .btn-sm:hover{background:rgba(var(--accent-rgb),.24)}
   .btn-sm:disabled{opacity:.5;cursor:default}
   .modal code{display:inline-block;margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.06);
@@ -362,11 +491,10 @@
     background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;color:#fff;
     box-shadow:0 10px 28px rgba(var(--accent-rgb),.42),inset 0 1px 0 rgba(255,255,255,.35);
     transition:transform .22s}
-  .supportfab:hover{transform:translateY(-2px) scale(1.05)}
   .supportfab .ic{width:20px;height:20px}
   .wallets{display:flex;flex-direction:column;gap:10px}
   .wal{position:relative;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.05);
-    border:1px solid var(--stroke);cursor:pointer;transition:.2s}
+    border:1px solid var(--stroke);cursor:pointer;transition:var(--t-ui)}
   .wal:hover{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.3)}
   .wal.copied{background:rgba(var(--accent-rgb),.18);border-color:rgba(var(--accent-rgb),.45)}
   .wal .wl{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--txt);margin-bottom:4px}
@@ -380,7 +508,7 @@
   .warnbar{display:flex;align-items:center;gap:10px;padding:12px 16px;margin-bottom:16px;
     border-radius:14px;font-size:12.5px;font-weight:600;color:var(--amber);
     background:rgba(255,159,10,.1);border:1px solid rgba(255,159,10,.3);
-    animation:rise .6s cubic-bezier(.16,1,.3,1) both}
+    animation:rise var(--t-rise) var(--ease-out) both}
   .warnbar .ic{width:16px;height:16px;flex:none}
   .warnbar code{font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:11.5px;
     padding:1px 6px;border-radius:6px;background:rgba(255,159,10,.14)}
@@ -391,7 +519,7 @@
   .updbar{display:flex;align-items:center;gap:10px;padding:12px 16px;margin-bottom:16px;
     border-radius:14px;font-size:12.5px;font-weight:600;color:var(--red-soft);
     background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.30);
-    animation:rise .6s cubic-bezier(.16,1,.3,1) both}
+    animation:rise var(--t-rise) var(--ease-out) both}
   .updbar .ic{width:16px;height:16px;flex:none}
   .updbar b{font-family:ui-monospace,Menlo,monospace;font-size:12px}
   .updbar .btn-sm{margin-left:auto;flex:none}
@@ -399,9 +527,9 @@
 
   /* Update notice: same accent the CLI uses to mark its Update entry. */
   .updpill{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 14px;
-    border-radius:12px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.22s;
+    border-radius:12px;font-size:12.5px;font-weight:600;cursor:pointer;transition:var(--t-ui);
     background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.32);color:var(--red-soft)}
-  .updpill:hover{background:rgba(var(--accent-rgb),.24);transform:translateY(-1px)}
+  .updpill:hover{background:rgba(var(--accent-rgb),.24)}
   .updpill .ic{width:15px;height:15px}
 
   /* ---------- meters ---------- */
@@ -410,13 +538,13 @@
     background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
     padding:20px 16px 16px;text-align:center;position:relative;overflow:hidden;
     backdrop-filter:blur(20px);transition:transform .3s,background .3s,border-color .3s;
-    animation:rise .6s cubic-bezier(.16,1,.3,1) both;
+    animation:rise var(--t-rise) var(--ease-out) both;
   }
-  .meter:hover{transform:translateY(-4px);background:var(--card-hi);border-color:rgba(255,255,255,.16)}
+  .meter:hover{background:var(--card-hi);border-color:rgba(255,255,255,.16)}
   .ring{width:112px;height:112px;margin:0 auto 10px;position:relative}
   .ring svg{transform:rotate(-90deg)}
   .ring .track{stroke:rgba(255,255,255,.08)}
-  .ring .bar{stroke-linecap:round;transition:stroke-dashoffset .7s cubic-bezier(.16,1,.3,1),stroke .4s}
+  .ring .bar{stroke-linecap:round;transition:stroke-dashoffset .7s var(--ease-out),stroke .4s}
   .ring .val{position:absolute;inset:0;display:grid;place-items:center;
     font-size:23px;font-weight:700;font-variant-numeric:tabular-nums}
   .ring .val span{font-size:11px;color:var(--muted);font-weight:500;margin-top:2px}
@@ -429,8 +557,8 @@
   .grid-stats{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:26px}
   .pill{background:var(--card);border:1px solid var(--stroke);border-radius:16px;padding:14px 16px;
     display:flex;align-items:center;gap:12px;backdrop-filter:blur(20px);transition:transform .25s,background .25s;
-    animation:rise .6s cubic-bezier(.16,1,.3,1) both}
-  .pill:hover{transform:translateY(-3px);background:var(--card-hi)}
+    animation:rise var(--t-rise) var(--ease-out) both}
+  .pill:hover{background:var(--card-hi)}
   .pill .ico{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;color:var(--red-soft);
     background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.22)}
   .pill .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
@@ -450,23 +578,25 @@
   .grid-tun{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
   .tun{background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
     padding:18px;backdrop-filter:blur(20px);transition:transform .3s,background .3s,border-color .3s;
-    position:relative;overflow:hidden;animation:rise .5s cubic-bezier(.16,1,.3,1) both}
+    position:relative;overflow:hidden;animation:rise var(--t-rise) var(--ease-out) both}
   /* Status is carried by a ring around the whole card, drawn inside its edge,
      rather than a bar down one side. The same three pixels say the same thing
      and now describe the card they belong to.
 
-     It breathes on the dot's rhythm — identical duration and identical keyframe
-     stops — so the two read as one signal rather than two things blinking near
-     each other. Sharing the numbers is what keeps them in phase; they start
-     together because the card and its dot are painted together. */
+     It used to breathe on the dot's rhythm, so the two read as one signal. They
+     did read as one — which is the argument against doing it twice. The ring was
+     the expensive half: an animated inset box-shadow spreading eight pixels
+     across a whole card repaints that card every frame, forever, once per online
+     tunnel on the page. Ten tunnels on a phone is ten perpetual repaints for a
+     fact that changes maybe twice a day. The colour stays and says the same
+     thing while it is still; the pulse now lives only on the dot, where it costs
+     a composited transform on nine pixels. */
   .tun::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
     border:3px solid var(--muted2);transition:border-color .3s;z-index:1}
-  .tun.online::before{border-color:var(--green);animation:ring-on 1.8s infinite}
-  .tun.offline::before{border-color:var(--amber);animation:ring-off 1.8s infinite}
+  .tun.online::before{border-color:var(--green)}
+  .tun.offline::before{border-color:var(--amber)}
   .tun.stopped::before{border-color:var(--red)}
-  @keyframes ring-on{0%{box-shadow:inset 0 0 0 0 rgba(48,209,88,.5)}70%{box-shadow:inset 0 0 0 8px rgba(48,209,88,0)}100%{box-shadow:inset 0 0 0 0 rgba(48,209,88,0)}}
-  @keyframes ring-off{0%{box-shadow:inset 0 0 0 0 rgba(255,159,10,.5)}70%{box-shadow:inset 0 0 0 8px rgba(255,159,10,0)}100%{box-shadow:inset 0 0 0 0 rgba(255,159,10,0)}}
-  .tun:hover{transform:translateY(-4px);background:var(--card-hi);border-color:rgba(255,255,255,.16)}
+  .tun:hover{background:var(--card-hi);border-color:rgba(255,255,255,.16)}
   .tun .top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
   .tun .name{font-size:16px;font-weight:700;letter-spacing:-.01em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Traffic on one line. The glyphs are quiet because they are labels; the
@@ -477,12 +607,24 @@
   .trafline b{color:#fff;font-weight:600;margin-right:6px}
   .trafline b:last-child{margin-right:0}
 
-  .dot{width:9px;height:9px;border-radius:50%;flex:none}
-  .dot.online{background:var(--green);animation:pulse 1.8s infinite}
-  .dot.offline{background:var(--amber);animation:pulse-a 1.8s infinite}
+  /* The one piece of perpetual motion the panel keeps, because it is the one
+     that carries information: a tunnel saying it is alive.
+     It expands a halo rather than an animated box-shadow. Transform and opacity
+     are the two properties the compositor can animate without laying out or
+     repainting anything; box-shadow is neither, and a spreading one is a repaint
+     of the element and its surroundings on every frame. Same picture, none of
+     the cost. */
+  .dot{width:9px;height:9px;border-radius:50%;flex:none;position:relative}
+  .dot::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:inherit;opacity:0;pointer-events:none}
+  .dot.online{background:var(--green)}
+  .dot.offline{background:var(--amber)}
   .dot.stopped{background:var(--red)}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(48,209,88,.55)}70%{box-shadow:0 0 0 8px rgba(48,209,88,0)}100%{box-shadow:0 0 0 0 rgba(48,209,88,0)}}
-  @keyframes pulse-a{0%{box-shadow:0 0 0 0 rgba(255,159,10,.55)}70%{box-shadow:0 0 0 8px rgba(255,159,10,0)}100%{box-shadow:0 0 0 0 rgba(255,159,10,0)}}
+  .dot.online::after,.dot.offline::after{animation:halo 1.8s var(--ease-out) infinite}
+  @keyframes halo{0%{opacity:.55;transform:scale(1)}70%,100%{opacity:0;transform:scale(2.8)}}
+  /* A background tab still runs CSS animations in most browsers. Nobody is
+     looking at it, so it should not be costing anything. */
+  body.tab-hidden .dot::after{animation-play-state:paused}
   .badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
   .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:8px;
     letter-spacing:.02em;background:rgba(255,255,255,.06);border:1px solid var(--stroke);color:var(--txt)}
@@ -501,7 +643,7 @@
   .cardbtns{display:flex;gap:8px}
   .logbtn{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;min-height:44px;
     border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;
-    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:.22s}
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);color:var(--txt);transition:var(--t-ui)}
   .logbtn:hover{background:rgba(var(--accent-rgb),.15);border-color:rgba(var(--accent-rgb),.35);color:var(--red-soft)}
   /* Three buttons where there were two, so each one gets less room: the label
      may shrink but never wraps, and the icon never squashes. */
@@ -518,7 +660,7 @@
   .actbtns{display:flex;gap:6px;margin-top:8px}
   .actbtn{display:flex;align-items:center;justify-content:center;gap:5px;flex:1;min-width:0;min-height:38px;
     border-radius:10px;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;
-    background:rgba(255,255,255,.04);border:1px solid var(--stroke);color:var(--muted);transition:.2s}
+    background:rgba(255,255,255,.04);border:1px solid var(--stroke);color:var(--muted);transition:var(--t-ui)}
   .actbtn .ic{width:13px;height:13px;flex:none}
   .actbtn:hover{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.32);color:var(--red-soft)}
   .actbtn:disabled{opacity:.45;cursor:default}
@@ -532,7 +674,7 @@
   .secbtns .btn-sm .ic{width:15px;height:15px}
   .btn-add{background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;color:#fff;
     box-shadow:0 8px 20px rgba(var(--accent-rgb),.32)}
-  .btn-add:hover{background:linear-gradient(145deg,var(--red),var(--red-deep));transform:translateY(-1px)}
+  .btn-add:hover{background:linear-gradient(145deg,var(--red),var(--red-deep))}
 
   /* ---------- setup / edit forms ----------
      Wider than the other dialogs because these are forms rather than one
@@ -560,9 +702,9 @@
      Answered before anything else, because every following field depends on
      it — a client has no forwarded ports and a server has no address to dial. */
   .sides{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .side{padding:18px 14px;border-radius:18px;cursor:pointer;text-align:center;transition:.22s;
+  .side{padding:18px 14px;border-radius:18px;cursor:pointer;text-align:center;transition:var(--t-ui);
     background:rgba(255,255,255,.04);border:1px solid var(--stroke);color:var(--txt)}
-  .side:hover{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.34);transform:translateY(-2px)}
+  .side:hover{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.34)}
   .side .sflag{font-size:26px;line-height:1;display:block;margin-bottom:8px}
   .side .st{font-size:14px;font-weight:700;display:block}
   .side .sd{font-size:11.5px;color:var(--muted);display:block;margin-top:4px;line-height:1.5}
@@ -638,15 +780,30 @@
   .scrim.on{opacity:1;pointer-events:auto}
   .drawer{position:fixed;left:0;right:0;bottom:0;z-index:50;max-height:78dvh;
     background:var(--bg2);border-top:1px solid var(--stroke);border-radius:24px 24px 0 0;
-    box-shadow:0 -20px 60px rgba(0,0,0,.6);transform:translateY(100%);transition:transform .4s cubic-bezier(.16,1,.3,1);
+    box-shadow:0 -20px 60px rgba(0,0,0,.6);transform:translateY(100%);transition:transform .4s var(--ease-out);
     display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom)}
   .drawer.on{transform:translateY(0)}
-  .drawer .dh{position:relative;display:flex;align-items:center;gap:12px;padding:18px 22px 14px;border-bottom:1px solid var(--stroke)}
+  /* The header is the handle. Binding the drag here and not to the whole sheet
+     is what keeps it away from the log box: that panel scrolls, and a drag
+     recogniser over a scrollable region has to arbitrate between the two on
+     every touch. There is nothing to arbitrate if it never sees them. */
+  .drawer .dh{position:relative;display:flex;align-items:center;gap:12px;padding:18px 22px 14px;border-bottom:1px solid var(--stroke);
+    touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+  .drawer .dh:active{cursor:grabbing}
+  /* The controls inside the header are still controls. */
+  .drawer .dh .close,.drawer .dh .logfilter{touch-action:auto;cursor:auto}
+  .drawer .dh .close{cursor:pointer}
+  /* While a finger is on it the sheet follows that finger and nothing else, so
+     the transition is out of the way. It comes back for the release, which is
+     when the spring runs. */
+  .drawer.dragging{transition:none}
+  .drawer .dh .grip{transition:background var(--t-hover) ease,width var(--t-hover) var(--ease-out)}
+  .drawer.dragging .dh .grip{background:rgba(255,255,255,.4);width:52px}
   .drawer .dh h3{font-size:15px;font-weight:700;flex:1}
   .drawer .dh .grip{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:42px;height:5px;
     border-radius:3px;background:rgba(255,255,255,.18)}
   .close{width:40px;height:40px;border-radius:11px;border:1px solid var(--stroke);background:rgba(255,255,255,.05);
-    color:var(--txt);cursor:pointer;display:grid;place-items:center;transition:.2s}
+    color:var(--txt);cursor:pointer;display:grid;place-items:center;transition:var(--t-ui)}
   .close:hover{background:rgba(var(--accent-rgb),.18);color:var(--red-soft)}
   .logbox{flex:1;overflow:auto;padding:16px 22px;margin:0;
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;line-height:1.7;
@@ -662,8 +819,52 @@
     color:var(--muted);font-size:11.5px;font-family:inherit;cursor:pointer;border-radius:8px}
   .starnever:hover{color:var(--txt);background:rgba(255,255,255,.06)}
 
-  .empty{text-align:center;color:var(--muted);padding:50px 0;font-size:14px}
+  /* Shown when the last tunnel is deleted, which is the moment it is least
+     wanted and most jarring: a card leaves and this takes its place in the same
+     frame. The delay lets the card finish going first, so the two read as one
+     thing replacing another rather than a swap.
+     A display:none element runs no animations, so flipping display back on is
+     what starts this — no new API, and nothing to undo if it is unsupported. */
+  .empty{text-align:center;color:var(--muted);padding:50px 0;font-size:14px;
+    animation:rise 240ms var(--ease-out) 140ms both}
+
+  /* A card that is going. Kept as a transition rather than a keyframe because
+     "restart all" and a multi-delete take several at once: a keyframe restarts
+     from zero if the element is touched again mid-flight, a transition retargets
+     from where it is. */
+  .tun.leaving{opacity:0;transform:scale(.97);pointer-events:none;
+    transition:opacity 180ms ease,transform 180ms var(--ease-out)}
+
+  /* Both of these appear from nothing and mean something arrived: an alert, or
+     a release. News rather than celebration, so no bounce. */
+  .updpill,#alnotif{animation:pop-in var(--t-pop) var(--ease-out) both}
+  @keyframes pop-in{from{opacity:0;transform:scale(.9)}}
+
+  /* The one place a stagger is earned. Both of these land after the operator has
+     watched a spinner for ten seconds, and arriving as a single block gives no
+     sense that the answer has parts. Scoped to these two containers by id and
+     not to .dl, which the Details modal also uses — that one repaints on every
+     poll while it is open, and animating it would flash the numbers somebody is
+     reading. */
+  #ltres .r,#hcbody .hc-item,#hcbody .hc-fix{animation:rise 240ms var(--ease-out) both}
+  #ltres .r:nth-child(2),#hcbody .hc-item:nth-child(2){animation-delay:40ms}
+  #ltres .r:nth-child(3),#hcbody .hc-item:nth-child(3){animation-delay:80ms}
+  #ltres .r:nth-child(4),#hcbody .hc-item:nth-child(4){animation-delay:120ms}
+  #ltres .r:nth-child(n+5),#hcbody .hc-item:nth-child(n+5){animation-delay:160ms}
   @keyframes rise{from{opacity:0;transform:translateY(18px)}}
+  /* Everything on the page used to arrive in the same frame, which reads as a
+     single block dropping in rather than a page assembling itself. A short
+     stagger — 45ms, inside the 30-80ms that still feels immediate — gives the
+     eye an order to follow.
+     It is capped rather than open-ended: at one tunnel per step, thirty tunnels
+     would take a second and a half to finish appearing, and a stagger that makes
+     the page slower has stopped doing its job. Past the sixth card they all
+     share the last delay. */
+  .grid-meters > *:nth-child(2),.grid-stats > *:nth-child(2),.grid-tun > *:nth-child(2){animation-delay:45ms}
+  .grid-meters > *:nth-child(3),.grid-stats > *:nth-child(3),.grid-tun > *:nth-child(3){animation-delay:90ms}
+  .grid-meters > *:nth-child(4),.grid-stats > *:nth-child(4),.grid-tun > *:nth-child(4){animation-delay:135ms}
+  .grid-meters > *:nth-child(5),.grid-stats > *:nth-child(5),.grid-tun > *:nth-child(5){animation-delay:180ms}
+  .grid-meters > *:nth-child(n+6),.grid-stats > *:nth-child(n+6),.grid-tun > *:nth-child(n+6){animation-delay:225ms}
 
   /* ---------- right to left ----------
      Almost nothing needs flipping by hand: the layout is flex and grid, which
@@ -731,7 +932,7 @@
   .certopt:has(input:checked){border-color:rgba(var(--accent-rgb),.45);background:rgba(var(--accent-rgb),.07)}
   .certopt:has(input:disabled){opacity:.5;cursor:not-allowed}
   .certopt input{appearance:none;-webkit-appearance:none;flex:none;width:18px;height:18px;margin:1px 0 0;
-    border:2px solid var(--muted2);border-radius:50%;cursor:inherit;transition:.18s}
+    border:2px solid var(--muted2);border-radius:50%;cursor:inherit;transition:border-color var(--t-press) ease,border-width var(--t-press) ease}
   .certopt input:checked{border-color:var(--accent);border-width:5px}
   .certopt input:focus-visible{outline:2px solid var(--red);outline-offset:2px}
   .co-t{min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -746,7 +947,7 @@
     padding:18px 18px calc(18px + env(safe-area-inset-bottom));
     background:rgba(20,20,23,.99);border-top:1px solid var(--stroke);
     border-radius:22px 22px 0 0;box-shadow:0 -18px 50px rgba(0,0,0,.55);
-    transform:translateY(110%);transition:transform .42s cubic-bezier(.16,1,.3,1)}
+    transform:translateY(110%);transition:transform .42s var(--ease-out)}
   .pwa.on{transform:none}
   .pwa[hidden]{display:none}
   .pwa-head{display:flex;align-items:center;gap:13px;margin-bottom:12px}
@@ -788,8 +989,61 @@
   [dir="rtl"] .pwa-steps li{padding-left:0;padding-right:30px}
   [dir="rtl"] .pwa-steps li::before{left:auto;right:0}
 
+  /* ---------- the other two accessibility preferences ----------
+     This panel is built almost entirely out of glass: ten surfaces carry a
+     backdrop filter, and the page behind them is a moving starfield over three
+     radial gradients. That is the look, and for most people it is fine.
+
+     For the people who have turned translucency down it is not a preference
+     about taste. Text over a blurred, shifting background is measurably harder
+     to read, and the operating systems expose the setting precisely so an app
+     can stop doing it. Nothing in this file was listening.
+
+     Both blocks below only ever make surfaces more solid, so there is no layout
+     to break — the geometry is untouched and only the paint changes. */
+  @media (prefers-reduced-transparency: reduce){
+    header,.meter,.pill,.tun,.menu,.drawer,.pwa,.modal .box{
+      backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+      background:var(--bg2)!important;
+    }
+    .modal{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+      background:rgba(0,0,0,.8)!important}
+    /* The starfield and the page's glow are the moving background those
+       surfaces were blurring. With the blur gone they would show through the
+       gaps instead. */
+    #starfield{display:none}
+    body{background-image:none}
+  }
+  @media (prefers-contrast: more){
+    /* Near-solid surfaces with a border that is actually visible, and text that
+       stops being a shade of grey. --muted2 in particular exists to be quiet,
+       which is the opposite of what this setting asks for. */
+    :root{--card:rgba(255,255,255,.10);--card-hi:rgba(255,255,255,.14);
+      --stroke:rgba(255,255,255,.34);--muted:#c2c2c8;--muted2:#aeaeb6}
+    header,.meter,.pill,.tun,.menu,.drawer,.pwa,.modal .box{background:var(--bg2)}
+    .badge,.btn-sm,.actbtn,.logbtn,.menubtn,.side,.close{border-width:1.5px}
+    :focus-visible{outline-width:3px}
+  }
+
   @media (prefers-reduced-motion: reduce){
-    *{animation:none!important;transition:none!important}
+    /* Reduced motion means less movement, not no feedback. Switching every
+       transition off took the colour and opacity changes with it — the ones that
+       tell you a button registered your click, that a row is the one you are on,
+       that a panel opened. Those are what make the interface legible, and
+       removing them makes it worse for the person who asked for less motion, not
+       better.
+       So: everything that moves goes, and everything that only changes how
+       something looks stays, at a shortened duration. */
+    *{animation:none!important}
+    *{transition-property:opacity,color,background-color,background,border-color,box-shadow,fill,stroke!important;
+      transition-duration:120ms!important;transition-timing-function:ease!important}
+    /* The lift-on-hover effects are movement too, and they are the only
+       transforms left once the animations are off. */
+    .meter:hover,.tun:hover,.pill:hover,.side:hover,.logout:hover,.iconbtn:hover,
+    .btn-primary:hover,.updpill:hover,.btn-add:hover,.supportfab:hover,.swatch:hover{transform:none!important}
+    /* Press feedback is a 3% scale over 140ms and stays: it is the acknowledgement
+       of a deliberate action, not ambient motion, and on a touch device it is the
+       only acknowledgement there is. */
   }
 </style>
 </head>
@@ -866,7 +1120,11 @@
      readers who ask for reduced motion. One <canvas> and a loop — nothing is
      downloaded, so it looks the same on a server with no internet. -->
 <canvas id="starfield" aria-hidden="true"></canvas>
-<div class="wrap">
+<!-- The panel's content is one landmark. Without it, a screen reader offers no
+     way past the header to the tunnels, and "skip to content" has nothing to
+     skip to. -->
+<a class="skiplink" href="#tunnels" data-i18n>Skip to tunnels</a>
+<main class="wrap">
   <header>
     <div class="brand">
       <div class="mark" aria-hidden="true">
@@ -1023,7 +1281,7 @@
   </div>
   <div class="grid-tun" id="tunnels"></div>
   <div class="empty" id="empty" style="display:none" data-i18n>No tunnels yet. Add one with the button above, or from the CLI menu (sudo backpack).</div>
-</div>
+</main>
 
 <div class="modal" id="settings" onclick="if(event.target===this)closeSettings()">
   <div class="box" role="dialog" aria-modal="true" aria-labelledby="settitle">
@@ -1870,6 +2128,7 @@ const FA={
   "Channel size":"اندازهٔ کانال",
   "Connection pool size":"اندازهٔ استخر اتصال",
   "Log level":"سطح لاگ",
+  "Skip to tunnels":"پرش به تونل‌ها",
   "TCP MSS clamp (bytes, 0 = automatic)":"محدودکنندهٔ MSS در TCP (بایت، ۰ یعنی خودکار)",
   "Mux connections / sessions":"اتصال‌ها / نشست‌های Mux",
   "Mux version (1 or 2)":"نسخهٔ Mux (۱ یا ۲)",
@@ -2075,9 +2334,18 @@ function closeSupport(){ $('support').classList.remove('on'); }
 // ---- header menu ----
 // A menu that stays open behind whatever it opened is a menu you have to
 // dismiss twice, so every destination closes it on the way out.
-function menuOpen(){ return !$('mainmenu').hidden; }
+// A menu that is on its way out is not open: without this, a second click
+// during the 160ms exit reads as "still open" and closes it again instead of
+// reopening it.
+function menuOpen(){ const m=$('mainmenu'); return !m.hidden && !m.classList.contains('closing'); }
+let menuCloseTimer=null;
 function openMenu(){
-  $('mainmenu').hidden=false; $('menuscrim').hidden=false;
+  const m=$('mainmenu');
+  // Reopening mid-exit: cancel the pending hide and drop the closing state, or
+  // the menu would be shown and then hidden by a timer from the last close.
+  clearTimeout(menuCloseTimer); menuCloseTimer=null;
+  m.classList.remove('closing');
+  m.hidden=false; $('menuscrim').hidden=false;
   fillMenuIdentity();
   placeMenu();
   $('menubtn').setAttribute('aria-expanded','true');
@@ -2114,8 +2382,25 @@ function placeMenu(){
 }
 addEventListener('resize',function(){ if(menuOpen()) placeMenu(); });
 function closeMenu(){
-  $('mainmenu').hidden=true; $('menuscrim').hidden=true;
+  const m=$('mainmenu');
+  // The scrim and the ARIA state go at once. Whatever the animation is doing,
+  // from this instant the menu is closed as far as clicks and screen readers
+  // are concerned — deferring either would make the exit a 160ms window in
+  // which the page is unusable.
+  $('menuscrim').hidden=true;
   $('menubtn').setAttribute('aria-expanded','false');
+  if(m.hidden || m.classList.contains('closing')) return;
+  m.classList.add('closing');
+  // A timer rather than transitionend. transitionend does not fire if the
+  // transition never runs — reduced motion, a tab hidden mid-animation, a
+  // browser that skipped it — and a menu that stays in the DOM because an event
+  // did not arrive is a worse bug than one that closes a frame late. The timer
+  // always fires, so the menu always closes.
+  menuCloseTimer=setTimeout(function(){
+    menuCloseTimer=null;
+    m.classList.remove('closing');
+    m.hidden=true;
+  },180);
 }
 applyLang(LANG);
 
@@ -2356,6 +2641,24 @@ function sparkSVG(rates,h){
    <span>last ${Math.round((last.t-rates[0].t)/60)} min</span></div>`;
 }
 
+// A deleted tunnel's card used to vanish between two frames, which gives no
+// confirmation that the one that went was the one that was meant to go — and
+// Delete is the single thing on the card that cannot be undone.
+//
+// The card is dropped from cardMap by the caller straight away, so a tunnel
+// recreated under the same name gets a fresh card rather than this one; what is
+// left here is a detached-in-spirit element playing out its exit. It is made
+// inert first so nothing can be clicked on the way out.
+function leaveCard(el){
+  if(!el || el.dataset.leaving) return;
+  el.dataset.leaving='1';
+  el.setAttribute('aria-hidden','true');
+  el.classList.add('leaving');
+  // Unconditional, for the same reason the menu uses a timer: the element must
+  // leave the DOM whether or not the transition ran.
+  setTimeout(function(){ el.remove(); },200);
+}
+
 async function loadTunnels(){
   try{
     const list=await (await fetch('/api/tunnels')).json()||[];
@@ -2363,7 +2666,7 @@ async function loadTunnels(){
     $('tsum').textContent=list.length;
     $('empty').style.display=list.length?'none':'block';
     const box=$('tunnels'), names=new Set(list.map(t=>t.name));
-    Object.keys(cardMap).forEach(n=>{ if(!names.has(n)){ cardMap[n].remove(); delete cardMap[n]; } });
+    Object.keys(cardMap).forEach(n=>{ if(!names.has(n)){ leaveCard(cardMap[n]); delete cardMap[n]; } });
     let built=false;
     list.forEach(t=>{
       let el=cardMap[t.name];
@@ -2861,9 +3164,121 @@ function openLogs(name){
   setTimeout(()=>{const b=$('logbox');b.scrollTop=b.scrollHeight;b.focus();},300);
 }
 function closeLogs(){
-  $('scrim').classList.remove('on'); $('drawer').classList.remove('on');
+  const d=$('drawer');
+  d.classList.remove('dragging');
+  d.style.transform='';                       // hand the position back to CSS
+  $('scrim').classList.remove('on'); d.classList.remove('on');
+  $('scrim').style.opacity='';
   clearInterval(logTimer); logName=null;
 }
+
+// ---- the sheet is draggable ----
+// It always looked like it was. The header carries a grip — the one shape every
+// phone uses to mean "pull me" — and there was nothing behind it: the only way
+// down was the X in the corner. An affordance that promises something the
+// interface does not do is worse than no affordance, because it is the person
+// who trusted it who ends up feeling wrong.
+//
+// So it does what it says. Three details separate a drag that feels like an
+// object from one that feels like a slider:
+//
+//   - It tracks the finger one to one, from wherever it was grabbed. Jumping to
+//     a centre or applying a ratio breaks the illusion in the first frame.
+//   - It resists upward instead of stopping. There is nothing above the sheet's
+//     open position, and a hard stop reads as frozen; progressive damping reads
+//     as "responsive, but there is nothing more here".
+//   - It lands where the gesture was going, not where the finger happened to
+//     let go. A flick that has barely moved the sheet should still dismiss it,
+//     because the intent was in the speed. The projection below is the same
+//     exponential-decay one scroll deceleration uses.
+(function drawerDrag(){
+  const d=$('drawer'), scrim=$('scrim');
+  const head=d.querySelector('.dh');
+  if(!head) return;
+  const reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let id=null, startY=0, y=0, last=0, lastT=0, v=0;
+
+  // Apple's projection: where a flick would come to rest on its own.
+  //
+  // The rate is 0.99 rather than the 0.998 that models scroll deceleration.
+  // 0.998 is right for a long glide coming to rest — it multiplies velocity by
+  // about 500 — but this is not a glide, it is a yes/no about whether to close.
+  // At that rate an unhurried 110px/s drag projects nearly sixty pixels past
+  // where the finger actually stopped, which is enough on its own to dismiss a
+  // short sheet the operator was only nudging. 0.99 keeps a flick decisive and
+  // stops a slow drag from voting for something the person did not do.
+  const project=(vel,rate=0.99)=>(vel/1000)*rate/(1-rate);
+  // The further past the top, the less the sheet follows.
+  const rubber=(over,dim,c=0.55)=>(over*dim*c)/(dim+c*Math.abs(over));
+
+  const height=()=>d.getBoundingClientRect().height||1;
+  const apply=py=>{
+    d.style.transform='translateY('+py+'px)';
+    // The scrim fades with the sheet, so the page behind comes back as it goes
+    // rather than all at once at the end.
+    scrim.style.opacity=String(Math.max(0,1-py/height()));
+  };
+
+  head.addEventListener('pointerdown',function(e){
+    // Never steal a press meant for a control in the header.
+    if(id!==null || e.button!==0 || e.target.closest('.close,.logfilter')) return;
+    id=e.pointerId;
+    // Start from where the sheet actually is on screen, not from zero: if it is
+    // still animating in, grabbing it must not make it jump.
+    // getComputedStyle returns the string "none" for an untransformed element,
+    // which DOMMatrix throws on — inside a pointerdown handler that would kill
+    // the gesture with nothing to show for it.
+    y=0;
+    try{
+      const t=getComputedStyle(d).transform;
+      if(t && t!=='none') y=new DOMMatrixReadOnly(t).m42||0;
+    }catch(err){}
+    startY=e.clientY-y;
+    last=e.clientY; lastT=e.timeStamp; v=0;
+    d.classList.add('dragging');
+    head.setPointerCapture(id);
+  });
+
+  head.addEventListener('pointermove',function(e){
+    if(e.pointerId!==id) return;
+    let next=e.clientY-startY;
+    if(next<0) next=-rubber(-next,height());   // resist upward
+    y=next;
+    // Velocity from the last sample only: an average over the whole gesture
+    // reports the finger slowing down as it stops, which is the opposite of a
+    // flick's intent.
+    const dt=e.timeStamp-lastT;
+    if(dt>0){ v=(e.clientY-last)/dt*1000; last=e.clientY; lastT=e.timeStamp; }
+    apply(y);
+  });
+
+  function end(e){
+    if(e.pointerId!==id) return;
+    id=null;
+    d.classList.remove('dragging');
+    try{ head.releasePointerCapture(e.pointerId); }catch(err){}
+    // Where the gesture was heading, not where it stopped.
+    const projected=y+(reduce?0:project(v));
+    // A third of the way down, but never less than a deliberate 64 pixels. The
+    // fraction alone is wrong for a short sheet: a log with four lines in it is
+    // only a couple of hundred pixels tall, and a third of that is close enough
+    // to a slip of the thumb while reaching for the filter box that the sheet
+    // would close on people who never meant to touch it. The floor is what stops
+    // the threshold shrinking with the content.
+    if(projected>Math.max(64,height()*0.35)){
+      d.style.transform=''; scrim.style.opacity='';
+      closeLogs();
+    }else{
+      // Back home. The transition is already on the element, so releasing the
+      // inline transform lets CSS carry it — and because it is a transition and
+      // not a keyframe, grabbing it again mid-return picks it up where it is.
+      d.style.transform=''; scrim.style.opacity='';
+    }
+  }
+  head.addEventListener('pointerup',end);
+  head.addEventListener('pointercancel',end);
+})();
 
 // ---- per-tunnel details ----
 // Everything worth a look but not worth card space: traffic, preset, limits,
@@ -3503,7 +3918,7 @@ function openAcc(id){
   $('acch-'+id).setAttribute('aria-expanded','true');
   // Opening bounces: the overshoot easing lets the height spring slightly past
   // and settle.
-  b.style.transition='height .5s cubic-bezier(.34,1.56,.64,1)';
+  b.style.transition='height .32s var(--ease-spring)';
   b.style.height='0px';
   requestAnimationFrame(function(){
     b.style.height=b.scrollHeight+'px';
@@ -3699,6 +4114,16 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLogs();closeSe
     document.addEventListener('visibilitychange',()=>{ document.hidden?stop():start(); });
     start();
   }
+})();
+
+// The starfield already stops itself when the tab goes away; the status dots are
+// CSS animations, which most browsers keep running in a background tab. This is
+// the class of thing nobody ever notices working — a panel left open in a tab
+// for a day should not be doing anything at all — so it is handled the same way.
+(function pauseWhenHidden(){
+  const sync=()=>document.body.classList.toggle('tab-hidden',document.hidden);
+  document.addEventListener('visibilitychange',sync);
+  sync();
 })();
 
 ['ring-cpu','ring-mem','ring-disk','ring-swap'].forEach(id=>makeRing($(id),0));
