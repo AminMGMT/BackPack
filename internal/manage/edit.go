@@ -36,7 +36,7 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		Heartbeat:       sc.Heartbeat,
 		LogLevel:        sc.LogLevel,
 		LogFormat:       sc.LogFormat,
-		AcceptUDP:       sc.AcceptUDP,
+		AcceptUDP:       sc.ForwardsUDP(),
 		Ports:           sc.Ports,
 		MSS:             sc.MSS,
 		SoRcvBuf:        sc.SO_RCVBUF,
@@ -395,10 +395,6 @@ func switchTransport(s *TunnelSpec, transport string) error {
 			preset = PresetTurbo
 		}
 		applyKCPPreset(s, preset)
-	}
-	// accept_udp is only meaningful on the plain TCP transport.
-	if transport != "tcp" {
-		s.AcceptUDP = false
 	}
 	return nil
 }

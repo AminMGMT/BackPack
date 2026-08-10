@@ -103,22 +103,29 @@ func TestUnansweredNumbersKeepThePresetsValue(t *testing.T) {
 	}
 }
 
-// Settings that belong to one transport must not leak onto another: zero-copy
-// and accept_udp are plain-TCP only, and the engine would take them and ignore
-// them, which reads as a setting that did not work.
-func TestTCPOnlyKnobsStayOnTCP(t *testing.T) {
+// Zero-copy is the one knob that belongs to plain TCP alone — the kernel path
+// it asks for needs two ordinary TCP sockets, and every other transport would
+// take the setting and quietly ignore it.
+//
+// UDP forwarding deliberately is not in that category any more. It used to be
+// written for the TCP transport and stripped from every other one, which is
+// why a tunnel on wsmux or kcp forwarded no datagrams at all.
+func TestZeroCopyStaysOnTCPButUDPDoesNot(t *testing.T) {
 	s := TunnelSpec{Role: "server", Transport: "wssmux"}
 	ApplyPreset(&s, PresetTurbo)
 	FineTune{ZeroCopy: true, AcceptUDP: true}.apply(&s)
-	if s.ZeroCopy || s.AcceptUDP {
-		t.Errorf("a TCP-only knob was set on a %s tunnel", s.Transport)
+	if s.ZeroCopy {
+		t.Errorf("zero-copy was set on a %s tunnel, where it cannot engage", s.Transport)
+	}
+	if !s.AcceptUDP {
+		t.Errorf("UDP forwarding was refused on a %s tunnel — every transport carries it now", s.Transport)
 	}
 
 	s = TunnelSpec{Role: "server", Transport: "tcp"}
 	ApplyPreset(&s, PresetTurbo)
 	FineTune{ZeroCopy: true, AcceptUDP: true}.apply(&s)
 	if !s.ZeroCopy || !s.AcceptUDP {
-		t.Error("a TCP-only knob was refused on a TCP tunnel")
+		t.Error("a knob that applies to TCP was refused on a TCP tunnel")
 	}
 }
 

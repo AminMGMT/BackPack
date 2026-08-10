@@ -351,6 +351,14 @@ func (c *WsTransport) tunnelDialer() {
 
 			remoteAddr := string(remoteAddrBytes)
 
+			// A UDP flow is carried as framed datagrams over this same
+			// websocket, read back as one stream: the relay on the other end
+			// splits the frames across messages wherever it likes, so a
+			// message is not a datagram and must not be treated as one.
+			if dialForwardedUDP(&wsStream{conn: tunnelConn}, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer) {
+				return
+			}
+
 			// Extract the port from the received address
 			port, resolvedAddr, err := network.ResolveRemoteAddr(remoteAddr)
 			if err != nil {

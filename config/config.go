@@ -182,11 +182,16 @@ type ServerConfig struct {
 	SimpleAuth bool `toml:"simple_auth"`
 	Heartbeat  int  `toml:"heartbeat"`
 	MuxCon     int  `toml:"mux_con"`
-	AcceptUDP  bool `toml:"accept_udp"`
-	SkipOptz   bool `toml:"skip_optz"`
-	MSS        int  `toml:"mss"`
-	SO_RCVBUF  int  `toml:"so_rcvbuf"`
-	SO_SNDBUF  int  `toml:"so_sndbuf"`
+	// AcceptUDP is a pointer so that "not set" and "set to false" are different
+	// answers. A forwarded port carries UDP as well as TCP unless the operator
+	// says otherwise, which is what a config with no accept_udp line — every
+	// config written before this was the default — now means. An explicit
+	// accept_udp = false is still honoured.
+	AcceptUDP *bool `toml:"accept_udp"`
+	SkipOptz  bool  `toml:"skip_optz"`
+	MSS       int   `toml:"mss"`
+	SO_RCVBUF int   `toml:"so_rcvbuf"`
+	SO_SNDBUF int   `toml:"so_sndbuf"`
 	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
 	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
 	// the window, which costs a large multiple of the throughput on a fast
@@ -215,6 +220,19 @@ type ServerConfig struct {
 	// Embedded so the spoof_* keys sit at the top level too. Only used when
 	// transport = "spoof".
 	SpoofConfig
+}
+
+// ForwardsUDP reports whether the forwarded ports should carry UDP as well as
+// TCP.
+//
+// A forwarded port used to be a TCP listener and nothing else unless
+// accept_udp was set, and it was set almost nowhere: off by default,
+// undocumented, and honoured only by the plain TCP transport. What people saw
+// was a tunnel where a browser worked and Xray's or Shadowsocks' UDP did not,
+// with nothing in the logs to say why. So an unanswered question now answers
+// yes, and turning it off is the deliberate act.
+func (s ServerConfig) ForwardsUDP() bool {
+	return s.AcceptUDP == nil || *s.AcceptUDP
 }
 
 // ClientConfig represents the configuration for the client.

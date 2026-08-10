@@ -16,6 +16,7 @@ Detailed pages for each part of Backpack. Start with the
 - [Choosing a transport (Link Test)](choosing-a-transport.md)
 - [Performance presets](performance-presets.md)
 - [Real client IP (PROXY protocol)](real-client-ip.md)
+- [Forwarded UDP](forwarded-udp.md)
 
 ### Monitoring
 - [Web panel](web-panel.md)

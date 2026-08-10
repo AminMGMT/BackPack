@@ -452,9 +452,16 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 				s.logger.Debugf("accepted tunnel connection from %s", addr.String())
 			default:
 				s.logger.Warn("UDP tunnel channel is full")
-				// Close the newly created connection as it couldn't be added
-				close(tunnelConn.payload)
-				delete(s.activeConnections, key)
+				// Close the newly created connection as it couldn't be added.
+				// Under the lock: this map is read and written by every other
+				// datagram that arrives, and deleting from it unguarded is a
+				// data race that can corrupt the map outright.
+				s.activeMu.Lock()
+				if s.activeConnections[key] == &tunnelConn {
+					close(tunnelConn.payload)
+					delete(s.activeConnections, key)
+				}
+				s.activeMu.Unlock()
 			}
 		}
 	}
@@ -667,6 +674,26 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 		case localConn := <-udpChan:
 			if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
 				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
+				// Drop the flow whole, rather than only stopping work on it.
+				//
+				// Giving up here while leaving the source address in the table
+				// was what made this transport go permanently quiet for a peer:
+				// every later datagram from that address found the stale entry
+				// and was filed into a payload channel no goroutine would ever
+				// read again. The peer stayed silent until the service was
+				// restarted, which is exactly the "UDP worked, then stopped"
+				// report. Removing it means the next datagram starts a fresh
+				// flow and the peer recovers on its own.
+				//
+				// Under the same lock the listener holds while it delivers, so
+				// closing the channel here cannot race a send into it.
+				key := localConn.addr.String()
+				mu.Lock()
+				if (*activeConnections)[key] == localConn {
+					close(localConn.payload)
+					delete(*activeConnections, key)
+				}
+				mu.Unlock()
 				continue
 			}
 

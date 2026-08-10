@@ -60,6 +60,7 @@ type WsConfig struct {
 	Token        string
 	SimpleAuth   bool
 	Ports        []string
+	AcceptUDP    bool
 	Nodelay      bool
 	Sniffer      bool
 	KeepAlive    time.Duration
@@ -479,6 +480,13 @@ func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr strin
 	s.logger.Infof("listener started successfully, listening on address: %s", portListener.Addr().String())
 
 	go s.acceptLocalConn(g, portListener, remoteAddr)
+	// The same forwarded port, carrying datagrams. A flow is handed over as a
+	// net.Conn, so from here down it is paired with a tunnel connection, piped,
+	// counted and torn down by exactly the code that does it for TCP.
+	if s.config.AcceptUDP {
+		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
+			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+	}
 
 	<-g.ctx.Done()
 }
@@ -586,7 +594,7 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
 						defer s.limits.release()
-						handlers.WSConnectionHandler(g.ctx, tunnelConn.conn, localConn.conn, s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+						handlers.WSConnectionHandler(g.ctx, tunnelConn.conn, localConn.conn, s.logger, g.usageMonitor, localForwardPort(localConn.conn), s.config.Sniffer)
 					}(tunnelConnection, localConn)
 					break loop
 				}

@@ -596,11 +596,6 @@ func (s *TcpTransport) startListeners(g *tcpGen, localAddr, remoteAddr string) {
 	// Start TCP listener
 	go s.localListener(g, localAddr, remoteAddr)
 
-	// Start UDP listener if configured
-	if s.config.AcceptUDP {
-		go s.udpListener(g, localAddr, remoteAddr)
-	}
-
 	s.logger.Debugf("Started listening on %s, forwarding to %s", localAddr, remoteAddr)
 }
 
@@ -616,6 +611,13 @@ func (s *TcpTransport) localListener(g *tcpGen, localAddr string, remoteAddr str
 	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
 
 	go s.acceptLocalConn(g, listener, remoteAddr)
+	// The same forwarded port, carrying datagrams. A flow is handed over as a
+	// net.Conn, so from here down it is paired with a tunnel connection, piped,
+	// counted and torn down by exactly the code that does it for TCP.
+	if s.config.AcceptUDP {
+		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
+			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+	}
 
 	<-g.ctx.Done()
 }
@@ -720,7 +722,7 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
 						defer s.limits.release()
-						handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, localConn.conn, metrics.CountedConn(tunnelConn), s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+						handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol && !isUDPFlow(localConn.conn), localConn.conn, metrics.CountedConn(tunnelConn), s.logger, g.usageMonitor, localForwardPort(localConn.conn), s.config.Sniffer)
 					}(localConn, tunnelConn)
 					break loop
 

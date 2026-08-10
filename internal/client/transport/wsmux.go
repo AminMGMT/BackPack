@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -393,7 +394,15 @@ func (c *WsMuxTransport) handleSession(tunnelConn *websocket.Conn) {
 	}
 }
 
+// dialUDP forwards a target marked as UDP, reporting whether it took the flow.
+func (c *WsMuxTransport) dialUDP(stream net.Conn, remoteAddr string) bool {
+	return dialForwardedUDP(stream, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer)
+}
+
 func (c *WsMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
+	if c.dialUDP(stream, remoteAddr) {
+		return
+	}
 	// Extract the port from the received address
 	port, resolvedAddr, err := network.ResolveRemoteAddr(remoteAddr)
 	if err != nil {

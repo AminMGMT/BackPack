@@ -72,7 +72,7 @@ func (s *Server) Start() {
 			Sniffer:        s.config.Sniffer,
 			WebPort:        s.config.WebPort,
 			SnifferLog:     s.config.SnifferLog,
-			AcceptUDP:      s.config.AcceptUDP,
+			AcceptUDP:      s.config.ForwardsUDP(),
 			MSS:            s.config.MSS,
 			SO_RCVBUF:      s.config.SO_RCVBUF,
 			SO_SNDBUF:      s.config.SO_SNDBUF,
@@ -115,6 +115,7 @@ func (s *Server) Start() {
 		useICMP := s.config.Transport == config.XDI
 		useSpoof := s.config.Transport == config.SPOOF
 		kcpConfig := &transport.KcpConfig{
+			AcceptUDP:        s.config.ForwardsUDP(),
 			BindAddr:         s.config.BindAddr,
 			Heartbeat:        time.Duration(s.config.Heartbeat) * time.Second,
 			Token:            s.config.Token,
@@ -159,6 +160,7 @@ func (s *Server) Start() {
 
 	case config.QUIC:
 		quicConfig := &transport.QuicConfig{
+			AcceptUDP:      s.config.ForwardsUDP(),
 			BindAddr:       s.config.BindAddr,
 			Heartbeat:      time.Duration(s.config.Heartbeat) * time.Second,
 			KeepAlive:      time.Duration(s.config.Keepalive) * time.Second,
@@ -180,6 +182,7 @@ func (s *Server) Start() {
 
 	case config.TCPMUX:
 		tcpMuxConfig := &transport.TcpMuxConfig{
+			AcceptUDP:        s.config.ForwardsUDP(),
 			BindAddr:         s.config.BindAddr,
 			Nodelay:          s.config.Nodelay,
 			KeepAlive:        time.Duration(s.config.Keepalive) * time.Second,
@@ -208,6 +211,7 @@ func (s *Server) Start() {
 
 	case config.WS, config.WSS:
 		wsConfig := &transport.WsConfig{
+			AcceptUDP:    s.config.ForwardsUDP(),
 			BindAddr:     s.config.BindAddr,
 			Nodelay:      s.config.Nodelay,
 			KeepAlive:    time.Duration(s.config.Keepalive) * time.Second,
@@ -235,6 +239,7 @@ func (s *Server) Start() {
 
 	case config.WSMUX, config.WSSMUX:
 		wsMuxConfig := &transport.WsMuxConfig{
+			AcceptUDP:        s.config.ForwardsUDP(),
 			BindAddr:         s.config.BindAddr,
 			Nodelay:          s.config.Nodelay,
 			KeepAlive:        time.Duration(s.config.Keepalive) * time.Second,

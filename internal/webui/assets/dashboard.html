@@ -1881,7 +1881,7 @@ const FA={
   "TCP_NODELAY — lower latency":"TCP_NODELAY — تأخیر کمتر",
   "Write logs as JSON (for log collectors)":"نوشتن لاگ به صورت JSON (برای جمع‌آورنده‌های لاگ)",
   "Aggressive pool":"استخر تهاجمی",
-  "Accept UDP traffic over the TCP transport":"پذیرش ترافیک UDP روی ترنسپورت TCP",
+  "Forward UDP as well as TCP on the exposed ports":"فوروارد UDP در کنار TCP روی پورت‌های بازشده",
   "Zero-copy forwarding (experimental)":"فوروارد zero-copy (آزمایشی)",
 };
 let LANG=localStorage.getItem('bp_lang')==='fa'?'fa':'en';
@@ -2442,7 +2442,7 @@ const FT_FIELDS=[
   {k:'nodelay',         t:'bool',label:'TCP_NODELAY — lower latency'},
   {k:'logJSON',         t:'bool',label:'Write logs as JSON (for log collectors)'},
   {k:'aggressivePool',  t:'bool',label:'Aggressive pool', when:c=>c.role==='client'},
-  {k:'acceptUDP',       t:'bool',label:'Accept UDP traffic over the TCP transport', when:c=>c.role==='server'&&c.transport==='tcp'},
+  {k:'acceptUDP',       t:'bool',label:'Forward UDP as well as TCP on the exposed ports', when:c=>c.role==='server'},
   {k:'zeroCopy',        t:'bool',label:'Zero-copy forwarding (experimental)', when:c=>c.transport==='tcp'},
 ];
 // The three knobs whose zero is an answer rather than a blank: no heartbeat, no

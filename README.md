@@ -34,6 +34,9 @@ the **real service**. The tunnel is always dialed **by the client**
 
 ## Why Backpack?
 
+- **TCP and UDP on every forwarded port** — expose 443 and both protocols go
+  through, on every transport. Xray/3x-ui, Shadowsocks, WireGuard and DNS work
+  without a second tunnel underneath. See [docs/forwarded-udp.md](docs/forwarded-udp.md).
 - **Multi-transport** — nine transports across TCP, UDP and WebSocket, so you
   match the route instead of fighting it.
 - **Automatic rollback** — an update or edit that breaks a tunnel reverts itself,

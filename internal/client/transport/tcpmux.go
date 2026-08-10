@@ -463,7 +463,15 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 	}
 }
 
+// dialUDP forwards a target marked as UDP, reporting whether it took the flow.
+func (c *TcpMuxTransport) dialUDP(stream net.Conn, remoteAddr string) bool {
+	return dialForwardedUDP(stream, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer)
+}
+
 func (c *TcpMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
+	if c.dialUDP(stream, remoteAddr) {
+		return
+	}
 	// Extract the port from the received address
 	port, resolvedAddr, err := network.ResolveRemoteAddr(remoteAddr)
 	if err != nil {

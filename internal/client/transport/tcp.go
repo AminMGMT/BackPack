@@ -456,6 +456,13 @@ func (c *TcpTransport) tunnelDialer() {
 		return
 	}
 
+	// A forwarded UDP flow says so in the target address, on this transport as
+	// on every other one, so there is one thing to recognise rather than a
+	// signal byte here and a marked address everywhere else.
+	if dialForwardedUDP(tcpConn, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer) {
+		return
+	}
+
 	// Extract the port from the received address
 	port, resolvedAddr, err := network.ResolveRemoteAddr(remoteAddr)
 	if err != nil {
@@ -468,9 +475,6 @@ func (c *TcpTransport) tunnelDialer() {
 	case utils.SG_TCP:
 		// Dial local server using the received address
 		c.localDialer(tcpConn, resolvedAddr, port)
-
-	case utils.SG_UDP:
-		UDPDialer(tcpConn, resolvedAddr, c.logger, c.state.Usage(), port, c.config.Sniffer)
 
 	default:
 		c.logger.Error("undefined transport. close the connection.")

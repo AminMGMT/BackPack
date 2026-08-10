@@ -436,7 +436,15 @@ func (c *QuicTransport) tunnelDialer() {
 	c.localDialer(data, remoteAddr)
 }
 
+// dialUDP forwards a target marked as UDP, reporting whether it took the flow.
+func (c *QuicTransport) dialUDP(stream net.Conn, remoteAddr string) bool {
+	return dialForwardedUDP(stream, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer)
+}
+
 func (c *QuicTransport) localDialer(stream net.Conn, remoteAddr string) {
+	if c.dialUDP(stream, remoteAddr) {
+		return
+	}
 	port, resolvedAddr, err := network.ResolveRemoteAddr(remoteAddr)
 	if err != nil {
 		c.logger.Infof("failed to resolve remote port: %v", err)

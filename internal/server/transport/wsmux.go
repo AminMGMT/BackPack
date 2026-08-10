@@ -66,6 +66,7 @@ type WsMuxConfig struct {
 	ACMECacheDir     string
 	TunnelStatus     string
 	Ports            []string
+	AcceptUDP        bool
 	Nodelay          bool
 	Sniffer          bool
 	KeepAlive        time.Duration
@@ -502,6 +503,13 @@ func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr
 	defer listener.Close()
 
 	go s.acceptLocalConn(g, listener, remoteAddr)
+	// The same forwarded port, carrying datagrams. A flow is handed over as a
+	// net.Conn, so from here down it is paired with a tunnel connection, piped,
+	// counted and torn down by exactly the code that does it for TCP.
+	if s.config.AcceptUDP {
+		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
+			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+	}
 
 	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
 
@@ -643,7 +651,7 @@ func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
 				// Free the connection slot once the transfer ends, or the
 				// limit would fill up permanently.
 				defer s.limits.release()
-				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, incomingConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol && !isUDPFlow(incomingConn.conn), incomingConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, localForwardPort(incomingConn.conn), s.config.Sniffer)
 				atomic.AddInt32(&s.streamCounter, -1)
 				<-counter // read signal from the channel
 			}()

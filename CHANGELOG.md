@@ -10,6 +10,73 @@ only door. The other half is the UDP side of the engine: the three transports
 that carry their data in datagrams — udp, kcp (and xdi, which is kcp over ICMP) —
 plus quic, which joins them.
 
+### Fixed
+- **A forwarded port carries UDP now, on every transport.** This is the one
+  reported as "UDP does not pass through BackPack" with 3x-ui/Xray and
+  Shadowsocks, worked around by building a GRE tunnel underneath and running
+  Backpack over that. The workaround was sound and the diagnosis was right: the
+  UDP was never reaching Backpack's forwarded port, because nothing was
+  listening for it.
+
+  A forwarded port opened a TCP listener and nothing else. Datagrams were
+  refused by the kernel; nothing was logged, so the port looked healthy and half
+  of it silently was not there. There *was* an `accept_udp` setting, but it was
+  off by default, undocumented, and honoured only by the plain `tcp` transport —
+  the management layer deleted it from the config whenever the transport was
+  anything else. So on `tcpmux`, `ws`, `wss`, `wsmux`, `wssmux`, `kcp` or
+  `quic`, which is most tunnels, forwarded UDP could not be turned on at all.
+
+  It now works everywhere, and it is on by default: expose `443` and the tunnel
+  listens on 443/tcp and 443/udp both. Each source address becomes a flow that
+  is paired, limited, counted and torn down by exactly the code that already
+  does it for a TCP connection — a datagram flow is handed to the transport
+  wearing the same shape, so there is no second implementation to drift. The
+  flow is marked in the target address rather than in a new header byte, which
+  is why this needed no change to any transport's framing. Datagrams are
+  length-prefixed, so a packet that goes in as one message comes out as one
+  message of the same size.
+
+  **Open the port for UDP in your firewall** — `ufw allow 443/udp` — TCP is not
+  enough, and it is the first thing to check if this still does not work. Both
+  ends must be on v1.7.1: a client that predates it logs a resolve error for the
+  UDP flow and carries TCP as before. `accept_udp = false` still turns it off
+  per tunnel, and a UDP port that cannot be bound now warns and leaves the
+  tunnel running instead of killing the server. See
+  [docs/forwarded-udp.md](docs/forwarded-udp.md).
+
+  Three faults in the old path went with it. A source address whose flow could
+  not be started was recorded anyway and never removed, so one full channel
+  blackholed that peer until the service was restarted — the signature being
+  "UDP worked, then stopped, and a restart fixes it". The client leaked a
+  goroutine and a file descriptor per flow, forever, so a busy client eventually
+  ran out of descriptors and stopped accepting anything. And congestion was
+  judged by comparing a timestamp from one machine against the clock of the
+  other: two servers do not share a clock, so a kharej host a second ahead made
+  every packet look a second late, flagged every flow as congested, and tore
+  them down in a loop. That measurement was never sound and is gone rather than
+  corrected.
+
+- **The `udp` transport could silence a peer permanently.** The same fault, in
+  the one place the rewrite above does not reach. A forwarded flow that waits
+  more than three seconds for a tunnel connection is given up on — which happens
+  whenever the pool is briefly empty, and always happens when traffic arrives
+  before the client has finished connecting. Giving up removed the flow from
+  service but left its source address in the table, and nothing else ever
+  removed it, so every later datagram from that peer was filed against a payload
+  channel no goroutine was reading. The peer went quiet for good; restarting the
+  service was the only cure. The flow is now dropped whole, so the next datagram
+  from that address starts a fresh one.
+
+  A second, smaller fault went with it: the tunnel-side table was written
+  without its lock on one path, which is a data race that can corrupt a Go map
+  outright.
+
+  Worth saying plainly, though: the `udp` transport carries datagrams with no
+  retransmission, no ordering and no error correction, so on a lossy or
+  throttled route it will still do far worse than **UDP + KCP** — and since this
+  release you do not need it to forward a UDP service at all. Any transport
+  does that now.
+
 ### Added
 - **The web panel builds and manages tunnels.** It used to say "monitoring
   only" in the corner of the Tunnels heading, and it meant it: every tunnel was

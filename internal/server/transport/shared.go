@@ -111,15 +111,6 @@ type LocalTCPConn struct {
 	timeCreated int64
 }
 
-type LocalAcceptUDPConn struct {
-	timeCreated int64
-	payload     chan []byte
-	remoteAddr  string
-	listener    *net.UDPConn
-	clientAddr  *net.UDPAddr
-	IsCongested bool // for congested tcp connection
-}
-
 type LocalUDPConn struct {
 	timeCreated int64
 	payload     chan []byte

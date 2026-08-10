@@ -290,10 +290,11 @@ func (s TunnelSpec) Render() string {
 		s.writeTuning(p)
 		s.writeKCP(p)
 		s.writeSpoof(p)
-		if s.Transport == "tcp" {
-			// accept_udp is only honoured by the plain TCP transport in the engine.
-			p("accept_udp = %t\n", s.AcceptUDP)
-		}
+		// Written for every transport: a forwarded port carries UDP as well as
+		// TCP now, whatever the tunnel is built on, and the value is written
+		// out so the file says what the tunnel does rather than relying on a
+		// default that has changed once already.
+		p("accept_udp = %t\n", s.AcceptUDP)
 		if needsTLS(s.Transport) {
 			p("tls_cert = %q\n", s.TLSCert)
 			p("tls_key = %q\n", s.TLSKey)

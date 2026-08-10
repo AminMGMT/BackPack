@@ -102,7 +102,7 @@ type FineTune struct {
 	LogJSON   bool   `json:"logJSON"`
 
 	ChannelSize int  `json:"channelSize"` // server
-	AcceptUDP   bool `json:"acceptUDP"`   // server, plain TCP only
+	AcceptUDP   bool `json:"acceptUDP"`   // server
 
 	ConnectionPool int  `json:"connectionPool"` // client
 	AggressivePool bool `json:"aggressivePool"` // client
@@ -162,7 +162,7 @@ func tuneOf(s TunnelSpec) FineTune {
 func (f FineTune) apply(s *TunnelSpec) {
 	s.Nodelay = f.Nodelay
 	s.AggressivePool = f.AggressivePool
-	s.AcceptUDP = f.AcceptUDP && s.Transport == "tcp"
+	s.AcceptUDP = f.AcceptUDP
 	s.ZeroCopy = f.ZeroCopy && s.Transport == "tcp"
 	// Heartbeat is the one number whose zero is meaningful — it disables the
 	// heartbeat, which the CLI offers in as many words.
@@ -208,7 +208,10 @@ func setInt(dst *int, v int) {
 // of this role and transport — what the panel's Fine Tune drawer shows before
 // anything is edited, and what it resets to when the preset is changed.
 func PresetTune(preset, role, transport string) FineTune {
-	s := TunnelSpec{Role: role, Transport: transport}
+	// AcceptUDP is not part of a preset — it is a defaulted setting — so it is
+	// seeded here with the answer a new tunnel gets, or the drawer would show
+	// the switch off on a tunnel that is about to forward UDP.
+	s := TunnelSpec{Role: role, Transport: transport, AcceptUDP: true}
 	ApplyPreset(&s, preset)
 	return tuneOf(s)
 }
@@ -239,7 +242,9 @@ type NewTunnel struct {
 // is created and reported as not running, exactly as the CLI reports it, rather
 // than being refused after the config was already written.
 func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
-	s := TunnelSpec{}
+	// Forwarded ports carry UDP as well as TCP unless the Fine Tune drawer
+	// turns it off, which is what the CLI wizard does too.
+	s := TunnelSpec{AcceptUDP: true}
 
 	switch n.Role {
 	case "server", "client":

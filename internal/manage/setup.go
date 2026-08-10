@@ -115,9 +115,10 @@ func applyManualTuning(s *TunnelSpec) {
 	}
 	if s.Role == "server" {
 		s.ChannelSize = tui.PromptInt("Channel size", s.ChannelSize)
-		if s.Transport == "tcp" {
-			s.AcceptUDP = tui.Confirm("Accept UDP traffic over the TCP transport (accept_udp)", s.AcceptUDP)
-		}
+		// Every transport forwards UDP now, so the question is asked for every
+		// transport. Turning it off leaves the forwarded ports carrying TCP
+		// only, which is what they used to do.
+		s.AcceptUDP = tui.Confirm("Forward UDP as well as TCP on the exposed ports", s.AcceptUDP)
 	} else {
 		s.ConnectionPool = tui.PromptInt("Connection pool size", s.ConnectionPool)
 		s.AggressivePool = tui.Confirm("Enable aggressive pool", s.AggressivePool)
@@ -457,7 +458,9 @@ func SetupServer() {
 		return
 	}
 
-	s := TunnelSpec{Role: "server", Transport: transport}
+	// AcceptUDP starts on: a forwarded port carries both protocols unless the
+	// operator says otherwise. See config.ServerConfig.ForwardsUDP.
+	s := TunnelSpec{Role: "server", Transport: transport, AcceptUDP: true}
 
 	port := tui.Prompt("Tunnel (control) port: ")
 	if !validPort(port) {
@@ -730,6 +733,11 @@ func showForwardTargets(ports []string) {
 	tui.Warn("Check there with:  ss -tlnp | grep <port>")
 	tui.Warn("A panel bound to a public IP instead of 127.0.0.1 will refuse the")
 	tui.Warn("connection — in that case map it explicitly: 443=<that IP>:443")
+	fmt.Println()
+	// Both protocols on every forwarded port, which is new — and a firewall
+	// opened for TCP is not opened for UDP, which is the thing people miss.
+	tui.Info("These ports carry UDP as well as TCP (Xray, Shadowsocks, DNS, games).")
+	tui.Warn("Open BOTH in the firewall here:  ufw allow <port>/tcp && ufw allow <port>/udp")
 	fmt.Println()
 }
 
