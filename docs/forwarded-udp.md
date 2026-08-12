@@ -1,10 +1,28 @@
 # Forwarded UDP
 
-A forwarded port carries **both TCP and UDP**. You do not have to turn anything
-on: expose `443` and the tunnel listens on 443/tcp *and* 443/udp, relays both to
-the kharej machine, and sends the replies back to whoever sent them.
+A forwarded port can carry **UDP as well as TCP** — but only when you ask it to.
+It is **off by default**: expose `443` and the tunnel carries 443/tcp until you
+turn UDP on, at which point it also listens on 443/udp, relays both to the
+kharej machine, and sends the replies back to whoever sent them.
 
-This matters because a lot of what people put behind a tunnel is not TCP-only:
+> **Why off by default.** A browser's QUIC is UDP on port 443, so a tunnel that
+> forwarded UDP for every port silently began carrying every QUIC flow a browser
+> opened. On the connection-pooled transports (`ws`, `wss`, and the mux family)
+> each of those long-lived flows holds a pooled connection for as long as the
+> browser keeps it, which starves the TCP forwards sharing the pool — a site
+> half-loads (images stall while audio plays) until a restart clears it. So UDP
+> forwarding is now a deliberate choice: turn it on for the tunnels that need
+> it, and a plain web or proxy tunnel is left to carry only TCP.
+
+## Turning it on
+
+- **Panel** — Edit the *server* tunnel → Fine Tune → switch on **Forward UDP as
+  well as TCP on the exposed ports** → Save.
+- **CLI** — answer *yes* to the UDP question under "Fine-tune the advanced
+  settings by hand" at setup.
+- **By hand** — add `accept_udp = true` under `[server]` and restart.
+
+Turn it on because a lot of what people put behind a tunnel is not TCP-only:
 
 | Service | What needs UDP |
 |---|---|
@@ -18,11 +36,14 @@ This matters because a lot of what people put behind a tunnel is not TCP-only:
 
 ## How it works
 
-The forwarded port opens a UDP socket alongside the TCP listener. Each source
-address that sends a datagram becomes a **flow**, and a flow is carried over the
-tunnel exactly the way a TCP connection is — same pool, same limits, same
-metrics, same teardown. Datagrams are length-prefixed on the wire so a packet
-that goes in as one message comes out as one message of the same size.
+With UDP forwarding on, the forwarded port opens a UDP socket alongside the TCP
+listener. Each source address that sends a datagram becomes a **flow**, and a
+flow is carried over the tunnel exactly the way a TCP connection is — same pool,
+same limits, same metrics, same teardown. That shared pool is the reason it is
+off by default: a flow holds a pooled connection for its whole life, so on a
+pooled transport a crowd of long-lived flows (a browser's QUIC) squeezes out the
+TCP forwards. Datagrams are length-prefixed on the wire so a packet that goes in
+as one message comes out as one message of the same size.
 
 On the kharej side the tunnel opens one UDP socket per flow to the backend, and
 sends its replies back through the same flow. The source sees the answer coming

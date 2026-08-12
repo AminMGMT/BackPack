@@ -48,6 +48,26 @@ All notable changes to Backpack are documented here.
   rule instead of adding one. See [docs/tcp-pck.md](docs/tcp-pck.md).
 
 ### Changed
+- **Forwarded UDP is opt-in again — off unless you turn it on.** v1.7.1 made a
+  forwarded port carry UDP as well as TCP by default, to fix Xray/Shadowsocks
+  UDP working nowhere. That default caused a worse problem than it solved. A
+  browser's QUIC is UDP on port 443, so a plain web tunnel silently began
+  carrying every QUIC flow the browser opened — and each forwarded UDP flow
+  holds a pooled tunnel connection for as long as it lives. On the
+  connection-pooled transports (`ws`, `wss`, and the mux family) a browser's
+  many long-lived QUIC connections to a site drained the pool the TCP forwards
+  shared, so the site half-loaded (images stalled while audio played) and a
+  restart cleared it for a while before it filled again. Instagram, which is
+  QUIC-heavy, was the usual casualty; Telegram, which is TCP, was fine.
+
+  So `accept_udp` is off by default once more, as it was before v1.7.1. New
+  tunnels carry TCP only; turn UDP on — Edit → Fine Tune → *Forward UDP…*, or
+  `accept_udp = true` — for the tunnels that genuinely need it (a VPN, a game,
+  an Xray/Shadowsocks inbound). **An existing tunnel created on v1.7.1 has
+  `accept_udp = true` written in its config and keeps forwarding UDP until you
+  turn it off** — that is the fix for the symptom above if you are hitting it.
+  See [docs/forwarded-udp.md](docs/forwarded-udp.md).
+
 - **The spoof transport's ICMP and UDP profiles now match the reference spoof
   transports on the wire — and carry the payload bare.** They used to borrow
   xdi's framing: every datagram went out with a 5-byte tag+direction prefix in

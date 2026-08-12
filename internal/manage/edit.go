@@ -471,6 +471,24 @@ func mssLabel(mss int) string {
 	return fmt.Sprintf("%d bytes", mss)
 }
 
+// SetAcceptUDP turns UDP forwarding on the exposed ports on or off. It is a
+// server-side setting — the forwarded ports live there — and off is the default
+// a plain web or proxy tunnel should keep. See config.ServerConfig.ForwardsUDP.
+func SetAcceptUDP(name string, on bool) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if s.Role != "server" {
+		return fmt.Errorf("UDP forwarding is a server-side setting — the exposed ports live there")
+	}
+	if s.AcceptUDP == on {
+		return fmt.Errorf("UDP forwarding is already %s", map[bool]string{true: "on", false: "off"}[on])
+	}
+	s.AcceptUDP = on
+	return applySpec(s)
+}
+
 // SetMSS clamps the largest TCP payload the tunnel puts in one packet. Zero —
 // the default — hands the decision back to the kernel.
 //

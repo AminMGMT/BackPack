@@ -221,9 +221,9 @@ func setInt(dst *int, v int) {
 // anything is edited, and what it resets to when the preset is changed.
 func PresetTune(preset, role, transport string) FineTune {
 	// AcceptUDP is not part of a preset — it is a defaulted setting — so it is
-	// seeded here with the answer a new tunnel gets, or the drawer would show
-	// the switch off on a tunnel that is about to forward UDP.
-	s := TunnelSpec{Role: role, Transport: transport, AcceptUDP: true}
+	// seeded here with the answer a new tunnel gets: off. A tunnel forwards UDP
+	// only when the operator turns it on. See config.ServerConfig.ForwardsUDP.
+	s := TunnelSpec{Role: role, Transport: transport, AcceptUDP: false}
 	ApplyPreset(&s, preset)
 	return tuneOf(s)
 }
@@ -254,9 +254,10 @@ type NewTunnel struct {
 // is created and reported as not running, exactly as the CLI reports it, rather
 // than being refused after the config was already written.
 func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
-	// Forwarded ports carry UDP as well as TCP unless the Fine Tune drawer
-	// turns it off, which is what the CLI wizard does too.
-	s := TunnelSpec{AcceptUDP: true}
+	// Forwarded ports carry TCP only unless the Fine Tune drawer turns UDP on,
+	// which is what the CLI wizard defaults to too. See ForwardsUDP for why the
+	// default is off.
+	s := TunnelSpec{AcceptUDP: false}
 
 	switch n.Role {
 	case "server", "client":

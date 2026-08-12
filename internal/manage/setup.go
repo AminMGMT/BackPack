@@ -116,10 +116,12 @@ func applyManualTuning(s *TunnelSpec) {
 	}
 	if s.Role == "server" {
 		s.ChannelSize = tui.PromptInt("Channel size", s.ChannelSize)
-		// Every transport forwards UDP now, so the question is asked for every
-		// transport. Turning it off leaves the forwarded ports carrying TCP
-		// only, which is what they used to do.
-		s.AcceptUDP = tui.Confirm("Forward UDP as well as TCP on the exposed ports", s.AcceptUDP)
+		// Off by default: a forwarded port carries TCP only unless this is
+		// turned on. Turn it on for a tunnel that must carry UDP — a VPN, a
+		// game, an Xray/Shadowsocks inbound. A plain web or proxy tunnel should
+		// leave it off, or the browser's QUIC (UDP/443) is tunnelled too and
+		// crowds the connection pool the TCP forwards share.
+		s.AcceptUDP = tui.Confirm("Forward UDP as well as TCP on the exposed ports (only if you need UDP)", s.AcceptUDP)
 	} else {
 		s.ConnectionPool = tui.PromptInt("Connection pool size", s.ConnectionPool)
 		s.AggressivePool = tui.Confirm("Enable aggressive pool", s.AggressivePool)
@@ -541,9 +543,9 @@ func SetupServer() {
 		return
 	}
 
-	// AcceptUDP starts on: a forwarded port carries both protocols unless the
-	// operator says otherwise. See config.ServerConfig.ForwardsUDP.
-	s := TunnelSpec{Role: "server", Transport: transport, AcceptUDP: true}
+	// AcceptUDP starts off: a forwarded port carries TCP only unless the
+	// operator turns UDP on. See config.ServerConfig.ForwardsUDP.
+	s := TunnelSpec{Role: "server", Transport: transport, AcceptUDP: false}
 
 	port := tui.Prompt("Tunnel (control) port: ")
 	if !validPort(port) {

@@ -216,11 +216,10 @@ type ServerConfig struct {
 	SimpleAuth bool `toml:"simple_auth"`
 	Heartbeat  int  `toml:"heartbeat"`
 	MuxCon     int  `toml:"mux_con"`
-	// AcceptUDP is a pointer so that "not set" and "set to false" are different
-	// answers. A forwarded port carries UDP as well as TCP unless the operator
-	// says otherwise, which is what a config with no accept_udp line — every
-	// config written before this was the default — now means. An explicit
-	// accept_udp = false is still honoured.
+	// AcceptUDP turns UDP forwarding on for the exposed ports. It is off unless
+	// set: a forwarded port carries TCP only until the operator asks for UDP as
+	// well. The pointer distinguishes "not set" (off) from an explicit
+	// accept_udp = true, so a config with no line does not forward UDP.
 	AcceptUDP *bool `toml:"accept_udp"`
 	SkipOptz  bool  `toml:"skip_optz"`
 	MSS       int   `toml:"mss"`
@@ -260,16 +259,21 @@ type ServerConfig struct {
 }
 
 // ForwardsUDP reports whether the forwarded ports should carry UDP as well as
-// TCP.
+// TCP. It is off unless the operator turns it on.
 //
-// A forwarded port used to be a TCP listener and nothing else unless
-// accept_udp was set, and it was set almost nowhere: off by default,
-// undocumented, and honoured only by the plain TCP transport. What people saw
-// was a tunnel where a browser worked and Xray's or Shadowsocks' UDP did not,
-// with nothing in the logs to say why. So an unanswered question now answers
-// yes, and turning it off is the deliberate act.
+// It was briefly the other way — on unless turned off — so that Xray and
+// Shadowsocks UDP would work without a hidden switch. That default did more harm
+// than the problem it solved: a browser's QUIC is UDP on port 443, so every web
+// tunnel silently began carrying every QUIC flow, and on the connection-pooled
+// transports (ws/wss and the mux family) those long-lived flows each hold a
+// pooled connection for as long as the browser keeps them — which starves the
+// TCP forwards sharing the pool. The visible symptom was a site half-loading
+// (images stalled while audio played) that a restart fixed for a while. So the
+// default is back to off: the tunnels that genuinely need UDP — a VPN, a game,
+// an Xray inbound — turn it on, and a plain web or proxy tunnel is not made to
+// carry traffic nobody asked it to.
 func (s ServerConfig) ForwardsUDP() bool {
-	return s.AcceptUDP == nil || *s.AcceptUDP
+	return s.AcceptUDP != nil && *s.AcceptUDP
 }
 
 // ClientConfig represents the configuration for the client.

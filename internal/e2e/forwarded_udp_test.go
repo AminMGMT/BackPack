@@ -58,6 +58,12 @@ func startForwardingTunnel(t *testing.T, transport, backendAddr string) string {
 	token := "forwarded-udp-token-0123456789ab"
 
 	srvCfg := baseServerConfig(transport, tunnelPort, entryPort, backendAddr, token)
+	// UDP forwarding is opt-in — off unless asked for — so a test about
+	// forwarded UDP has to turn it on, exactly as an operator who needs UDP now
+	// does. Without this the server would carry TCP only and these tests would
+	// be asserting against a port that never bound UDP.
+	on := true
+	srvCfg.AcceptUDP = &on
 	cliCfg := baseClientConfig(transport, fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -269,6 +275,50 @@ func TestForwardedUDPCanBeTurnedOff(t *testing.T) {
 	pc, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", entryPort))
 	if err != nil {
 		t.Fatalf("accept_udp = false still bound the UDP side of the forwarded port: %v", err)
+	}
+	pc.Close()
+}
+
+// The default — no accept_udp line at all — is off. This is the regression the
+// opt-in change fixes: a plain web tunnel silently forwarded every QUIC flow
+// and let those long-lived datagram flows crowd the connection pool its TCP
+// forwards shared, so a site would half-load until a restart. A tunnel that
+// says nothing about UDP must carry TCP only.
+func TestForwardedUDPIsOffByDefault(t *testing.T) {
+	backend := startUDPEcho(t)
+
+	tunnelPort := freePort(t)
+	entryPort := freePort(t)
+	token := "forwarded-udp-default-0123456789"
+
+	srvCfg := baseServerConfig("ws", tunnelPort, entryPort, backend, token)
+	// AcceptUDP is left nil — a config with no accept_udp line, which is what a
+	// hand-written config and every tunnel that predates the feature look like.
+	if srvCfg.AcceptUDP != nil {
+		t.Fatal("baseServerConfig should not set accept_udp; this test needs the default")
+	}
+	if srvCfg.ForwardsUDP() {
+		t.Fatal("the default (no accept_udp line) must not forward UDP")
+	}
+	cliCfg := baseClientConfig("ws", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	t.Cleanup(func() { cancel(); wg.Wait() })
+
+	srv := server.NewServer(srvCfg, ctx)
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Start() }()
+	time.Sleep(300 * time.Millisecond)
+	cli := client.NewClient(cliCfg, ctx)
+	wg.Add(1)
+	go func() { defer wg.Done(); cli.Start() }()
+	time.Sleep(1500 * time.Millisecond)
+
+	// The UDP side of the forwarded port must be free, because nothing bound it.
+	pc, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", entryPort))
+	if err != nil {
+		t.Fatalf("the default forwarded UDP even though no accept_udp was set: %v", err)
 	}
 	pc.Close()
 }

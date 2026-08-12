@@ -160,6 +160,11 @@ func editPortsMenu(name string) {
 				func() { toggleProxyProtocol(name, spec) },
 				func() { editLimits(name, spec) },
 			}
+			opts = append(opts, tui.Option{
+				Title: "Forward UDP: " + onOff(spec.AcceptUDP),
+				Desc:  "carry UDP on the exposed ports too — off unless you need it",
+			})
+			actions = append(actions, func() { toggleAcceptUDP(name, spec) })
 			if !isDatagram(spec.Transport) {
 				opts = append(opts, tui.Option{
 					Title: "TCP MSS clamp",
@@ -461,6 +466,42 @@ func editPckFlags(name string, spec TunnelSpec) {
 		return
 	}
 	tui.Success("Flags set to " + pckFlagSummary(flags) + " and the tunnel restarted.")
+	tui.PressEnter()
+}
+
+// toggleAcceptUDP turns forwarding of UDP on the exposed ports on or off. It is
+// the CLI's way to undo the v1.7.1 default on an existing tunnel, since a tunnel
+// created then carries an explicit accept_udp = true that only an edit clears.
+func toggleAcceptUDP(name string, spec TunnelSpec) {
+	fmt.Println()
+	tui.Title("Forward UDP for " + name)
+	fmt.Println()
+	tui.Warn("Off, the exposed ports carry TCP only — which is what a web or")
+	tui.Warn("proxy tunnel wants. On, they also carry UDP.")
+	fmt.Println()
+	tui.Error("Turn it on only if you actually need UDP — a VPN, a game, an Xray or")
+	tui.Error("Shadowsocks inbound. A browser's QUIC is UDP on 443, so on a ws/wss")
+	tui.Error("or mux tunnel leaving this on funnels every QUIC flow through the")
+	tui.Error("connection pool and starves the TCP forwards — a site half-loads and")
+	tui.Error("a restart fixes it for a while. That is what this being off prevents.")
+	fmt.Println()
+	tui.Info("Currently : " + onOff(spec.AcceptUDP))
+	fmt.Println()
+
+	want := !spec.AcceptUDP
+	verb := "Enable"
+	if !want {
+		verb = "Disable"
+	}
+	if !tui.Confirm(verb+" UDP forwarding for "+name, false) {
+		return
+	}
+	if err := SetAcceptUDP(name, want); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("UDP forwarding is now " + onOff(want) + " and the tunnel restarted.")
 	tui.PressEnter()
 }
 
