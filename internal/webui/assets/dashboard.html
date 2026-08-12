@@ -1448,6 +1448,9 @@
         <label for="tgadmin">Your numeric user id <span class="hint" data-i18n>from @userinfobot</span></label>
         <input id="tgadmin" inputmode="numeric" autocomplete="off" placeholder="123456789">
 
+        <label for="tgadmins">Other admins <span class="hint" data-i18n>one id per line — add :ro for look-but-don't-touch</span></label>
+        <textarea id="tgadmins" rows="3" autocomplete="off" spellcheck="false" placeholder="987654321&#10;123123123:ro"></textarea>
+
         <label for="tgrelay" data-i18n>Send through</label>
         <select id="tgrelay" class="sel">
           <option value="auto" data-i18n>Automatic — pick a live tunnel, switch if it drops</option>
@@ -1912,6 +1915,7 @@ const FA={
   "from @BotFather":"از @BotFather",
   "Your numeric user id":"شناسه عددی شما",
   "from @userinfobot":"از @userinfobot",
+  "one id per line — add :ro for look-but-don't-touch":"هر آی‌دی در یک خط — برای دسترسی فقط‌خواندنی :ro اضافه کنید",
   "Send through":"ارسال از طریق",
   "Automatic — pick a live tunnel, switch if it drops":"خودکار — یک تونل فعال انتخاب می‌کند و اگر قطع شد جابه‌جا می‌شود",
   "Direct — only where Telegram is reachable":"مستقیم — فقط جایی که تلگرام در دسترس است",
@@ -3504,6 +3508,14 @@ let alTimer=null;
 function openAlerts(){ $('alerts').classList.add('on'); loadAlerts();
   clearInterval(alTimer); alTimer=setInterval(loadAlerts,10000); }
 function closeAlerts(){ $('alerts').classList.remove('on'); clearInterval(alTimer); }
+// Alert messages are written for Telegram, which renders them as HTML. The
+// panel escapes everything it prints, so the tags would show up as tags —
+// strip the emphasis and keep the words. The asterisks are the older Markdown
+// form, still present in histories written before the switch.
+function plainAlert(m){
+  return (m||'').replace(/<\/?b>/g,'').replace(/\*/g,'');
+}
+
 async function loadAlerts(){
   const box=$('albody');
   let st;
@@ -3518,7 +3530,7 @@ async function loadAlerts(){
   if(ev.length){
     h+='<div class="dsec">Recent</div>'+ev.map(e=>
       '<div class="al-ev"><div class="t">'+new Date(e.time).toLocaleString()+'</div>'+
-      '<div class="m">'+esc((e.message||'').replace(/\*/g,''))+'</div></div>').join('');
+      '<div class="m">'+esc(plainAlert(e.message))+'</div></div>').join('');
   }
   if(!h) h='Nothing has fired yet. Alerts are watched by the monitoring service; '+
            'thresholds live under Settings → Telegram bot.';
@@ -3832,6 +3844,7 @@ async function loadTelegram(){
     setText($('accnote-telegram'), t.configured ? 'Connected' : 'Not set up');
     $('tgtoken').placeholder = t.configured ? 'leave blank to keep the current one' : 'paste the token from @BotFather';
     $('tgadmin').value=t.adminId||'';
+    $('tgadmins').value=t.admins||'';
     $('tgevery').value=t.intervalHours||0;
     $('tgalerts').checked=!!t.alerts.enabled;
     $('tgdown').checked=!!t.alerts.tunnelDown;
@@ -3868,6 +3881,7 @@ async function saveTelegram(){
     const body=new URLSearchParams({
       token:$('tgtoken').value.trim(),
       adminId:$('tgadmin').value.trim(),
+      admins:$('tgadmins').value,
       relayMode:$('tgrelay').value,
       intervalHours:$('tgevery').value||'0',
       alertsEnabled:$('tgalerts').checked?'1':'0',

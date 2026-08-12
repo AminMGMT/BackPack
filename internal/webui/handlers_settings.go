@@ -102,6 +102,10 @@ type telegramView struct {
 	// separately: the person reading the bot is not always the person reading
 	// the panel, and the two are set in different places.
 	Lang string `json:"lang"`
+	// Admins are the extra accounts allowed to use the bot, one per line, an
+	// id optionally suffixed ":ro" for read-only. A list rather than JSON
+	// because it is typed by a person into a textarea.
+	Admins string `json:"admins"`
 }
 
 // handleTelegram reads (GET) or updates (POST) the bot configuration.
@@ -148,6 +152,16 @@ func telegramSnapshot() telegramView {
 	v.Alerts.TunnelDown = c.Alerts.TunnelDown
 	v.Alerts.NewRelease = c.Alerts.NewRelease
 	v.Lang = c.Language()
+
+	var admins []string
+	for _, a := range c.Admins {
+		entry := a.ID
+		if a.ReadOnly {
+			entry += ":ro"
+		}
+		admins = append(admins, entry)
+	}
+	v.Admins = strings.Join(admins, "\n")
 	return v
 }
 
@@ -196,6 +210,12 @@ func applyTelegramForm(r *http.Request) error {
 	c.Alerts.NewRelease = formBool(r, "alertNewRelease", c.Alerts.NewRelease)
 	if lang := r.FormValue("lang"); lang != "" {
 		c.Lang = lang
+	}
+	// Absent means "not supplied", which every existing caller is; an empty
+	// string means "clear the list", which is how the last extra admin is
+	// removed. The two have to be told apart or the list could never be emptied.
+	if _, supplied := r.Form["admins"]; supplied {
+		c.Admins = telegram.ParseAdmins(r.FormValue("admins"))
 	}
 	c.Alerts.CPUPercent = formPercent(r, "alertCPU", c.Alerts.CPUPercent)
 	c.Alerts.MemPercent = formPercent(r, "alertMem", c.Alerts.MemPercent)

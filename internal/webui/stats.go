@@ -526,14 +526,7 @@ func GatherTunnels() []TunnelInfo {
 }
 
 // TunnelLogs returns the last N journal lines for a tunnel service.
-func TunnelLogs(name string) string {
-	service := "backpack-" + name + ".service"
-	out, err := exec.Command("journalctl", "-u", service, "-n", "150", "--no-pager", "-o", "short-iso").CombinedOutput()
-	if err != nil && len(out) == 0 {
-		return "No logs available for " + name
-	}
-	return string(out)
-}
+func TunnelLogs(name string) string { return manage.Logs(name, 150) }
 
 // --- helpers ----------------------------------------------------------------
 

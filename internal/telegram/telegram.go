@@ -10,7 +10,6 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -23,12 +22,6 @@ import (
 	"github.com/backpack/backpack/internal/schedule"
 	"github.com/backpack/backpack/internal/sysstat"
 )
-
-// menuKeyboard is the inline-button keyboard attached to bot messages. Two
-// buttons per row so the labels stay readable on a phone.
-const menuKeyboard = `{"inline_keyboard":[` +
-	`[{"text":"📊 Status","callback_data":"status"},{"text":"🖥 System","callback_data":"system"}],` +
-	`[{"text":"🔐 Backup","callback_data":"backup"},{"text":"💛 Support","callback_data":"support"}]]}`
 
 const cronMarker = "backpack-telegram"
 
@@ -45,6 +38,9 @@ type Config struct {
 	SocksPort int `json:"socks_port"`
 	// Alerts controls threshold and tunnel-state notifications.
 	Alerts AlertConfig `json:"alerts"`
+	// Admins are the accounts allowed to use the bot besides AdminID, which
+	// stays the owner. An entry may be read-only: every screen, no actions.
+	Admins []Admin `json:"admins,omitempty"`
 	// Lang is the language the bot writes in: "en" or "fa". Empty means
 	// English, so a config written before this existed keeps the wording it
 	// has always had rather than changing language on an update.
@@ -135,41 +131,45 @@ func StatusText() string {
 
 	if manage.IsActive(app.WebUIService) {
 		pw, port := webPanelInfo()
-		fmt.Fprintf(&b, "\n"+tr(lang, "Web Panel")+" : http://%s:%d\n"+tr(lang, "Password")+" : %s\n",
-			manage.PublicIPv4(), port, pw)
+		fmt.Fprintf(&b, "\n"+tr(lang, "Web Panel")+" : %s\n"+tr(lang, "Password")+" : %s\n",
+			code(fmt.Sprintf("http://%s:%d", manage.PublicIPv4(), port)), code(pw))
 	}
 	return b.String()
+}
+
+// stateIcon is the one place a health state becomes a colour, so the list, the
+// detail screen and the report can never disagree about what green means.
+func stateIcon(state string) string {
+	switch state {
+	case "online":
+		return "🟢"
+	case "offline":
+		return "🟡"
+	}
+	return "🔴"
 }
 
 // tunnelBlock renders one tunnel.
 func tunnelBlock(lang string, t manage.Tunnel, h manage.Health) string {
 	var b strings.Builder
 
-	icon := "🔴"
-	switch h.State {
-	case "online":
-		icon = "🟢"
-	case "offline":
-		icon = "🟡"
-	}
-
-	fmt.Fprintf(&b, "%s ", icon)
+	fmt.Fprintf(&b, "%s ", stateIcon(h.State))
 	if f := tunnelFlag(t); f != "" {
 		fmt.Fprintf(&b, "%s ", f)
 	}
-	fmt.Fprintf(&b, "%s [ %s ]", t.Name, strings.ToUpper(t.Transport))
+	fmt.Fprintf(&b, "%s [ %s ]", esc(t.Name), esc(strings.ToUpper(t.Transport)))
 	if p := manage.PresetLabel(t.Name); p != "" {
-		fmt.Fprintf(&b, " [ %s ]", p)
+		fmt.Fprintf(&b, " [ %s ]", esc(p))
 	}
 	b.WriteString("\n")
 
 	if t.Role == "server" {
-		fmt.Fprintf(&b, tr(lang, "Tunnel Port")+" : %s\n", portOf(t.Addr))
+		fmt.Fprintf(&b, tr(lang, "Tunnel Port")+" : %s\n", code(portOf(t.Addr)))
 		if ports := manage.VisiblePorts(t.Ports, manage.TunnelToken(t.Name)); len(ports) > 0 {
-			fmt.Fprintf(&b, tr(lang, "Forwarded Port")+" : %s\n", strings.Join(ports, ", "))
+			fmt.Fprintf(&b, tr(lang, "Forwarded Port")+" : %s\n", code(strings.Join(ports, ", ")))
 		}
 	} else {
-		fmt.Fprintf(&b, tr(lang, "Server")+" : %s\n", t.Addr)
+		fmt.Fprintf(&b, tr(lang, "Server")+" : %s\n", code(t.Addr))
 	}
 
 	if snap, err := metrics.Read(app.ConfigDir, t.Name); err == nil {
@@ -260,18 +260,20 @@ func portOf(addr string) string {
 // byte figures were dropped: they are either constant, or they say the same
 // thing as the percentage directly above them.
 func SystemText() string {
+	lang := Load().Language()
 	s := sysstat.Get()
-	var b strings.Builder
+	var out strings.Builder
 
+	out.WriteString(b("🖥 "+tr(lang, "System")) + "\n\n")
 	if s.OS != "" {
-		fmt.Fprintf(&b, "OS : %s\n", s.OS)
+		fmt.Fprintf(&out, "OS : %s\n", esc(s.OS))
 	}
-	fmt.Fprintf(&b, "UpTime : %s\n\n", sysstat.HumanDuration(s.Uptime))
+	fmt.Fprintf(&out, "UpTime : %s\n\n", esc(sysstat.HumanDuration(s.Uptime)))
 
-	fmt.Fprintf(&b, "%s CPU %.1f%%\n", bar(s.CPUPercent), s.CPUPercent)
-	fmt.Fprintf(&b, "%s Memory %.1f%%\n", bar(s.MemPercent), s.MemPercent)
-	fmt.Fprintf(&b, "%s Disk %.1f%%\n", bar(s.DiskPercent), s.DiskPercent)
-	return b.String()
+	fmt.Fprintf(&out, "<code>%s</code> CPU %.1f%%\n", bar(s.CPUPercent), s.CPUPercent)
+	fmt.Fprintf(&out, "<code>%s</code> Memory %.1f%%\n", bar(s.MemPercent), s.MemPercent)
+	fmt.Fprintf(&out, "<code>%s</code> Disk %.1f%%\n", bar(s.DiskPercent), s.DiskPercent)
+	return out.String()
 }
 
 // bar draws a ten-segment meter. A number is precise; a bar is glanceable, and
@@ -293,17 +295,17 @@ func AlertsText() string {
 	return Load().Alerts.Summary()
 }
 
-// helpText lists what the bot understands.
-func helpText() string {
-	return "🎒 Backpack\n\n" +
-		"/status — every tunnel: state, ports, traffic\n" +
-		"/system — processor, memory and disk\n" +
-		"/backup — send a full backup here as a file\n" +
-		"/alerts — current alert thresholds\n" +
-		"/webui — panel link and login code\n" +
-		"/support — project links and donations\n\n" +
-		"Alerts arrive on their own when a threshold is crossed, a tunnel " +
-		"changes state, or a new version is released."
+// helpText lists what the bot understands. The command list is generated from
+// commandList so the help screen and Telegram's own slash menu are the same
+// list, written once.
+func helpText(lang string) string {
+	var out strings.Builder
+	out.WriteString(b("🎒 Backpack") + " " + esc(app.Version) + "\n\n")
+	for _, e := range commandList() {
+		fmt.Fprintf(&out, "/%s — %s\n", e.name, esc(tr(lang, e.desc)))
+	}
+	out.WriteString("\n" + esc(tr(lang, "Alerts arrive on their own when a threshold is crossed, a tunnel changes state, or a new version is released.")))
+	return out.String()
 }
 
 // webPanelInfo reads the web-panel password and port straight from disk to
@@ -334,7 +336,15 @@ func SendStatusNow() error {
 	if c.Token == "" || c.AdminID == "" {
 		return fmt.Errorf("telegram bot is not configured")
 	}
-	return explainSendFailure(c, send(c, c.AdminID, StatusText()))
+	text := StatusText()
+	// The owner's delivery is the one that decides success — the cron job has
+	// somewhere to report a failure. The other admins are told too, but a
+	// second admin's blocked chat is not a reason to call the report failed.
+	err := send(c, c.AdminID, text)
+	for _, id := range c.recipients()[1:] {
+		_ = send(c, id, text)
+	}
+	return explainSendFailure(c, err)
 }
 
 // SendToAdmin delivers one message to the configured admin chat. Used by the
@@ -345,7 +355,7 @@ func SendToAdmin(text string) error {
 	if c.Token == "" || c.AdminID == "" {
 		return fmt.Errorf("telegram bot is not configured")
 	}
-	return explainSendFailure(c, send(c, c.AdminID, text))
+	return explainSendFailure(c, sendPlain(c, c.AdminID, text))
 }
 
 // SendTest sends a one-off confirmation message.
@@ -445,60 +455,48 @@ func tunnelledClient(port int, timeout time.Duration) *http.Client {
 	}
 }
 
-// send delivers a message (with the button menu attached) to the chat.
-func send(c Config, chatID, text string) error {
-	client, err := botClient(c, 20*time.Second)
-	if err != nil {
-		return err
-	}
-	return postMessage(client, c.Token, chatID, text, menuKeyboard)
-}
-
-// postMessage posts a message via the Telegram Bot API, optionally with an
-// inline keyboard (reply_markup).
-func postMessage(client *http.Client, botToken, chatID, text, replyMarkup string) error {
-	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
-	form := url.Values{}
-	form.Set("chat_id", chatID)
-	form.Set("text", text)
-	if replyMarkup != "" {
-		form.Set("reply_markup", replyMarkup)
-	}
-	resp, err := client.PostForm(endpoint, form)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
-	}
-	return nil
-}
-
 // --- interactive bot (inline buttons) --------------------------------------
 
 type tgUpdate struct {
-	UpdateID int64 `json:"update_id"`
-	Message  *struct {
-		Text string `json:"text"`
-		From struct {
-			ID int64 `json:"id"`
-		} `json:"from"`
-	} `json:"message"`
+	UpdateID int64      `json:"update_id"`
+	Message  *tgMessage `json:"message"`
 	Callback *struct {
-		ID   string `json:"id"`
-		Data string `json:"data"`
-		From struct {
-			ID int64 `json:"id"`
-		} `json:"from"`
+		ID      string     `json:"id"`
+		Data    string     `json:"data"`
+		Message *tgMessage `json:"message"`
+		From    tgUser     `json:"from"`
 	} `json:"callback_query"`
+}
+
+type tgMessage struct {
+	MessageID int64  `json:"message_id"`
+	Text      string `json:"text"`
+	From      tgUser `json:"from"`
+	Chat      struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+}
+
+type tgUser struct {
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
 }
 
 // RunBot long-polls Telegram for button presses and commands, and responds.
 // It runs only where the bot is configured (a single node — normally Iran), so
 // there is no getUpdates conflict. Safe to start unconditionally.
 func RunBot(ctx context.Context) {
-	var offset int64
+	// The offset is read back from disk rather than starting at zero.
+	//
+	// Telegram redelivers every update that has not been confirmed, and the
+	// confirmation is the offset on the *next* poll. A process that is killed
+	// after handling a press but before polling again therefore used to replay
+	// it on startup — harmless when every button was a read-only screen, and
+	// not harmless at all now that one of them restarts a tunnel.
+	offset := loadOffset()
+	var announced string
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -510,6 +508,14 @@ func RunBot(ctx context.Context) {
 			sleepCtx(ctx, 15*time.Second)
 			continue
 		}
+		// Registering the slash menu needs a token, so it cannot happen at
+		// startup; and it must happen again if the language changes, because the
+		// descriptions are translated. Keyed on both so it costs one call.
+		if key := c.Token + "|" + c.Language(); key != announced {
+			setMyCommands(c)
+			announced = key
+		}
+
 		updates, err := getUpdates(c, offset)
 		if err != nil {
 			sleepCtx(ctx, 5*time.Second)
@@ -517,9 +523,30 @@ func RunBot(ctx context.Context) {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
+			saveOffset(offset)
 			handleUpdate(c, u)
 		}
 	}
+}
+
+// offsetFile is where the last confirmed update id is kept; a variable so tests
+// can point it somewhere writable.
+var offsetFile = app.ConfigDir + "/telegram-offset"
+
+func loadOffset() int64 {
+	data, err := os.ReadFile(offsetFile)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func saveOffset(n int64) {
+	_ = app.WriteFileAtomic(offsetFile, []byte(strconv.FormatInt(n, 10)), 0600)
 }
 
 func getUpdates(c Config, offset int64) ([]tgUpdate, error) {
@@ -543,56 +570,47 @@ func getUpdates(c Config, offset int64) ([]tgUpdate, error) {
 	return out.Result, nil
 }
 
-// screen maps a button or command name to the text it produces. Both entry
-// points resolve through here so a button and its command can never drift apart.
-func screen(name string) (string, bool) {
-	switch name {
-	case "status":
-		return StatusText(), true
-	case "system":
-		return SystemText(), true
-	case "alerts":
-		return AlertsText(), true
-	case "webui":
-		return webUIText(), true
-	case "support":
-		return supportText(), true
-	case "help", "start":
-		return helpText(), true
-	}
-	return "", false
-}
-
+// handleUpdate dispatches one incoming update.
 func handleUpdate(c Config, u tgUpdate) {
 	if u.Callback != nil {
-		if strconv.FormatInt(u.Callback.From.ID, 10) == c.AdminID {
-			respond(c, u.Callback.Data)
+		user := strconv.FormatInt(u.Callback.From.ID, 10)
+		if !c.isAdmin(user) {
+			answerCallback(c, u.Callback.ID, tr(c.Language(), "Not authorised."), true)
+			return
 		}
-		answerCallback(c, u.Callback.ID)
+		chat, msgID := c.AdminID, int64(0)
+		if u.Callback.Message != nil {
+			chat = strconv.FormatInt(u.Callback.Message.Chat.ID, 10)
+			msgID = u.Callback.Message.MessageID
+		}
+		r := route(c, u.Callback.From, u.Callback.Data)
+		answerCallback(c, u.Callback.ID, r.toast, r.alert)
+		r.deliver(c, chat, msgID)
 		return
 	}
-	if u.Message == nil || strconv.FormatInt(u.Message.From.ID, 10) != c.AdminID {
-		return
-	}
-	respond(c, command(u.Message.Text))
-}
 
-// respond handles one button press or command.
-func respond(c Config, name string) {
-	// Backup sends a file rather than a message, so it cannot go through
-	// screen(). It is also slow enough to be worth acknowledging first.
-	if name == "backup" {
-		send(c, c.AdminID, "🔐 Preparing your backup…")
-		if err := sendBackup(c); err != nil {
-			send(c, c.AdminID, "Backup failed: "+err.Error())
-		}
+	if u.Message == nil {
 		return
 	}
-	if text, ok := screen(name); ok {
-		send(c, c.AdminID, text)
+	user := strconv.FormatInt(u.Message.From.ID, 10)
+	if !c.isAdmin(user) {
 		return
 	}
-	send(c, c.AdminID, helpText())
+	chat := strconv.FormatInt(u.Message.Chat.ID, 10)
+	if chat == "0" {
+		chat = c.AdminID
+	}
+
+	name := command(u.Message.Text)
+	data, ok := commandRoute(name)
+	if !ok {
+		data = "nav:home"
+	}
+	// A typed command always answers with a new message: there is nothing on
+	// screen to edit, and editing the user's own command is not possible.
+	r := route(c, u.Message.From, data)
+	r.edit = false
+	r.deliver(c, chat, 0)
 }
 
 // command extracts a bare command name from a message. Telegram appends the bot
@@ -613,32 +631,48 @@ func command(text string) string {
 	return strings.ToLower(text)
 }
 
-func answerCallback(c Config, id string) {
-	client, err := botClient(c, 15*time.Second)
-	if err != nil {
-		return
+// commandRoute maps a slash command onto the callback data of the screen it
+// opens. Anything not listed here is not a command.
+func commandRoute(name string) (string, bool) {
+	switch name {
+	case "status", "overview":
+		return "nav:overview", true
+	case "tunnels":
+		return "nav:tunnels", true
+	case "system":
+		return "nav:system", true
+	case "alerts":
+		return "nav:alerts", true
+	case "health":
+		return "nav:health", true
+	case "history":
+		return "nav:history", true
+	case "webui":
+		return "nav:webui", true
+	case "support":
+		return "nav:support", true
+	case "backup":
+		return "act:backup", true
+	case "help", "start":
+		return "nav:home", true
 	}
-	form := url.Values{}
-	form.Set("callback_query_id", id)
-	if resp, err := client.PostForm(fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", c.Token), form); err == nil {
-		resp.Body.Close()
-	}
+	return "", false
 }
 
-func webUIText() string {
+func webUIText(lang string) string {
 	pw, port := webPanelInfo()
-	return fmt.Sprintf("🖥 Web Panel\n\nURL:  http://%s:%d\nPassword:  %s", manage.PublicIPv4(), port, pw)
+	return b("🖥 "+tr(lang, "Web Panel")) + "\n\n" +
+		tr(lang, "Address") + " : " + code(fmt.Sprintf("http://%s:%d", manage.PublicIPv4(), port)) + "\n" +
+		tr(lang, "Password") + " : " + code(pw)
 }
 
-func supportText() string {
-	return "GitHub : https://github.com/AminMGMT\n" +
+func supportText(lang string) string {
+	return b("💛 "+tr(lang, "Support")) + "\n\n" +
+		"GitHub : https://github.com/AminMGMT\n" +
 		"Channel : https://t.me/BlackProtocols\n\n" +
-		"🔺 Tron [ TRX ] :\n" +
-		"TTzuUAtsEsrLgNpFVLNTyLVJVRRFNWESYc\n\n" +
-		"💠 USDT [ BEP20 ] :\n" +
-		"0xc112AE9bfF7c59dEcFb34E988A397848D3093E82\n\n" +
-		"💎 Gram [ TON ] :\n" +
-		"UQD9g40QubAICJ6zPqegtCY7s-joMx2DB8aIqA0xF1aHoCDs"
+		"🔺 Tron [ TRX ] :\n" + code("TTzuUAtsEsrLgNpFVLNTyLVJVRRFNWESYc") + "\n\n" +
+		"💠 USDT [ BEP20 ] :\n" + code("0xc112AE9bfF7c59dEcFb34E988A397848D3093E82") + "\n\n" +
+		"💎 Gram [ TON ] :\n" + code("UQD9g40QubAICJ6zPqegtCY7s-joMx2DB8aIqA0xF1aHoCDs")
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {

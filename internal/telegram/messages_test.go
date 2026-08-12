@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -65,7 +66,7 @@ func TestSystemTextIsTrimmed(t *testing.T) {
 }
 
 func TestSupportTextFormat(t *testing.T) {
-	got := supportText()
+	got := supportText(LangEN)
 	for _, want := range []string{
 		"GitHub : ", "Channel : ",
 		"🔺 Tron [ TRX ] :",
@@ -78,49 +79,123 @@ func TestSupportTextFormat(t *testing.T) {
 	}
 }
 
-// Status absorbed the Tunnels and Metrics screens, so help must not advertise
-// commands that no longer exist — and must mention the one that replaced them.
+// Help, Telegram's own slash menu and the router are generated from one list,
+// so the thing to prove is that the list is actually wired at both ends: every
+// command it advertises must be routable, and the help screen must show them
+// all. A command in the menu that the router does not know is a button in the
+// user's client that answers with the wrong screen.
 func TestHelpMatchesWhatTheBotActuallyDoes(t *testing.T) {
-	help := helpText()
+	help := helpText(LangEN)
 
-	for _, cmd := range []string{"status", "system", "backup", "alerts", "webui", "support"} {
-		if !strings.Contains(help, "/"+cmd) {
-			t.Errorf("/%s is not listed in help", cmd)
+	for _, e := range commandList() {
+		if !strings.Contains(help, "/"+e.name) {
+			t.Errorf("/%s is not listed in help", e.name)
 		}
-		// backup is an action rather than a screen, so it is exempt here.
-		if cmd == "backup" {
-			continue
-		}
-		if _, ok := screen(cmd); !ok {
-			t.Errorf("help lists /%s but it does not resolve to a screen", cmd)
+		if _, ok := commandRoute(e.name); !ok {
+			t.Errorf("/%s is offered but the router does not know it", e.name)
 		}
 	}
-	for _, gone := range []string{"/tunnels", "/metrics"} {
-		if strings.Contains(help, gone) {
-			t.Errorf("help still lists %s, which Status replaced", gone)
+	// Metrics was folded into Overview and must not come back as a command.
+	if strings.Contains(help, "/metrics") {
+		t.Error("help still lists /metrics, which Overview replaced")
+	}
+}
+
+// Every button must do something. A dead button looks like the bot has hung,
+// and the way one appears is a typo in a callback string that no compiler
+// checks — so every keyboard the bot can draw is walked here and every
+// destination matched against what the router actually handles.
+func TestEveryButtonRoutes(t *testing.T) {
+	keyboards := map[string]string{
+		"home":     homeKeyboard(LangEN),
+		"overview": overviewKeyboard(LangEN),
+		"alerts":   alertsScreen(Config{Alerts: DefaultAlerts()}, LangEN).keyboard,
+		"tools":    toolsScreen(LangEN).keyboard,
+		"history":  historyScreen(Config{}, LangEN).keyboard,
+		"audit":    auditScreen(Config{}, LangEN).keyboard,
+		"update":   updateScreen(Config{}, LangEN).keyboard,
+		"confirm": confirmScreen(LangEN, "q", "d", "yes",
+			"do:restartall::"+stamp(), "nav:tunnels").keyboard,
+	}
+
+	navs := map[string]bool{}
+	for _, n := range navScreens {
+		navs[n] = true
+	}
+
+	for where, markup := range keyboards {
+		for _, data := range callbackData(t, markup) {
+			verb, rest, _ := strings.Cut(data, ":")
+			switch verb {
+			case "nav":
+				if !navs[rest] {
+					t.Errorf("%s keyboard points at unknown screen %q", where, rest)
+				}
+			case "t", "act", "do", "alert", "snap", "diag", "noop":
+				// Handled by route; the argument is validated at press time
+				// because it names a tunnel or snapshot that may have gone.
+			default:
+				t.Errorf("%s keyboard has button %q, which the router ignores", where, data)
+			}
 		}
 	}
 }
 
-// Every button must do something. A dead button looks like the bot has hung.
-func TestEveryButtonIsHandled(t *testing.T) {
-	for _, name := range []string{"status", "system", "backup", "support"} {
-		if !strings.Contains(menuKeyboard, `"callback_data":"`+name+`"`) {
-			t.Errorf("%q is not on the keyboard", name)
-		}
-		if name == "backup" {
-			continue // handled as an action in respond()
-		}
-		if _, ok := screen(name); !ok {
-			t.Errorf("button %q resolves to nothing", name)
-		}
-	}
-	// The removed screens must not linger on the keyboard.
-	for _, gone := range []string{"tunnels", "metrics"} {
-		if strings.Contains(menuKeyboard, `"callback_data":"`+gone+`"`) {
-			t.Errorf("the keyboard still offers %q", gone)
+// Every screen the router can serve must be reachable, or it is code nobody can
+// get to. Reachable means a button somewhere or a typed command.
+func TestEveryScreenIsReachable(t *testing.T) {
+	reached := map[string]bool{"home": true} // where the bot starts
+
+	for _, markup := range []string{
+		homeKeyboard(LangEN), overviewKeyboard(LangEN),
+		toolsScreen(LangEN).keyboard, historyScreen(Config{}, LangEN).keyboard,
+		auditScreen(Config{}, LangEN).keyboard, updateScreen(Config{}, LangEN).keyboard,
+		alertsScreen(Config{Alerts: DefaultAlerts()}, LangEN).keyboard,
+	} {
+		for _, data := range callbackData(t, markup) {
+			if verb, rest, _ := strings.Cut(data, ":"); verb == "nav" {
+				reached[rest] = true
+			}
 		}
 	}
+	for _, e := range commandList() {
+		if data, ok := commandRoute(e.name); ok {
+			if verb, rest, _ := strings.Cut(data, ":"); verb == "nav" {
+				reached[rest] = true
+			}
+		}
+	}
+
+	for _, name := range navScreens {
+		if !reached[name] {
+			t.Errorf("screen %q exists but nothing leads to it", name)
+		}
+	}
+}
+
+// callbackData pulls every callback_data out of a reply_markup.
+func callbackData(t *testing.T, markup string) []string {
+	t.Helper()
+	if markup == "" {
+		return nil
+	}
+	var parsed struct {
+		Keyboard [][]struct {
+			Data string `json:"callback_data"`
+		} `json:"inline_keyboard"`
+	}
+	if err := json.Unmarshal([]byte(markup), &parsed); err != nil {
+		t.Fatalf("keyboard is not valid JSON: %v\n%s", err, markup)
+	}
+	var out []string
+	for _, row := range parsed.Keyboard {
+		for _, b := range row {
+			if b.Data != "" {
+				out = append(out, b.Data)
+			}
+		}
+	}
+	return out
 }
 
 // The relay's failure mode is the most common thing that goes wrong with the

@@ -203,8 +203,11 @@ func RunAlerts(ctx context.Context) {
 		msgs := w.checkAt(alerts, sysstat.Get(), tunnels, time.Now())
 		alerthist.Record(msgs, w.activeConditions(tunnels))
 		if configured {
+			// To every admin, not just the owner. An account that can press the
+			// buttons but is never told a tunnel dropped has the half of the bot
+			// that matters least.
 			for _, msg := range msgs {
-				send(c, c.AdminID, msg)
+				broadcast(c, msg)
 			}
 		}
 
@@ -335,17 +338,17 @@ func (w *watcher) checkTunnels(now map[string]bool) []string {
 			// A newly created tunnel: record it, but only announce if it is
 			// already down, which is worth knowing immediately.
 			if !up {
-				msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🔴 Tunnel *%s* is down"), name))
+				msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🔴 Tunnel <b>%s</b> is down"), esc(name)))
 			}
 		case was && !up:
-			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🔴 Tunnel *%s* went down"), name))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🔴 Tunnel <b>%s</b> went down"), esc(name)))
 		case !was && up:
-			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🟢 Tunnel *%s* is back up"), name))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🟢 Tunnel <b>%s</b> is back up"), esc(name)))
 		}
 	}
 	for name := range w.tunnelUp {
 		if _, still := now[name]; !still {
-			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🗑 Tunnel *%s* no longer exists"), name))
+			msgs = append(msgs, fmt.Sprintf(tr(w.lang, "🗑 Tunnel <b>%s</b> no longer exists"), esc(name)))
 		}
 	}
 

@@ -663,6 +663,7 @@ func telegramMenu() {
 		tui.Info(fmt.Sprintf("Configured — reports every %d hour(s).", telegram.IntervalHours()))
 		tui.Info("Relay                 : " + telegram.RelayStatus())
 		tui.Info("Alerts                : " + alertSummaryLine(cfg.Alerts))
+		tui.Info(fmt.Sprintf("Admins                : %d", telegram.AdminCount(cfg)))
 	} else {
 		tui.Info("Not configured yet.")
 	}
@@ -671,6 +672,7 @@ func telegramMenu() {
 	idx := tui.ChooseOpt("Choose:", []tui.Option{
 		{Title: "Configure / Update bot", Desc: "token, admin id, tunnel relay"},
 		{Title: "Alerts", Desc: "warn when CPU, memory, disk or a tunnel goes bad"},
+		{Title: "Admins", Desc: "who else may use the bot, and who may only look"},
 		{Title: "Diagnose relay", Desc: "find which hop is broken when messages fail"},
 		{Title: "Send a test report now", Desc: "verify the bot works"},
 		{Title: "Disable reports", Desc: "stop the scheduled reports"},
@@ -681,15 +683,17 @@ func telegramMenu() {
 	case 1:
 		configureAlerts(cfg)
 	case 2:
-		diagnoseRelay()
+		configureAdmins(cfg)
 	case 3:
+		diagnoseRelay()
+	case 4:
 		if err := telegram.SendStatusNow(); err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
 			tui.Success("Report sent.")
 		}
 		tui.PressEnter()
-	case 4:
+	case 5:
 		if err := telegram.Disable(); err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
@@ -697,6 +701,58 @@ func telegramMenu() {
 		}
 		tui.PressEnter()
 	}
+}
+
+// configureAdmins edits who else may drive the bot.
+//
+// The owner is not on the editable list and cannot be removed here: locking
+// yourself out of the bot from inside the bot's own settings is not a mistake
+// worth making possible.
+func configureAdmins(cfg telegram.Config) {
+	tui.Clear()
+	tui.Title("Telegram Admins")
+	fmt.Println()
+
+	if cfg.AdminID == "" {
+		tui.Error("Configure the bot first — the owner is set there.")
+		tui.PressEnter()
+		return
+	}
+
+	tui.Info("Currently allowed:")
+	tui.Info(telegram.AdminsSummary(cfg))
+	fmt.Println()
+	tui.Info("Enter the extra ids separated by commas. Add \":ro\" to an id to give")
+	tui.Info("it every screen but no buttons that change anything.")
+	tui.Info("Leave blank to keep the list as it is; type \"none\" to clear it.")
+	fmt.Println()
+
+	// Blank means "changed my mind", not "remove everyone": pressing enter at a
+	// prompt is how people back out, and it must not delete the admin list.
+	answer := tui.Prompt("Extra admins: ")
+	switch {
+	case answer == "":
+		tui.Info("Unchanged.")
+		tui.PressEnter()
+		return
+	case strings.EqualFold(answer, "none"):
+		cfg.Admins = nil
+	default:
+		cfg.Admins = telegram.ParseAdmins(answer)
+		if len(cfg.Admins) == 0 {
+			tui.Error("None of those look like Telegram ids — nothing was changed.")
+			tui.PressEnter()
+			return
+		}
+	}
+
+	if err := telegram.Save(cfg); err != nil {
+		tui.Error("Failed to save: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success(fmt.Sprintf("Saved — %d account(s) may use the bot.", telegram.AdminCount(cfg)))
+	tui.PressEnter()
 }
 
 // alertSummaryLine renders the alert state as one line for the menu header.
