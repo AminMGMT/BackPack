@@ -1,14 +1,48 @@
 package network
 
 import (
+	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 
 	"github.com/xtaci/kcp-go/v5"
 	"golang.org/x/crypto/pbkdf2"
 )
+
+// noopCloser is what the plain-UDP path returns for its carrier closer: there,
+// kcp-go opened the socket and closes it itself, so the caller has nothing of
+// its own to close. Returning a real closer either way lets the caller close it
+// unconditionally without knowing which carrier it got.
+type noopCloser struct{}
+
+func (noopCloser) Close() error { return nil }
+
+// ownedKCPSession wraps a PacketConn we built (spoof, xdi or pck) in a KCP
+// session that OWNS the socket, so closing the session closes the socket.
+//
+// This is the whole of the "address already in use" bug. kcp-go's NewConn2
+// deliberately does not take ownership of a caller-provided conn — it expects
+// the caller to close it — and nothing did. So on every restart, when a new
+// control channel arrived and the tunnel rebuilt itself, the previous run's raw
+// receive socket stayed bound to its port; two seconds later the new run tried
+// to bind the same port and the listener died with a fatal bind error. The
+// plain UDP transport never hit it because it dials through DialWithOptions,
+// which opens and owns the socket itself.
+//
+// NewConn4 is NewConn2 with the ownConn flag exposed. Set true, session.Close()
+// closes our socket, which is what every close path in the client already does.
+func ownedKCPSession(raddr net.Addr, block kcp.BlockCrypt, dataShards, parityShards int, conn net.PacketConn) (*kcp.UDPSession, error) {
+	var convid uint32
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &convid); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return kcp.NewConn4(convid, raddr, block, dataShards, parityShards, true, conn)
+}
 
 // KCPSettings carries the tuning of a KCP session from the config all the way
 // down to the socket. Both the server and the client side fill it from the
@@ -122,13 +156,19 @@ func ApplyKCPSettings(session *kcp.UDPSession, s KCPSettings) {
 	}
 }
 
-// KCPListen opens a KCP listener on bindAddr. The returned listener yields
-// reliable, ordered sessions carried inside UDP datagrams — or, when the
-// settings ask for it, inside ICMP echo (the xdi transport).
-func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
+// KCPListen opens a KCP listener on bindAddr. It yields reliable, ordered
+// sessions carried inside UDP datagrams — or, when the settings ask for it,
+// inside ICMP echo (xdi), forged raw IP (spoof) or hand-built TCP (pck).
+//
+// It returns the listener and a Closer for the underlying carrier socket. The
+// two are separate because kcp-go does not own a socket handed to it through
+// ServeConn: listener.Close() leaves the raw socket bound, so the caller must
+// close the returned Closer as well or the next restart cannot bind the port.
+// For the plain UDP path the Closer is a no-op — kcp owns that socket.
+func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer, error) {
 	block, err := kcpCrypt(token)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Over ICMP the socket is a raw ICMP one shared by every tunnel on the
@@ -138,14 +178,14 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 	if s.UseICMP {
 		conn, err := newICMPServerConn(token)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("xdi: failed to start the KCP listener: %w", err)
+			return nil, nil, fmt.Errorf("xdi: failed to start the KCP listener: %w", err)
 		}
-		return listener, nil
+		return listener, conn, nil
 	}
 
 	// Over the spoof carrier the send side is a raw IPv4 socket and the receive
@@ -155,18 +195,18 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 	if s.Spoof != nil {
 		peer := net.ParseIP(s.Spoof.PeerIP)
 		if peer == nil {
-			return nil, fmt.Errorf("spoof: spoof_peer_ip must be set to the client's real IPv4 address on the server")
+			return nil, nil, fmt.Errorf("spoof: spoof_peer_ip must be set to the client's real IPv4 address on the server")
 		}
 		conn, err := newSpoofServerConn(token, s.Spoof.Uplink, s.Spoof.Downlink, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("spoof: failed to start the KCP listener: %w", err)
+			return nil, nil, fmt.Errorf("spoof: failed to start the KCP listener: %w", err)
 		}
-		return listener, nil
+		return listener, conn, nil
 	}
 
 	// The pck carrier is a PacketConn like the others, so KCP is handed it and
@@ -180,23 +220,23 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 			carrier.Port = portOf(bindAddr)
 		}
 		if carrier.Port == 0 {
-			return nil, fmt.Errorf("pck: the tunnel port could not be read from %q", bindAddr)
+			return nil, nil, fmt.Errorf("pck: the tunnel port could not be read from %q", bindAddr)
 		}
 		conn, err := newPckConn(true, carrier.Port, carrier)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("pck: failed to start the KCP listener: %w", err)
+			return nil, nil, fmt.Errorf("pck: failed to start the KCP listener: %w", err)
 		}
-		return listener, nil
+		return listener, conn, nil
 	}
 
 	listener, err := kcp.ListenWithOptions(bindAddr, block, s.DataShards, s.ParityShards)
 	if err != nil {
-		return nil, fmt.Errorf("kcp: failed to listen on %s: %w", bindAddr, err)
+		return nil, nil, fmt.Errorf("kcp: failed to listen on %s: %w", bindAddr, err)
 	}
 	if s.SO_RCVBUF > 0 {
 		_ = listener.SetReadBuffer(s.SO_RCVBUF)
@@ -207,7 +247,7 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, error) {
 	// The tunnel carries its own token handshake, so KCP's own connection
 	// filter only needs to reject packets that fail to decrypt.
 	_ = listener.SetDSCP(46)
-	return listener, nil
+	return listener, noopCloser{}, nil
 }
 
 // KCPDial opens a KCP session to remoteAddr with the tuning applied, over UDP
@@ -232,7 +272,7 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 			conn.Close()
 			return nil, err
 		}
-		session, err = kcp.NewConn2(ipAddr, block, s.DataShards, s.ParityShards, conn)
+		session, err = ownedKCPSession(ipAddr, block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("xdi: failed to open the KCP session: %w", err)
@@ -254,7 +294,7 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 		if err != nil {
 			return nil, err
 		}
-		session, err = kcp.NewConn2(&net.IPAddr{IP: peer}, block, s.DataShards, s.ParityShards, conn)
+		session, err = ownedKCPSession(&net.IPAddr{IP: peer}, block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("spoof: failed to open the KCP session: %w", err)
@@ -279,7 +319,7 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 		if err != nil {
 			return nil, err
 		}
-		session, err = kcp.NewConn2(&net.UDPAddr{IP: ipAddr.IP, Port: int(carrier.Port)},
+		session, err = ownedKCPSession(&net.UDPAddr{IP: ipAddr.IP, Port: int(carrier.Port)},
 			block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()

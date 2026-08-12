@@ -8,23 +8,23 @@ import (
 
 // Framing and identity for the IP-spoofing carrier.
 //
-// A raw IPv4 socket, like the raw ICMP one xdi uses, receives every packet of
-// its protocol the host sees — there is no port to bind. So the same problem
-// arises and the same answer solves it: a session tag and a direction byte,
-// both derived from the token, prefix the tunnel's payload inside whatever L4
-// shim the profile wraps around it. A packet that does not carry this tunnel's
-// tag and the direction this end accepts is not this tunnel's packet and is
-// dropped. This reuses the tag/direction encoding the xdi frame already
-// defines (encodeXdiPayload/decodeXdiPayload); only the identity derivation and
-// the profile vocabulary are specific to spoofing.
+// The carrier used to prefix every payload with a session tag and a direction
+// byte borrowed from xdi. It no longer does: to match the reference spoof
+// transports, the KCP datagram now rides bare inside the profile's L4 header,
+// and a packet is recognised as this tunnel's by the field the kernel already
+// filters on — the UDP/TCP port, or the ICMP echo identifier — with the
+// encryption above rejecting anything that shares that field by chance. The
+// only thing derived from the token here now is that identifier; the tag half
+// of spoofIdentity is dead weight kept only so the derivation stays stable.
 //
-// None of this is a security boundary — KCP's own encrypted handshake still
-// authenticates the tunnel, exactly as on every other carrier. It is a
-// demultiplexer, so the wrong packet is never mistaken for the right one.
+// None of this was a security boundary — KCP's token-keyed cipher authenticates
+// the tunnel, exactly as on every other carrier. The tag was a demultiplexer,
+// and the port/identifier demultiplexes just as well without adding bytes to
+// the wire.
 
 // SpoofProfile is the L4 shim the carrier wraps around each datagram. It
-// changes only what the packet looks like to inspection; the tag/direction
-// framing and everything above are identical across profiles.
+// changes only what the packet looks like to inspection; everything above the
+// L4 header is identical across profiles.
 type SpoofProfile string
 
 const (
@@ -38,10 +38,10 @@ const (
 	// this profile installs a targeted iptables rule that drops the kernel's
 	// outbound RSTs for the tunnel's port. Needs the iptables binary.
 	SpoofProfileTCP SpoofProfile = "tcp"
-	// SpoofProfileICMP wraps the payload in an ICMP echo, so on the wire the
-	// tunnel looks like ping traffic — the same carrier xdi uses, but with a
-	// forged source. The direction byte in the frame discards the kernel's
-	// automatic echo reply, so no firewall rule is needed.
+	// SpoofProfileICMP wraps the payload in an ICMP Echo Request, so on the wire
+	// the tunnel looks like ping traffic, with a forged source. Both ends send
+	// Echo Requests; the receiver keeps only those, so the kernel's automatic
+	// Echo Reply is ignored and no firewall rule is needed.
 	SpoofProfileICMP SpoofProfile = "icmp"
 )
 

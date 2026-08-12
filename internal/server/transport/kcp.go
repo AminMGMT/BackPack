@@ -413,12 +413,17 @@ func (s *KcpTransport) channelHandler(g *kcpGen) {
 }
 
 func (s *KcpTransport) tunnelListener(g *kcpGen) {
-	listener, err := network.KCPListen(s.config.BindAddr, s.config.Token, s.kcpSettings)
+	listener, carrier, err := network.KCPListen(s.config.BindAddr, s.config.Token, s.kcpSettings)
 	if err != nil {
 		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
 		return
 	}
 
+	// Both are closed on the way out. Closing the listener alone leaves the
+	// carrier's raw socket bound — the leak that made a restart fail to bind —
+	// so the carrier is closed too; for plain UDP it is a no-op. The carrier
+	// goes last so nothing is still reading the socket when it is pulled.
+	defer carrier.Close()
 	defer listener.Close()
 
 	if s.config.DataShards > 0 {

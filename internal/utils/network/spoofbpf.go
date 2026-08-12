@@ -40,13 +40,15 @@ func spoofBPFProgram(profile SpoofProfile, port uint16) ([]bpf.RawInstruction, e
 			bpf.RetConstant{Val: 0},
 		}
 	case SpoofProfileICMP:
+		// Keep only Echo Requests (type 8) whose identifier is this tunnel's.
+		// Both ends send type 8, so type 0 — the kernel's automatic reply — is
+		// dropped here in the kernel rather than in the read loop.
 		prog = []bpf.Instruction{
 			bpf.LoadMemShift{Off: 0},          // X = IPv4 header length
 			bpf.LoadIndirect{Off: 0, Size: 1}, // A = ICMP type
-			bpf.JumpIf{Cond: bpf.JumpEqual, Val: icmpTypeEchoRequest, SkipTrue: 1, SkipFalse: 0}, // type 8 -> load id
-			bpf.JumpIf{Cond: bpf.JumpEqual, Val: icmpTypeEchoReply, SkipTrue: 0, SkipFalse: 3},   // type 0 -> load id, else drop
-			bpf.LoadIndirect{Off: 4, Size: 2}, // A = ICMP identifier
-			bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(port), SkipTrue: 0, SkipFalse: 1},
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: icmpTypeEchoRequest, SkipTrue: 3}, // not type 8 -> drop
+			bpf.LoadIndirect{Off: 4, Size: 2},                                         // A = ICMP identifier
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(port), SkipTrue: 1},        // wrong id -> drop
 			bpf.RetConstant{Val: bpfAccept},
 			bpf.RetConstant{Val: 0},
 		}

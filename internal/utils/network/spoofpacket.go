@@ -160,31 +160,34 @@ const (
 	icmpEchoHeaderLen   = 8
 )
 
-// buildICMPEcho wraps framed in an ICMP echo header. typ is the echo type this
-// side sends (request from the client, reply from the server); id and seq fill
-// the echo identifier and sequence fields.
-func buildICMPEcho(typ byte, id, seq uint16, framed []byte) []byte {
-	b := make([]byte, icmpEchoHeaderLen+len(framed))
+// buildICMPEcho wraps payload in an ICMP echo header. Both ends send an Echo
+// Request (type 8); id and seq fill the echo identifier and sequence fields.
+func buildICMPEcho(typ byte, id, seq uint16, payload []byte) []byte {
+	b := make([]byte, icmpEchoHeaderLen+len(payload))
 	b[0] = typ
 	b[1] = 0 // code
 	// b[2:4] checksum, left zero for the computation
 	binary.BigEndian.PutUint16(b[4:6], id)
 	binary.BigEndian.PutUint16(b[6:8], seq)
-	copy(b[icmpEchoHeaderLen:], framed)
+	copy(b[icmpEchoHeaderLen:], payload)
 	binary.BigEndian.PutUint16(b[2:4], onesComplement(b))
 	return b
 }
 
-// parseICMPEcho validates an incoming ICMP message as an echo carrying this
-// tunnel's identifier and returns the framed payload inside. Both echo types are
-// accepted; which direction is this tunnel's is decided afterwards by the frame's
-// direction byte, exactly as xdi does — that is what discards the kernel's
-// automatic echo reply to our own request.
-func parseICMPEcho(id uint16, msg []byte) (framed []byte, ok bool) {
+// parseICMPEcho validates an incoming ICMP message as an Echo Request carrying
+// this tunnel's identifier and returns the payload inside.
+//
+// Only type 8 (Echo Request) is accepted. Since both ends send Echo Requests,
+// this is what discards the kernel's own automatic Echo Reply (type 0) to an
+// inbound request — the job the old direction byte used to do, done by the type
+// alone. The identifier is the demux: a stray ping with a different id is not
+// this tunnel's, and one that happens to share the id is rejected by the
+// encryption above when it fails to decrypt.
+func parseICMPEcho(id uint16, msg []byte) (payload []byte, ok bool) {
 	if len(msg) < icmpEchoHeaderLen {
 		return nil, false
 	}
-	if msg[0] != icmpTypeEchoRequest && msg[0] != icmpTypeEchoReply {
+	if msg[0] != icmpTypeEchoRequest {
 		return nil, false
 	}
 	if binary.BigEndian.Uint16(msg[4:6]) != id {

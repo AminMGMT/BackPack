@@ -47,7 +47,43 @@ All notable changes to Backpack are documented here.
   derived from the token rather than picked at random, so a reconnect reuses the
   rule instead of adding one. See [docs/tcp-pck.md](docs/tcp-pck.md).
 
+### Changed
+- **The spoof transport's ICMP and UDP profiles now match the reference spoof
+  transports on the wire — and carry the payload bare.** They used to borrow
+  xdi's framing: every datagram went out with a 5-byte tag+direction prefix in
+  front of the KCP packet, and the ICMP profile split the two directions into
+  Echo Request (client) and Echo Reply (server). The reference transports do
+  neither — an ICMP packet is a plain Echo Request in both directions, a UDP
+  packet is a plain datagram, and the payload sits directly inside the L4 header
+  with nothing added. What authenticates a packet as the tunnel's is the same
+  thing that always did: the encryption above it, whose key comes from the
+  token, plus the L4 port (UDP/TCP) or echo identifier (ICMP) that the kernel
+  filter already matched on. The tag was redundant with the cipher; the
+  direction byte's job — discarding the kernel's automatic Echo Reply — is now
+  done by keeping only Echo Requests, since both ends send them.
+
+  **This is a breaking wire change: both ends must run this version.** A spoof
+  tunnel with one end on the old framing and the other on the new one will not
+  pass traffic. The effective MTU also grows by five bytes (the dropped prefix),
+  which both ends compute identically. The `tcp` profile is unframed by the same
+  change. The xdi transport is untouched — it still carries its own framing,
+  which is what lets several xdi tunnels share one host's ICMP socket.
+
 ### Fixed
+- **A spoof tunnel could not restart: `bind: address already in use`.** In the
+  field logs, a spoof server that restarted to adopt a new client died with
+  `listen udp4 0.0.0.0:58521: bind: address already in use`, and the client
+  looped on the same error. The carrier transports — spoof, xdi, and pck — hand
+  kcp-go a socket they open themselves, and kcp-go's `ServeConn`/`NewConn2`
+  deliberately do not take ownership of a caller-provided socket: closing the
+  KCP listener or session left the raw socket bound. So every restart leaked the
+  previous run's receive socket, and two seconds later the new run could not
+  rebind the port and exited fatally. Plain UDP never hit it because it dials
+  through kcp-go's own `ListenWithOptions`/`DialWithOptions`, which own and close
+  the socket. The client now builds its session with ownership set, and the
+  server closes the carrier socket alongside the listener; the plain-UDP path is
+  unchanged.
+
 - **The MSS clamp the diagnostics ask for can now be set, and now does
   something.** Health Check measures the path MTU and, where the path carries
   less than the tunnel is sending, prints the exact fix: `set mss = 1208 on both

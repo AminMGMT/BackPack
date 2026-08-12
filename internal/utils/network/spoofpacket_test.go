@@ -83,23 +83,27 @@ func TestSpoofICMPEchoRoundTrip(t *testing.T) {
 	const id = 0x4321
 	payload := []byte("kcp-over-ping")
 
-	// A client sends an echo request; a server sends an echo reply. Both carry
-	// the identifier and must be parseable back to the payload.
-	for _, typ := range []byte{icmpTypeEchoRequest, icmpTypeEchoReply} {
-		msg := buildICMPEcho(typ, id, 7, payload)
-		// The ICMP checksum spans the whole message and must verify to zero.
-		if got := onesComplement(msg); got != 0 {
-			t.Fatalf("type %d: icmp checksum does not verify to zero: %#04x", typ, got)
-		}
-		got, ok := parseICMPEcho(id, msg)
-		if !ok || !bytes.Equal(got, payload) {
-			t.Fatalf("type %d: icmp echo did not round-trip: ok=%v", typ, ok)
-		}
+	// Both ends send an Echo Request (type 8); it carries the identifier and
+	// must parse back to the bare payload — no tag or direction prefix.
+	msg := buildICMPEcho(icmpTypeEchoRequest, id, 7, payload)
+	// The ICMP checksum spans the whole message and must verify to zero.
+	if got := onesComplement(msg); got != 0 {
+		t.Fatalf("icmp checksum does not verify to zero: %#04x", got)
+	}
+	got, ok := parseICMPEcho(id, msg)
+	if !ok || !bytes.Equal(got, payload) {
+		t.Fatalf("icmp echo did not round-trip: ok=%v", ok)
 	}
 
 	// A wrong identifier (another tunnel's) is rejected.
 	if _, ok := parseICMPEcho(id+1, buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)); ok {
 		t.Fatal("an echo with a different identifier was accepted")
+	}
+	// An Echo Reply (type 0) — the kernel's automatic answer to an inbound
+	// request — is rejected: only Echo Requests are the tunnel's, which is what
+	// lets the direction byte go.
+	if _, ok := parseICMPEcho(id, buildICMPEcho(icmpTypeEchoReply, id, 1, payload)); ok {
+		t.Fatal("an echo reply was accepted; the kernel's own replies would be read as tunnel data")
 	}
 	// A non-echo ICMP type is rejected.
 	bad := buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)

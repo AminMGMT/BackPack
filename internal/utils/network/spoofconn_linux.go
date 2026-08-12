@@ -58,7 +58,6 @@ type spoofConn struct {
 	recvProfile SpoofProfile
 
 	server    bool
-	tag       [xdiTagLen]byte
 	port      uint16
 	realPeer  net.IP
 	spoofSrcs []net.IP // forged sources, rotated one per packet; empty = no spoofing
@@ -70,10 +69,15 @@ type spoofConn struct {
 	icmpSeq atomic.Uint32
 }
 
-// spoofOverhead is what a profile's framing costs on top of the payload, so KCP
+// spoofOverhead is what a profile's headers cost on top of the payload, so KCP
 // can be told a small enough MTU that a datagram never fragments.
+//
+// It no longer counts a tag/direction prefix. That framing was borrowed from
+// xdi and has been dropped so the carrier's ICMP and UDP match the reference
+// spoof transports, which carry the payload bare and let the encryption above
+// authenticate it. Only the IP header and the profile's L4 header remain.
 func spoofOverhead(p SpoofProfile) int {
-	return ipv4.HeaderLen + profileL4Len(p) + xdiHeaderLen
+	return ipv4.HeaderLen + profileL4Len(p)
 }
 
 // openRawIP opens a raw IPv4 socket for a protocol, optionally pinned to a
@@ -119,7 +123,10 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 	if len(spoofSrcs) == 0 {
 		spoofSrcs = []net.IP{localSourceToward(realPeer)}
 	}
-	tag, port := spoofIdentity(token)
+	// Only the port is used now — as the ICMP identifier and the UDP/TCP port
+	// the receiver filters on. The tag half of the identity backed the
+	// tag/direction frame, which this carrier no longer writes.
+	_, port := spoofIdentity(token)
 
 	// The client sends on the uplink and receives on the downlink; the server is
 	// the mirror.
@@ -135,7 +142,7 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 
 	c := &spoofConn{
 		send: send, sendPC: sendPC, sendProfile: sendProfile,
-		recvProfile: recvProfile, server: server, tag: tag, port: port,
+		recvProfile: recvProfile, server: server, port: port,
 		realPeer: realPeer, spoofSrcs: spoofSrcs,
 	}
 
@@ -153,8 +160,8 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 
 	// tcp/icmp receive: a raw socket. For tcp the host kernel would answer the
 	// forged segments with a RST; a targeted rule drops just those. icmp needs no
-	// rule — the frame's direction byte discards the kernel's automatic echo
-	// reply.
+	// rule — the receiver keeps only Echo Requests, so the kernel's automatic
+	// Echo Reply is ignored.
 	rawRecvPC, rawRecv, err := openRawIP(recvProfile.ipProtocol(), iface)
 	if err != nil {
 		send.Close()
@@ -162,8 +169,9 @@ func newSpoofConn(server bool, token string, uplink, downlink SpoofProfile, real
 	}
 	c.rawRecv, c.rawRecvPC = rawRecv, rawRecvPC
 	// Push the demux into the kernel so the read loop only wakes for this
-	// tunnel's flow. Best effort: the userspace tag check still guarantees
-	// correctness if the kernel refuses the filter, so the error is ignored.
+	// tunnel's flow. Best effort: ReadFrom re-checks the port/identifier if the
+	// kernel refuses the filter, so correctness holds regardless and the error
+	// is ignored.
 	_ = attachSpoofBPF(rawRecvPC, recvProfile, port)
 	if recvProfile == SpoofProfileTCP {
 		c.rst = installRSTGuard(port)
@@ -207,20 +215,25 @@ func localSourceToward(dst net.IP) net.IP {
 // is ignored for routing — it is always the real peer.
 func (c *spoofConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	src := c.sourceFor()
-	framed := encodeXdiPayload(c.tag, outboundDir(c.server), p)
 
+	// The KCP datagram goes on the wire as-is, inside the profile's L4 header —
+	// no tag or direction byte in front of it. That prefix was xdi's, carried
+	// over when this transport was first built; the reference spoof transports
+	// send the payload bare and rely on the encryption above to reject anything
+	// that is not the tunnel's. Dropping it makes an ICMP packet a plain ping
+	// and a UDP packet a plain datagram, which is what a capture should show.
 	var shim []byte
 	switch c.sendProfile {
 	case SpoofProfileICMP:
-		typ := byte(icmpTypeEchoRequest) // the client pings
-		if c.server {
-			typ = icmpTypeEchoReply // the server answers
-		}
-		shim = buildICMPEcho(typ, c.port, uint16(c.icmpSeq.Add(1)), framed)
+		// Both ends send an Echo Request (type 8), as the reference does: the
+		// receiver keeps only type 8, so the kernel's automatic Echo Reply to an
+		// inbound request is discarded by the type alone, with no direction byte
+		// to carry it.
+		shim = buildICMPEcho(icmpTypeEchoRequest, c.port, uint16(c.icmpSeq.Add(1)), p)
 	case SpoofProfileTCP:
-		shim = buildTCPShim(c.port, c.tcpSeq.Add(uint32(len(framed))+1), src, c.realPeer, framed)
+		shim = buildTCPShim(c.port, c.tcpSeq.Add(uint32(len(p))+1), src, c.realPeer, p)
 	default: // udp
-		shim = buildUDPShim(c.port, src, c.realPeer, framed)
+		shim = buildUDPShim(c.port, src, c.realPeer, p)
 	}
 
 	h := &ipv4.Header{
@@ -249,8 +262,11 @@ func (c *spoofConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 // real peer, so KCP routes its replies there rather than to the forged source.
 func (c *spoofConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	peer := &net.IPAddr{IP: c.realPeer}
-	wantDir := inboundDir(c.server)
 
+	// The udp profile receives on an ordinary UDP socket, so the kernel has
+	// already stripped the IP and UDP headers and what arrives is the payload.
+	// It is handed up untouched; the encryption above decides whether it is the
+	// tunnel's, exactly as the reference does.
 	if c.udpRecv != nil {
 		buf := make([]byte, len(p)+spoofOverhead(c.recvProfile)+64)
 		for {
@@ -258,31 +274,34 @@ func (c *spoofConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			if err != nil {
 				return 0, nil, err
 			}
-			if inner, ok := decodeXdiPayload(c.tag, wantDir, buf[:n]); ok {
-				return copy(p, inner), peer, nil
+			if n == 0 {
+				continue
 			}
+			return copy(p, buf[:n]), peer, nil
 		}
 	}
 
+	// The tcp/icmp profiles receive on a raw socket, so the L4 header is still
+	// present and its payload has to be lifted out. The demux is the L4 port
+	// (tcp) or the echo identifier (icmp), the same field the kernel BPF filter
+	// already matched on; there is no frame to check beyond that.
 	buf := make([]byte, len(p)+spoofOverhead(c.recvProfile)+64)
 	for {
 		_, payload, _, err := c.rawRecv.ReadFrom(buf)
 		if err != nil {
 			return 0, nil, err
 		}
-		var l4 []byte
+		var inner []byte
 		var ok bool
 		if c.recvProfile == SpoofProfileICMP {
-			l4, ok = parseICMPEcho(c.port, payload)
+			inner, ok = parseICMPEcho(c.port, payload)
 		} else {
-			l4, ok = stripSpoofShim(c.recvProfile, c.port, payload)
+			inner, ok = stripSpoofShim(c.recvProfile, c.port, payload)
 		}
-		if !ok {
+		if !ok || len(inner) == 0 {
 			continue
 		}
-		if inner, ok := decodeXdiPayload(c.tag, wantDir, l4); ok {
-			return copy(p, inner), peer, nil
-		}
+		return copy(p, inner), peer, nil
 	}
 }
 

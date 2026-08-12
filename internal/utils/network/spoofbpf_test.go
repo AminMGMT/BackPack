@@ -75,8 +75,10 @@ func TestSpoofBPFICMP(t *testing.T) {
 	if !runBPF(t, SpoofProfileICMP, id, ip4pkt(1, echo(icmpTypeEchoRequest, id))) {
 		t.Error("echo request with our id must be accepted")
 	}
-	if !runBPF(t, SpoofProfileICMP, id, ip4pkt(1, echo(icmpTypeEchoReply, id))) {
-		t.Error("echo reply with our id must be accepted")
+	// Both ends now send Echo Requests, so a reply is the kernel's own and must
+	// be dropped in the kernel rather than reaching the read loop.
+	if runBPF(t, SpoofProfileICMP, id, ip4pkt(1, echo(icmpTypeEchoReply, id))) {
+		t.Error("echo reply must be dropped; only requests are the tunnel's")
 	}
 	if runBPF(t, SpoofProfileICMP, id, ip4pkt(1, echo(icmpTypeEchoRequest, id+1))) {
 		t.Error("echo with another id must be dropped")
