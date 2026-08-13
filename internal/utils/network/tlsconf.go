@@ -3,7 +3,6 @@ package network
 import (
 	"crypto/tls"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -193,10 +192,10 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 	}
 
 	// A tunnel that is not on 443 cannot be validated that way, so an HTTP-01
-	// responder is started on port 80 as well. It is best effort: if the port
-	// is taken, TLS-ALPN may still work, and saying so is more useful than
-	// refusing to start.
-	go serveACMEHTTP(m, logf)
+	// responder answers on port 80 as well. One responder serves the whole
+	// process and is pointed at this manager; see acmehttp.go for why it is
+	// not started afresh here.
+	acmeResponder.use(m, logf)
 
 	return cfg, nil
 }
@@ -208,18 +207,4 @@ func hasProto(list []string, want string) bool {
 		}
 	}
 	return false
-}
-
-// serveACMEHTTP runs the HTTP-01 responder on port 80.
-func serveACMEHTTP(m *autocert.Manager, logf func(string, ...any)) {
-	srv := &http.Server{
-		Addr:         ":80",
-		Handler:      m.HTTPHandler(nil),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
-		logf("ACME HTTP-01 responder could not use port 80 (%v); "+
-			"validation will rely on TLS-ALPN, which needs the tunnel to be on port 443", err)
-	}
 }

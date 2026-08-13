@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -21,20 +22,35 @@ import (
 )
 
 type Usage struct {
-	dataStore    sync.Map
-	listenAddr   string
-	shutdownCtx  context.Context
-	cancelFunc   context.CancelFunc
-	server       *http.Server
-	logger       *logrus.Logger
-	sniffer      bool
-	snifferLog   string
-	mu           sync.Mutex
-	totalTraffic uint64
+	dataStore   sync.Map
+	listenAddr  string
+	shutdownCtx context.Context
+	cancelFunc  context.CancelFunc
+	server      *http.Server
+	logger      *logrus.Logger
+	sniffer     bool
+	snifferLog  string
+	// mu guards the per-port accounting only. AddOrUpdatePort runs once per
+	// read on every forwarded connection, so nothing slow may ever be done
+	// while holding it — the file writing and the stat collection below have
+	// their own locks for exactly that reason.
+	mu sync.Mutex
+	// Written by the save loop, read by the stats endpoint: two goroutines, no
+	// lock between them, on a plain uint64. Atomic is the cheap fix and does
+	// not put disk work behind the counter's lock.
+	totalTraffic atomic.Uint64
+	// fileMu serialises the usage file. Saving reads the file, merges it with
+	// what is in memory and writes it back; the save runs on a timer in its
+	// own goroutine and the dashboard reads the same file whenever anyone
+	// loads the page, so two of them could interleave a read-modify-write and
+	// lose whichever finished first.
+	fileMu sync.Mutex
 	// A getter rather than a *string: the transport rewrites its status from
 	// one goroutine while this one reads it, and a pointer hands out no way to
 	// synchronise the two. See transport.tunnelStatus.
 	tunnelStatus func() string
+
+	stats statsCache
 }
 
 type PortUsage struct {
@@ -66,8 +82,6 @@ func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog str
 		sniffer:      sniffer,
 		snifferLog:   snifferLog,
 		tunnelStatus: tunnelStatus,
-		mu:           sync.Mutex{},
-		totalTraffic: 0,
 	}
 	return u
 }
@@ -189,6 +203,14 @@ func (m *Usage) AddOrUpdatePort(port int, usage uint64) {
 }
 
 func (m *Usage) saveUsageData() {
+	// The whole read-merge-write is one operation on the file. It runs on a
+	// timer in its own goroutine, and a save that takes longer than the tick
+	// used to be joined by the next one: two of them reading the same file,
+	// merging against it and writing back, with whichever finished last
+	// silently discarding the other's totals.
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+
 	// Step 1: Load existing usage data from the JSON file
 	var existingUsageData []PortUsage
 	file, err := os.Open(m.snifferLog)
@@ -229,14 +251,18 @@ func (m *Usage) saveUsageData() {
 		}
 	}
 
-	m.totalTraffic = 0
-
 	// Step 4: Convert the map back to a slice
 	var mergedUsageData []PortUsage
+	var total uint64
 	for _, usage := range usageMap {
 		mergedUsageData = append(mergedUsageData, usage)
-		m.totalTraffic += usage.Usage
+		total += usage.Usage
 	}
+	// Published once, at the end. Zeroing the counter and adding the ports
+	// back one at a time meant the stats endpoint could read a total that was
+	// part-way through being rebuilt — and, on the tick that reset it, read
+	// zero and report the tunnel as having carried nothing.
+	m.totalTraffic.Store(total)
 
 	// Step 5: Convert merged data to JSON
 	data, err := json.MarshalIndent(mergedUsageData, "", "  ")
@@ -253,6 +279,11 @@ func (m *Usage) saveUsageData() {
 }
 
 func (m *Usage) getUsageFromFile() []PortUsage {
+	// Reading shares the lock with saving, so a page load cannot catch the
+	// file part-way through being rewritten.
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+
 	// Check if the file exists
 	if _, err := os.Stat(m.snifferLog); os.IsNotExist(err) {
 		// If the file does not exist, create it and write "null"
@@ -261,11 +292,13 @@ func (m *Usage) getUsageFromFile() []PortUsage {
 			m.logger.Errorf("error creating file: %v", err)
 			return nil
 		}
+		// Closed on the way out however this branch ends; the success path
+		// used to return without closing it at all.
+		defer file.Close()
 
 		// Write "null" to the new file
 		if _, err := file.Write([]byte("null")); err != nil {
 			m.logger.Errorf("error writing 'null' to the file: %v", err)
-			file.Close()
 			return nil
 		}
 
@@ -359,7 +392,23 @@ func (m *Usage) convertBytesToReadable(bytes uint64) string {
 	}
 }
 
+// getSystemStats returns the host's statistics, sharing one collection between
+// everything asking at the same time. The tunnel's own figures are filled in
+// afterwards, so they are current even when the host figures came from the
+// snapshot a second ago.
 func (m *Usage) getSystemStats() (*SystemStats, error) {
+	collected, err := m.stats.collect(m.collectSystemStats)
+	if err != nil {
+		return nil, err
+	}
+
+	live := *collected
+	live.TunnelStatus = m.status()
+	live.TunnelTraffic = m.convertBytesToReadable(m.totalTraffic.Load())
+	return &live, nil
+}
+
+func (m *Usage) collectSystemStats() (*SystemStats, error) {
 
 	// Get initial network stats
 	initialStats, err := m.getNetworkStats()
@@ -376,10 +425,17 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 		return nil, err
 	}
 
-	// Get CPU usage
+	// Get CPU usage. The slice is empty rather than an error when the kernel
+	// has no sample to give — briefly at boot, and on a host where the counter
+	// has not moved — and indexing it then took the whole process down over a
+	// number on a status page.
 	cpuPercent, err := cpu.Percent(0, false)
 	if err != nil {
 		return nil, err
+	}
+	cpuUsage := 0.0
+	if len(cpuPercent) > 0 {
+		cpuUsage = cpuPercent[0]
 	}
 
 	// Get RAM usage
@@ -405,6 +461,10 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	if err != nil {
 		return nil, err
 	}
+	var totalNetwork uint64
+	if len(netStats) > 0 {
+		totalNetwork = netStats[0].BytesSent + netStats[0].BytesRecv
+	}
 
 	// Get all active network connections (TCP, UDP, etc.)
 	connections, err := net.Connections("all")
@@ -417,15 +477,19 @@ func (m *Usage) getSystemStats() (*SystemStats, error) {
 	downloadSpeed := float64(finalStats.BytesRecv - initialStats.BytesRecv)
 
 	stats := &SystemStats{
+		// TunnelStatus and TunnelTraffic are refreshed by getSystemStats after
+		// this returns; they are cheap and want to be live, and caching them
+		// alongside the host figures would leave the page a couple of seconds
+		// behind on the two numbers that describe the tunnel itself.
 		TunnelStatus:   m.status(),
-		CPUUsage:       m.formatFloat(cpuPercent[0]),
+		CPUUsage:       m.formatFloat(cpuUsage),
 		RAMUsage:       m.convertBytesToReadable(memStats.Used),
 		DiskUsage:      m.convertBytesToReadable(diskStats.Used),
 		SwapUsage:      m.convertBytesToReadable(swapStats.Used),
-		NetworkTraffic: m.convertBytesToReadable(netStats[0].BytesSent + netStats[0].BytesRecv),
+		NetworkTraffic: m.convertBytesToReadable(totalNetwork),
 		DownloadSpeed:  m.formatSpeed(downloadSpeed),
 		UploadSpeed:    m.formatSpeed(uploadSpeed),
-		TunnelTraffic:  m.convertBytesToReadable(m.totalTraffic),
+		TunnelTraffic:  m.convertBytesToReadable(m.totalTraffic.Load()),
 		Sniffer:        map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
 		AllConnections: fmt.Sprintf("%d", len(connections)),
 	}

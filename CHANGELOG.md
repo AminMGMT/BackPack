@@ -445,6 +445,79 @@ All notable changes to Backpack are documented here.
   Dropping the frame leaves a working tunnel exactly where ignoring it always
   left it.*
 
+- **The monitor page collected the host's statistics once per request, and
+  could crash the tunnel doing it.** One collection samples the network
+  counters, sleeps a whole second so a rate can be worked out, and then walks
+  the process table to count connections. The dashboard polls on a timer, so a
+  page left open on two screens meant two of those, each holding a goroutine
+  asleep for a second and each doing the walk again — and anything scraping the
+  endpoint faster multiplied it from there, on the page that exists to report
+  how the host is doing.
+
+  A collection is now shared: whoever arrives while one is running waits for it
+  and gets its result, and a result stays good for two seconds. The tunnel's
+  own status and traffic total are refreshed on the way out, so the two figures
+  that describe the tunnel are still live — only the part that was slow to get
+  is reused. A failure is not cached, so a host that could not be read a moment
+  ago is asked again rather than reported as broken for the next two seconds.
+
+  Two crashes went with it. The CPU sample comes back as an empty slice rather
+  than an error when the kernel has nothing to give — briefly at boot, and
+  where the counter has not moved — and indexing it took the whole tunnel down
+  over a number on a status page; the same was true of the network counters.
+  Both are checked now.
+
+  The tunnel's traffic total was written by the save loop and read by the stats
+  endpoint with nothing between them, on a plain integer. It is atomic now, and
+  published once at the end of a save rather than zeroed and added back a port
+  at a time — which is what let a poll land mid-rebuild and report the tunnel
+  as having carried nothing. The usage file is serialised too: the save is a
+  read-modify-write, it runs on a timer in its own goroutine, and a save slower
+  than the tick used to be joined by the next one, with whichever finished last
+  discarding the other's totals. Reading is under the same lock, so a page load
+  cannot catch the file half-written. And the first read of a fresh install
+  creates that file and now closes it.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#25](https://github.com/AminMGMT/BackPack/pull/25). We reviewed that pull
+  request; the largest thing in it — the shared tunnel-status string, rewritten
+  by transports while the stats endpoint read it — had already been fixed here
+  since, so what shipped is the rest of it, reviewed and finished. The
+  accounting lock is deliberately not the one the cache and the file use:
+  traffic is accounted once per read on every forwarded connection, so putting
+  disk work or a one-second collection behind that lock would have paid for a
+  monitoring page out of the tunnel's throughput.*
+
+- **A tunnel using a Let's Encrypt certificate stopped renewing it after the
+  second reload.** The HTTP-01 responder was started with a bare `go` on every
+  TLS configuration built, and nothing ever stopped it. One process builds
+  another on every reload, so the second reload found port 80 held by the
+  responder the first run had left behind: it logged that it could not have the
+  port and carried on. What was still answering on 80 was the *old* manager,
+  belonging to a generation that had been torn down, with the configuration and
+  cache directory it was built with rather than the ones now in force. Renewal
+  then depended on TLS-ALPN, which only works when the tunnel is on 443 — off
+  443 it simply stopped, silently, and the first anyone would know is a
+  certificate expiring ninety days later.
+
+  There is now one responder for the life of the process, started once and
+  pointed at whichever manager is current. It holds no state of its own —
+  everything a challenge needs lives in the manager — so a reload only has to
+  swap the pointer. A port that cannot be taken is still reported and survived
+  rather than fatal: a tunnel on 443 validates over TLS-ALPN and needs no
+  responder at all.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#21](https://github.com/AminMGMT/BackPack/pull/21). We reviewed that pull
+  request and took the problem it identified rather than its solution. It
+  builds a registry with reference-counted leases, a retry loop and a scheme
+  for sharing the challenge port between separate processes — several hundred
+  lines, on the path where a mistake means no certificate and where Let's
+  Encrypt's rate limits punish finding out the hard way. One process runs one
+  tunnel here, so the fix that matters is one listener that survives a reload,
+  and that is about forty lines. The responder also gained the header and idle
+  timeouts every other listener in this project has.*
+
 ## v1.7.1 — 2026-08-10
 
 Two halves. The web panel stops being a window and becomes a way to work: it
