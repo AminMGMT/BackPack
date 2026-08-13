@@ -3,8 +3,6 @@
 package network
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -103,6 +101,18 @@ type pckConn struct {
 	closed atomic.Bool
 }
 
+// pckFrameBuffers hands out the receive buffers ReadFrom parses frames in. It
+// stores *[]byte rather than []byte because putting a slice into a sync.Pool
+// converts it to an interface, and that conversion allocates — which would put
+// back a good part of what the pool is here to save. Sized for the largest
+// frame a packet socket can hand up.
+var pckFrameBuffers = sync.Pool{
+	New: func() any {
+		b := make([]byte, 65536)
+		return &b
+	},
+}
+
 // pckPeer is the numbering of one conversation.
 type pckPeer struct {
 	addr    *net.UDPAddr
@@ -153,10 +163,25 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	// The server is addressed on the tunnel port and answers from it. A client
 	// sends from an ephemeral port of its own, as any connecting host would —
 	// one sending from the same port it sends to would stand out on that alone.
+	//
+	// Each of the client's carriers takes a DIFFERENT port out of the tunnel's
+	// range, and that is not cosmetic. KCP's listener demultiplexes purely on the
+	// sender's address: `l.sessions[addr.String()]`. Every carrier sharing one
+	// port meant every session in the pool arrived at the server looking like the
+	// same peer, and kcp-go's rule for a packet that claims a new conversation on
+	// an existing entry is to close the old one. So each pool connection killed
+	// the session before it — the control channel included — and the tunnel spent
+	// its life reconnecting: control channel up, pool dials, control channel dead,
+	// timeout, restart. Distinct ports make each session a distinct peer, which is
+	// what it always was. It also keeps the TCP sequence numbers of one flow
+	// consistent, instead of N carriers each advancing their own on one 4-tuple.
+	guardLo, guardHi := listenPort, listenPort
 	if server {
 		c.local = listenPort
 	} else {
-		c.local = pckClientPort(carrier.Token)
+		base := pckClientPortBase(carrier.Token)
+		c.local = nextPckClientPort(base)
+		guardLo, guardHi = base, base+pckPortSpan-1
 	}
 
 	if err := c.openRx(); err != nil {
@@ -166,7 +191,9 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 		c.rx.Close()
 		return nil, err
 	}
-	c.guard = installPckGuard(c.local)
+	// One rule set covers the whole range and is shared by every carrier in this
+	// process, so a pool of sixteen does not install sixteen sets of rules.
+	c.guard = installPckGuard(guardLo, guardHi)
 	return c, nil
 }
 
@@ -255,6 +282,32 @@ func (c *pckConn) L2() bool { return c.txFile != nil }
 // suppressed. Without it the tunnel usually still works and occasionally dies
 // for reasons nothing explains, which is worth a warning.
 func (c *pckConn) GuardInstalled() bool { return c.guard.Installed() }
+
+// PckDiag returns a one-line summary of what the carrier discovered and
+// installed, for the startup log. When a pck tunnel never connects this is the
+// first thing to read: a wrong egress interface, an unresolved next hop, or an
+// absent RST-guard each shows here, and each is otherwise invisible. It is what
+// makes L2() and GuardInstalled() reach a human.
+func (c *pckConn) PckDiag() string {
+	role := "client"
+	if c.server {
+		role = "server"
+	}
+	send := "kernel-routed raw IP (no L2 injection)"
+	nextHop := "kernel"
+	if c.L2() {
+		send = "L2 frame injection"
+		if c.egress.NextHop != nil {
+			nextHop = c.egress.NextHop.String()
+		}
+	}
+	guard := "installed (kernel RSTs dropped, flow untracked)"
+	if !c.GuardInstalled() {
+		guard = "MISSING — kernel RSTs are NOT suppressed; the flow will drop at any stateful hop. Install iptables."
+	}
+	return fmt.Sprintf("pck %s ready: iface=%s src=%s:%d peer-tcp-port=%d send=%s next-hop=%s rst-guard=%s",
+		role, c.egress.Iface.Name, c.egress.LocalIP, c.local, c.port, send, nextHop, guard)
+}
 
 // timestamp is our TCP timestamp clock: a random base advancing at the 1 kHz a
 // Linux host uses, so the value moves the way a real one does.
@@ -363,7 +416,15 @@ func (c *pckConn) sendFrame(frame []byte) error {
 // came from. Anything else on the wire is skipped rather than reported: a
 // packet socket sees a great deal that is not ours.
 func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	buf := make([]byte, 65536)
+	// The frame buffer comes from a pool rather than being allocated here. KCP
+	// calls ReadFrom once per packet, so a fresh 64 KiB slice per call meant a
+	// 64 KiB allocation for every packet the tunnel received — at a few thousand
+	// packets a second that is the garbage collector, not the network, deciding
+	// how fast the tunnel runs. Nothing in the buffer outlives the call: the
+	// payload is copied into p before returning, so it is safe to hand back.
+	bp := pckFrameBuffers.Get().(*[]byte)
+	defer pckFrameBuffers.Put(bp)
+	buf := *bp
 	for {
 		n, err := c.rx.Read(buf)
 		if err != nil {
@@ -450,22 +511,9 @@ func toUDPAddr(a net.Addr) (*net.UDPAddr, bool) {
 
 func htons(v uint16) uint16 { return v<<8 | v>>8 }
 
-// pckClientPort derives the client's source port from the tunnel token.
-//
-// A fresh random port per connection would be marginally more lifelike, and it
-// is not worth what it costs. The port is what the kernel-suppression rules are
-// written against, so a new one on every reconnect means a new pair of iptables
-// rules on every reconnect — and on a flaky link, where reconnects are the whole
-// point of the transport, they accumulate until something notices. Deriving it
-// leaves exactly one rule per tunnel for the tunnel's life, and has the side
-// benefit that a middlebox watching the pair sees the same flow resume rather
-// than a new one appear.
-func pckClientPort(token string) uint16 {
-	sum := sha256.Sum256([]byte("backpack-pck-v1:" + token))
-	// Into the ephemeral range, which is where a connecting host's port comes
-	// from and so where one is expected to be.
-	return 32768 + binary.BigEndian.Uint16(sum[:2])%28000
-}
+// The client's source-port range and the firewall rules written against it are
+// pure arithmetic, so they live in pckport.go where a test can reach them on any
+// platform.
 
 // attachSockFilter installs an assembled classic BPF program on a raw file
 // descriptor.

@@ -68,7 +68,15 @@ func transferWebSocketToTCP(wsConn *websocket.Conn, tcpConn net.Conn, logger *lo
 
 // transferTCPToWebSocket transfers data from a TCP connection to a WebSocket connection
 func transferTCPToWebSocket(tcpConn net.Conn, wsConn *websocket.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
-	buf := make([]byte, 16*1024) // 16K buffer size
+	// The same pooled 64 KiB buffer the TCP relay copies through, for the same
+	// two reasons (see relaybuf.go): a relay's cost is syscalls, and 16 KiB took
+	// four times as many of them per gigabyte as 64 KiB does; and allocating it
+	// per connection put a 16 KiB slice through the garbage collector for every
+	// connection forwarded. This path was simply missed when the TCP one was
+	// fixed.
+	bufp := getRelayBuffer()
+	defer putRelayBuffer(bufp)
+	buf := *bufp
 	for {
 		// Read data from the TCP connection
 		n, err := tcpConn.Read(buf)

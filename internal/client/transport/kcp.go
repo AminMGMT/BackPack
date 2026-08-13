@@ -183,6 +183,10 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
 	}
+	// Surface the carrier's startup diagnostics (effective FEC/MTU, and for pck
+	// the discovered egress and RST-guard status) in the tunnel log, so a client
+	// that never connects reports why instead of staying silent.
+	client.kcpSettings.Logf = logger.Infof
 	// Seed the first generation through the same path a restart uses, so
 	// there is only one way this state is ever published.
 	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, client.status.get, logger))

@@ -81,6 +81,36 @@ type KCPSettings struct {
 	// the source is this machine's real one, so the server learns each client
 	// from the wire exactly as a UDP socket would. See pckconn_linux.go.
 	Pck *PcapCarrier
+	// Logf, when set, receives one-line startup notes: the effective MTU and FEC
+	// on both ends, and — for the pck carrier — the egress it discovered and
+	// whether the kernel-RST guard installed. It exists because a KCP tunnel that
+	// never connects is otherwise silent: FEC is not negotiated, so a shard
+	// mismatch between the two ends drops every packet with nothing in the log,
+	// and the pck carrier's interface/next-hop/guard decisions were computed and
+	// then thrown away. Nil disables the notes. It is only ever called at
+	// startup, never on the data path.
+	Logf func(format string, args ...any)
+}
+
+// pckDiagnoser is implemented by the pck carrier alone, to surface in the
+// startup log what it discovered about the egress path and whether the
+// kernel-RST guard installed. The type assertion against it in KCPListen and
+// KCPDial simply does nothing for every other carrier.
+type pckDiagnoser interface{ PckDiag() string }
+
+// logSettings emits the effective session parameters, so a mismatch between the
+// two ends — which never negotiates and so fails silently — is visible in the
+// log of each. Safe to call with a nil Logf.
+func (s KCPSettings) logSettings(role string) {
+	if s.Logf == nil {
+		return
+	}
+	fec := "off"
+	if s.DataShards > 0 && s.ParityShards > 0 {
+		fec = fmt.Sprintf("%d:%d", s.DataShards, s.ParityShards)
+	}
+	s.Logf("KCP %s parameters: MTU=%d (effective %d) FEC=%s sndwnd=%d rcvwnd=%d — both ends MUST match MTU and FEC or the tunnel never connects",
+		role, s.MTU, s.effectiveMTU(), fec, s.SndWnd, s.RcvWnd)
 }
 
 // SpoofCarrier is the IP-spoofing carrier's tuning, passed down to the raw
@@ -165,6 +195,21 @@ func ApplyKCPSettings(session *kcp.UDPSession, s KCPSettings) {
 	session.SetNoDelay(s.NoDelay, s.Interval, s.Resend, s.NoCongestion)
 	session.SetWindowSize(s.SndWnd, s.RcvWnd)
 	session.SetMtu(s.effectiveMTU())
+	// Stream mode, which kcp-go leaves off by default.
+	//
+	// Off, every Write becomes its own segment (or run of segments) and the last
+	// one is left part-empty however few bytes it holds — so a tunnel carrying
+	// SMUX, whose frames are a header plus a payload of whatever size the
+	// application happened to write, spends a share of every packet on padding it
+	// did not need to send. On, a short write is appended to the segment already
+	// queued until that segment is full, so the packets that go out are full ones.
+	//
+	// What rides on this session is a byte stream (SMUX over KCP), not datagrams,
+	// so nothing above it can tell the difference — message boundaries were never
+	// meaningful here. Measured on a loopback tunnel it is worth 5-7% on every
+	// preset, and it costs no latency: SetWriteDelay(false) below still flushes
+	// what is queued on the next tick rather than waiting for a segment to fill.
+	session.SetStreamMode(true)
 	// Write delay off means a small write goes out on the next tick instead of
 	// waiting to be batched — the behaviour a tunnel wants.
 	session.SetWriteDelay(false)
@@ -194,6 +239,7 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 	if err != nil {
 		return nil, nil, err
 	}
+	s.logSettings("server")
 
 	// Over ICMP the socket is a raw ICMP one shared by every tunnel on the
 	// host, not a UDP socket bound to bindAddr — the bind address's port is
@@ -250,6 +296,9 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 		if err != nil {
 			return nil, nil, err
 		}
+		if d, ok := conn.(pckDiagnoser); ok && s.Logf != nil {
+			s.Logf("%s", d.PckDiag())
+		}
 		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
@@ -281,6 +330,7 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.logSettings("client")
 
 	var session *kcp.UDPSession
 	if s.UseICMP {
@@ -342,6 +392,9 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 		conn, err := newPckConn(false, carrier.Port, carrier)
 		if err != nil {
 			return nil, err
+		}
+		if d, ok := conn.(pckDiagnoser); ok && s.Logf != nil {
+			s.Logf("%s", d.PckDiag())
 		}
 		session, err = ownedKCPSession(&net.UDPAddr{IP: ipAddr.IP, Port: int(carrier.Port)},
 			block, s.DataShards, s.ParityShards, conn)

@@ -545,18 +545,24 @@ func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr strin
 }
 
 func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAddr string) {
+	var backoff acceptBackoff
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
 
 		default:
-			s.logger.Debugf("waiting to accept incoming connection on %s", listener.Addr().String())
 			conn, err := listener.Accept()
 			if err != nil {
-				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr().String(), err)
+				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
+				// One of these runs per forwarded port, so an instant retry on a
+				// broken listener would pin a core per port. See acceptBackoff.
+				if !backoff.fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff.ok()
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)

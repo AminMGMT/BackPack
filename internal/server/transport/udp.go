@@ -204,15 +204,23 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 	// restarted by hand — the exact symptom this fixes.
 	established := false
 
+	var backoff acceptBackoff
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if g.ctx.Err() != nil {
 				return
 			}
-			s.logger.Debugf("failed to accept control channel connection on %s: %v", listener.Addr().String(), err)
+			s.logger.Debugf("failed to accept control channel connection on %s: %v", listener.Addr(), err)
+			// The context check above catches a shutdown, but a listener broken
+			// for any other reason fails instantly and forever; without a pause
+			// this loop would spin on a core. See acceptBackoff.
+			if !backoff.fail(g.ctx) {
+				return
+			}
 			continue
 		}
+		backoff.ok()
 
 		if !s.validControlClaim(conn) {
 			conn.Close()

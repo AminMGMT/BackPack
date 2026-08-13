@@ -215,6 +215,10 @@ func NewKcpServer(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 		reqNewConnChan:   make(chan struct{}, config.ChannelSize),
 		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
+	// Route the carrier's startup diagnostics (effective FEC/MTU, and for pck the
+	// discovered egress and RST-guard status) into the tunnel log, so a tunnel
+	// that never connects says why instead of staying silent.
+	server.kcpSettings.Logf = logger.Infof
 	// Built after the transport exists, because it needs a getter for the
 	// status rather than a pointer into it.
 	server.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, server.status.get, logger)
@@ -450,17 +454,23 @@ func (s *KcpTransport) tunnelListener(g *kcpGen) {
 }
 
 func (s *KcpTransport) acceptTunnelConn(g *kcpGen, listener *kcp.Listener) {
+	var backoff acceptBackoff
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
 		default:
-			s.logger.Debugf("waiting for accept incoming tunnel connection on %s", listener.Addr().String())
 			session, err := listener.AcceptKCP()
 			if err != nil {
-				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr().String(), err)
+				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr(), err)
+				// Back off rather than retry instantly: a closed listener fails
+				// immediately and forever, and `continue` would pin a core.
+				if !backoff.fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff.ok()
 
 			// Sessions used to be dropped unless they came from the same
 			// address as the control channel. That was already redundant here —
@@ -673,6 +683,7 @@ func (s *KcpTransport) localListener(g *kcpGen, localAddr string, remoteAddr str
 }
 
 func (s *KcpTransport) acceptLocalConn(g *kcpGen, listener net.Listener, remoteAddr string) {
+	var backoff acceptBackoff
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -681,9 +692,15 @@ func (s *KcpTransport) acceptLocalConn(g *kcpGen, listener net.Listener, remoteA
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
-				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr().String(), err)
+				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
+				// One of these runs per forwarded port, so an instant retry on a
+				// broken listener would pin a core per port. See acceptBackoff.
+				if !backoff.fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff.ok()
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)

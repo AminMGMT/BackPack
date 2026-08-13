@@ -526,6 +526,7 @@ func (s *QuicTransport) localListener(g *quicGen, localAddr string, remoteAddr s
 }
 
 func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remoteAddr string) {
+	var backoff acceptBackoff
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -534,9 +535,15 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
-				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr().String(), err)
+				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
+				// One of these runs per forwarded port, so an instant retry on a
+				// broken listener would pin a core per port. See acceptBackoff.
+				if !backoff.fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff.ok()
 
 			tcpConn, ok := conn.(*net.TCPConn)
 			if !ok {

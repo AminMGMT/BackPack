@@ -3,9 +3,9 @@
 package network
 
 import (
-	"fmt"
 	"os/exec"
 	"strconv"
+	"sync"
 )
 
 // Keeping the host kernel out of a conversation it is not part of.
@@ -23,25 +23,57 @@ import (
 // these pseudo-flows would get a conntrack entry it will never need, and on a
 // busy server that is a table filling up for nothing.
 //
-// Both are fixed by two narrow rules, installed for the tunnel's port only and
-// removed when it closes. paqet, which has the same problem, documents them and
-// leaves them to the operator; there is no reason a tunnel that already knows
-// its own port cannot install them itself.
+// Both are fixed by three narrow rules, installed for the tunnel's ports only
+// and removed when the last carrier using them closes. paqet, which has the same
+// problem, documents them and leaves them to the operator; there is no reason a
+// tunnel that already knows its own ports cannot install them itself.
+//
+// The rules cover a port RANGE rather than a single port, because a client's
+// pool opens one carrier per session and each needs its own source port (see
+// newPckConn). They are refcounted so that a pool of sixteen installs one set of
+// rules rather than sixteen.
 type pckGuard struct {
-	port  uint16
-	rules [][]string // each entry is a full rule body, table first
-	added [][]string
+	lo, hi uint16
+	rules  [][]string // each entry is a full rule body, table first
+	added  [][]string
 }
 
-// installPckGuard adds the rules for a port and returns a handle that remembers
-// which of them took, so remove undoes exactly that much.
+// Guards are shared per port range within a process, so the pool's carriers all
+// reference one rule set and the last one out removes it.
+var (
+	guardMu     sync.Mutex
+	guardShared = map[string]*sharedGuard{}
+)
+
+type sharedGuard struct {
+	g   *pckGuard
+	ref int
+}
+
+func guardKey(lo, hi uint16) string {
+	return strconv.Itoa(int(lo)) + ":" + strconv.Itoa(int(hi))
+}
+
+// installPckGuard adds the rules for a port range and returns a handle that
+// remembers which of them took, so remove undoes exactly that much. Calling it
+// again for the same range takes a reference on the rules already installed.
 //
 // Best effort throughout: a machine without iptables still runs the tunnel, and
 // the carrier says so at startup rather than failing. What it must not do is
 // report success for a rule that was refused, which is why each is checked.
-func installPckGuard(port uint16) *pckGuard {
-	g := &pckGuard{port: port, rules: pckRules(port)}
+func installPckGuard(lo, hi uint16) *pckGuard {
+	guardMu.Lock()
+	defer guardMu.Unlock()
+
+	key := guardKey(lo, hi)
+	if sh, ok := guardShared[key]; ok {
+		sh.ref++
+		return sh.g
+	}
+
+	g := &pckGuard{lo: lo, hi: hi, rules: pckRules(lo, hi)}
 	if _, err := exec.LookPath("iptables"); err != nil {
+		guardShared[key] = &sharedGuard{g: g, ref: 1}
 		return g
 	}
 	for _, r := range g.rules {
@@ -51,15 +83,29 @@ func installPckGuard(port uint16) *pckGuard {
 			g.added = append(g.added, r)
 		}
 	}
+	guardShared[key] = &sharedGuard{g: g, ref: 1}
 	return g
 }
 
-// remove deletes the rules that were installed. Safe on a nil guard and on one
-// that installed nothing.
+// remove drops this carrier's reference and deletes the rules once the last one
+// is gone. Safe on a nil guard and on one that installed nothing.
 func (g *pckGuard) remove() {
 	if g == nil {
 		return
 	}
+	guardMu.Lock()
+	defer guardMu.Unlock()
+
+	key := guardKey(g.lo, g.hi)
+	sh, ok := guardShared[key]
+	if !ok {
+		return // already torn down
+	}
+	if sh.ref--; sh.ref > 0 {
+		return // another carrier is still using the rules
+	}
+	delete(guardShared, key)
+
 	for _, r := range g.added {
 		table, body := r[0], r[1:]
 		args := append([]string{"-t", table, "-D"}, body...)
@@ -74,25 +120,5 @@ func (g *pckGuard) Installed() bool {
 	return g != nil && len(g.added) == len(g.rules)
 }
 
-// pckRules is the rule set, each entry being the table followed by the rule
-// body. They are tagged with a comment naming the port, so a rule left behind
-// by a crash is identifiable and removable by hand.
-func pckRules(port uint16) [][]string {
-	p := strconv.Itoa(int(port))
-	tag := []string{"-m", "comment", "--comment", fmt.Sprintf("backpack-pck-%s", p)}
-
-	rule := func(table string, body ...string) []string {
-		return append([]string{table}, append(body, tag...)...)
-	}
-	return [][]string{
-		// The one that matters: drop the kernel's replies to segments it thinks
-		// arrived at a closed port. Scoped to RSTs leaving from this port, so
-		// nothing else on the machine is affected.
-		rule("filter", "OUTPUT", "-p", "tcp", "--sport", p,
-			"--tcp-flags", "RST", "RST", "-j", "DROP"),
-		// And keep the pseudo-flows out of the connection tracker, in both
-		// directions.
-		rule("raw", "PREROUTING", "-p", "tcp", "--dport", p, "-j", "NOTRACK"),
-		rule("raw", "OUTPUT", "-p", "tcp", "--sport", p, "-j", "NOTRACK"),
-	}
-}
+// portSpec and pckRules — the spelling of the rules themselves — live in
+// pckport.go, which carries no build tag so they can be asserted on anywhere.

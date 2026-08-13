@@ -568,6 +568,7 @@ func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr
 }
 
 func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, remoteAddr string) {
+	var backoff acceptBackoff
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -576,9 +577,15 @@ func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, rem
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
-				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr().String(), err)
+				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
+				// One of these runs per forwarded port, so an instant retry on a
+				// broken listener would pin a core per port. See acceptBackoff.
+				if !backoff.fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff.ok()
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)

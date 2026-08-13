@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## Unreleased
+## v1.7.2 — 2026-08-13
 
 ### Added
 - **Multi-exit failover with health scoring.** A client with more than one server
