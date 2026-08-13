@@ -2352,7 +2352,7 @@ const FA={
   "encrypted with no fingerprint — hardest to detect, for heavy filtering":
     "رمزنگاری‌شده و بدون اثر انگشت — سخت‌ترین برای شناسایی، مناسب فیلترینگ شدید",
   "raw datagrams — for UDP-based services":"دیتاگرام خام — برای سرویس‌های مبتنی بر UDP",
-  "reliable UDP with error correction — best on lossy links":"UDP مطمئن با تصحیح خطا — بهترین روی لینک‌های پرافت",
+  "low-latency gaming tunnel — reliable UDP with always-on error correction":"تونل گیمینگ کم‌تأخیر — UDP مطمئن با تصحیح خطای همیشه‌روشن",
   "encrypted TLS 1.3 streams over UDP — self-tuning, great under loss":
     "جریان‌های رمزنگاری‌شدهٔ TLS 1.3 روی UDP — خودتنظیم، عالی در شرایط افت بسته",
   "WebSocket — HTTP camouflage, CDN friendly":"وب‌سوکت — استتار HTTP، سازگار با CDN",
@@ -4069,6 +4069,7 @@ function renderLinkTestResult(q){
   if(q.recLabel){
     h+=dRow('Recommended',q.recLabel,true);
     if(q.recWhy&&q.recWhy.length) h+=dRow('Why',q.recWhy.join(' '),true);
+    if(q.recFEC) h+=dRow('Recommended FEC',q.recFEC+(q.recFECWhy?' — '+q.recFECWhy:'')+' · set the same ratio on both ends',true);
     if(q.caveats&&q.caveats.length) h+=dRow('Caveats',q.caveats.join(' '),true);
   }
   box.innerHTML=h+'</div>'; relang();

@@ -16,7 +16,7 @@ on this route drop ping while carrying tunnel traffic perfectly well. It then:
 
 | Situation | Use |
 |-----------|-----|
-| The route loses packets | **UDP + KCP** — repairs loss with forward error correction |
+| The route loses packets | **UDP + KCP + FEC** — repairs loss with forward error correction |
 | The link is clean | **TCP Mux** |
 | You need to look like a browser loading HTTPS | **WSS** — sends a real Chrome TLS fingerprint |
 | The connection itself is being filtered | **TCP + Stealth** — encrypted with no fingerprint at all |
@@ -28,7 +28,7 @@ TCP-based transport instead.
 
 - **TCP** — reliable stream. `TCP Mux` runs many streams over one connection;
   `TCP + Stealth` wraps it in a Noise layer with no fingerprint.
-- **UDP** — datagrams. `UDP + KCP` adds reliable delivery + FEC.
+- **UDP** — datagrams. `UDP + KCP + FEC` is a low-latency gaming tunnel: reliable delivery with always-on FEC.
 - **WebSocket** — looks like web traffic. `WSS` / `WSS Mux` add TLS with a
   browser fingerprint and bind the credential to the TLS session.
 

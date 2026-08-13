@@ -133,64 +133,72 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 // applyKCPPreset fills the KCP-only knobs. They are written to the config only
 // for the KCP transport, but filling them unconditionally keeps a later
 // transport change (tcp -> kcp) from landing on zero values.
+//
+// KCP here is the "UDP + KCP + FEC" transport: a low-latency gaming tunnel, not
+// a bulk mover. So every preset shares the same latency-first ARQ — NoDelay on,
+// a 10 ms tick, fast-retransmit at 2 duplicate ACKs, KCP's own congestion
+// window off, and ACKs sent immediately — and every preset carries FEC, because
+// on a game path repairing a lost packet from parity beats waiting a whole RTT
+// for a retransmit. What the preset changes is only how much headroom it buys:
+// the window (which, with congestion control off, is also the bound on how much
+// data can queue and inflate ping) and the parity ratio (how much loss it can
+// absorb before a stall shows through).
 func applyKCPPreset(s *TunnelSpec, preset string) {
 	// MTU stays below the common 1500 path MTU with room for the KCP, FEC and
 	// encryption headers, so a KCP packet never fragments in transit.
 	s.KCPMTU = 1350
 
+	// Latency-first ARQ, identical on every preset. This is the "fast mode"
+	// KCP was built for: NoDelay skips the delayed-ACK wait, a 10 ms tick (the
+	// floor kcp-go allows) flushes retransmits promptly, Resend=2 retransmits a
+	// segment after two duplicate ACKs instead of on a timer, NoCongestion
+	// takes KCP's own AIMD window out of the path so one loss does not halve the
+	// rate, and AckNoDelay returns each ACK at once so the sender learns of a
+	// loss a round trip sooner. Together they trade bandwidth-efficiency for the
+	// steady, low ping a game needs.
+	s.KCPInterval = 10
+	s.KCPResend = 2
+	s.KCPNoDelay = 1
+	s.KCPNoCongestion = 1
+	s.KCPAckNoDelay = true
+
 	switch preset {
 	case PresetBalance:
-		// Standard-interval ARQ with congestion control left on: gentlest on
-		// CPU and the friendliest to a shared link.
-		s.KCPInterval = 30
-		s.KCPResend = 2
-		s.KCPNoDelay = 1
-		s.KCPNoCongestion = 1
-		// The window is the throughput ceiling: window × MTU / RTT. At 1350 MTU
-		// and 100 ms, 1024 packets is about 110 Mbit/s — plenty for the preset
-		// that exists to be light, and four times what 256 allowed.
-		s.KCPSndWnd = 1024
-		s.KCPRcvWnd = 1024
-		s.KCPAckNoDelay = false
-		// No FEC: parity packets cost bandwidth on a clean link.
-		s.KCPDataShards = 0
-		s.KCPParityShards = 0
-
-	case PresetTurbo:
-		// A 10 ms tick flushes four times as often as the old 40 ms one, which
-		// is what turns a full window into steady throughput instead of bursts.
-		s.KCPInterval = 10
-		s.KCPResend = 2
-		s.KCPNoDelay = 1
-		s.KCPNoCongestion = 1
-		// 2048 × 1350 / 100 ms ≈ 220 Mbit/s. The old 1024 halved that.
-		s.KCPSndWnd = 2048
-		s.KCPRcvWnd = 2048
-		s.KCPAckNoDelay = true
-		// 10 data + 2 parity repairs up to 2 lost packets in every 12 without
-		// waiting for a retransmit. It was 10:3, which spends 30% of the link
-		// on parity; 20% keeps most of the benefit and gives the rest back as
-		// throughput, which is what this preset is for.
+		// The lightest gaming profile. With congestion control off the window
+		// is the ceiling on in-flight data, so keeping it small is what keeps
+		// buffering — and therefore worst-case ping — bounded on a modest link.
+		// 512 × 1350 / 100 ms ≈ 55 Mbit/s, ample for game traffic plus light
+		// browsing through the same tunnel.
+		s.KCPSndWnd = 512
+		s.KCPRcvWnd = 512
+		// 10:2 repairs up to 2 lost packets in every 12 (~17% loss) for a 20%
+		// parity cost — the floor that still makes "+ FEC" mean something on a
+		// clean-ish route.
 		s.KCPDataShards = 10
 		s.KCPParityShards = 2
 
-	case PresetAggressive:
-		s.KCPInterval = 10
-		s.KCPResend = 2
-		s.KCPNoDelay = 1
-		s.KCPNoCongestion = 1
-		// 8192 × 1350 / 100 ms ≈ 880 Mbit/s: enough window that the link, not
-		// the protocol, is what runs out first. Costs about 11 MB of send and
-		// receive buffer per session, which is the trade this preset exists to
-		// make.
-		s.KCPSndWnd = 8192
-		s.KCPRcvWnd = 8192
-		s.KCPAckNoDelay = true
-		// 10:3 rather than 10:4 — 40% parity is a lot of link to spend on a
-		// preset whose whole promise is throughput. Where the route is bad
-		// enough to need more, Link Test says so.
+	case PresetTurbo:
+		// The recommended default. Twice the window — ~110 Mbit/s of headroom at
+		// 100 ms — for room to also pull a download through the tunnel without
+		// starving the game packets, still small enough to keep queueing low.
+		s.KCPSndWnd = 1024
+		s.KCPRcvWnd = 1024
+		// 10:3 (~33% loss tolerated, 30% overhead): the middle of the loss the
+		// tuned Iran-to-abroad routes this preset targets actually see.
 		s.KCPDataShards = 10
 		s.KCPParityShards = 3
+
+	case PresetAggressive:
+		// The strongest profile, for a bad route on a server with headroom.
+		// 2048 × 1350 / 100 ms ≈ 220 Mbit/s — larger, but deliberately far below
+		// the old 8192: past the bandwidth-delay product the extra window buys a
+		// gaming tunnel nothing but bufferbloat.
+		s.KCPSndWnd = 2048
+		s.KCPRcvWnd = 2048
+		// 10:4 (~40% loss tolerated, 40% overhead): the most parity worth
+		// spending before a different route is the better answer.
+		s.KCPDataShards = 10
+		s.KCPParityShards = 4
 	}
 }
 

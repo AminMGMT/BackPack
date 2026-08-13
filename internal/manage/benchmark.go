@@ -116,6 +116,73 @@ type Recommendation struct {
 	Why       []string
 	// Caveats are things the user must check or accept before applying it.
 	Caveats []string
+	// FEC is the parity ratio to run when Transport is KCP, sized to the loss
+	// that was measured. Zero when the recommendation is not a KCP transport.
+	FEC FECPlan
+}
+
+// FECPlan is a forward-error-correction ratio: for every Data packets the link
+// carries Parity extra ones, so up to Parity losses in each group of Data+Parity
+// are repaired without waiting a round trip for a retransmit. Both ends must run
+// the same ratio.
+type FECPlan struct {
+	Data   int
+	Parity int
+	Why    string
+}
+
+// Set reports whether the plan carries a real ratio.
+func (f FECPlan) Set() bool { return f.Data > 0 && f.Parity > 0 }
+
+// Ratio renders the plan as "data:parity".
+func (f FECPlan) Ratio() string { return fmt.Sprintf("%d:%d", f.Data, f.Parity) }
+
+// RecommendFEC sizes the FEC ratio to the measured loss. This is the single
+// setting that most decides how a KCP link feels on a lossy route: too little
+// parity and lost packets still stall waiting for a retransmit, too much and the
+// parity traffic itself congests the link.
+//
+// The rule is that parity/(data+parity) has to exceed the loss rate with
+// headroom, because loss arrives in bursts rather than evenly, so each tier
+// tolerates comfortably more than the loss that selects it. The ratios are the
+// ones proven on this kind of route; the data shard count drops as parity climbs
+// so a very lossy link is not also carrying huge FEC groups.
+func RecommendFEC(q PathQuality) FECPlan {
+	loss := q.LossPercent()
+	switch {
+	case !q.Usable():
+		// Nothing trustworthy to size against: the gaming default, which every
+		// KCP preset already carries.
+		return FECPlan{10, 3, "link not measurable — the default gaming ratio"}
+	case loss < 1:
+		return FECPlan{20, 5, fmt.Sprintf("%.0f%% loss — a light 25%% parity is plenty on a clean route", loss)}
+	case loss < 5:
+		return FECPlan{10, 5, fmt.Sprintf("%.0f%% loss — 10:5 repairs bursts up to ~33%%", loss)}
+	case loss < 15:
+		return FECPlan{8, 8, fmt.Sprintf("%.0f%% loss — 8:8 repairs bursts up to ~50%%", loss)}
+	default:
+		return FECPlan{4, 8, fmt.Sprintf("%.0f%% loss — 4:8 trades 200%% overhead for repairing up to ~67%%", loss)}
+	}
+}
+
+// SetFEC applies a parity ratio to a KCP tunnel and restarts it. Like the other
+// measured tunings it clears the preset, because the numbers no longer match a
+// named profile and a later preset change must not silently overwrite them.
+func SetFEC(name string, plan FECPlan) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	if !isKCP(s.Transport) {
+		return fmt.Errorf("FEC only applies to a KCP-based transport")
+	}
+	if s.KCPDataShards == plan.Data && s.KCPParityShards == plan.Parity {
+		return fmt.Errorf("the tunnel already uses %s FEC", plan.Ratio())
+	}
+	s.KCPDataShards = plan.Data
+	s.KCPParityShards = plan.Parity
+	s.Preset = ""
+	return applySpec(s)
 }
 
 // RecommendTransport turns a path measurement into a transport choice.
@@ -149,7 +216,7 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			"first make sure the server is actually running and the port is open — a stopped server looks exactly the same from here")
 
 	case q.LossPercent() >= 20:
-		r.Transport, r.Label = "kcp", "UDP + KCP"
+		r.Transport, r.Label = "kcp", "UDP + KCP + FEC"
 		r.Preset = PresetAggressive
 		r.Why = append(r.Why,
 			fmt.Sprintf("%.0f%% of probes never completed — this link loses a lot of packets", q.LossPercent()),
@@ -160,7 +227,7 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			"and if UDP itself is the problem here, TCP + PCK carries the same KCP inside TCP-shaped packets built below the kernel — Linux and root on both ends")
 
 	case q.LossPercent() >= 2:
-		r.Transport, r.Label = "kcp", "UDP + KCP"
+		r.Transport, r.Label = "kcp", "UDP + KCP + FEC"
 		r.Why = append(r.Why,
 			fmt.Sprintf("%.0f%% packet loss measured — enough that TCP keeps backing off and losing speed", q.LossPercent()),
 			"KCP's error correction recovers those losses without a full round trip")
@@ -180,6 +247,12 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 		r.Why = append(r.Why,
 			fmt.Sprintf("the link is clean and steady (%s, ±%s, no measurable loss)", shortDur(q.Avg), shortDur(q.Jitter)),
 			"with nothing to repair, plain multiplexed TCP is the fastest and the lightest on CPU")
+	}
+
+	// When the answer is KCP, the parity ratio is the setting that most decides
+	// how it feels, so carry the measured recommendation alongside the transport.
+	if r.Transport == "kcp" {
+		r.FEC = RecommendFEC(q)
 	}
 
 	if r.Transport == current {

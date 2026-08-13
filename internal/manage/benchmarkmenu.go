@@ -106,12 +106,20 @@ func LinkTest() {
 	for _, why := range rec.Why {
 		tui.Info("  • " + why)
 	}
+	if rec.FEC.Set() {
+		tui.Success(fmt.Sprintf("  ▸ FEC %s — %s", rec.FEC.Ratio(), rec.FEC.Why))
+		tui.Warn("    Set the SAME ratio on both ends, or the link will not come up.")
+	}
 	for _, c := range rec.Caveats {
 		tui.Warn("  ! " + c)
 	}
 	fmt.Println()
 
 	if rec.Transport == target.Transport {
+		// Same transport, but the measured FEC may still beat what it runs now.
+		if rec.FEC.Set() {
+			offerFEC(target, rec.FEC)
+		}
 		tui.PressEnter()
 		return
 	}
@@ -131,8 +139,53 @@ func LinkTest() {
 		return
 	}
 	tui.Success("Switched to " + rec.Label + ".")
-	tui.Warn("Now switch the server side to " + rec.Label + " as well.")
+	// A fresh KCP tunnel starts on its preset's FEC; nudge it to the ratio the
+	// measurement actually calls for so the switch lands fully tuned.
+	if rec.FEC.Set() {
+		if err := SetFEC(target.Name, rec.FEC); err == nil {
+			tui.Success("Applied FEC " + rec.FEC.Ratio() + ".")
+		}
+	}
+	tui.Warn("Now switch the server side to " + rec.Label + " as well" +
+		func() string {
+			if rec.FEC.Set() {
+				return ", with the same FEC " + rec.FEC.Ratio() + "."
+			}
+			return "."
+		}())
 	tui.PressEnter()
+}
+
+// offerFEC proposes a measured parity ratio for a KCP tunnel and applies it if
+// the operator agrees. SetFEC refuses a no-op, so an unchanged ratio just falls
+// through quietly.
+func offerFEC(t Tunnel, plan FECPlan) {
+	spec, err := LoadSpec(t.Name)
+	if err != nil {
+		return
+	}
+	if spec.KCPDataShards == plan.Data && spec.KCPParityShards == plan.Parity {
+		return // already tuned for this loss
+	}
+
+	tui.Title("Error correction")
+	fmt.Println()
+	tui.Info(fmt.Sprintf("  Now       : FEC %d:%d", spec.KCPDataShards, spec.KCPParityShards))
+	tui.Info(fmt.Sprintf("  Suggested : FEC %s", plan.Ratio()))
+	tui.Warn("  " + plan.Why)
+	fmt.Println()
+
+	if !tui.Confirm("Apply FEC "+plan.Ratio()+" to "+t.Name, false) {
+		return
+	}
+	if err := SetFEC(t.Name, plan); err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	tui.Success("FEC applied and the tunnel restarted.")
+	tui.Warn("Set the same ratio " + plan.Ratio() + " on the OTHER side, or the link will not come up.")
+	fmt.Println()
 }
 
 // reportDatagramLink explains why a UDP-based tunnel cannot be measured this

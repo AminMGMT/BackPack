@@ -16,7 +16,7 @@ measures your route and recommends one. See
 | **TCP + Stealth** | TCP | ✅ (Noise) | ✅ | — |
 | **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root |
 | UDP | UDP | — | — | UDP open |
-| **UDP + KCP** | UDP | ✅ (token key) | ✅ | UDP open |
+| **UDP + KCP + FEC** | UDP | ✅ (token key) | ✅ | UDP open |
 | WS | WebSocket | — | — | — |
 | WS Mux | WebSocket | — | ✅ | — |
 | WSS | WebSocket | ✅ (TLS) | — | certificate |
@@ -78,13 +78,17 @@ ends must be on it. See [TCP + PCK](tcp-pck.md).
 Raw datagrams, for forwarding UDP-based services. No reliability layer — packets
 that are lost stay lost, which is correct for protocols that expect that.
 
-### UDP + KCP
-A reliable, ordered protocol built on top of UDP, with **forward error
-correction**: for every batch of data packets it sends a few parity packets, so
-the receiver repairs lost packets **instantly** instead of waiting a full round
-trip for a retransmit. This is the transport for a route that loses packets
-where TCP keeps backing off. Datagrams are encrypted with a key derived from the
-tunnel token.
+### UDP + KCP + FEC
+A **low-latency gaming tunnel**: a reliable, ordered protocol built on top of
+UDP, with **always-on forward error correction**. For every batch of data
+packets it sends a few parity packets, so the receiver repairs lost packets
+**instantly** instead of waiting a full round trip for a retransmit. Every
+preset runs the same latency-first ARQ (NoDelay, a 10 ms tick, immediate ACKs,
+KCP's own congestion window off) with the window kept near the
+bandwidth-delay product so queueing — and therefore ping — stays bounded. This
+is the transport for a route that loses packets where TCP keeps backing off, and
+for real-time traffic like games where a stall hurts more than a little
+overhead. Datagrams are encrypted with a key derived from the tunnel token.
 
 > KCP runs over UDP. **If your provider filters or throttles UDP, it will not
 > help** — use a TCP-based transport instead. Test before committing to it.

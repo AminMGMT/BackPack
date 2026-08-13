@@ -51,14 +51,17 @@ func TestPresetStreamWindowIsNotTheBottleneck(t *testing.T) {
 	}
 }
 
-// KCP's ceiling is window × MTU / RTT, so the same reasoning applies to the
-// datagram transport's own window.
+// KCP's ceiling is window × MTU / RTT. On the "UDP + KCP + FEC" gaming
+// transport the window is deliberately kept near the bandwidth-delay product —
+// past it, with congestion control off, extra window is only bufferbloat — so
+// these floors are lower than a bulk mover's, but still well clear of throttling
+// the game traffic plus a download sharing the tunnel.
 func TestPresetKCPWindowIsNotTheBottleneck(t *testing.T) {
 	const rttSeconds = 0.1
 	minMbit := map[string]float64{
-		PresetBalance:    80,
-		PresetTurbo:      180,
-		PresetAggressive: 600,
+		PresetBalance:    50,
+		PresetTurbo:      100,
+		PresetAggressive: 200,
 	}
 	for p, want := range minMbit {
 		s := presetOf(t, p)
@@ -94,15 +97,24 @@ func TestPresetsAreOrderedBySpeed(t *testing.T) {
 	}
 }
 
-// FEC costs link capacity, so a preset promising throughput must not spend
-// more of it than the one below. Parity is expressed per 10 data shards.
-func TestPresetFECOverheadDoesNotGrowWithSpeed(t *testing.T) {
-	tur, agg := presetOf(t, PresetTurbo), presetOf(t, PresetAggressive)
-	if presetOf(t, PresetBalance).KCPParityShards != 0 {
-		t.Fatal("Balance should carry no FEC overhead on a clean link")
+// "UDP + KCP + FEC" is a gaming transport, so FEC is not optional: every preset
+// must carry parity, or the name is lying and a lost game packet stalls waiting
+// for a retransmit. A stronger preset tolerates more loss, so its parity ratio
+// climbs (or holds), never drops — the opposite of a bulk mover, which would
+// spend as little on parity as it could get away with.
+func TestEveryPresetCarriesFECAndParityRisesWithStrength(t *testing.T) {
+	bal, tur, agg := presetOf(t, PresetBalance), presetOf(t, PresetTurbo), presetOf(t, PresetAggressive)
+	for _, s := range []struct {
+		name string
+		spec TunnelSpec
+	}{{"Balance", bal}, {"Turbo", tur}, {"Aggressive", agg}} {
+		if s.spec.KCPDataShards <= 0 || s.spec.KCPParityShards <= 0 {
+			t.Fatalf("%s carries no FEC (%d:%d) — the gaming transport must always repair loss",
+				s.name, s.spec.KCPDataShards, s.spec.KCPParityShards)
+		}
 	}
-	if tur.KCPParityShards > 3 || agg.KCPParityShards > 3 {
-		t.Fatalf("parity too heavy for a throughput preset: turbo %d, aggressive %d",
-			tur.KCPParityShards, agg.KCPParityShards)
+	if !(bal.KCPParityShards <= tur.KCPParityShards && tur.KCPParityShards <= agg.KCPParityShards) {
+		t.Fatalf("parity must not fall as the preset strengthens: %d, %d, %d",
+			bal.KCPParityShards, tur.KCPParityShards, agg.KCPParityShards)
 	}
 }

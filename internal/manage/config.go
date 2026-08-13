@@ -29,6 +29,11 @@ type TunnelSpec struct {
 	// same server.
 	LoadBalance bool
 
+	// HealthFailover scores every address (primary + FallbackAddrs) on a timer
+	// and keeps traffic on the healthiest, stepping off an exit as it degrades
+	// rather than only when it dies. It overrides LoadBalance.
+	HealthFailover bool
+
 	// FallbackAddrs are extra server addresses a client tries, in order, when
 	// the primary one cannot be reached — a second IP, a different port, or a
 	// CDN edge. This keeps the tunnel up when one address gets filtered.
@@ -462,6 +467,9 @@ func (s TunnelSpec) Render() string {
 	p("nodelay = %t\n", s.Nodelay)
 	if s.LoadBalance {
 		p("load_balance = true\n")
+	}
+	if s.HealthFailover {
+		p("health_failover = true\n")
 	}
 	p("retry_interval = %d\n", 3)
 	p("dial_timeout = %d\n", 10)

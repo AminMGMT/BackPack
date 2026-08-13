@@ -187,14 +187,16 @@ sudo backpack   →  2. Setup Client
 
 ## امکانات
 
-**ترنسپورت‌ها** — TCP، TCP Mux، TCP + Stealth، UDP، UDP + KCP، WS، WS Mux،
+**ترنسپورت‌ها** — TCP، TCP Mux، TCP + Stealth، UDP، UDP + KCP + FEC، WS، WS Mux،
 WSS و WSS Mux، با Connection Pool.
 
 - **TCP + Stealth** — یک تونل TCP در لایه‌ی Noise با **بدون fingerprint**؛ روی سیم
   شبیه بایت تصادفی است، پس چیزی برای تطبیق DPI نیست. برای جایی که فیلترینگ سنگین
   است. [بیشتر بخوان →](docs/transports.md)
-- **UDP + KCP** — تحویل مطمئن با **تصحیح خطای رو‌به‌جلو (FEC)** روی UDP، که گم‌شدن
-  پکت را بدون انتظار برای ارسال مجدد ترمیم می‌کند. [بیشتر بخوان →](docs/transports.md)
+- **UDP + KCP + FEC** — یک **تونل گیمینگ کم‌تأخیر**: تحویل مطمئن با **تصحیح خطای
+  رو‌به‌جلوی همیشه‌روشن (FEC)** روی UDP، که گم‌شدن پکت را بدون انتظار برای ارسال
+  مجدد ترمیم می‌کند و سرتاسر برای پینگ پایدار تنظیم شده است.
+  [بیشتر بخوان →](docs/transports.md)
 - **WSS / WSS Mux** — تی‌ال‌اس با **fingerprint واقعی Chrome** و گواهی **Let's
   Encrypt** (یا self-signed)؛ توکن به **session تی‌ال‌اس گره می‌خورد** و فرستاده
   نمی‌شود. به‌علاوه یک **site فیک (decoy)** به هر probeی که تونل واقعی نیست یک

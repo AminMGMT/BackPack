@@ -38,7 +38,7 @@ var transportGroups = []struct {
 	}},
 	{"UDP", "lower latency, better on lossy or throttled links", []transportEntry{
 		{"UDP", "raw datagrams — for UDP-based services", "udp"},
-		{"UDP + KCP", "reliable UDP with error correction — best on lossy links", "kcp"},
+		{"UDP + KCP + FEC", "low-latency gaming tunnel — reliable UDP with always-on error correction", "kcp"},
 		{"UDP + QUIC", "encrypted TLS 1.3 streams over UDP — self-tuning, great under loss", "quic"},
 	}},
 	{"WebSocket", "looks like normal web traffic — CDN friendly", []transportEntry{
@@ -867,11 +867,18 @@ func SetupClient() {
 		}
 		if len(s.FallbackAddrs) > 0 {
 			fmt.Println()
-			tui.Info("Load balancing spreads the tunnel's connections over ALL of those")
-			tui.Info("addresses at once instead of keeping them as spares.")
+			tui.Info("Automatic failover scores every address (latency, jitter, loss) and")
+			tui.Info("keeps traffic on the healthiest one — the multi-exit gaming setup.")
 			tui.Warn("Only turn this on if every address reaches the SAME server — a")
 			tui.Warn("second IP of it, another port, or a CDN edge in front of it.")
-			s.LoadBalance = tui.Confirm("Enable load balancing", false)
+			if tui.Confirm("Enable automatic failover to the healthiest server", false) {
+				s.HealthFailover = true
+			} else {
+				fmt.Println()
+				tui.Info("Load balancing instead spreads connections over ALL those addresses")
+				tui.Info("at once, rather than picking the single best one.")
+				s.LoadBalance = tui.Confirm("Enable load balancing", false)
+			}
 		}
 	}
 

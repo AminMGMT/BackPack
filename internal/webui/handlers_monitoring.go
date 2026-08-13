@@ -74,6 +74,10 @@ type linkTestResult struct {
 	RecLabel string   `json:"recLabel,omitempty"`
 	RecWhy   []string `json:"recWhy,omitempty"`
 	Caveats  []string `json:"caveats,omitempty"`
+	// RecFEC is the parity ratio ("data:parity") recommended when the pick is a
+	// KCP transport, sized to the measured loss. Empty otherwise.
+	RecFEC    string `json:"recFEC,omitempty"`
+	RecFECWhy string `json:"recFECWhy,omitempty"`
 }
 
 var linkTest = struct {
@@ -154,6 +158,10 @@ func runLinkTest(t manage.Tunnel) linkTestResult {
 	res.RecLabel = rec.Label
 	res.RecWhy = rec.Why
 	res.Caveats = rec.Caveats
+	if rec.FEC.Set() {
+		res.RecFEC = rec.FEC.Ratio()
+		res.RecFECWhy = rec.FEC.Why
+	}
 	return res
 }
 

@@ -5,6 +5,51 @@ All notable changes to Backpack are documented here.
 ## Unreleased
 
 ### Added
+- **Multi-exit failover with health scoring.** A client with more than one server
+  address can now steer traffic to the healthiest one on its own. A scoring loop
+  measures every exit every few seconds and ranks it by
+  `rtt + 2·jitter + 20·loss%` — the weighting that puts a steady 90 ms exit ahead
+  of a 60 ms one that stutters — then keeps new connections on the best exit,
+  with hysteresis (a challenger must be ≥15% better for three checks running)
+  so the choice does not flap. It is the piece that turns a plain fallback list
+  into the multi-exit gaming behaviour, and it steps off an exit as it *degrades*
+  rather than only when it dies. Opt-in per tunnel (`health_failover`), asked at
+  setup when a tunnel has backup addresses, and it overrides load balancing
+  (steering to one best exit is the opposite of spreading across all of them).
+  **Manage → Exit Health** is the manual companion: it scores and ranks every
+  address on demand and offers to pin the healthiest as the primary.
+- **Game Latency Test (Manage → Game Latency Test).** Estimates the in-game ping
+  a player would feel through this exit without anyone installing a game or a
+  config. It pings the nearest edge of popular game publishers (Dota 2, CS2,
+  Valorant, PUBG, Fortnite and more) from the abroad server, measures the
+  exit-to-game leg, adds the hub-to-exit tunnel leg where a TCP tunnel makes it
+  measurable, and rates the result with a typical player last mile folded in.
+  Test one game, every game through an exit, or a custom host. The endpoint list
+  is bundled but editable (`/etc/backpack/game-endpoints.list`) — publishers move
+  addresses, and many game servers filter ICMP, both of which the tool says
+  plainly rather than guessing around.
+- **FEC recommendation in the Link Test.** After measuring loss, the test now
+  names the exact parity ratio to run on a KCP link — the setting that most
+  decides how a lossy route feels — sized so the parity always clears the loss
+  with burst headroom (10:5 at a few percent, 8:8 in the teens, 4:8 past 20%).
+  On the CLI it offers to apply the ratio and, on a switch to KCP, sets it as
+  part of the switch; the web panel shows it alongside the transport pick. Both
+  ends must run the same ratio, which every screen repeats.
+
+### Changed
+- **UDP + KCP is now "UDP + KCP + FEC", a low-latency gaming transport.** The
+  transport was already running gaming-grade ARQ on Turbo and Aggressive; it is
+  now tuned that way throughout and named for what it is. Every preset — Balance
+  included — runs the same latency-first ARQ (NoDelay, a 10 ms tick, Resend=2,
+  KCP's own congestion window off, immediate ACKs) and carries **FEC by
+  default**: Balance 10:2, Turbo 10:3, Aggressive 10:4. Send/receive windows are
+  pulled back to near the bandwidth-delay product (512 / 1024 / 2048 packets)
+  so that, with congestion control off, buffering — and therefore ping — stays
+  bounded instead of ballooning under a large window. The trade is deliberate:
+  a little peak throughput for a steadier ping, which is what a game needs.
+  Existing tunnels keep their on-disk numbers until a preset is re-applied.
+
+### Added
 - **TCP + PCK — a TCP transport that does not use the kernel's TCP stack.**
   Setup → TCP → TCP + PCK. Linux, root, and both ends must be on it.
 

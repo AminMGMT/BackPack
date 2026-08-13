@@ -84,7 +84,7 @@ func TestSpoofSummariesReadTheTunnelBack(t *testing.T) {
 // so rather than naming only the first.
 func TestEvasionSummaryNamesEverythingThatIsOn(t *testing.T) {
 	s := TunnelSpec{
-		Transport: "spoof",
+		Transport:      "spoof",
 		SpoofTTLJitter: true, SpoofRandomDSCP: true, SpoofShufflePort: true,
 		SpoofPadding: true, SpoofFakeTLS: true, SpoofICMPReply: true, SpoofMTU: 1300,
 	}

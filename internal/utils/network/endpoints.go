@@ -24,6 +24,14 @@ type Endpoints struct {
 	// channel is pinned to.
 	spreadIdx atomic.Int64
 	spread    atomic.Bool
+
+	// steer, when set, hands both Current() and Next() over to a health scorer
+	// (see healthscore.go): preferred holds the index of the endpoint currently
+	// scoring healthiest, so traffic concentrates on the best exit rather than
+	// following the dial order. It is mutually exclusive with spread — steering
+	// picks one exit on purpose, where spread deliberately uses all of them.
+	steer     atomic.Bool
+	preferred atomic.Int64
 }
 
 // NewEndpoints builds the list from a primary address plus optional fallbacks,
@@ -51,14 +59,34 @@ func (e *Endpoints) Current() string {
 	if e == nil || len(e.list) == 0 {
 		return ""
 	}
+	if e.steer.Load() {
+		return e.list[e.clampIdx(e.preferred.Load())]
+	}
 	i := int(e.idx.Load()) % len(e.list)
 	return e.list[i]
+}
+
+// clampIdx wraps a stored index into range, guarding against a negative wrap
+// after a very long uptime.
+func (e *Endpoints) clampIdx(v int64) int {
+	i := int(v) % len(e.list)
+	if i < 0 {
+		i += len(e.list)
+	}
+	return i
 }
 
 // Rotate advances to the next endpoint and returns it. With a single endpoint
 // it is a no-op, so simple setups never change behaviour.
 func (e *Endpoints) Rotate() string {
 	if e == nil || len(e.list) <= 1 {
+		return e.Current()
+	}
+	// Under health steering a failed dial means the preferred exit is bad right
+	// now: step off it and let the next scoring cycle settle on a new best,
+	// which will avoid this one because it just failed to answer.
+	if e.steer.Load() {
+		e.preferred.Store(int64(e.clampIdx(e.preferred.Load() + 1)))
 		return e.Current()
 	}
 	e.idx.Add(1)
@@ -82,6 +110,11 @@ func (e *Endpoints) Rotate() string {
 func (e *Endpoints) Next() string {
 	if e == nil || len(e.list) == 0 {
 		return ""
+	}
+	// Steering wins over spread: when it is on, every new data connection also
+	// rides the endpoint currently scoring healthiest.
+	if e.steer.Load() {
+		return e.list[e.clampIdx(e.preferred.Load())]
 	}
 	if !e.spread.Load() || len(e.list) == 1 {
 		return e.Current()

@@ -165,15 +165,16 @@ Enter the **Iran server IP**, the tunnel port and the **same token**. Done.
 
 ## Features
 
-**Transports** — TCP, TCP Mux, TCP + Stealth, UDP, UDP + KCP, WS, WS Mux,
+**Transports** — TCP, TCP Mux, TCP + Stealth, UDP, UDP + KCP + FEC, WS, WS Mux,
 WSS and WSS Mux, with connection pooling.
 
 - **TCP + Stealth** — a TCP tunnel wrapped in a Noise layer with **no
   fingerprint**; on the wire it looks like random bytes, so there is nothing for
   deep packet inspection to match. Best where filtering is heavy.
   [Learn more →](docs/transports.md)
-- **UDP + KCP** — reliable delivery with **forward error correction** over UDP,
-  repairing packet loss without waiting for a retransmit.
+- **UDP + KCP + FEC** — a **low-latency gaming tunnel**: reliable delivery with
+  **always-on forward error correction** over UDP, repairing packet loss
+  without waiting for a retransmit, tuned throughout for steady ping.
   [Learn more →](docs/transports.md)
 - **WSS / WSS Mux** — TLS with a real **Chrome fingerprint** and a **Let's
   Encrypt** (or self-signed) certificate; the credential is **bound to the TLS
@@ -201,8 +202,10 @@ WSS and WSS Mux, with connection pooling.
 
 **Reliability**
 
-- **Automatic failover** to backup server addresses when the main one is filtered,
-  or **load balancing** across all of them at once.
+- **Automatic failover** to backup server addresses when the main one is filtered.
+  With **health scoring** it goes further — measuring latency, jitter and loss on
+  every address and steering traffic to the healthiest exit as routes degrade, the
+  multi-exit setup for gaming — or **load balancing** across all of them at once.
 - **Self-healing watchdog** restarts a dropped tunnel within ~1 minute, from
   its own service — monitoring keeps running with the web panel stopped.
 - **Automatic rollback** — updates and edits revert themselves if the tunnel does

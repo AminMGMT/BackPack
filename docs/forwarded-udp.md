@@ -104,7 +104,7 @@ tunnel logs a warning and carries on with TCP on that port. It is never fatal.
 
   **You almost certainly do not want the `udp` transport.** It has no
   retransmission, no ordering and no error correction, so on a route with any
-  loss or throttling it performs far worse than **UDP + KCP**, which is the same
+  loss or throttling it performs far worse than **UDP + KCP + FEC**, which is the same
   UDP carrier with those things on top. Since v1.7.1 there is no reason to pick
   it for the sake of forwarding a UDP service — every transport does that.
   Choose the transport that suits your route, and UDP follows.
