@@ -493,12 +493,7 @@ func (s *QuicTransport) parsePortMappings(g *quicGen) {
 				continue
 			}
 
-			port, err := strconv.Atoi(localPortOrRange)
-			if err == nil && port > 1 && port < 65535 { // format port=remoteAddress
-				localAddr = fmt.Sprintf(":%d", port)
-			} else {
-				localAddr = localPortOrRange // format ip:port=remoteAddress
-			}
+			localAddr = listenAddrFor(localPortOrRange)
 		} else {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}

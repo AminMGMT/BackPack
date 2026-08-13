@@ -14,22 +14,20 @@ import (
 
 // WebSocketToTCPConnectionHandler handles data transfer between a WebSocket and a TCP connection
 func WSConnectionHandler(ctx context.Context, wsConn *websocket.Conn, tcpConn net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
-	done := make(chan struct{})
-
+	// Two independent copies, for the reason given in TCPConnectionHandler: a
+	// ReadMessage on an idle websocket blocks exactly as long as an idle TCP
+	// Read does, and cancellation has to be able to interrupt it.
+	done := make(chan struct{}, 2)
 	go func() {
-		defer close(done)
 		transferWebSocketToTCP(wsConn, tcpConn, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
+	}()
+	go func() {
+		transferTCPToWebSocket(tcpConn, wsConn, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
 	}()
 
-	transferTCPToWebSocket(tcpConn, wsConn, logger, usage, remotePort, sniffer)
-
-	select {
-	case <-ctx.Done():
-		wsConn.Close()
-		tcpConn.Close()
-		return
-	case <-done:
-	}
+	awaitRelay(ctx, done, wsConn, tcpConn)
 }
 
 // transferWebSocketToTCP transfers data from a WebSocket connection to a TCP connection

@@ -189,17 +189,22 @@ func TestAwaitConfigChangeSurvivesAMissingFile(t *testing.T) {
 func TestPortsInUse(t *testing.T) {
 	server := &config.Config{}
 	server.Server.BindAddr = "0.0.0.0:3080"
+	server.Server.Transport = config.TCP
 	server.Server.WebPort = 2060
 	got := portsInUse(server)
-	if len(got) != 2 || got[0] != "0.0.0.0:3080" || got[1] != ":2060" {
-		t.Fatalf("server ports = %v, want the bind address and the web port", got)
+	want := []listenerBinding{
+		{network: "tcp", address: "0.0.0.0:3080"},
+		{network: "tcp", address: ":2060"},
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("server ports = %v, want %v", got, want)
 	}
 
 	client := &config.Config{}
 	client.Client.RemoteAddr = "example.com:3080"
 	client.Client.WebPort = 2061
 	got = portsInUse(client)
-	if len(got) != 1 || got[0] != ":2061" {
+	if len(got) != 1 || got[0] != (listenerBinding{network: "tcp", address: ":2061"}) {
 		t.Fatalf("client ports = %v, want only the web port", got)
 	}
 
@@ -208,6 +213,55 @@ func TestPortsInUse(t *testing.T) {
 	bare.Client.RemoteAddr = "example.com:3080"
 	if got := portsInUse(bare); len(got) != 0 {
 		t.Fatalf("a client with no web port reported %v", got)
+	}
+}
+
+// The bind address of a datagram transport has to be reported as UDP: probing
+// it as TCP is what let a reload restart into `address already in use`.
+func TestPortsInUseNamesTheTransportsOwnProtocol(t *testing.T) {
+	kcp := &config.Config{}
+	kcp.Server.BindAddr = "0.0.0.0:3080"
+	kcp.Server.Transport = config.KCP
+	got := portsInUse(kcp)
+	if len(got) != 1 || got[0] != (listenerBinding{network: "udp", address: "0.0.0.0:3080"}) {
+		t.Fatalf("kcp ports = %v, want the bind address as UDP", got)
+	}
+
+	// A raw-socket transport has no listener to probe, so only the web port
+	// is waited for.
+	spoof := &config.Config{}
+	spoof.Server.BindAddr = "0.0.0.0:3080"
+	spoof.Server.Transport = config.SPOOF
+	spoof.Server.WebPort = 2060
+	got = portsInUse(spoof)
+	if len(got) != 1 || got[0] != (listenerBinding{network: "tcp", address: ":2060"}) {
+		t.Fatalf("spoof ports = %v, want only the web port", got)
+	}
+}
+
+func TestTunnelNetwork(t *testing.T) {
+	tests := []struct {
+		transport config.TransportType
+		want      string
+	}{
+		{config.TCP, "tcp"},
+		{config.TCPMUX, "tcp"},
+		{config.WS, "tcp"},
+		{config.WSS, "tcp"},
+		{config.WSMUX, "tcp"},
+		{config.WSSMUX, "tcp"},
+		{config.STEALTH, "tcp"},
+		{config.UDP, "udp"},
+		{config.KCP, "udp"},
+		{config.QUIC, "udp"},
+		{config.XDI, ""},
+		{config.SPOOF, ""},
+		{config.PCK, ""},
+	}
+	for _, tt := range tests {
+		if got := tunnelNetwork(tt.transport); got != tt.want {
+			t.Errorf("tunnelNetwork(%q) = %q, want %q", tt.transport, got, tt.want)
+		}
 	}
 }
 
@@ -222,7 +276,7 @@ func TestWaitForPorts(t *testing.T) {
 
 	// Held open: this cannot succeed, so it has to give up on the timeout.
 	start := time.Now()
-	waitForPorts(context.Background(), []string{addr})
+	waitForPorts(context.Background(), []listenerBinding{{network: "tcp", address: addr}})
 	held := time.Since(start)
 	ln.Close()
 	if held < portSettleTimeout {
@@ -231,8 +285,62 @@ func TestWaitForPorts(t *testing.T) {
 
 	// Now free: this should return almost immediately.
 	start = time.Now()
-	waitForPorts(context.Background(), []string{addr})
+	waitForPorts(context.Background(), []listenerBinding{{network: "tcp", address: addr}})
 	if free := time.Since(start); free > 2*time.Second {
 		t.Fatalf("took %v to notice a free port", free)
+	}
+}
+
+// The bug in one test: a UDP socket is still bound, and the TCP port of the
+// same number is free. Probing as TCP returns at once and the reload races the
+// socket that is actually still there.
+func TestWaitForPortsWaitsOutADatagramSocket(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	addr := pc.LocalAddr().String()
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		pc.Close()
+	}()
+
+	start := time.Now()
+	waitForPorts(context.Background(), []listenerBinding{{network: "udp", address: addr}})
+	waited := time.Since(start)
+	if waited < 250*time.Millisecond {
+		t.Fatalf("returned after %v; the UDP socket was still bound", waited)
+	}
+	if waited > 2*time.Second {
+		t.Fatalf("took %v to notice the UDP socket was released", waited)
+	}
+}
+
+// Every binding gets its own settling budget, so a slow one does not eat the
+// wait belonging to the binding after it.
+func TestWaitForPortsBudgetsEachBindingSeparately(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer held.Close()
+
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	freeAddr := free.Addr().String()
+	free.Close()
+
+	start := time.Now()
+	waitForPorts(context.Background(), []listenerBinding{
+		{network: "tcp", address: held.Addr().String()},
+		{network: "tcp", address: freeAddr},
+	})
+	// The held one costs the full timeout; the free one must still be checked
+	// rather than skipped, so this stays close to a single budget.
+	if elapsed := time.Since(start); elapsed > portSettleTimeout+2*time.Second {
+		t.Fatalf("two bindings took %v, want roughly one settle timeout", elapsed)
 	}
 }

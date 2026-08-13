@@ -12,8 +12,6 @@ import (
 )
 
 func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
-	done := make(chan struct{})
-
 	// Write Proxy Protocol V2 Header
 	if proxyProtocol {
 		err := WriteProxyProtocol(from, to)
@@ -25,19 +23,49 @@ func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn
 		}
 	}
 
+	// Both directions run in their own goroutine so that cancellation is seen
+	// even when the connection is completely idle. Running one of them here
+	// meant the ctx case was not reached until that Read returned, and an idle
+	// Read returns when the peer sends something — which on a connection
+	// nobody is using is never. A tunnel could shut down or reload and leave
+	// the previous generation's forwarded connections open behind it, holding
+	// their descriptors and their goroutines for as long as the process ran.
+	done := make(chan struct{}, 2)
 	go func() {
-		defer close(done)
 		transferData(from, to, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
+	}()
+	go func() {
+		transferData(to, from, logger, usage, remotePort, sniffer)
+		done <- struct{}{}
 	}()
 
-	transferData(to, from, logger, usage, remotePort, sniffer)
+	awaitRelay(ctx, done, from, to)
+}
 
+// awaitRelay waits for a two-directional copy to finish, or for the context to
+// end, and leaves nothing of it running either way.
+//
+// Closing is the only thing that interrupts a blocked Read, so both ends are
+// closed on the way out whichever case wins. Waiting for the second copy
+// afterwards is what makes that a guarantee rather than a hope: the caller
+// releases its connection quota when this returns, so no copy from this
+// connection may still be running at that point.
+func awaitRelay(ctx context.Context, done <-chan struct{}, ends ...io.Closer) {
+	finished := 0
 	select {
 	case <-ctx.Done():
-		from.Close()
-		to.Close()
-		return
 	case <-done:
+		finished = 1
+	}
+
+	for _, end := range ends {
+		end.Close()
+	}
+
+	for finished < 2 {
+		<-done
+		finished++
 	}
 }
 

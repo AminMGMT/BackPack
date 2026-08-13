@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -11,6 +12,24 @@ import (
 
 	"github.com/backpack/backpack/internal/utils/network"
 )
+
+// listenAddrFor turns the left-hand side of a `local=remote` forwarding
+// mapping into an address to listen on. A bare number is shorthand for "this
+// port on every interface"; anything else is already a full address and is
+// handed back untouched.
+//
+// Every transport used to inline this, and every one of them wrote the range
+// check as `port > 1 && port < 65535`. Ports 1 and 65535 are perfectly valid
+// and the config validator accepts them, so `1=127.0.0.1:80` fell through to
+// the else branch and was passed to the listener as the literal address "1",
+// which fails to resolve. Written once, the bound is stated once.
+func listenAddrFor(localPortOrAddr string) string {
+	value := strings.TrimSpace(localPortOrAddr)
+	if port, err := strconv.Atoi(value); err == nil && port >= 1 && port <= 65535 {
+		return ":" + strconv.Itoa(port)
+	}
+	return value
+}
 
 // isTunnelRequest reports whether a request is a genuine tunnel connection —
 // a websocket upgrade, on a tunnel path, carrying a valid credential. Anything

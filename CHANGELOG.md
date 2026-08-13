@@ -134,6 +134,109 @@ All notable changes to Backpack are documented here.
   refuse: on a path below the 576 bytes IPv4 requires, no clamp helps, so it
   says the route is at fault instead of naming a value nothing will accept.
 
+- **Ports 1 and 65535 can now be forwarded.** The config validator accepts the
+  whole `1..65535` range and always has, but every transport's mapping parser
+  wrote the check as `port > 1 && port < 65535`. A mapping of `1=127.0.0.1:80`
+  or `65535=127.0.0.1:80` therefore failed that test, fell through to the branch
+  that treats the left-hand side as a complete address, and was handed to the
+  listener as the literal string `1` — which does not resolve, so the forward
+  never came up while the config it came from was perfectly valid.
+
+  All seven server transports had their own copy of that expression. They now
+  share one helper, so the range is stated once rather than seven times, and
+  cannot drift apart again.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#12](https://github.com/AminMGMT/BackPack/pull/12). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the
+  result — the shared helper trims its input and states the bound as an
+  inclusive range, so the edge the report was about is the one the code now
+  reads as valid.*
+
+- **A forwarded port with an empty backend list took the client down.** A port
+  can name several backends separated by a pipe. The pool decided it had a list
+  to balance by looking for that pipe in the target — not by looking at what was
+  on either side of it — so a target like `||`, which parses to no backends at
+  all, still built a group with an empty list. The round-robin then indexed it
+  with `next % 0` and the process panicked. The target comes off the tunnel, not
+  out of this side's config, so what it contains is not this process's to assume.
+
+  Two other things about that pool were wrong in the same direction. Every
+  distinct backend list created a goroutine that probed its backends every ten
+  seconds forever and a map entry that was never removed, both of them keyed by
+  a string the far end chooses; a tunnel that saw many different lists grew both
+  without limit, and the goroutines went on dialling backends nothing was
+  routing to long after the generation that created them had stopped. The map
+  is now bounded and evicts the list used longest ago, and the health checks run
+  from the pick that needs them — at most one pass at a time, at most one per
+  interval — so an abandoned list finishes its current pass and then costs
+  nothing. A backend that recovers while no traffic is flowing is noticed on the
+  next connection instead of within ten seconds, which is the moment the answer
+  begins to matter.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#26](https://github.com/AminMGMT/BackPack/pull/26). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  the group is keyed on the parsed list rather than the raw target, so spacing
+  and a trailing separator no longer each get a pool of their own, and the
+  last-used timestamp is read and written under the group's own lock rather
+  than beside it.*
+
+- **A `udp`, `kcp` or `quic` tunnel could fail to come back from a config
+  reload: `bind: address already in use`.** Before starting the new run, the
+  reload waits for the old one's ports to come free, and the only honest way to
+  ask that is to try to bind them. It asked with `net.Listen("tcp", …)` whatever
+  the transport was. For a datagram transport that is the wrong question: the
+  TCP port of that number was free — nothing had ever bound it — while the
+  previous run's UDP socket was still open. The wait returned at once, the new
+  listener raced the socket that was actually still there, and lost.
+
+  Each address is now probed on the protocol its transport actually uses. `xdi`,
+  `spoof` and `pck` are left out of the wait entirely rather than guessed at:
+  they read through a raw or packet socket, so there is no listener to probe,
+  and opening one to find out would need the same privilege and could take
+  packets from the run still shutting down. Their teardown is the transport's
+  own, and the reload waits only for the web port alongside them. While in
+  there, each address also got its own settling budget instead of sharing one
+  across the list — a slow tunnel port used to spend the web port's wait as
+  well, and the web port, the one that shuts down gracefully and genuinely needs
+  waiting for, was the one that then got none.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#11](https://github.com/AminMGMT/BackPack/pull/11). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  `pck` did not exist when it was written and is a raw-socket transport too, so
+  it joins `xdi` and `spoof` in being left out of the wait instead of spending
+  the whole settling timeout on a port it was never going to bind.*
+
+- **Idle forwarded connections survived a shutdown or a reload.** The relay ran
+  one direction of the copy in a goroutine and the other on the handler's own
+  stack, and only looked at the context once that second copy returned. On a
+  connection carrying traffic that is a distinction without a difference. On an
+  idle one it is the whole problem: neither Read returns until the peer sends
+  something, and on a connection nobody is using, neither ever does. The tunnel
+  stopped, the generation was replaced, and the connections from the previous
+  one stayed open — with their descriptors, their goroutines and their share of
+  the connection quota — for as long as the process ran.
+
+  Both directions now run independently, so cancellation is seen while both are
+  blocked, and both ends are closed on the way out, which is the only thing that
+  interrupts a blocked Read. The handler also waits for the second copy before
+  returning rather than leaving it to finish on its own: the caller releases its
+  connection quota at that point, so nothing belonging to that connection may
+  still be running. One consequence worth stating plainly — the relay now ends
+  as soon as *either* direction does, where it used to wait for both. That is
+  what the close is for, and it is what every other relay in this project does,
+  but a protocol that half-closes and then expects a reply on the other
+  direction will not get one.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#18](https://github.com/AminMGMT/BackPack/pull/18). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result —
+  the waiting and closing is one shared routine both handlers call rather than
+  the same dozen lines written out twice, so the two relays cannot drift apart
+  on the behaviour this fix is about.*
+
 ## v1.7.1 — 2026-08-10
 
 Two halves. The web panel stops being a window and becomes a way to work: it
