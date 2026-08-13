@@ -2,9 +2,27 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.7.2 — 2026-08-13
+## v1.7.2 — 2026-08-14
 
 ### Added
+- **A Throughput preset, for `udp + kcp + fec` only.** Balance, Turbo and
+  Aggressive are all gaming profiles: they differ in how much headroom they buy,
+  but every one of them spends bandwidth to hold the ping steady — immediate
+  ACKs, a 10 ms tick, and enough parity to repair a loss rather than wait a round
+  trip for the retransmit. That is the right trade for a game and the wrong one
+  for a download, and no tuning inside those three fixes it, because the cost is
+  the point. This profile makes the opposite trade on the same transport: ACKs
+  batched, a 20 ms tick, 10:1 parity instead of 10:4, a 4096-packet window and a
+  32 MB per-stream buffer, so one stream can fill a long fat path (~210 Mbit/s at
+  200 ms round trip, against ~105 on Aggressive). Measured end to end on
+  loopback it carries roughly twice what Aggressive does. It is offered on the
+  plain `kcp` transport alone — the other KCP carriers (xdi, spoof, pck) build
+  their packets by hand and pay a syscall per datagram, so bandwidth is not what
+  they are for, and on a TCP transport every knob it changes belongs to the
+  kernel rather than to this process. Choosing it elsewhere is refused with a
+  message saying so, rather than written to the config and quietly ignored.
+  **Not a gaming preset:** with congestion control off, a window that large is a
+  queue that deep. Use Turbo or Aggressive for play and this for transfers.
 - **Multi-exit failover with health scoring.** A client with more than one server
   address can now steer traffic to the healthiest one on its own. A scoring loop
   measures every exit every few seconds and ranks it by
@@ -37,6 +55,24 @@ All notable changes to Backpack are documented here.
   ends must run the same ratio, which every screen repeats.
 
 ### Changed
+- **KCP sessions run in stream mode, which is worth 5-7% on every preset.**
+  kcp-go leaves stream mode off by default, and nothing here turned it on. Off,
+  every write becomes its own segment and the last one goes out part-empty
+  however few bytes it holds — so a tunnel carrying SMUX, whose frames are a
+  header plus whatever the application happened to write, spent a share of every
+  packet on padding. On, a short write is appended to the segment already queued
+  until that segment is full. What rides on these sessions is a byte stream, so
+  message boundaries were never meaningful, and `SetWriteDelay(false)` still
+  flushes on the next tick — it costs no latency. Measured at 5-7% more
+  throughput on Balance, Turbo, Aggressive and Throughput alike.
+- **Aggressive is now genuinely maximal in everything that does not cost ping.**
+  Socket buffers 16 → 32 MB and the per-stream mux buffer 8 → 16 MB, so flow
+  control stops being what limits a transfer and a full window can land in one
+  burst without the kernel dropping its tail. The KCP window deliberately stays
+  at 2048: with congestion control off the window *is* the queue, and a deeper
+  queue is exactly the bufferbloat a gaming preset exists to prevent — wanting a
+  bigger one is wanting the new Throughput profile. Worst-case memory is
+  unchanged at 16 × 32 MB.
 - **UDP + KCP is now "UDP + KCP + FEC", a low-latency gaming transport.** The
   transport was already running gaming-grade ARQ on Turbo and Aggressive; it is
   now tuned that way throughout and named for what it is. Every preset — Balance
@@ -135,6 +171,58 @@ All notable changes to Backpack are documented here.
   which is what lets several xdi tunnels share one host's ICMP socket.
 
 ### Fixed
+- **TCP + PCK never stayed connected: every pool connection killed the one
+  before it.** The carrier derived its source port from the tunnel token, so
+  every connection a client opened sent from the *same* port. kcp-go's listener
+  demultiplexes sessions purely on the sender's address
+  (`l.sessions[addr.String()]`), and its rule for a packet announcing a new
+  conversation on an existing entry is to close that entry — so each pool
+  connection closed the session before it, the control channel included. The
+  tunnel spent its life in a loop: control channel up, pool dials, control
+  channel dead, `read from control channel: timeout`, restart. Aggressive made it
+  worse by opening sixteen. Each carrier now takes its own port from a
+  128-port range derived from the token, so every session reaches the server as
+  its own peer and the TCP sequence numbers of one flow stay consistent. The
+  kernel-RST rules cover the range in one set and are reference-counted, so a
+  pool of sixteen no longer installs sixteen sets of iptables rules.
+- **The pck send path allocated 4.2 KB per packet.** It built each frame a layer
+  at a time — TCP, then IPv4, then Ethernet — allocating three times and copying
+  the payload three times for every datagram. This carrier pays that per packet
+  and cannot amortise it the way UDP does, because kcp-go only reaches for its
+  batching write path when the socket is a real `*net.UDPConn`. Frames are now
+  assembled in place into a pooled buffer: 628 ns → 296 ns and 4224 B → **zero**
+  allocations per packet, with a test asserting the result is byte for byte what
+  the layered builders produced. The send socket also gets an 8 MB `SO_SNDBUF`;
+  only the receive socket had one, so a burst from a full window had its tail
+  refused with `EAGAIN` at exactly the busiest moment.
+- **The pck receive path allocated 64 KB per packet.** `ReadFrom` took a fresh
+  64 KiB buffer on every call, and KCP calls it once per packet — so the garbage
+  collector, not the network, was setting the pace. Pooled: 1115 ns → 44 ns.
+- **A failing accept loop could pin a CPU core at 100%.** Every transport's
+  accept loop retried instantly on error. That is right for the error `Accept`
+  normally returns (one connection failed the handshake, take the next) and wrong
+  for the two that matter: a closed listener and an exhausted file-descriptor
+  table both fail immediately and keep failing, so `continue` spun as fast as the
+  CPU allowed with nothing to block on. The context check at the top did not
+  help, because the context was not cancelled — only the listener was broken, a
+  state a tunnel restart passes through every time. Consecutive failures now back
+  off geometrically to 100 ms, reset on the first success, and return at once on
+  cancellation. This affected `acceptLocalConn` too, of which one runs **per
+  forwarded port**. The per-iteration `listener.Addr().String()` — built on every
+  accept regardless of log level — is gone with it.
+- **The websocket relay used an unpooled 16 KB buffer.** The TCP relay was moved
+  to a pooled 64 KB buffer for two measured reasons (a relay's cost is syscalls,
+  and 16 KB took four times as many per gigabyte; and allocating per connection
+  put a buffer through the GC for every connection forwarded). The ws/wss path
+  was missed. It now shares the same pool.
+- **The end-to-end suite could fail with `bind: address already in use` on CI.**
+  Test ports were handed out from 34000-60000, which sits entirely inside Linux's
+  default ephemeral range (32768-60999). The suite opens hundreds of outgoing
+  connections and the kernel draws each one's *source* port from that range, so a
+  port the harness had just verified free could be taken before the tunnel bound
+  it. macOS starts its ephemeral range at 49152, which is why this failed on CI
+  and not on a developer's machine. The harness range moved to 12000-30000,
+  below both.
 - **A spoof tunnel could not restart: `bind: address already in use`.** In the
   field logs, a spoof server that restarted to adopt a new client died with
   `listen udp4 0.0.0.0:58521: bind: address already in use`, and the client
