@@ -3,6 +3,7 @@ package telegram
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -61,18 +62,34 @@ func call(c Config, method string, form url.Values) (apiResult, error) {
 	}
 	resp, err := client.PostForm(fmt.Sprintf("https://api.telegram.org/bot%s/%s", c.Token, method), form)
 	if err != nil {
-		return apiResult{}, err
+		// The URL carries the bot token, and Go puts the whole URL in a transport
+		// error — so an unedited error hands the credential to whoever reads the
+		// screen or the journal.
+		return apiResult{}, fmt.Errorf("%s", redactToken(err.Error(), c.Token))
 	}
 	defer resp.Body.Close()
 
 	var out apiResult
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		if resp.StatusCode != http.StatusOK {
+			// The body was not JSON, so there is no description to quote; the
+			// status still gets the treatment it deserves. 401 in particular must
+			// not read as a network fault.
+			if resp.StatusCode == http.StatusUnauthorized {
+				return out, fmt.Errorf("telegram rejected the bot token (401 Unauthorized) — " +
+					"the relay is fine; get a fresh token from @BotFather and set it with: " +
+					"sudo backpack → Telegram Bot → Configure")
+			}
 			return out, fmt.Errorf("telegram API returned status %d", resp.StatusCode)
 		}
 		return out, err
 	}
 	if !out.OK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return out, fmt.Errorf("telegram rejected the bot token (401 %s) — "+
+				"the relay is fine; get a fresh token from @BotFather and set it with: "+
+				"sudo backpack → Telegram Bot → Configure", strings.TrimSpace(out.Description))
+		}
 		return out, fmt.Errorf("telegram: %s", out.Description)
 	}
 	return out, nil
@@ -88,9 +105,39 @@ func postMessage(client *http.Client, botToken, chatID, text, replyMarkup string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
+		return describeStatus(resp)
 	}
 	return nil
+}
+
+// describeStatus turns a failed Bot API response into an error that says what
+// to do about it.
+//
+// A bare "telegram API returned status 401" sent an operator looking at their
+// tunnel, which is the one thing that cannot cause it: the relay had already
+// carried the request to Telegram and Telegram had answered. 401 from the Bot
+// API means one thing only — the token is not accepted — and saying so turns an
+// afternoon of relay debugging into a visit to @BotFather. Telegram also puts a
+// plain description in the body of every refusal, which is more specific than
+// any status code, so it is read out when present.
+func describeStatus(resp *http.Response) error {
+	var res apiResult
+	if body, err := io.ReadAll(io.LimitReader(resp.Body, 4096)); err == nil {
+		_ = json.Unmarshal(body, &res)
+	}
+	detail := strings.TrimSpace(res.Description)
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		if detail == "" {
+			detail = "Unauthorized"
+		}
+		return fmt.Errorf("telegram rejected the bot token (401 %s) — the relay is fine; "+
+			"get a fresh token from @BotFather and set it with: sudo backpack → Telegram Bot → Configure", detail)
+	}
+	if detail != "" {
+		return fmt.Errorf("telegram API returned status %d: %s", resp.StatusCode, detail)
+	}
+	return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
 }
 
 // messageForm builds the shared body of sendMessage and editMessageText.

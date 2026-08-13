@@ -3,7 +3,9 @@ package telegram
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -104,17 +106,99 @@ func DiagnoseRelay() []RelayStep {
 	}
 	out = append(out, RelayStep{Name: "Peer's internet", OK: true, Detail: "api.telegram.org answered through the tunnel"})
 
-	// 5) And the bot's own client, end to end.
+	// 5) And the bot's own client, end to end — asking the Bot API who this bot
+	//    is, which is the one request that tests the token as well as the path.
+	return append(out, checkBotAPI(c))
+}
+
+// checkBotAPI calls getMe through the relay: the same host, port, client and
+// credential every other bot request uses.
+//
+// It used to GET https://api.telegram.org/ instead, and that was wrong in a way
+// that produced a confident, specific and false answer. The API root is not an
+// API endpoint — it redirects to the documentation site at core.telegram.org —
+// and Go's client follows redirects by default. The relay only rewrites the dial
+// for api.telegram.org, so the redirected request went out of THIS machine
+// directly, where core.telegram.org resolves to the filtering blackhole and
+// times out. The diagnosis then blamed the relay for a failure it had caused
+// itself, one step after proving the relay worked.
+//
+// getMe fixes both halves: it is a real endpoint that does not redirect, and its
+// status distinguishes the two things that actually go wrong here — a path that
+// cannot reach Telegram, and a token Telegram will not accept.
+func checkBotAPI(c Config) RelayStep {
 	client, err := botClient(c, 20*time.Second)
 	if err != nil {
-		return append(out, RelayStep{Name: "Telegram", Detail: err.Error()})
+		return RelayStep{Name: "Telegram", Detail: redactToken(err.Error(), c.Token)}
 	}
-	resp, err := client.Get("https://api.telegram.org/")
+	// Redirects are refused rather than followed: every Bot API method answers
+	// directly, so a redirect here means something other than Telegram replied,
+	// and following it would leave the relay for a host this machine cannot
+	// reach — which is exactly how the old check misdiagnosed itself.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	resp, err := client.Get(fmt.Sprintf("https://api.telegram.org/bot%s/getMe", c.Token))
 	if err != nil {
-		return append(out, RelayStep{Name: "Telegram", Detail: err.Error()})
+		return RelayStep{
+			Name: "Telegram", Detail: redactToken(err.Error(), c.Token),
+			Fix: "the relay carried a TLS connection a moment ago, so this is the\n" +
+				"      request itself failing — retry, and check the peer's internet",
+		}
 	}
-	resp.Body.Close()
-	return append(out, RelayStep{Name: "Telegram", OK: true, Detail: "reachable through the relay"})
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+	var res apiResult
+	_ = json.Unmarshal(body, &res)
+
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return RelayStep{
+			Name: "Telegram",
+			Detail: "the relay works, but Telegram rejected the bot token (401 Unauthorized)" +
+				describeAPIError(res),
+			Fix: "the token is wrong, revoked, or from a deleted bot. Get a fresh one\n" +
+				"      from @BotFather and set it: sudo backpack → Telegram Bot → Configure",
+		}
+
+	case resp.StatusCode != http.StatusOK:
+		return RelayStep{
+			Name:   "Telegram",
+			Detail: fmt.Sprintf("Telegram answered %d through the relay%s", resp.StatusCode, describeAPIError(res)),
+			Fix:    "the path is fine — this is Telegram refusing the request itself",
+		}
+
+	case !res.OK:
+		return RelayStep{
+			Name:   "Telegram",
+			Detail: "Telegram answered through the relay but refused the request" + describeAPIError(res),
+			Fix:    "check the bot token: sudo backpack → Telegram Bot → Configure",
+		}
+	}
+
+	return RelayStep{Name: "Telegram", OK: true,
+		Detail: "reachable through the relay, and the bot token is valid"}
+}
+
+// describeAPIError appends Telegram's own words when it gave any, since its
+// description is more specific than any status code.
+func describeAPIError(res apiResult) string {
+	if d := strings.TrimSpace(res.Description); d != "" {
+		return " — " + d
+	}
+	return ""
+}
+
+// redactToken keeps the bot token out of anything shown or logged. Go puts the
+// whole URL in a transport error, and for these calls the URL contains the
+// credential, so an unedited error hands it to whoever reads the screen.
+func redactToken(s, token string) string {
+	if token == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, token, "<token>")
 }
 
 // probeTelegramThrough opens a TLS connection to the API through the forwarded

@@ -171,6 +171,27 @@ All notable changes to Backpack are documented here.
   which is what lets several xdi tunnels share one host's ICMP socket.
 
 ### Fixed
+- **"Diagnose relay" failed at the last step even when the relay was working.**
+  The final check fetched `https://api.telegram.org/`, which is not an API
+  endpoint — it redirects to the documentation site at `core.telegram.org` — and
+  Go's HTTP client follows redirects by default. The relay only rewrites the dial
+  for `api.telegram.org`, so the redirected request left the Iran server
+  directly, where `core.telegram.org` resolves to the filtering blackhole
+  (`10.10.34.36`) and times out. The tool then reported
+  `dial tcp 10.10.34.36:443: i/o timeout` and blamed the relay for a failure it
+  had caused itself — one line after proving the relay carried a TLS connection
+  to Telegram. It now calls `getMe`, a real endpoint that does not redirect, with
+  redirects refused outright, and reads Telegram's own answer.
+- **A bad bot token reported itself as a network fault.** `telegram API returned
+  status 401` is the one error that cannot be the tunnel's doing: the request
+  reached Telegram and Telegram answered. It now says so — that the token was
+  rejected, that the relay is fine, and to get a fresh one from @BotFather —
+  and quotes Telegram's own description of any other refusal instead of showing
+  a bare status number. "Diagnose relay" checks the token as part of the same
+  request, so an invalid one is named at the step it belongs to.
+- **The bot token could leak into error output.** Every Bot API URL contains the
+  token, and Go copies the full URL into transport errors, so a failed request
+  printed the credential to the screen and the journal. It is redacted now.
 - **A data race on the logger's level, on every transport.** Both the client and
   the server hand one logger to all of their transports, and a transport's
   `Restart` saved the current level before quieting the log with
