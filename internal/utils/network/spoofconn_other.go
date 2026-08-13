@@ -15,11 +15,11 @@ import (
 
 var errSpoofNotLinux = errors.New("the spoof transport is only available on Linux")
 
-func newSpoofServerConn(token string, uplink, downlink SpoofProfile, realPeer net.IP, srcIP string, srcPool []string, iface string) (net.PacketConn, error) {
+func newSpoofServerConn(o spoofConnOpts) (net.PacketConn, error) {
 	return nil, errSpoofNotLinux
 }
 
-func newSpoofClientConn(token string, uplink, downlink SpoofProfile, realPeer net.IP, srcIP string, srcPool []string, iface string) (net.PacketConn, error) {
+func newSpoofClientConn(o spoofConnOpts) (net.PacketConn, error) {
 	return nil, errSpoofNotLinux
 }
 

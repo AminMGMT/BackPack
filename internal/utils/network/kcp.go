@@ -90,12 +90,36 @@ type KCPSettings struct {
 // symmetric tunnel they are equal. The carrier's own constructor picks which is
 // its send and which its receive from the side it is on.
 type SpoofCarrier struct {
-	Uplink    SpoofProfile
-	Downlink  SpoofProfile
-	SrcIP     string   // forged source address, empty to keep the real one
-	SrcPool   []string // forged sources to rotate through; SrcIP is a member
-	PeerIP    string   // peer's real IPv4; required on the server, derived on the client
-	Interface string   // egress device to pin the raw socket to, empty for none
+	Uplink     SpoofProfile
+	Downlink   SpoofProfile
+	SrcIP      string   // forged source address, empty to keep the real one
+	SrcPool    []string // forged sources to rotate through; SrcIP is a member
+	PeerIP     string   // peer's real IPv4; required on the server, derived on the client
+	Interface  string   // egress device to pin the raw socket to, empty for none
+	SockBuf    int      // SO_SNDBUF/SO_RCVBUF for the carrier's sockets, 0 = default
+	PeerSrcIP  string   // expected forged source of inbound packets, empty = accept any
+	ReplySplit bool     // icmp/icmpv6: client sends Echo Request, server sends Echo Reply
+	MTU        int      // fragment sends larger than this, 0 = default 1500
+	DPI        SpoofDPI // optional obfuscation knobs (ttl/dscp/port/padding/fake-tls)
+}
+
+// spoofOpts turns a carrier's public knobs into the internal constructor's
+// options for one side of the tunnel.
+func (c SpoofCarrier) spoofOpts(token string, realPeer net.IP) spoofConnOpts {
+	return spoofConnOpts{
+		token:      token,
+		uplink:     c.Uplink,
+		downlink:   c.Downlink,
+		realPeer:   realPeer,
+		srcIP:      c.SrcIP,
+		srcPool:    c.SrcPool,
+		iface:      c.Interface,
+		sockBuf:    c.SockBuf,
+		replySplit: c.ReplySplit,
+		peerSrc:    c.PeerSrcIP,
+		mtu:        c.MTU,
+		dpi:        c.DPI,
+	}
 }
 
 // effectiveMTU returns the MTU KCP should use, which is smaller on the carriers
@@ -197,7 +221,7 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 		if peer == nil {
 			return nil, nil, fmt.Errorf("spoof: spoof_peer_ip must be set to the client's real IPv4 address on the server")
 		}
-		conn, err := newSpoofServerConn(token, s.Spoof.Uplink, s.Spoof.Downlink, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
+		conn, err := newSpoofServerConn(s.Spoof.spoofOpts(token, peer))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -290,7 +314,7 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 				peer = p
 			}
 		}
-		conn, err := newSpoofClientConn(token, s.Spoof.Uplink, s.Spoof.Downlink, peer, s.Spoof.SrcIP, s.Spoof.SrcPool, s.Spoof.Interface)
+		conn, err := newSpoofClientConn(s.Spoof.spoofOpts(token, peer))
 		if err != nil {
 			return nil, err
 		}

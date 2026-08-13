@@ -114,6 +114,11 @@ type KcpConfig struct {
 	SpoofSrcPool   []string
 	SpoofPeerIP    string
 	SpoofInterface string
+	SpoofSockBuf   int
+	SpoofPeerSrcIP string
+	SpoofICMPReply bool
+	SpoofMTU       int
+	SpoofDPI       network.SpoofDPI
 	// UsePck carries the session inside TCP segments built and read through a
 	// packet socket (the pck transport). Only the packet layer differs; nothing
 	// is forged. See settings().
@@ -172,12 +177,17 @@ func (c *KcpConfig) settings() network.KCPSettings {
 		// Profile is validated at load time (checkSpoof); default to udp here.
 		up, down := network.ResolveSpoofDirections(c.SpoofProfile, c.SpoofUplink, c.SpoofDownlink)
 		s.Spoof = &network.SpoofCarrier{
-			Uplink:    up,
-			Downlink:  down,
-			SrcIP:     c.SpoofSrcIP,
-			SrcPool:   c.SpoofSrcPool,
-			PeerIP:    c.SpoofPeerIP,
-			Interface: c.SpoofInterface,
+			Uplink:     up,
+			Downlink:   down,
+			SrcIP:      c.SpoofSrcIP,
+			SrcPool:    c.SpoofSrcPool,
+			PeerIP:     c.SpoofPeerIP,
+			Interface:  c.SpoofInterface,
+			SockBuf:    c.SpoofSockBuf,
+			PeerSrcIP:  c.SpoofPeerSrcIP,
+			ReplySplit: c.SpoofICMPReply,
+			MTU:        c.SpoofMTU,
+			DPI:        c.SpoofDPI,
 		}
 	}
 	return s

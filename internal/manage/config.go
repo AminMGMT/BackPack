@@ -79,6 +79,19 @@ type TunnelSpec struct {
 	SpoofInterface string   // egress device to pin the raw socket to
 	SpoofPipe      bool     // WireGuard-pipe mode instead of a KCP tunnel
 	SpoofPipeAddr  string   // this host's WireGuard UDP endpoint
+	SpoofSockBuf   int      // SO_SNDBUF/SO_RCVBUF for the carrier's sockets (bytes)
+	SpoofPeerSrcIP string   // expected forged source of inbound packets
+	SpoofICMPReply bool     // icmp/icmpv6: client requests, server replies
+	SpoofMTU       int      // fragment sends larger than this (bytes)
+	// DPI-evasion obfuscation knobs (all optional, default off).
+	SpoofTTLJitter   bool // vary IP TTL per packet
+	SpoofRandomDSCP  bool // vary IP DSCP per packet
+	SpoofShufflePort bool // randomise L4 source port per packet
+	SpoofPortMin     int  // source-port shuffle low bound
+	SpoofPortMax     int  // source-port shuffle high bound
+	SpoofPadding     bool // append self-describing random padding
+	SpoofPaddingMax  int  // most padding bytes per frame
+	SpoofFakeTLS     bool // prepend a fake TLS record header (tcp)
 
 	// Packet-level TCP carrier (pck). All optional: the transport finds its own
 	// egress from the route to the peer, and the flag cycle defaults to what
@@ -220,6 +233,42 @@ func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
 	}
 	if s.SpoofInterface != "" {
 		p("spoof_interface = %q\n", s.SpoofInterface)
+	}
+	if s.SpoofSockBuf > 0 {
+		p("spoof_sockbuf = %d\n", s.SpoofSockBuf)
+	}
+	if s.SpoofPeerSrcIP != "" {
+		p("spoof_peer_src_ip = %q\n", s.SpoofPeerSrcIP)
+	}
+	if s.SpoofICMPReply {
+		p("spoof_icmp_reply = true\n")
+	}
+	if s.SpoofMTU > 0 {
+		p("spoof_mtu = %d\n", s.SpoofMTU)
+	}
+	if s.SpoofTTLJitter {
+		p("spoof_ttl_jitter = true\n")
+	}
+	if s.SpoofRandomDSCP {
+		p("spoof_random_dscp = true\n")
+	}
+	if s.SpoofShufflePort {
+		p("spoof_shuffle_port = true\n")
+		if s.SpoofPortMin > 0 {
+			p("spoof_port_min = %d\n", s.SpoofPortMin)
+		}
+		if s.SpoofPortMax > 0 {
+			p("spoof_port_max = %d\n", s.SpoofPortMax)
+		}
+	}
+	if s.SpoofPadding {
+		p("spoof_padding = true\n")
+		if s.SpoofPaddingMax > 0 {
+			p("spoof_padding_max = %d\n", s.SpoofPaddingMax)
+		}
+	}
+	if s.SpoofFakeTLS {
+		p("spoof_fake_tls = true\n")
 	}
 	if s.SpoofPipe {
 		p("spoof_pipe = true\n")

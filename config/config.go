@@ -154,6 +154,57 @@ type SpoofConfig struct {
 	// server it is where the real WireGuard listens and datagrams are forwarded.
 	// Defaults to 127.0.0.1:51820.
 	SpoofPipeAddr string `toml:"spoof_pipe_addr"`
+	// SpoofSockBuf sizes the send and receive socket buffers (SO_SNDBUF /
+	// SO_RCVBUF) of the raw and UDP sockets the carrier owns, in bytes. A large
+	// buffer is what lets the forged-source flow reach real bandwidth: under a
+	// burst the kernel parks packets here instead of dropping them before the
+	// read loop drains them, which is exactly what throttled the throughput
+	// before. 0 uses the carrier default (4 MiB), matching the reference
+	// spoof-tunnel; raise it on a fat, high-latency path.
+	SpoofSockBuf int `toml:"spoof_sockbuf"`
+	// SpoofPeerSrcIP pins the forged source the peer stamps on its packets, so
+	// anything arriving with a different source is dropped before the encryption
+	// ever looks at it. Empty accepts any source and leaves the demux to the port
+	// and the encryption, which is safe but noisier. Set it to the peer's
+	// spoof_src_ip for a tighter, cheaper receive path.
+	SpoofPeerSrcIP string `toml:"spoof_peer_src_ip"`
+	// SpoofICMPReply makes an icmp/icmpv6 tunnel look like a real ping exchange:
+	// the client sends Echo Requests and the server answers with Echo Replies,
+	// instead of both ends sending Requests. Purely cosmetic camouflage; both
+	// ends must set it the same. Ignored by the udp/tcp profiles.
+	SpoofICMPReply bool `toml:"spoof_icmp_reply"`
+	// SpoofMTU is the largest IP packet the carrier emits before it fragments in
+	// userspace; a datagram whose headers push it over this is split into IP
+	// fragments the peer's kernel reassembles. 0 uses 1500. Lower it on a path
+	// with a smaller MTU so oversize packets fragment cleanly rather than being
+	// dropped.
+	SpoofMTU int `toml:"spoof_mtu"`
+
+	// The DPI-evasion knobs below are optional obfuscation ported from the
+	// reference spooftunnel. The header cosmetics (ttl/dscp/source-port) need no
+	// agreement between the two ends because the receiver ignores those fields;
+	// the wire-changing ones (padding, fake TLS) must be set the same on both.
+
+	// SpoofTTLJitter varies the IP TTL per packet across a pool of realistic OS
+	// defaults {64,128,255} instead of a fixed 64, to blur TTL-based fingerprints.
+	SpoofTTLJitter bool `toml:"spoof_ttl_jitter"`
+	// SpoofRandomDSCP varies the IP DSCP/ToS byte per packet across plausible
+	// values instead of leaving it 0.
+	SpoofRandomDSCP bool `toml:"spoof_random_dscp"`
+	// SpoofShufflePort randomises the L4 SOURCE port per packet (udp/tcp) within
+	// [SpoofPortMin,SpoofPortMax], so the flow does not sit on one source port.
+	// The destination port stays fixed, so the receiver's demux is unaffected.
+	SpoofShufflePort bool `toml:"spoof_shuffle_port"`
+	SpoofPortMin     int  `toml:"spoof_port_min"`
+	SpoofPortMax     int  `toml:"spoof_port_max"`
+	// SpoofPadding appends 1..SpoofPaddingMax random bytes to every payload
+	// (self-describing, so the receiver strips them), defeating size fingerprints.
+	// Both ends must set it the same.
+	SpoofPadding    bool `toml:"spoof_padding"`
+	SpoofPaddingMax int  `toml:"spoof_padding_max"`
+	// SpoofFakeTLS prepends a fake TLS 1.2 record header to each TCP segment, so a
+	// middlebox reads it as TLS. TCP profile only; both ends must agree.
+	SpoofFakeTLS bool `toml:"spoof_fake_tls"`
 }
 
 // PckConfig holds the packet-level TCP carrier's settings. Every field is

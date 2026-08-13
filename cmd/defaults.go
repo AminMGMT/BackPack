@@ -279,11 +279,25 @@ func checkSpoof(cfg *config.Config) {
 		logger.Info("spoof needs reverse-path filtering relaxed on the receiving host (rp_filter=2 or 0 on net.ipv4.conf.all and the receiving interface) or the kernel drops the forged-source packets.")
 	}
 
-	// For icmp, the host kernel still auto-answers each incoming echo request
-	// with a reply to the forged source — harmless to the tunnel (the direction
-	// byte discards it) but noisy and a signature. An operator can silence it.
+	// For icmp, the host kernel would auto-answer each incoming echo request with
+	// a reply to the forged source. The carrier now silences this automatically
+	// (net.ipv4.icmp_echo_ignore_all, refcounted and restored on stop) while an
+	// icmp receiver is open, so no operator action is needed — noted only so the
+	// change in the host's ping behaviour is not a surprise.
 	if up == "icmp" || down == "icmp" {
-		logger.Info("spoof_profile icmp: to stop the kernel spraying echo replies at the forged sources, set net.ipv4.icmp_echo_ignore_all=1 on the server (this also stops it answering normal pings).")
+		logger.Info("spoof_profile icmp: while the tunnel runs, the kernel's automatic ping replies are suppressed (net.ipv4.icmp_echo_ignore_all=1) so it does not answer the forged sources; the previous value is restored on stop.")
+	}
+	// The icmpv6 profile carries ICMPv6 echo messages (type 128) inside IPv4
+	// packets with protocol 58 — useful where a firewall clamps down on ICMP and
+	// UDP but leaves proto 58 open. The kernel does not answer proto-58-in-IPv4,
+	// so it needs no reply suppression.
+	if up == "icmpv6" || down == "icmpv6" {
+		logger.Info("spoof_profile icmpv6: ICMPv6 echo (type 128) inside IPv4 proto 58, a path some firewalls leave more open than icmp/udp. Both ends must set the same profile.")
+	}
+	// ipip/gre carry no port or identifier, so the receiver cannot filter the
+	// flow in the kernel and leans on the source-IP pin. Recommend it.
+	if (up == "ipip" || down == "ipip" || up == "gre" || down == "gre") && net.ParseIP(sc.SpoofPeerSrcIP).To4() == nil {
+		logger.Info("spoof_profile ipip/gre has no port to demultiplex on: set spoof_peer_src_ip to the peer's forged source so foreign packets of the same protocol are dropped before the encryption; without it every proto-4/47 packet reaches the cipher.")
 	}
 
 	// Pipe mode carries WireGuard rather than forwarding ports; sanity-check its

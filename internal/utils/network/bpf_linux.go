@@ -13,8 +13,8 @@ import (
 // kernel only delivers this tunnel's flow. Best effort: on any failure the
 // caller keeps the socket and relies on the userspace tag check, which is why
 // the error is advisory rather than fatal.
-func attachSpoofBPF(pc net.PacketConn, profile SpoofProfile, port uint16) error {
-	raw, err := spoofBPFProgram(profile, port)
+func attachSpoofBPF(pc net.PacketConn, profile SpoofProfile, port uint16, wantType byte) error {
+	raw, err := spoofBPFProgram(profile, port, wantType)
 	if err != nil {
 		return err
 	}

@@ -25,13 +25,14 @@ import (
 const bpfAccept = 262144 // snap length for an accepted packet; larger than any datagram
 
 // spoofBPFProgram assembles the filter for a receive profile: tcp keeps segments
-// whose destination port is the tunnel's; icmp keeps echo messages carrying the
-// tunnel's identifier. udp never uses this path (it receives on an ordinary
-// socket).
-func spoofBPFProgram(profile SpoofProfile, port uint16) ([]bpf.RawInstruction, error) {
+// whose destination port is the tunnel's; icmp/icmpv6 keep echo messages of the
+// wanted type carrying the tunnel's identifier. wantType is the echo type this
+// side expects from its peer (request or, with the reply split, reply); it is
+// ignored for tcp. udp never uses this path (it receives on an ordinary socket).
+func spoofBPFProgram(profile SpoofProfile, port uint16, wantType byte) ([]bpf.RawInstruction, error) {
 	var prog []bpf.Instruction
-	switch profile {
-	case SpoofProfileTCP:
+	switch {
+	case profile == SpoofProfileTCP:
 		prog = []bpf.Instruction{
 			bpf.LoadMemShift{Off: 0},          // X = IPv4 header length
 			bpf.LoadIndirect{Off: 2, Size: 2}, // A = TCP destination port
@@ -39,16 +40,19 @@ func spoofBPFProgram(profile SpoofProfile, port uint16) ([]bpf.RawInstruction, e
 			bpf.RetConstant{Val: bpfAccept},
 			bpf.RetConstant{Val: 0},
 		}
-	case SpoofProfileICMP:
-		// Keep only Echo Requests (type 8) whose identifier is this tunnel's.
-		// Both ends send type 8, so type 0 — the kernel's automatic reply — is
-		// dropped here in the kernel rather than in the read loop.
+	case profile.isICMPFamily():
+		// Keep only echoes of the wanted type whose identifier is this tunnel's.
+		// The echo header sits at the same offsets whether the payload is ICMP
+		// (proto 1) or ICMPv6-in-IPv4 (proto 58), so one program serves both;
+		// only the type number differs. When both ends send requests, wantType is
+		// the request type, so the kernel's automatic reply is dropped here in the
+		// kernel rather than in the read loop.
 		prog = []bpf.Instruction{
-			bpf.LoadMemShift{Off: 0},          // X = IPv4 header length
-			bpf.LoadIndirect{Off: 0, Size: 1}, // A = ICMP type
-			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: icmpTypeEchoRequest, SkipTrue: 3}, // not type 8 -> drop
-			bpf.LoadIndirect{Off: 4, Size: 2},                                         // A = ICMP identifier
-			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(port), SkipTrue: 1},        // wrong id -> drop
+			bpf.LoadMemShift{Off: 0},                                               // X = IPv4 header length
+			bpf.LoadIndirect{Off: 0, Size: 1},                                      // A = echo type
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(wantType), SkipTrue: 3}, // wrong type -> drop
+			bpf.LoadIndirect{Off: 4, Size: 2},                                      // A = echo identifier
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(port), SkipTrue: 1},     // wrong id -> drop
 			bpf.RetConstant{Val: bpfAccept},
 			bpf.RetConstant{Val: 0},
 		}

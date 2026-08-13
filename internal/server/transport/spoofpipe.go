@@ -77,6 +77,9 @@ func (s *SpoofPipeServer) runOnce() error {
 		return fmt.Errorf("dialling the WireGuard endpoint %q: %w", s.config.PipeAddr, err)
 	}
 	defer tconn.Close()
+	// Match the carrier's socket buffers on the WireGuard side too, so a burst
+	// coming off the tunnel is not dropped here on its way to WireGuard.
+	network.SizePipeUDP(tconn, s.config.Carrier.SockBuf)
 
 	// Unblock the relay's reads when the run is cancelled.
 	stop := make(chan struct{})

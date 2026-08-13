@@ -73,6 +73,9 @@ func (c *SpoofPipeClient) runOnce() error {
 		return fmt.Errorf("listening on the local WireGuard endpoint %q: %w", c.config.PipeAddr, err)
 	}
 	defer local.Close()
+	// Match the carrier's socket buffers on the WireGuard side too, so a burst
+	// coming off the tunnel is not dropped here on its way to WireGuard.
+	network.SizePipeUDP(local, c.config.Carrier.SockBuf)
 	spoof, err := network.NewSpoofPacketConn(false, c.config.Token, c.config.Carrier, server)
 	if err != nil {
 		return err

@@ -90,29 +90,29 @@ func TestSpoofICMPEchoRoundTrip(t *testing.T) {
 	if got := onesComplement(msg); got != 0 {
 		t.Fatalf("icmp checksum does not verify to zero: %#04x", got)
 	}
-	got, ok := parseICMPEcho(id, msg)
+	got, ok := parseICMPEcho(icmpTypeEchoRequest, id, msg)
 	if !ok || !bytes.Equal(got, payload) {
 		t.Fatalf("icmp echo did not round-trip: ok=%v", ok)
 	}
 
 	// A wrong identifier (another tunnel's) is rejected.
-	if _, ok := parseICMPEcho(id+1, buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)); ok {
+	if _, ok := parseICMPEcho(icmpTypeEchoRequest, id+1, buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)); ok {
 		t.Fatal("an echo with a different identifier was accepted")
 	}
 	// An Echo Reply (type 0) — the kernel's automatic answer to an inbound
 	// request — is rejected: only Echo Requests are the tunnel's, which is what
 	// lets the direction byte go.
-	if _, ok := parseICMPEcho(id, buildICMPEcho(icmpTypeEchoReply, id, 1, payload)); ok {
+	if _, ok := parseICMPEcho(icmpTypeEchoRequest, id, buildICMPEcho(icmpTypeEchoReply, id, 1, payload)); ok {
 		t.Fatal("an echo reply was accepted; the kernel's own replies would be read as tunnel data")
 	}
 	// A non-echo ICMP type is rejected.
 	bad := buildICMPEcho(icmpTypeEchoRequest, id, 1, payload)
 	bad[0] = 3 // destination unreachable
-	if _, ok := parseICMPEcho(id, bad); ok {
+	if _, ok := parseICMPEcho(icmpTypeEchoRequest, id, bad); ok {
 		t.Fatal("a non-echo ICMP message was accepted")
 	}
 	// A truncated message is rejected, not sliced out of bounds.
-	if _, ok := parseICMPEcho(id, []byte{8, 0, 0}); ok {
+	if _, ok := parseICMPEcho(icmpTypeEchoRequest, id, []byte{8, 0, 0}); ok {
 		t.Fatal("a too-short icmp message was accepted")
 	}
 }
@@ -144,10 +144,18 @@ func TestParseSpoofProfile(t *testing.T) {
 			t.Errorf("%q should be udp: %v %v", in, p, err)
 		}
 	}
-	if p, err := ParseSpoofProfile("tcp"); err != nil || p != SpoofProfileTCP {
-		t.Errorf("tcp should parse: %v %v", p, err)
+	for in, want := range map[string]SpoofProfile{
+		"tcp":    SpoofProfileTCP,
+		"icmp":   SpoofProfileICMP,
+		"icmpv6": SpoofProfileICMPv6,
+		"ipip":   SpoofProfileIPIP,
+		"gre":    SpoofProfileGRE,
+	} {
+		if p, err := ParseSpoofProfile(in); err != nil || p != want {
+			t.Errorf("%q should parse to %q: %v %v", in, want, p, err)
+		}
 	}
-	if _, err := ParseSpoofProfile("gre"); err == nil {
+	if _, err := ParseSpoofProfile("carrier-pigeon"); err == nil {
 		t.Error("an unsupported profile should be rejected")
 	}
 }
@@ -169,5 +177,125 @@ func TestSpoofIdentityDeterministic(t *testing.T) {
 	}
 	if portA < 1024 {
 		t.Fatalf("port %d is in the well-known range", portA)
+	}
+}
+
+// Fragmentation must tile the whole segment with no gap or overlap, keep every
+// fragment (but the last) a multiple of 8 bytes and inside the MTU, and flag
+// more-fragments on all but the last. A wrong offset here corrupts the peer's
+// reassembly silently, so the arithmetic is checked directly.
+func TestSpoofFragments(t *testing.T) {
+	const mtu = 1500
+	// A segment that fits comes back whole, not fragmented.
+	if fr := spoofFragments(1000, mtu); len(fr) != 1 || fr[0] != (spoofFragRange{0, 1000, false}) {
+		t.Fatalf("a segment under the MTU must not fragment: %+v", fr)
+	}
+	// An oversize segment fragments; verify the invariants.
+	const segLen = 4000
+	frags := spoofFragments(segLen, mtu)
+	if len(frags) < 2 {
+		t.Fatalf("a %d-byte segment over MTU %d must fragment: got %d", segLen, mtu, len(frags))
+	}
+	want := 0
+	for i, f := range frags {
+		if f.off != want {
+			t.Fatalf("fragment %d starts at %d, expected %d (gap/overlap)", i, f.off, want)
+		}
+		if 20+(f.end-f.off) > mtu {
+			t.Fatalf("fragment %d of %d bytes exceeds MTU %d", i, f.end-f.off, mtu)
+		}
+		last := i == len(frags)-1
+		if !last {
+			if (f.end-f.off)%8 != 0 {
+				t.Fatalf("non-final fragment %d is not a multiple of 8: %d", i, f.end-f.off)
+			}
+			if !f.more {
+				t.Fatalf("non-final fragment %d must set more-fragments", i)
+			}
+		} else if f.more {
+			t.Fatalf("the final fragment must not set more-fragments")
+		}
+		want = f.end
+	}
+	if want != segLen {
+		t.Fatalf("fragments cover %d bytes, expected the whole %d", want, segLen)
+	}
+}
+
+// The obfuscation transforms must round-trip: whatever WriteTo layers on, the
+// receiver's undo must recover the exact original bytes, or the tunnel corrupts
+// silently. Each is checked directly here, without a socket.
+func TestSpoofPaddingRoundTrip(t *testing.T) {
+	orig := []byte("wireguard-datagram-payload")
+	for i := 0; i < 200; i++ {
+		padded := applyPadding(orig, 64)
+		if len(padded) <= len(orig) {
+			t.Fatalf("padding did not grow the payload: %d <= %d", len(padded), len(orig))
+		}
+		got, ok := stripPadding(padded)
+		if !ok || !bytes.Equal(got, orig) {
+			t.Fatalf("padding did not round-trip: ok=%v got=%q", ok, got)
+		}
+	}
+	// A byte claiming more padding than exists is rejected, not mis-sliced.
+	if _, ok := stripPadding([]byte{0xff}); ok {
+		t.Fatal("an impossible pad length was accepted")
+	}
+	if _, ok := stripPadding(nil); ok {
+		t.Fatal("empty input was accepted")
+	}
+}
+
+func TestSpoofFakeTLSRoundTrip(t *testing.T) {
+	orig := []byte("payload behind a fake TLS record")
+	wrapped := applyFakeTLS(orig)
+	if wrapped[0] != 0x17 || wrapped[1] != 0x03 || wrapped[2] != 0x03 {
+		t.Fatalf("fake TLS header is not a TLS 1.2 application_data record: % x", wrapped[:3])
+	}
+	got, ok := stripFakeTLS(wrapped)
+	if !ok || !bytes.Equal(got, orig) {
+		t.Fatalf("fake TLS did not round-trip: ok=%v", ok)
+	}
+	// A segment that does not start with the record header is rejected.
+	if _, ok := stripFakeTLS([]byte{0x16, 0x03, 0x03, 0, 0, 1}); ok {
+		t.Fatal("a non-application-data record was accepted")
+	}
+}
+
+func TestSpoofGRERoundTrip(t *testing.T) {
+	orig := []byte("gre-encapsulated payload")
+	shim := buildGREShim(orig)
+	if len(shim) != greHeaderLen+len(orig) {
+		t.Fatalf("gre shim wrong length: %d", len(shim))
+	}
+	got, ok := stripGREShim(shim)
+	if !ok || !bytes.Equal(got, orig) {
+		t.Fatalf("gre did not round-trip: ok=%v", ok)
+	}
+	if _, ok := stripGREShim([]byte{0, 0}); ok {
+		t.Fatal("a too-short gre packet was accepted")
+	}
+}
+
+func TestSpoofSrcPortShuffle(t *testing.T) {
+	// Off: always the fixed port.
+	off := SpoofDPI{}
+	for i := 0; i < 20; i++ {
+		if p := off.pickSrcPort(4444); p != 4444 {
+			t.Fatalf("shuffle off must return the fixed port, got %d", p)
+		}
+	}
+	// On: always inside the range.
+	on := SpoofDPI{ShufflePort: true, PortMin: 50000, PortMax: 50010}
+	seen := map[uint16]bool{}
+	for i := 0; i < 500; i++ {
+		p := on.pickSrcPort(4444)
+		if p < 50000 || p > 50010 {
+			t.Fatalf("shuffled port %d out of range", p)
+		}
+		seen[p] = true
+	}
+	if len(seen) < 2 {
+		t.Fatal("shuffle produced no variation")
 	}
 }

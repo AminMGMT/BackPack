@@ -43,6 +43,27 @@ const (
 	// Echo Requests; the receiver keeps only those, so the kernel's automatic
 	// Echo Reply is ignored and no firewall rule is needed.
 	SpoofProfileICMP SpoofProfile = "icmp"
+	// SpoofProfileICMPv6 carries the payload in an ICMPv6 Echo Request (type
+	// 128) that rides inside an ORDINARY IPv4 packet whose protocol byte is 58
+	// (ICMPv6's number). It is not real IPv6 — the outer packet is IPv4 with a
+	// forged IPv4 source, exactly like the icmp profile — but many filters that
+	// clamp down hard on ICMP and UDP leave protocol 58 comparatively open,
+	// because IPv6 itself is cut off and its ICMP is treated as harmless. The
+	// reference spoof-tunnel ships this same trick. The kernel does not process
+	// proto-58 payloads in an IPv4 packet as ICMP, so unlike the icmp profile it
+	// generates no automatic reply and needs no suppression.
+	SpoofProfileICMPv6 SpoofProfile = "icmpv6"
+	// SpoofProfileIPIP carries the payload directly as the body of an IP-in-IP
+	// packet (protocol 4), with no L4 header at all. Some filters that inspect
+	// UDP/TCP/ICMP wave IP-in-IP through, since it is normally a router-to-router
+	// encapsulation. There is no port or identifier to demultiplex on, so a
+	// receiver leans on spoof_peer_src_ip and the encryption above; pin the
+	// former for a clean feed.
+	SpoofProfileIPIP SpoofProfile = "ipip"
+	// SpoofProfileGRE carries the payload after a minimal 4-byte GRE header
+	// (protocol 47), the generic routing encapsulation firewalls see between
+	// routers. Like ipip it has no port to demultiplex on; pin spoof_peer_src_ip.
+	SpoofProfileGRE SpoofProfile = "gre"
 )
 
 // ParseSpoofProfile validates a profile string, defaulting an empty one to UDP.
@@ -54,8 +75,14 @@ func ParseSpoofProfile(s string) (SpoofProfile, error) {
 		return SpoofProfileTCP, nil
 	case SpoofProfileICMP:
 		return SpoofProfileICMP, nil
+	case SpoofProfileICMPv6:
+		return SpoofProfileICMPv6, nil
+	case SpoofProfileIPIP:
+		return SpoofProfileIPIP, nil
+	case SpoofProfileGRE:
+		return SpoofProfileGRE, nil
 	default:
-		return "", fmt.Errorf("unknown spoof profile %q (supported: udp, tcp, icmp)", s)
+		return "", fmt.Errorf("unknown spoof profile %q (supported: udp, tcp, icmp, icmpv6, ipip, gre)", s)
 	}
 }
 
@@ -86,9 +113,39 @@ func (p SpoofProfile) ipProtocol() int {
 		return 6 // IPPROTO_TCP
 	case SpoofProfileICMP:
 		return 1 // IPPROTO_ICMP
+	case SpoofProfileICMPv6:
+		return 58 // IPPROTO_ICMPV6, carried inside an IPv4 packet
+	case SpoofProfileIPIP:
+		return 4 // IPPROTO_IPIP
+	case SpoofProfileGRE:
+		return 47 // IPPROTO_GRE
 	default:
 		return 17 // IPPROTO_UDP
 	}
+}
+
+// hasPortDemux reports whether a profile carries a port or identifier the
+// receiver can filter on in the kernel. ipip and gre do not — they have no L4
+// header — so their receiver accepts every packet of the protocol and leans on
+// the source-IP pin and the encryption above.
+func (p SpoofProfile) hasPortDemux() bool {
+	return p != SpoofProfileIPIP && p != SpoofProfileGRE
+}
+
+// isICMPFamily reports whether a profile carries its payload in an echo message
+// (ICMP or the ICMPv6-in-IPv4 variant), which share framing and differ only in
+// their IP protocol number and echo type numbers.
+func (p SpoofProfile) isICMPFamily() bool {
+	return p == SpoofProfileICMP || p == SpoofProfileICMPv6
+}
+
+// icmpEchoTypes returns the echo "request" and "reply" type numbers for an
+// ICMP-family profile: 8/0 for ICMP, 128/129 for ICMPv6.
+func (p SpoofProfile) icmpEchoTypes() (request, reply byte) {
+	if p == SpoofProfileICMPv6 {
+		return icmpv6TypeEchoRequest, icmpv6TypeEchoReply
+	}
+	return icmpTypeEchoRequest, icmpTypeEchoReply
 }
 
 // spoofIdentity derives the session tag and the L4 port a tunnel uses, from its
