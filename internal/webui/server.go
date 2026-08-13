@@ -29,6 +29,12 @@ var dashboardHTML []byte
 
 const sessionCookie = "backpack_session"
 
+// sessionTTL is how long a signed-in browser stays signed in. It was written
+// out as `12 * time.Hour` in the store and as `12 * 3600` in the cookie; one
+// name means the cookie and the session it names cannot expire at different
+// times.
+const sessionTTL = 12 * time.Hour
+
 // sessionInfo is what the panel remembers about one signed-in browser — the
 // address and age make the Settings session list meaningful, and the token
 // itself is never shown again.
@@ -57,7 +63,7 @@ func (s *sessionStore) create(ip string) string {
 			delete(s.sessions, t)
 		}
 	}
-	s.sessions[tok] = &sessionInfo{expires: now.Add(12 * time.Hour), created: now, ip: ip}
+	s.sessions[tok] = &sessionInfo{expires: now.Add(sessionTTL), created: now, ip: ip}
 	s.mu.Unlock()
 	return tok
 }
@@ -234,10 +240,11 @@ func Serve() error {
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      withPanelSecurity(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
+	panelServerLimits(httpServer)
 	if !cfg.HTTPS {
 		return httpServer.ListenAndServe()
 	}
@@ -319,14 +326,19 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				int(left.Minutes())+1), http.StatusTooManyRequests)
 			return
 		}
-		r.ParseForm()
+		// Bounded before it is parsed: this runs before any authentication.
+		r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad login request", http.StatusBadRequest)
+			return
+		}
 		given := r.FormValue("password")
 		// Constant-time comparison + small delay to slow brute force.
 		if subtle.ConstantTimeCompare([]byte(given), []byte(s.password())) == 1 {
 			limiter.reset(ip)
 			// With two-factor on, the password alone is only half the login.
 			if Load().TwoFA && telegramReady() {
-				if s.startTwoFA(w) {
+				if s.startTwoFA(w, r) {
 					return
 				}
 				http.Error(w, "could not send the login code through Telegram — "+
@@ -336,14 +348,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			}
 			tok := s.sessions.create(ip)
 			notifyLogin(r)
-			http.SetCookie(w, &http.Cookie{
-				Name:     sessionCookie,
-				Value:    tok,
-				Path:     "/",
-				HttpOnly: true,
-				SameSite: http.SameSiteLaxMode,
-				MaxAge:   12 * 3600,
-			})
+			http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
@@ -362,7 +367,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.sessions.destroy(c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, clearedCookie(r, sessionCookie))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 

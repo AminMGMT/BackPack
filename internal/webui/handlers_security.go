@@ -22,26 +22,53 @@ import (
 const (
 	loginMaxFails    = 5
 	loginBlockPeriod = 10 * time.Minute
+
+	// How many addresses the limiter will remember at once.
+	//
+	// It remembers one entry per source address and only ever forgot an
+	// address that came back — so an address that failed once and never
+	// returned stayed in the map for the life of the process. The panel sits
+	// on a port that gets scanned, and a scan from a rotating source is the
+	// ordinary case rather than the exotic one, which made a defence against
+	// brute force into a way to grow the panel's memory from outside it.
+	//
+	// Well above the number of addresses any real panel sees, and small enough
+	// that the worst case is a few hundred kilobytes.
+	loginMaxTracked = 4096
 )
 
-type loginLimiter struct {
-	mu    sync.Mutex
-	fails map[string]int
-	until map[string]time.Time
+// loginAttempt is what the limiter remembers about one address.
+type loginAttempt struct {
+	fails int
+	until time.Time
+	seen  time.Time
 }
 
-var limiter = &loginLimiter{fails: map[string]int{}, until: map[string]time.Time{}}
+type loginLimiter struct {
+	mu   sync.Mutex
+	byIP map[string]*loginAttempt
+}
+
+var limiter = newLoginLimiter()
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{byIP: map[string]*loginAttempt{}}
+}
 
 // blocked reports whether ip is currently locked out, and for how much longer.
 func (l *loginLimiter) blocked(ip string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if t, ok := l.until[ip]; ok {
-		if left := time.Until(t); left > 0 {
-			return true, left
-		}
-		delete(l.until, ip)
-		delete(l.fails, ip)
+	a, ok := l.byIP[ip]
+	if !ok {
+		return false, 0
+	}
+	if a.isBlocked(time.Now()) {
+		return true, time.Until(a.until)
+	}
+	if !a.until.IsZero() {
+		// The block ran out, so the slate is clean again.
+		delete(l.byIP, ip)
 	}
 	return false, 0
 }
@@ -49,17 +76,87 @@ func (l *loginLimiter) blocked(ip string) (bool, time.Duration) {
 func (l *loginLimiter) fail(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fails[ip]++
-	if l.fails[ip] >= loginMaxFails {
-		l.until[ip] = time.Now().Add(loginBlockPeriod)
+	if l.byIP == nil {
+		l.byIP = map[string]*loginAttempt{}
+	}
+
+	a, ok := l.byIP[ip]
+	if !ok {
+		l.evictLocked()
+		a = &loginAttempt{}
+		l.byIP[ip] = a
+	}
+	a.fails++
+	a.seen = time.Now()
+	if a.fails >= loginMaxFails {
+		a.until = a.seen.Add(loginBlockPeriod)
 	}
 }
 
 func (l *loginLimiter) reset(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.fails, ip)
-	delete(l.until, ip)
+	delete(l.byIP, ip)
+}
+
+// isBlocked reports whether this address is inside its lockout right now.
+func (a *loginAttempt) isBlocked(now time.Time) bool {
+	return !a.until.IsZero() && now.Before(a.until)
+}
+
+// evictLocked makes room for a new address. Called with l.mu held, and only on
+// the insert that would push the map past its bound.
+//
+// A blocked address is never what gets given up. Evicting by age alone looks
+// reasonable and is the bypass: an address is stamped when it fails, so one
+// that hit the limit and was told to wait ten minutes immediately becomes the
+// least recently seen thing in the map, and a flood of fresh addresses — which
+// is precisely what an attacker with a proxy pool produces — would push out
+// the entry keeping that attacker out. The block would lift itself.
+func (l *loginLimiter) evictLocked() {
+	if len(l.byIP) < loginMaxTracked {
+		return
+	}
+	now := time.Now()
+
+	// Entries that are neither blocked nor recent are doing nothing at all.
+	for ip, a := range l.byIP {
+		if !a.isBlocked(now) && now.Sub(a.seen) > loginBlockPeriod {
+			delete(l.byIP, ip)
+		}
+	}
+	if len(l.byIP) < loginMaxTracked {
+		return
+	}
+
+	// Then the least recently seen address that is not being kept out.
+	var victim string
+	var oldest time.Time
+	for ip, a := range l.byIP {
+		if a.isBlocked(now) {
+			continue
+		}
+		if victim == "" || a.seen.Before(oldest) {
+			victim, oldest = ip, a.seen
+		}
+	}
+	if victim != "" {
+		delete(l.byIP, victim)
+		return
+	}
+
+	// Every address tracked is currently blocked, so one of them has to go:
+	// the one whose lockout ends soonest, being the closest to expiring on its
+	// own. Reaching here means thousands of distinct addresses have each spent
+	// five failed attempts, and the bound on memory is the thing being
+	// defended at that point.
+	var soonest time.Time
+	for ip, a := range l.byIP {
+		if victim == "" || a.until.Before(soonest) {
+			victim, soonest = ip, a.until
+		}
+	}
+	delete(l.byIP, victim)
 }
 
 func clientIP(r *http.Request) string {
@@ -148,7 +245,7 @@ func telegramReady() bool {
 
 // startTwoFA sends the code and serves the code-entry page. Returns false if
 // the code could not be delivered — the caller decides what to show.
-func (s *server) startTwoFA(w http.ResponseWriter) bool {
+func (s *server) startTwoFA(w http.ResponseWriter, r *http.Request) bool {
 	token, code := twoFA.start()
 	err := telegram.SendToAdmin("🔐 Backpack panel login code: " + code +
 		"\n\nValid for 5 minutes. If this wasn't you, someone has your panel password — change it now.")
@@ -156,11 +253,7 @@ func (s *server) startTwoFA(w http.ResponseWriter) bool {
 		twoFA.cancel(token)
 		return false
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: pendingCookie, Value: token, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		MaxAge: int(twoFACodeTTL / time.Second),
-	})
+	http.SetCookie(w, authCookie(r, pendingCookie, token, twoFACodeTTL))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(codePage("")))
 	return true
@@ -176,20 +269,22 @@ func (s *server) handleLogin2FA(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	r.ParseForm()
+	// Bounded like the login form: this also runs before authentication.
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	ok, dead := twoFA.verify(c.Value, strings.TrimSpace(r.FormValue("code")))
 	switch {
 	case ok:
-		http.SetCookie(w, &http.Cookie{Name: pendingCookie, Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, clearedCookie(r, pendingCookie))
 		tok := s.sessions.create(clientIP(r))
 		notifyLogin(r)
-		http.SetCookie(w, &http.Cookie{
-			Name: sessionCookie, Value: tok, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 3600,
-		})
+		http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case dead:
-		http.SetCookie(w, &http.Cookie{Name: pendingCookie, Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, clearedCookie(r, pendingCookie))
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	default:
 		time.Sleep(1 * time.Second)

@@ -211,7 +211,7 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 				return
 
 			default:
-				_, msg, err := s.controlChannel.Get().ReadMessage()
+				messageType, msg, err := s.controlChannel.Get().ReadMessage()
 				// Exit if there's an error
 				if err != nil {
 					// A generation that has already been cancelled must not ask for a
@@ -229,7 +229,12 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 					}
 					return
 				}
-				messageChan <- msg[0]
+				signal, ok := utils.WebSocketSignal(messageType, msg)
+				if !ok {
+					s.logger.Warnf("ignoring a malformed control frame (type %d, %d bytes)", messageType, len(msg))
+					continue
+				}
+				messageChan <- signal
 			}
 		}
 	}()

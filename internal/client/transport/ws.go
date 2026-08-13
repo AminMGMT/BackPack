@@ -256,7 +256,7 @@ func (c *WsTransport) channelHandler() {
 				return
 
 			default:
-				_, msg, err := c.state.WSConn().ReadMessage()
+				messageType, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
 					if c.state.Cancel() != nil {
 						c.logger.Error("failed to read from channel connection. ", err)
@@ -265,7 +265,12 @@ func (c *WsTransport) channelHandler() {
 					return
 				}
 
-				msgChan <- msg[0]
+				signal, ok := utils.WebSocketSignal(messageType, msg)
+				if !ok {
+					c.logger.Warnf("ignoring a malformed control frame (type %d, %d bytes)", messageType, len(msg))
+					continue
+				}
+				msgChan <- signal
 			}
 		}
 	}()

@@ -340,6 +340,111 @@ All notable changes to Backpack are documented here.
   publishing are separate functions now, so both are covered by tests that need
   neither a real `/etc/backpack` nor a real crash.*
 
+- **A bad backup archive used to half-restore, leaving an installation that
+  came from neither the backup nor from what was there before.** Restoring
+  extracted straight into the live config directory, one entry at a time, as
+  the archive was read. Every way an archive turns out to be bad is found
+  part-way through reading it — a truncated upload, a gzip checksum that only
+  fails at the very end, a path trying to escape the directory, a read error
+  half way — and by then some tunnels had been overwritten and some had not,
+  with nothing kept to put them back.
+
+  The whole post-restore tree is now built in a staging directory beside the
+  live one first: the current configuration copied in, the archive laid over
+  the top, every entry checked before it is written, and the compressed stream
+  read through to its checksum. Only then does anything in the live directory
+  change, and the change is a rename. A restore that fails now leaves the
+  installation exactly as it found it, and says why.
+
+  What the archive may contain is bounded too. Paths are checked as names
+  rather than by where they happen to land, so the answer does not depend on
+  what is already on disk; a backslash is refused outright, since it is a
+  separator where these archives can also be opened. Anything that is not a
+  file or a directory is refused — a symlink or a hard link is the standard way
+  an archive reaches outside the directory it is unpacked into, and a backup of
+  this system contains neither. The same path twice is refused. And there are
+  ceilings on the number of entries, the size of one file and the total
+  expanded size, so a corrupt or hostile archive cannot fill the disk before
+  anyone learns what is in it.
+
+  Restores still merge rather than replace: a backup taken by an older version
+  does not know about files a newer one added, and this host's `install_path`
+  still wins over the archived one.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#28](https://github.com/AminMGMT/BackPack/pull/28). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  it swapped the config tree without first copying the current one in, so
+  restoring an older archive would have deleted every file added since it was
+  taken. Seeding the staging directory is what keeps the merge behaviour
+  restores have always had — and refusing, before the commit, to swap over
+  anything in the live tree that cannot be copied is what keeps that swap from
+  quietly dropping something on the way through.*
+
+- **The panel's login could be used to grow its memory from outside, and its
+  cookies were missing the attribute that keeps them off plain HTTP.** The
+  rate limiter remembers one entry per source address and only ever forgot an
+  address that came back, so an address that failed once and never returned
+  stayed for the life of the process — and the panel sits on a port that gets
+  scanned by hosts that rotate their source. The entry table is now bounded.
+  Which entry it gives up matters as much as that it gives one up: an address
+  is stamped when it fails, so the one that just hit the limit is the least
+  recently seen thing in the table, and evicting by age alone would have let a
+  flood of fresh addresses lift the block on the attacker producing them. A
+  blocked address is never the one dropped.
+
+  Session and pending-login cookies now carry `Secure` when the panel is
+  actually serving over TLS, so they are not sent in the clear. They stay
+  `HttpOnly` and `SameSite=Lax` as before, and they are all built in one place
+  now rather than in three with slightly different flags — including the ones
+  that clear them, which a browser ignores unless the attributes match.
+
+  Responses carry the headers the panel had none of: `X-Frame-Options`,
+  `X-Content-Type-Options`, `Referrer-Policy` and a content security policy
+  that forbids framing, for a page that creates, edits and restarts tunnels.
+  The two endpoints that run before any authentication no longer read a request
+  body of any size into memory to find two short form fields in it. And the
+  listener gained a header timeout, a header-size cap and an idle timeout —
+  `ReadTimeout` and `WriteTimeout` were already set; these are what a
+  connection that opens and then says nothing runs into.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#23](https://github.com/AminMGMT/BackPack/pull/23). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  `Secure` is set on evidence of TLS — this connection, or a panel configured
+  for HTTPS — and never on `X-Forwarded-Proto`, which anyone can send and which
+  on a plain-HTTP panel would have logged its owner in and then treated every
+  request after that as a stranger's. The origin checks it added to mutating
+  endpoints are not here either: `SameSite=Lax` already keeps cookies off
+  cross-site POSTs, and an origin check is the thing most likely to break a
+  legitimate deployment behind a reverse proxy for a case that is already
+  covered.*
+
+- **A single empty WebSocket frame could stop a `ws`, `wss`, `wsmux` or
+  `wssmux` tunnel dead.** The control channel carries one-byte signals —
+  heartbeat, open a channel, closed — and all four read loops went straight to
+  `msg[0]` on whatever arrived. That is correct for every frame either end of
+  this tunnel has ever sent, and fatal for one it has not: indexing an empty
+  frame panics, and the panic takes the process with it. The control channel is
+  reachable by whatever holds the token, so a tunnel that can be stopped by one
+  zero-length frame is not one that should be.
+
+  A frame that is not exactly one binary byte is now logged and dropped, and
+  the loop reads on.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#22](https://github.com/AminMGMT/BackPack/pull/22). We reviewed that pull
+  request and took the part of it that fixes the crash. The rest of it changes
+  how live tunnels behave — read limits on the tunnel connections, a shorter
+  handshake timeout, and replacing the deliberate `IdleTimeout: -1` on the
+  WebSocket listeners with a write and idle deadline — and those are throughput
+  and stability questions to answer with measurements on a real link, not
+  alongside a crash fix. Its response to a malformed frame is also not ours:
+  the pull request closes the control channel and restarts the transport, which
+  hands anyone who can reach that channel a way to keep a tunnel restarting.
+  Dropping the frame leaves a working tunnel exactly where ignoring it always
+  left it.*
+
 ## v1.7.1 — 2026-08-10
 
 Two halves. The web panel stops being a window and becomes a way to work: it
