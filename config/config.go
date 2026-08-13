@@ -70,29 +70,51 @@ type KCPConfig struct {
 	ParityShards int `toml:"kcp_parityshards"`
 }
 
+const (
+	maxKCPMTU    = 9_000
+	maxKCPWindow = 65_535
+	maxKCPShards = 32
+	maxKCPResend = 2
+)
+
 // WithDefaults returns a copy with any unset field filled in, so a config
 // written by an older version — or by hand — can never produce a KCP session
 // with a zero window or a zero tick interval.
 func (k KCPConfig) WithDefaults() KCPConfig {
 	if k.MTU <= 0 {
 		k.MTU = 1350
+	} else if k.MTU > maxKCPMTU {
+		k.MTU = maxKCPMTU
 	}
 	if k.Interval <= 0 {
 		k.Interval = 20
 	}
 	if k.Resend < 0 {
 		k.Resend = 2
+	} else if k.Resend > maxKCPResend {
+		k.Resend = maxKCPResend
 	}
 	if k.SndWnd <= 0 {
 		k.SndWnd = 1024
+	} else if k.SndWnd > maxKCPWindow {
+		k.SndWnd = maxKCPWindow
 	}
 	if k.RcvWnd <= 0 {
 		k.RcvWnd = 1024
+	} else if k.RcvWnd > maxKCPWindow {
+		k.RcvWnd = maxKCPWindow
 	}
 	// Parity without data shards is meaningless to the encoder, so treat a
 	// half-configured pair as FEC disabled rather than failing to start.
 	if k.DataShards <= 0 || k.ParityShards <= 0 {
 		k.DataShards, k.ParityShards = 0, 0
+	} else {
+		if k.DataShards > maxKCPShards {
+			k.DataShards = maxKCPShards
+		}
+		if k.ParityShards > maxKCPShards {
+			k.ParityShards = maxKCPShards
+		}
 	}
 	return k
 }
