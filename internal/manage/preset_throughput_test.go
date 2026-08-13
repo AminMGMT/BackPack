@@ -62,18 +62,21 @@ func TestThroughputPresetTradesLatencyForBandwidth(t *testing.T) {
 	}
 }
 
-// The profile must be offered only where it changes anything: the transports
-// whose congestion control, retransmission and FEC this process runs.
+// The profile is for the plain udp+kcp+fec transport and nothing else. The
+// other KCP carriers (xdi, spoof, pck) hand-build their packets and pay a
+// syscall per datagram, so a "maximum bandwidth" profile would promise what
+// they cannot deliver.
 func TestThroughputPresetIsOfferedOnKCPOnly(t *testing.T) {
-	for _, transport := range []string{"kcp", "xdi", "spoof", "pck"} {
-		if !presetSuitsTransport(PresetThroughput, transport) {
-			t.Errorf("throughput should be allowed on %q", transport)
-		}
-		if !hasPreset(presetOptionsFor(transport), PresetThroughput) {
-			t.Errorf("throughput missing from the menu for %q", transport)
-		}
+	if !presetSuitsTransport(PresetThroughput, "kcp") {
+		t.Error("throughput should be allowed on kcp")
 	}
-	for _, transport := range []string{"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux", "udp", "quic", "stealth"} {
+	if !hasPreset(presetOptionsFor("kcp"), PresetThroughput) {
+		t.Error("throughput missing from the menu for kcp")
+	}
+	for _, transport := range []string{
+		"xdi", "spoof", "pck", // KCP family, but not bandwidth transports
+		"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux", "udp", "quic", "stealth",
+	} {
 		if presetSuitsTransport(PresetThroughput, transport) {
 			t.Errorf("throughput should not be allowed on %q", transport)
 		}

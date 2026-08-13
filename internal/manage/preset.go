@@ -33,15 +33,19 @@ const (
 	// operator who wants the tunnel to move data quickly and is not measuring
 	// their ping while it does.
 	//
-	// It is offered on the KCP family only. On a TCP-based transport every knob
-	// it changes belongs to the kernel's stack rather than to this process, so
-	// choosing it there would change nothing while implying it had.
+	// It is offered on the plain "udp + kcp + fec" transport only. The other
+	// carriers in the KCP family — xdi, spoof, pck — exist to get through a path
+	// that blocks the ordinary one, and each pays for that with hand-built
+	// packets and a syscall per datagram. Bandwidth is not what they are for, and
+	// offering a "maximum bandwidth" profile on them would promise something the
+	// carrier underneath cannot deliver. On a TCP-based transport it would be
+	// worse still: every knob it changes belongs to the kernel's stack rather
+	// than to this process, so choosing it there would change nothing at all.
 	PresetThroughput = "throughput"
 )
 
 // presetOptions is the ordered list shown in the setup and edit menus. kcpOnly
-// marks a preset that only means something on a transport this process runs the
-// congestion control for.
+// marks a preset offered on the udp+kcp+fec transport alone.
 var presetOptions = []struct {
 	label, desc, value string
 	kcpOnly            bool
@@ -64,13 +68,13 @@ func validPreset(p string) bool {
 }
 
 // presetSuitsTransport reports whether a preset can be chosen for a transport.
-// Only the KCP family runs its own congestion control, retransmission and FEC in
-// this process, so only there does the Throughput profile change anything.
+// Throughput is for the plain udp+kcp+fec transport alone — see the constant for
+// why the other KCP carriers are excluded rather than merely discouraged.
 func presetSuitsTransport(preset, transport string) bool {
 	if preset != PresetThroughput {
 		return true
 	}
-	return isKCP(transport)
+	return transport == "kcp"
 }
 
 // PresetSuitsTransport is the exported form, for the web panel's validation.
@@ -85,7 +89,7 @@ func presetOptionsFor(transport string) []struct {
 } {
 	out := presetOptions[:0:0]
 	for _, o := range presetOptions {
-		if o.kcpOnly && !isKCP(transport) {
+		if o.kcpOnly && !presetSuitsTransport(o.value, transport) {
 			continue
 		}
 		out = append(out, o)
@@ -167,19 +171,30 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 		// Refills the pool in a tight loop: lowest possible connect latency at
 		// the cost of real idle CPU. Only worth it on a server with cores spare.
 		s.AggressivePool = true
-		// Sizes the datagram socket only; TCP is auto-tuned by the kernel.
-		s.SoRcvBuf = 16 * 1024 * 1024
-		s.SoSndBuf = 16 * 1024 * 1024
+		// Sizes the datagram socket only; TCP is auto-tuned by the kernel. 32 MB
+		// so a full window can land in one burst without the kernel dropping the
+		// tail of it — on a datagram transport that loss is indistinguishable from
+		// the network's, and it costs a retransmit at the busiest moment.
+		s.SoRcvBuf = 32 * 1024 * 1024
+		s.SoSndBuf = 32 * 1024 * 1024
 		s.MuxCon = 16
 		s.MuxVersion = 2
 		s.MuxFrameSize = 65535
-		// 8 MB per stream ≈ 640 Mbit/s for a single connection at 100 ms RTT,
-		// which is what "maximum throughput" has to mean on this route. The
-		// memory is a ceiling on data actually in flight, not an allocation,
-		// but the worst case is real: MuxCon × MuxRecvBuffer = 16 × 32 MB, so
-		// this preset wants a server with RAM to spare — as it says it does.
+		// 16 MB per stream: at 100 ms round trip that is roughly 1.3 Gbit/s for a
+		// single connection, and at 200 ms still ~640 Mbit/s — enough that the
+		// flow control is never what limits a transfer on this route. The memory
+		// is a ceiling on data actually in flight rather than an allocation, but
+		// the worst case is real: MuxCon × MuxRecvBuffer = 16 × 32 MB, so this
+		// preset wants a server with RAM to spare — as it says it does.
 		s.MuxRecvBuffer = 32 * 1024 * 1024
-		s.MuxStreamBuffer = 8 * 1024 * 1024
+		s.MuxStreamBuffer = 16 * 1024 * 1024
+
+		// The KCP window deliberately stays where it is. It is the one knob on
+		// this preset where "more" is not "better": with congestion control off,
+		// the window IS the queue, and a deeper queue is exactly the bufferbloat
+		// that shows up as the ping spike a gaming preset exists to prevent.
+		// Wanting a bigger one is wanting the Throughput profile, which is what
+		// it is for.
 
 	case PresetThroughput:
 		s.KeepAlive = 75
@@ -201,14 +216,16 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 		s.MuxCon = 8
 		s.MuxVersion = 2
 		s.MuxFrameSize = 65535
-		// 16 MB per stream is what makes a single download fast on a long path:
+		// 32 MB per stream is what makes a single download fast on a long path:
 		// it is the flow-control ceiling one connection can have outstanding, so
-		// at 200 ms round trip it allows roughly 640 Mbit/s for one stream, where
-		// Turbo's 2 MB would cap that same stream near 80. Worst case is
-		// MuxCon × MuxRecvBuffer = 8 × 32 MB, the same ceiling Aggressive already
+		// at 200 ms round trip it allows roughly 1.3 Gbit/s for one stream, where
+		// Turbo's 2 MB would cap that same stream near 80 Mbit/s. Half as many
+		// sessions as Aggressive, each with twice the room — a transfer wants one
+		// deep stream far more than it wants sixteen shallow ones. Worst case is
+		// MuxCon × MuxRecvBuffer = 8 × 64 MB, the same 512 MB ceiling Aggressive
 		// asks for, so this needs a server with RAM but no more than that one.
-		s.MuxRecvBuffer = 32 * 1024 * 1024
-		s.MuxStreamBuffer = 16 * 1024 * 1024
+		s.MuxRecvBuffer = 64 * 1024 * 1024
+		s.MuxStreamBuffer = 32 * 1024 * 1024
 	}
 
 	applyKCPPreset(s, preset)

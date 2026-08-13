@@ -35,9 +35,30 @@ const tunnelReadyTimeout = 20 * time.Second
 // later. A failure to bind is fatal in the engine, which takes the whole test
 // binary down with it — so ports are handed out from a private range instead,
 // never reused within a run, and checked free on both TCP and UDP first.
+//
+// The range must sit BELOW the kernel's ephemeral range, and that is the whole
+// reason these constants are what they are.
+//
+// Checking a port is free and then binding it seconds later leaves a window, and
+// the thing most likely to take the port in that window is this very suite: it
+// opens hundreds of outgoing connections (client dials, pool connections, backend
+// dials), and the kernel draws each one's SOURCE port from the ephemeral range.
+// Any overlap means a test's listen port can be handed to some other connection
+// as its source port before the tunnel gets to bind it — which surfaces as
+// "bind: address already in use" and kills the whole test binary.
+//
+// Linux's default ephemeral range is 32768-60999, so the old 34000-60000 window
+// sat entirely inside it. macOS starts at 49152, which is why this failed on CI
+// and not on a developer's machine. Staying under 32768 removes the overlap on
+// both.
+const (
+	testPortLow  = 12000
+	testPortHigh = 30000
+)
+
 var (
 	portMu   sync.Mutex
-	nextPort = 34000 + (int(time.Now().UnixNano()/1e6) % 8000)
+	nextPort = testPortLow + (int(time.Now().UnixNano()/1e6) % (testPortHigh - testPortLow))
 	issued   = map[int]bool{}
 )
 
@@ -49,8 +70,8 @@ func freePort(t *testing.T) int {
 	for attempts := 0; attempts < 4000; attempts++ {
 		port := nextPort
 		nextPort++
-		if nextPort > 60000 {
-			nextPort = 34000
+		if nextPort > testPortHigh {
+			nextPort = testPortLow
 		}
 		if issued[port] || !portFree(port) {
 			continue

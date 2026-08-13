@@ -56,8 +56,8 @@ type PresetOption struct {
 	Label string `json:"label"`
 	Desc  string `json:"desc"`
 	Value string `json:"value"`
-	// KCPOnly marks a profile that only applies to the KCP family, so a panel
-	// rendering the full list can hide or disable it for other transports.
+	// KCPOnly marks a profile that only applies to the udp+kcp+fec transport,
+	// so a panel rendering the full list can hide or disable it elsewhere.
 	KCPOnly bool `json:"kcpOnly,omitempty"`
 }
 
@@ -344,7 +344,7 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	// path: on a kernel-stack transport this profile's knobs would be written and
 	// then ignored.
 	if !presetSuitsTransport(n.Preset, s.Transport) {
-		return "", false, fmt.Errorf("the %s preset applies to the KCP transports only (kcp, xdi, spoof, pck), not %q",
+		return "", false, fmt.Errorf("the %s preset applies to the udp+kcp+fec transport only, not %q",
 			presetLabel(n.Preset), s.Transport)
 	}
 	ApplyPreset(&s, n.Preset)
@@ -442,7 +442,7 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 		// control belongs to the kernel, every knob this profile changes would be
 		// written to the config and ignored, which looks like a setting that took.
 		if !presetSuitsTransport(p, string(s.Transport)) {
-			return fmt.Errorf("the %s preset applies to the KCP transports only (kcp, xdi, spoof, pck), not %q",
+			return fmt.Errorf("the %s preset applies to the udp+kcp+fec transport only, not %q",
 				presetLabel(p), s.Transport)
 		}
 		ApplyPreset(&s, p)

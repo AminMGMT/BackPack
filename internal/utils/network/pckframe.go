@@ -6,6 +6,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/bpf"
 	"golang.org/x/net/ipv4"
@@ -180,6 +181,107 @@ type pckSegment struct {
 	Seq     uint32
 	TSVal   uint32
 	Payload []byte
+}
+
+// pckFrameBuffers hands out the frame buffers both directions work in: the one
+// ReadFrom parses a received frame out of, and the one WriteTo assembles an
+// outgoing frame into. It stores *[]byte rather than []byte because putting a
+// slice into a sync.Pool converts it to an interface, and that conversion
+// allocates — which would put back a good part of what the pool is here to save.
+// Sized for the largest frame a packet socket can hand up.
+var pckFrameBuffers = sync.Pool{
+	New: func() any {
+		b := make([]byte, 65536)
+		return &b
+	},
+}
+
+// pckFrameParams is everything that varies between one outgoing frame and the
+// next. Grouped into a struct because assemblePckFrame would otherwise take
+// eleven positional arguments, half of them uint32, which is a bug waiting to
+// be written.
+type pckFrameParams struct {
+	SrcMAC, DstMAC   net.HardwareAddr
+	SrcIP, DstIP     net.IP
+	SrcPort, DstPort uint16
+	Seq, Ack         uint32
+	Flags            TCPFlags
+	TSVal, TSEcr     uint32
+	ID               uint16
+	Payload          []byte
+}
+
+// pckFrameLen is the whole frame's size on the wire for a given payload.
+func pckFrameLen(payload int) int {
+	return pckEthHeaderLen + ipv4.HeaderLen + pckTCPHeaderLen + pckTCPOptionsLen + payload
+}
+
+// Offsets of each header within an assembled frame.
+const (
+	pckIPOffset      = pckEthHeaderLen
+	pckTCPOffset     = pckIPOffset + ipv4.HeaderLen
+	pckPayloadOffset = pckTCPOffset + pckTCPHeaderLen + pckTCPOptionsLen
+)
+
+// assemblePckFrame writes one complete Ethernet + IPv4 + TCP frame into buf and
+// returns the slice holding it. buf must be at least pckFrameLen(len(payload)).
+//
+// It exists because the obvious way to build this — a function per layer, each
+// returning a fresh slice — allocated three times and copied the payload three
+// times for every packet the tunnel sent. On the pck carrier that cost is paid
+// per datagram and cannot be amortised the way it is on UDP: kcp-go only reaches
+// for the batching write path (sendmmsg, via x/net) when the socket is a real
+// *net.UDPConn, and this carrier is not one, so every packet is its own syscall
+// and its own frame. Building in place, into a buffer the caller pools, leaves
+// one copy of the payload and no allocation at all.
+//
+// The layer builders below are kept for the tests, which assert on each header
+// independently; a test in this package checks that what this produces is byte
+// for byte what they produce.
+func assemblePckFrame(buf []byte, p pckFrameParams) []byte {
+	total := pckFrameLen(len(p.Payload))
+	frame := buf[:total]
+
+	// Ethernet.
+	copy(frame[0:6], p.DstMAC)
+	copy(frame[6:12], p.SrcMAC)
+	binary.BigEndian.PutUint16(frame[12:14], etherTypeIPv4)
+
+	// IPv4. Written before the checksum so the checksum covers it.
+	ip := frame[pckIPOffset:pckTCPOffset]
+	ip[0] = 4<<4 | 5 // version 4, header length 5 words
+	ip[1] = 46 << 2  // DSCP 46 (EF), ECN 0
+	binary.BigEndian.PutUint16(ip[2:4], uint16(total-pckEthHeaderLen))
+	binary.BigEndian.PutUint16(ip[4:6], p.ID)
+	binary.BigEndian.PutUint16(ip[6:8], 0x4000) // Don't Fragment
+	ip[8] = 64                                  // TTL
+	ip[9] = 6                                   // TCP
+	ip[10], ip[11] = 0, 0                       // checksum, zero while computing
+	copy(ip[12:16], p.SrcIP.To4())
+	copy(ip[16:20], p.DstIP.To4())
+	binary.BigEndian.PutUint16(ip[10:12], onesComplement(ip))
+
+	// TCP, then the payload it carries.
+	const off = pckTCPHeaderLen + pckTCPOptionsLen
+	tcp := frame[pckTCPOffset:]
+	binary.BigEndian.PutUint16(tcp[0:2], p.SrcPort)
+	binary.BigEndian.PutUint16(tcp[2:4], p.DstPort)
+	binary.BigEndian.PutUint32(tcp[4:8], p.Seq)
+	binary.BigEndian.PutUint32(tcp[8:12], p.Ack)
+	tcp[12] = byte(off/4) << 4 // data offset in 32-bit words
+	tcp[13] = byte(p.Flags)
+	binary.BigEndian.PutUint16(tcp[14:16], pckWindow)
+	tcp[16], tcp[17] = 0, 0 // checksum, zero while computing
+	tcp[18], tcp[19] = 0, 0 // urgent pointer
+	// NOP, NOP, Timestamps — what Linux puts on a data segment.
+	tcp[20], tcp[21] = 1, 1
+	tcp[22], tcp[23] = 8, 10
+	binary.BigEndian.PutUint32(tcp[24:28], p.TSVal)
+	binary.BigEndian.PutUint32(tcp[28:32], p.TSEcr)
+	copy(frame[pckPayloadOffset:], p.Payload)
+	binary.BigEndian.PutUint16(tcp[16:18], l4Checksum(p.SrcIP, p.DstIP, 6, tcp))
+
+	return frame
 }
 
 // buildPckTCP assembles a TCP segment carrying payload, with the options and

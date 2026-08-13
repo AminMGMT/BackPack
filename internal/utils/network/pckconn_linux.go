@@ -101,17 +101,9 @@ type pckConn struct {
 	closed atomic.Bool
 }
 
-// pckFrameBuffers hands out the receive buffers ReadFrom parses frames in. It
-// stores *[]byte rather than []byte because putting a slice into a sync.Pool
-// converts it to an interface, and that conversion allocates — which would put
-// back a good part of what the pool is here to save. Sized for the largest
-// frame a packet socket can hand up.
-var pckFrameBuffers = sync.Pool{
-	New: func() any {
-		b := make([]byte, 65536)
-		return &b
-	},
-}
+// The frame buffer pool both ReadFrom and WriteTo draw from lives in
+// pckframe.go, alongside the framing it serves and free of a build tag, so the
+// send path can be benchmarked and asserted on anywhere.
 
 // pckPeer is the numbering of one conversation.
 type pckPeer struct {
@@ -243,6 +235,14 @@ func (c *pckConn) openTx() error {
 	if c.egress.Ethernet && c.egress.NextHop != nil {
 		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(htons(unix.ETH_P_IP)))
 		if err == nil {
+			// The send socket had no buffer set while the receive one had 8 MB.
+			// This carrier writes one packet per syscall — kcp-go only reaches for
+			// the batching path on a real UDP socket — so a burst from a full
+			// window arrives here as a burst of individual sends, and the default
+			// buffer is small enough that the tail of one is refused with EAGAIN.
+			// That costs a poller round trip per dropped packet at exactly the
+			// moment the tunnel is busiest.
+			_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, 8*1024*1024)
 			if err = unix.SetNonblock(fd, true); err == nil {
 				c.txFile = os.NewFile(uintptr(fd), "pck-tx")
 				return nil
@@ -355,19 +355,43 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	c.mu.Unlock()
 
 	f := c.flags[int(c.flagRot.Add(1)-1)%len(c.flags)]
-	tcp := buildPckTCP(c.local, uint16(dst.Port), seq, ack, f,
-		c.timestamp(), tsEcr, c.egress.LocalIP, dst.IP.To4(), p)
-
 	id := uint16(c.ipID.Add(1))
+
+	// The frame is assembled into a pooled buffer rather than built a layer at a
+	// time into three fresh ones. This is the hot path — one call, and one
+	// syscall, per packet the tunnel sends — so the three allocations and three
+	// copies of the payload the layered version cost were being paid for every
+	// datagram. See assemblePckFrame.
+	bp := pckFrameBuffers.Get().(*[]byte)
+	defer pckFrameBuffers.Put(bp)
+	buf := *bp
+	if n := pckFrameLen(len(p)); n > len(buf) {
+		// Larger than the pooled buffer: fall back to a one-off rather than
+		// silently truncating. KCP is sized well under this, so it does not
+		// happen in practice.
+		buf = make([]byte, n)
+	}
+
+	frame := assemblePckFrame(buf, pckFrameParams{
+		SrcMAC: c.egress.SrcMAC, DstMAC: c.egress.NextHop,
+		SrcIP: c.egress.LocalIP, DstIP: dst.IP.To4(),
+		SrcPort: c.local, DstPort: uint16(dst.Port),
+		Seq: seq, Ack: ack, Flags: f,
+		TSVal: c.timestamp(), TSEcr: tsEcr,
+		ID: id, Payload: p,
+	})
+
 	if c.txFile != nil {
-		ip := buildPckIPv4(id, c.egress.LocalIP, dst.IP.To4(), tcp)
-		frame := buildPckEthernet(c.egress.NextHop, c.egress.SrcMAC, ip)
 		if err := c.sendFrame(frame); err != nil {
 			return 0, err
 		}
 		return len(p), nil
 	}
 
+	// No link-layer injection available: hand the IP payload to the raw socket
+	// and let the kernel do the L2 work. The TCP segment is the same bytes the
+	// frame already holds, so nothing is rebuilt.
+	tcp := frame[pckTCPOffset:]
 	h := &ipv4.Header{
 		Version:  ipv4.Version,
 		Len:      ipv4.HeaderLen,
