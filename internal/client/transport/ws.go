@@ -102,7 +102,7 @@ func (c *WsTransport) Restart() {
 	c.logger.Info("restarting client...")
 
 	// for removing timeout logs
-	level := c.logger.Level
+	level := c.logger.GetLevel()
 	c.logger.SetLevel(logrus.FatalLevel)
 
 	if c.state.Cancel() != nil {

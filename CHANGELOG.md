@@ -171,6 +171,17 @@ All notable changes to Backpack are documented here.
   which is what lets several xdi tunnels share one host's ICMP socket.
 
 ### Fixed
+- **A data race on the logger's level, on every transport.** Both the client and
+  the server hand one logger to all of their transports, and a transport's
+  `Restart` saved the current level before quieting the log with
+  `level := logger.Level` — reading the field directly. logrus does not treat
+  that field as plain memory: `SetLevel` stores it with `atomic.StoreUint32` and
+  every log call loads it with `atomic.LoadUint32`. A direct read is therefore an
+  unsynchronised read racing an atomic write, which is a data race by definition
+  and was reported as one by the detector under CI's timing. The write it raced
+  with is real and reachable: the shutdown path calls `SetLevel(FatalLevel)` to
+  suppress teardown noise, so any restart overlapping a shutdown could hit it.
+  All fourteen sites now use `logger.GetLevel()`, which performs the atomic load.
 - **TCP + PCK never stayed connected: every pool connection killed the one
   before it.** The carrier derived its source port from the tunnel token, so
   every connection a client opened sent from the *same* port. kcp-go's listener

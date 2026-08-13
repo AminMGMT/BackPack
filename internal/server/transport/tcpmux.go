@@ -211,7 +211,7 @@ func (s *TcpMuxTransport) Restart() {
 	s.run.stop()
 
 	// for removing timeout logs
-	level := s.logger.Level
+	level := s.logger.GetLevel()
 	s.logger.SetLevel(logrus.FatalLevel)
 
 	// Close any open connections in the tunnel channel.

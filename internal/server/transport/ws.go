@@ -144,7 +144,7 @@ func (s *WsTransport) Restart() {
 
 	s.logger.Info("restarting server...")
 
-	level := s.logger.Level
+	level := s.logger.GetLevel()
 	s.logger.SetLevel(logrus.FatalLevel)
 
 	s.run.stop()

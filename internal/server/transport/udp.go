@@ -125,7 +125,7 @@ func (s *UdpTransport) Restart() {
 	s.logger.Info("restarting server...")
 
 	// for removing timeout logs
-	level := s.logger.Level
+	level := s.logger.GetLevel()
 	s.logger.SetLevel(logrus.FatalLevel)
 
 	s.run.stop()
