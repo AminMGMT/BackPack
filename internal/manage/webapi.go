@@ -56,13 +56,29 @@ type PresetOption struct {
 	Label string `json:"label"`
 	Desc  string `json:"desc"`
 	Value string `json:"value"`
+	// KCPOnly marks a profile that only applies to the KCP family, so a panel
+	// rendering the full list can hide or disable it for other transports.
+	KCPOnly bool `json:"kcpOnly,omitempty"`
 }
 
-// Presets returns the performance profiles in menu order.
+// Presets returns the performance profiles in menu order. It lists every one,
+// including those that only apply to some transports; PresetsFor narrows the
+// list, and KCPOnly says which entries it would drop.
 func Presets() []PresetOption {
 	out := make([]PresetOption, len(presetOptions))
 	for i, o := range presetOptions {
-		out[i] = PresetOption{Label: o.label, Desc: o.desc, Value: o.value}
+		out[i] = PresetOption{Label: o.label, Desc: o.desc, Value: o.value, KCPOnly: o.kcpOnly}
+	}
+	return out
+}
+
+// PresetsFor returns the profiles offerable for a transport, so the panel does
+// not present a choice that would be refused on submit.
+func PresetsFor(transport string) []PresetOption {
+	options := presetOptionsFor(transport)
+	out := make([]PresetOption, len(options))
+	for i, o := range options {
+		out[i] = PresetOption{Label: o.label, Desc: o.desc, Value: o.value, KCPOnly: o.kcpOnly}
 	}
 	return out
 }
@@ -324,6 +340,13 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 		s.RemoteAddr = net.JoinHostPort(host, port)
 	}
 
+	// Caught here rather than silently applied, for the reason given in the edit
+	// path: on a kernel-stack transport this profile's knobs would be written and
+	// then ignored.
+	if !presetSuitsTransport(n.Preset, s.Transport) {
+		return "", false, fmt.Errorf("the %s preset applies to the KCP transports only (kcp, xdi, spoof, pck), not %q",
+			presetLabel(n.Preset), s.Transport)
+	}
 	ApplyPreset(&s, n.Preset)
 	if n.Tune != nil {
 		n.Tune.apply(&s)
@@ -414,6 +437,13 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 	if p := strings.TrimSpace(e.Preset); p != "" && (p != s.Preset || e.Tune != nil) {
 		if !validPreset(p) {
 			return fmt.Errorf("unknown preset %q", p)
+		}
+		// Refused rather than quietly applied: on a transport whose congestion
+		// control belongs to the kernel, every knob this profile changes would be
+		// written to the config and ignored, which looks like a setting that took.
+		if !presetSuitsTransport(p, string(s.Transport)) {
+			return fmt.Errorf("the %s preset applies to the KCP transports only (kcp, xdi, spoof, pck), not %q",
+				presetLabel(p), s.Transport)
 		}
 		ApplyPreset(&s, p)
 		changed = true

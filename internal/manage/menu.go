@@ -608,7 +608,7 @@ func changeTunnelPreset(name string, spec TunnelSpec) {
 	tui.Warn("Use the SAME preset on both sides so the two ends stay matched.")
 	fmt.Println()
 
-	newPreset := choosePreset()
+	newPreset := choosePreset(spec.Transport)
 	if newPreset == spec.Preset {
 		tui.Info("That is already the current preset.")
 		tui.PressEnter()

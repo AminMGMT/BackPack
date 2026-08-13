@@ -87,16 +87,19 @@ func chooseTransport() string {
 
 // choosePreset asks for the performance profile. Turbo is preselected because
 // it reproduces exactly what earlier versions called "Best Performance".
-func choosePreset() string {
-	opts := make([]tui.Option, len(presetOptions))
-	for i, o := range presetOptions {
+// The transport decides which profiles are on offer: Throughput only means
+// something where this process runs the congestion control itself.
+func choosePreset(transport string) string {
+	options := presetOptionsFor(transport)
+	opts := make([]tui.Option, len(options))
+	for i, o := range options {
 		opts[i] = tui.Option{Title: o.label, Desc: o.desc}
 	}
 	idx := tui.ChooseOpt("Performance preset:", opts)
 	if idx < 0 {
 		return PresetTurbo
 	}
-	return presetOptions[idx].value
+	return options[idx].value
 }
 
 // applyManualTuning asks the advanced questions for users who want to override
@@ -743,7 +746,7 @@ func SetupServer() {
 
 	askProxyProtocol(&s)
 
-	ApplyPreset(&s, choosePreset())
+	ApplyPreset(&s, choosePreset(s.Transport))
 	if tui.Confirm("Fine-tune the advanced settings by hand", false) {
 		applyManualTuning(&s)
 	}
@@ -882,7 +885,7 @@ func SetupClient() {
 		}
 	}
 
-	ApplyPreset(&s, choosePreset())
+	ApplyPreset(&s, choosePreset(s.Transport))
 	if tui.Confirm("Fine-tune the advanced settings by hand", false) {
 		applyManualTuning(&s)
 	}

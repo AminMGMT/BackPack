@@ -623,6 +623,10 @@ func ChangePreset(name, preset string) error {
 	if err != nil {
 		return err
 	}
+	if !presetSuitsTransport(preset, s.Transport) {
+		return fmt.Errorf("the %s preset applies to the KCP transports only (kcp, xdi, spoof, pck), not %q",
+			presetLabel(preset), s.Transport)
+	}
 	ApplyPreset(&s, preset)
 	return applySpec(s)
 }
