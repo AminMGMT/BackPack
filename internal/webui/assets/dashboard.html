@@ -715,6 +715,16 @@
      settings" look and behave the same wherever they are opened from. */
   .ftgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .ftgrid .frow.full{grid-column:1/-1}
+  /* A drawer long enough to need signposting gets them: a heading that breaks it
+     into the groups the CLI asks in, and the warning paragraphs the wizard
+     prints before the questions they belong to. Neither is a field, so neither
+     is read back when the form is submitted. */
+  .ftsec{grid-column:1/-1;font-size:12px;font-weight:700;color:var(--txt);
+    padding-top:6px;border-top:1px solid var(--stroke);margin-top:2px}
+  .ftgrid > .ftsec:first-child{padding-top:0;border-top:0;margin-top:0}
+  .ftnote{grid-column:1/-1;font-size:11.5px;line-height:1.6;color:var(--muted2);
+    padding:9px 11px;border-radius:12px;background:rgba(var(--accent-rgb),.07);
+    border:1px solid rgba(var(--accent-rgb),.18)}
   @media (max-width:520px){ .ftgrid{grid-template-columns:1fr} .sides{grid-template-columns:1fr} }
 
   /* ---------- toast ----------
@@ -1635,7 +1645,11 @@
         <label for="af-token" data-i18n>Security token</label>
         <div class="fjoin">
           <input id="af-token" autocomplete="off" spellcheck="false">
-          <button class="btn-sm" id="af-tokenbtn" onclick="copyField('af-token',this)" data-i18n>Copy</button>
+          <!-- One button, two jobs, because the two sides have opposite ones:
+               the Iran side invents the token and hands it over, the kharej side
+               receives it. A Copy button on the kharej form copies the empty box
+               it was supposed to help fill. pickSide sets which it is. -->
+          <button class="btn-sm" id="af-tokenbtn" onclick="tokenAction(this)" data-i18n>Copy</button>
         </div>
         <div class="hint srv-only" data-i18n>Suggested for you — copy it, the kharej side needs the same one.</div>
         <div class="hint cli-only" data-i18n>Paste the exact token the Iran server was set up with.</div>
@@ -1656,6 +1670,37 @@
           <div class="hint" data-i18n>These start on the preset's own values. Change one and the tunnel is marked custom, so a later preset change cannot quietly overwrite it.</div>
           <div class="ftgrid" id="af-tune"></div>
         </div>
+      </div>
+
+      <!-- IP Spoofing, the packet carrier and the connection block: the same
+           questions askSpoof, askPck and the client wizard's optional-settings
+           branch ask, drawn from one field table each. The first two only exist
+           for their own transport, so onTransport shows and hides them. -->
+      <div class="acc hide" id="acc-asp">
+        <button class="acch" id="acch-asp" aria-expanded="false" aria-controls="accb-asp" onclick="toggleAcc('asp')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
+          <span data-i18n>IP Spoofing</span><span class="accnote" id="accnote-asp" data-i18n data-i18n-ph-only>carrier settings</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-asp" hidden><div class="ftgrid" id="af-spoof"></div></div>
+      </div>
+
+      <div class="acc hide" id="acc-apk">
+        <button class="acch" id="acch-apk" aria-expanded="false" aria-controls="accb-apk" onclick="toggleAcc('apk')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+          <span data-i18n>Packet carrier</span><span class="accnote" id="accnote-apk" data-i18n data-i18n-ph-only>egress &amp; flags</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-apk" hidden><div class="ftgrid" id="af-pck"></div></div>
+      </div>
+
+      <div class="acc" id="acc-acn">
+        <button class="acch" id="acch-acn" aria-expanded="false" aria-controls="accb-acn" onclick="toggleAcc('acn')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0114 0M8.5 16.05a6 6 0 017 0M2 9.05a16 16 0 0120 0"/><path d="M12 20h.01"/></svg>
+          <span data-i18n>Connection &amp; limits</span><span class="accnote" id="accnote-acn" data-i18n data-i18n-ph-only>optional</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-acn" hidden><div class="ftgrid" id="af-conn"></div></div>
       </div>
 
       <label class="tg srv-only"><input type="checkbox" id="af-ipv6">
@@ -1727,6 +1772,46 @@
           <div class="ftgrid" id="ef-tune"></div>
         </div>
       </div>
+
+      <!-- The same three drawers the setup form has, opened on what the tunnel
+           actually runs. Everything the CLI's Edit screen can change lives in
+           one of them, so a setting can be changed later wherever it could be
+           chosen in the first place. -->
+      <div class="acc hide" id="acc-esp">
+        <button class="acch" id="acch-esp" aria-expanded="false" aria-controls="accb-esp" onclick="toggleAcc('esp')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
+          <span data-i18n>IP Spoofing</span><span class="accnote" id="accnote-esp" data-i18n data-i18n-ph-only>current values</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-esp" hidden><div class="ftgrid" id="ef-spoof"></div></div>
+      </div>
+
+      <div class="acc hide" id="acc-epk">
+        <button class="acch" id="acch-epk" aria-expanded="false" aria-controls="accb-epk" onclick="toggleAcc('epk')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+          <span data-i18n>Packet carrier</span><span class="accnote" id="accnote-epk" data-i18n data-i18n-ph-only>current values</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-epk" hidden><div class="ftgrid" id="ef-pck"></div></div>
+      </div>
+
+      <div class="acc" id="acc-ecn">
+        <button class="acch" id="acch-ecn" aria-expanded="false" aria-controls="accb-ecn" onclick="toggleAcc('ecn')">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0114 0M8.5 16.05a6 6 0 017 0M2 9.05a16 16 0 0120 0"/><path d="M12 20h.01"/></svg>
+          <span data-i18n>Connection &amp; limits</span><span class="accnote" id="accnote-ecn" data-i18n data-i18n-ph-only>current values</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="accb" id="accb-ecn" hidden><div class="ftgrid" id="ef-conn"></div></div>
+      </div>
+
+      <!-- Real client IP, the CLI's own name for it in the Edit menu. It is a
+           top-level toggle rather than a drawer entry for the same reason it is
+           on the setup form: turning it on without the service behind the tunnel
+           expecting it breaks every connection, so it is not something to find
+           by accident. -->
+      <label class="tg srv-only" id="ef-pprow"><input type="checkbox" id="ef-pp">
+        <span data-i18n>PROXY protocol — send the real client IP to the service behind the tunnel</span></label>
+      <div class="hint srv-only" id="ef-pphint" data-i18n>Only turn this on if that service is set to accept the PROXY protocol; if it is not, every connection breaks.</div>
     </div>
 
     <div class="msg" id="editmsg"></div>
@@ -2047,6 +2132,165 @@ const FA={
     "برایت پیشنهاد شد — کپی‌اش کن، سمت خارج به همین توکن نیاز دارد.",
   "Paste the exact token the Iran server was set up with.":"دقیقاً همان توکنی را بگذار که سرور ایران با آن ساخته شده.",
   "Copied!":"کپی شد!",
+  "Paste":"جای‌گذاری",
+  "Pasted!":"جای‌گذاری شد!",
+  "There is nothing on the clipboard.":"چیزی در حافظهٔ موقت نیست.",
+  "This browser will not let the page read the clipboard — the box is selected, paste into it.":
+    "این مرورگر اجازهٔ خواندن حافظهٔ موقت را نمی‌دهد — کادر انتخاب شده، خودت داخلش جای‌گذاری کن.",
+
+  // ---- Fine Tune: the explanations the CLI prints beside each question. The
+  // field labels themselves are translated further down, with the rest of what
+  // the script renders. ----
+  "How often an idle connection is poked so the path does not drop it.":
+    "هر چند وقت یک اتصال بی‌کار تکان داده شود تا مسیر قطعش نکند.",
+  "How often the two ends check on each other. 0 turns it off entirely.":
+    "هر چند وقت دو سر حال هم را بپرسند. ۰ کاملاً خاموشش می‌کند.",
+  "How many forwarded connections may queue for the tunnel at once.":
+    "چند اتصال فوروارد‌شده هم‌زمان می‌توانند پشت تونل صف بکشند.",
+  "Connections kept open and ready, so a new user does not wait for a dial.":
+    "اتصال‌هایی که باز و آماده نگه داشته می‌شوند تا کاربر تازه منتظر برقراری نماند.",
+  "debug is for finding a fault, not for running on — it is loud.":
+    "debug برای پیدا کردن ایراد است نه برای اجرای دائمی — خیلی پرحرف است.",
+  "Caps the largest TCP segment the tunnel sends. Keep it at 0 unless Diagnose reports that the path cannot carry full-sized packets — it prints the value, and both ends need the same one.":
+    "بزرگ‌ترین سگمنت TCP که تونل می‌فرستد را محدود می‌کند. روی ۰ بگذار مگر اینکه Diagnose بگوید مسیر بستهٔ کامل را رد نمی‌کند — عدد را خودش چاپ می‌کند و هر دو سر باید یکی باشند.",
+  "How many carrier connections the multiplexer spreads streams over.":
+    "استریم‌ها روی چند اتصال حامل پخش شوند.",
+  "Both ends must be on the same version.":"هر دو سر باید روی یک نسخه باشند.",
+  "Keep it below the path MTU — a KCP packet that has to be fragmented is a packet that gets lost as a pair.":
+    "زیر MTU مسیر نگهش دار — بستهٔ KCP که مجبور به تکه‌شدن شود، جفتی از دست می‌رود.",
+  "The retransmit tick. Lower reacts faster to loss and costs CPU.":
+    "تیک ارسال مجدد. کمتر یعنی واکنش سریع‌تر به گم‌شدن بسته و مصرف CPU بیشتر.",
+  "Error correction: every this many packets carry the parity below, so that many losses are repaired without waiting for a retransmit.":
+    "تصحیح خطا: به ازای این تعداد بسته، به اندازهٔ پاریتی زیر بستهٔ اضافه می‌رود تا همان تعداد گم‌شدن بدون ارسال مجدد ترمیم شود.",
+  "Losses repaired per group. Costs that much extra bandwidth.":
+    "چند بستهٔ گم‌شده در هر گروه ترمیم شود. به همان اندازه پهنای باند بیشتر می‌برد.",
+  "For feeding a collector or a script. Someone reading journalctl is better served by the plain text default.":
+    "برای خوراک دادن به جمع‌کننده یا اسکریپت. برای کسی که journalctl می‌خواند، همان متن ساده بهتر است.",
+  "Refills the pool harder after a burst. Costs idle connections.":
+    "بعد از فشار ناگهانی، استخر را سریع‌تر پر می‌کند. هزینه‌اش اتصال‌های بی‌کار است.",
+  "Off by default. Turn it on for a tunnel that must carry UDP — a VPN, a game, an Xray/Shadowsocks inbound. On a plain web or proxy tunnel it also tunnels the browser’s QUIC on UDP/443, which crowds the pool the TCP forwards share.":
+    "به‌صورت پیش‌فرض خاموش. برای تونلی روشنش کن که باید UDP ببرد — وی‌پی‌ان، بازی، اینباند Xray/Shadowsocks. روی تونل وب یا پروکسی معمولی، QUIC مرورگر روی UDP/443 هم تونل می‌شود و استخری را که فورواردهای TCP در آن شریک‌اند شلوغ می‌کند.",
+  "Hands forwarded traffic straight to the kernel: the fastest path and the least proven one. Try it on a spare tunnel first. Nothing about it reaches the wire, so the two ends need not agree.":
+    "ترافیک فوروارد را مستقیم به کرنل می‌دهد: سریع‌ترین مسیر و کم‌آزموده‌ترین. اول روی یک تونل یدکی امتحانش کن. چیزی از آن به سیم نمی‌رسد، پس لازم نیست دو سر یکی باشند.",
+
+  // ---- the advanced drawers ----
+  "IP Spoofing":"جعل آی‌پی",
+  "Packet carrier":"حامل بسته‌ای",
+  "Connection & limits":"اتصال و محدودیت‌ها",
+  "carrier settings":"تنظیمات حامل",
+  // Both spellings, because the markup escapes the ampersand and the DOM hands
+  // it back bare — the same pair the panel-access section carries.
+  "Connection &amp; limits":"اتصال و محدودیت‌ها",
+  "egress &amp; flags":"خروجی و فلگ‌ها",
+  "egress & flags":"خروجی و فلگ‌ها",
+  "optional":"اختیاری",
+  "edited":"ویرایش‌شده",
+  "Automatic — let the kernel choose the route":"خودکار — مسیر را کرنل انتخاب کند",
+  "Same as the packet profile":"مثل پروفایل بسته",
+  "Default — push+ack, what a connection carrying data sends":
+    "پیش‌فرض — push+ack، همان چیزی که اتصال در حال انتقال داده می‌فرستد",
+
+  "IP Spoofing is experimental. It forges the source address of raw IP packets, so it only carries traffic where the upstream network does not drop forged-source packets. Prove that with the spoof tester before you rely on it.":
+    "جعل آی‌پی آزمایشی است. آدرس مبدأ بسته‌های خام IP را جعل می‌کند، پس فقط جایی ترافیک می‌برد که شبکهٔ بالادست بستهٔ با مبدأ جعلی را دور نریزد. قبل از تکیه کردن به آن، با تستر جعل ثابتش کن.",
+  "Packet profile — what the tunnel looks like on the wire":"پروفایل بسته — تونل روی سیم شبیه چیست",
+  "Both ends must be on the same profile.":"هر دو سر باید روی یک پروفایل باشند.",
+  "Uplink profile (kharej → Iran)":"پروفایل آپلینک (خارج ← ایران)",
+  "Only set the two directions apart if this path filters them differently. Test each one with the spoof tester.":
+    "فقط وقتی دو جهت را جدا کن که این مسیر هرکدام را جور دیگری فیلتر می‌کند. هرکدام را با تستر جعل امتحان کن.",
+  "Downlink profile (Iran → kharej)":"پروفایل داون‌لینک (ایران ← خارج)",
+  "The other end’s REAL IPv4 address":"آی‌پی‌وی‌۴ واقعی سر دیگر",
+  "Required on this side. The kharej machine forges its source, so this server cannot see where to send the replies — it has to be told. The kharej side needs no such field: it already knows this server’s address, because it dialled it.":
+    "این سمت اجباری است. دستگاه خارج مبدأش را جعل می‌کند، پس این سرور نمی‌بیند جواب را کجا بفرستد — باید بهش گفته شود. سمت خارج چنین فیلدی لازم ندارد: آدرس این سرور را می‌داند، چون خودش به آن وصل شده.",
+  "Forged source IP(s)":"آی‌پی(های) مبدأ جعلی",
+  "Stamped on outgoing packets. Give one, or several separated by commas to rotate through a pool — that is what gets past a per-IP limit or block. Empty forges nothing. Use the spoof tester to find which ones actually pass.":
+    "روی بسته‌های خروجی مهر می‌شود. یکی بده، یا چندتا با ویرگول تا نوبتی از استخر استفاده شود — همین است که از محدودیت یا بلاک بر اساس آی‌پی رد می‌شود. خالی یعنی هیچ جعلی. با تستر جعل ببین کدام‌ها واقعاً رد می‌شوند.",
+  "Egress interface for the raw packets":"اینترفیس خروج بسته‌های خام",
+  "Leave on automatic unless this machine has more than one uplink and the packets must leave by a particular one.":
+    "روی خودکار بگذار مگر اینکه این دستگاه بیش از یک آپلینک داشته باشد و بسته‌ها باید از یکی مشخص بیرون بروند.",
+  "WireGuard pipe mode — carry a whole-device VPN instead of forwarding ports":
+    "حالت پایپ WireGuard — به‌جای فوروارد پورت، یک وی‌پی‌ان کل‌دستگاه را ببر",
+  "WireGuard brings its own encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.":
+    "WireGuard رمزنگاری خودش را دارد، پس زیرش KCP نیست و در این حالت پورت‌های فوروارد نادیده گرفته می‌شوند.",
+  "WireGuard UDP endpoint":"اندپوینت UDP وایرگارد",
+  "Only used in pipe mode. On the Iran side: where the real WireGuard listens on this machine. On the kharej side: where the tunnel listens for WireGuard — point WireGuard’s `endpoint` at it.":
+    "فقط در حالت پایپ استفاده می‌شود. سمت ایران: جایی که WireGuard واقعی روی این دستگاه گوش می‌دهد. سمت خارج: جایی که تونل منتظر WireGuard است — `endpoint` وایرگارد را به آن بده.",
+  "Fingerprint & evasion":"اثر انگشت و دور زدن",
+  "All off by default, and none of them is needed to make a working tunnel. They change what the packets look like to whatever inspects them. Two of them describe the other end and must match what it sends; the rest are local.":
+    "همه پیش‌فرض خاموش‌اند و هیچ‌کدام برای کارکردن تونل لازم نیست. اینها ظاهر بسته‌ها را برای هرچه بازرسی‌شان می‌کند عوض می‌کنند. دوتاشان سر دیگر را توصیف می‌کنند و باید با آنچه او می‌فرستد بخواند؛ بقیه محلی‌اند.",
+  "Expected forged source from the other end":"مبدأ جعلی مورد انتظار از سر دیگر",
+  "Must match a source the other end actually forges. Inbound packets from anything else are ignored.":
+    "باید با یکی از مبدأهایی که سر دیگر واقعاً جعل می‌کند یکی باشد. بستهٔ ورودی از جای دیگر نادیده گرفته می‌شود.",
+  "Forged destination address":"آدرس مقصد جعلی",
+  "Written into the cosmetic header of the ICMP and TCP profiles. The UDP profile has no use for it.":
+    "در هدر ظاهری پروفایل‌های ICMP و TCP نوشته می‌شود. پروفایل UDP کاری با آن ندارد.",
+  "Fragment above (bytes, 0 = never)":"تکه‌تکه کن بالای (بایت، ۰ یعنی هرگز)",
+  "Sends larger than this are split, for a path that drops big packets.":
+    "ارسال‌های بزرگ‌تر از این تکه می‌شوند، برای مسیری که بستهٔ بزرگ را می‌اندازد.",
+  "Socket buffer (bytes, 0 = system default)":"بافر سوکت (بایت، ۰ یعنی پیش‌فرض سیستم)",
+  "Send and receive buffer for the carrier’s raw sockets.":"بافر ارسال و دریافت سوکت‌های خام حامل.",
+  "ICMP profile: the kharej side asks, the Iran side replies":"پروفایل ICMP: سمت خارج می‌پرسد، سمت ایران جواب می‌دهد",
+  "Makes the exchange read as ordinary ping and its answer rather than two streams of echo requests. Set the same answer on both ends.":
+    "باعث می‌شود رد و بدل شبیه پینگ معمولی و جوابش دیده شود نه دو جریان echo request. هر دو سر را یکسان بگذار.",
+  "Vary the TTL from packet to packet":"TTL را بسته به بسته تغییر بده",
+  "Vary the DSCP field from packet to packet":"فیلد DSCP را بسته به بسته تغییر بده",
+  "Randomise the source port of every packet":"پورت مبدأ هر بسته را تصادفی کن",
+  "Source-port range, low":"بازهٔ پورت مبدأ، پایین",
+  "Used only when the shuffle above is on. Leave both at 0 for the whole ephemeral range.":
+    "فقط وقتی به کار می‌آید که تصادفی‌سازی بالا روشن باشد. هر دو را ۰ بگذار تا کل بازهٔ موقت استفاده شود.",
+  "Source-port range, high":"بازهٔ پورت مبدأ، بالا",
+  "Append random padding to each frame":"به هر فریم لایی تصادفی اضافه کن",
+  "Hides the real length of what is being carried. Costs that much bandwidth.":
+    "طول واقعی چیزی که برده می‌شود را پنهان می‌کند. به همان اندازه پهنای باند می‌برد.",
+  "Most padding bytes per frame":"بیشترین بایت لایی در هر فریم",
+  "Used only when padding is on.":"فقط وقتی لایی روشن است به کار می‌آید.",
+  "Prepend a fake TLS record header":"هدر رکورد TLS قلابی جلویش بگذار",
+  "TCP profile only — on the other two there is no record to fake, and the setting is dropped.":
+    "فقط پروفایل TCP — در آن دوتای دیگر رکوردی برای جعل نیست و این تنظیم حذف می‌شود.",
+
+  "The packet carrier builds its own TCP segments instead of opening a socket. All three settings below are optional: it finds its own way out from the route to the other end, and reads the next hop from the neighbour table.":
+    "حامل بسته‌ای به‌جای باز کردن سوکت، خودش سگمنت TCP می‌سازد. هر سه تنظیم زیر اختیاری‌اند: راه خروج را از مسیرِ رسیدن به سر دیگر پیدا می‌کند و هاپ بعدی را از جدول همسایه می‌خواند.",
+  "TCP flag pattern":"الگوی فلگ TCP",
+  "What the flag field of this end’s packets says. Each end decides only its OWN packets, so this need not match the other side and changing it cannot strand it. The default is right unless the path is known to match on the pattern.":
+    "فیلد فلگ بسته‌های این سر چه بگوید. هر سر فقط برای بسته‌های خودش تصمیم می‌گیرد، پس لازم نیست با سر دیگر یکی باشد و عوض کردنش او را جا نمی‌گذارد. پیش‌فرض درست است مگر بدانی مسیر روی همین الگو تطبیق می‌دهد.",
+  "Egress interface":"اینترفیس خروجی",
+  "Overrides the automatic detection. Leave it automatic unless that detection picks the wrong device.":
+    "تشخیص خودکار را کنار می‌زند. روی خودکار بگذار مگر اینکه تشخیص، دستگاه اشتباه را انتخاب کند.",
+  "Gateway MAC address":"مک‌آدرس گیت‌وی",
+  "The next hop’s hardware address. Leave empty to read it from the neighbour table.":
+    "آدرس سخت‌افزاری هاپ بعدی. خالی بگذار تا از جدول همسایه خوانده شود.",
+
+  "Simple token auth — for a TLS-terminating proxy in front of the tunnel":
+    "احراز هویت سادهٔ توکنی — برای پروکسی‌ای که جلوی تونل TLS را می‌بندد",
+  "If NGINX or the like terminates TLS in front of this tunnel, the default proof-of-session authorisation cannot match and the tunnel is rejected; this sends the raw token instead, which works through such a proxy. Only turn it on when a trusted proxy is doing that — it hands the token to whatever terminates the TLS. Both ends need the same answer.":
+    "اگر NGINX یا مشابهش جلوی این تونل TLS را تمام کند، احراز هویت پیش‌فرض مبتنی بر نشست جور در نمی‌آید و تونل رد می‌شود؛ این گزینه به‌جایش توکن خام را می‌فرستد که از چنین پروکسی‌ای رد می‌شود. فقط وقتی روشنش کن که پروکسی مورد اعتماد این کار را می‌کند — توکن را به هرچه TLS را تمام کند تحویل می‌دهد. هر دو سر باید یکسان باشند.",
+  "Reaching the other end":"رسیدن به سر دیگر",
+  "Edge IP (CDN)":"آی‌پی اج (CDN)",
+  "Connect to a CDN edge — Cloudflare and the like — instead of resolving the server address directly. Leave empty to skip.":
+    "به‌جای رزولوِ مستقیم آدرس سرور، به اج یک CDN — مثل کلادفلر — وصل شو. خالی بگذار تا رد شود.",
+  "Proxy URL":"آدرس پروکسی",
+  "Reach the tunnel server through a SOCKS5 or HTTP proxy, for a machine that cannot open outbound connections directly. Empty dials the server directly.":
+    "برای دستگاهی که نمی‌تواند مستقیم اتصال خروجی باز کند، از راه پروکسی SOCKS5 یا HTTP به سرور تونل برس. خالی یعنی اتصال مستقیم.",
+  "Leave by this interface":"از این اینترفیس بیرون برو",
+  "Only worth setting on a machine with more than one uplink, when the tunnel should not leave by whichever route the kernel picks.":
+    "فقط روی دستگاهی که بیش از یک آپلینک دارد ارزش دارد، وقتی تونل نباید از هر مسیری که کرنل انتخاب می‌کند بیرون برود.",
+  "Source address":"آدرس مبدأ",
+  "Pin the tunnel to one of this machine’s own addresses. Empty lets the kernel choose.":
+    "تونل را به یکی از آدرس‌های خود این دستگاه بچسبان. خالی یعنی انتخاب با کرنل.",
+  "Failover":"جایگزینی",
+  "Backup server addresses":"آدرس‌های پشتیبان سرور",
+  "If the main address stops answering, the client fails over to these in turn. Comma separated; a bare IP reuses the tunnel port.":
+    "اگر آدرس اصلی جواب ندهد، کلاینت به‌ترتیب به اینها سوئیچ می‌کند. با ویرگول جدا کن؛ آی‌پی بدون پورت از همان پورت تونل استفاده می‌کند.",
+  "Load balancing — use every address at once instead of keeping them as spares":
+    "توزیع بار — به‌جای نگه داشتن به‌عنوان یدک، از همهٔ آدرس‌ها هم‌زمان استفاده کن",
+  "Only turn this on if every address reaches the SAME server: a second IP of it, another port, or a CDN edge in front of it.":
+    "فقط وقتی روشن کن که همهٔ آدرس‌ها به همان یک سرور می‌رسند: آی‌پی دوم همان، پورت دیگرش، یا یک اج CDN جلویش.",
+  "Caps for this tunnel as a whole — useful when several services or customers share one link and none of them should be able to take all of it. 0 means no limit, and both start there.":
+    "سقف برای کل این تونل — وقتی چند سرویس یا مشتری روی یک لینک شریک‌اند و هیچ‌کدام نباید بتواند همه‌اش را بردارد. ۰ یعنی بی‌حد، و هر دو از همان‌جا شروع می‌شوند.",
+  "Maximum simultaneous connections":"بیشترین اتصال هم‌زمان",
+  "Below about 10 is very low — a single browser can open more than that.":
+    "زیر حدود ۱۰ خیلی کم است — یک مرورگر تنها بیشتر از این باز می‌کند.",
+  "Bandwidth limit (Mbit/s)":"سقف پهنای باند (مگابیت بر ثانیه)",
+
   "Performance preset":"پروفایل کارایی",
   "Fine Tune":"تنظیم دقیق",
   "preset defaults":"مقادیر پیش‌فرض پروفایل",
@@ -2737,31 +2981,47 @@ function supportsPPT(t){ return ['tcp','tcpmux','kcp','wsmux','wssmux','stealth'
 // The advanced settings, in the order the CLI asks them. `when` decides whether
 // a knob means anything for this tunnel; everything without one always applies.
 const FT_FIELDS=[
-  {k:'keepAlive',       t:'int', label:'Keepalive period (seconds)'},
-  {k:'heartbeat',       t:'int', label:'Heartbeat interval (seconds, 0 disables)'},
-  {k:'channelSize',     t:'int', label:'Channel size', when:c=>c.role==='server'},
-  {k:'connectionPool',  t:'int', label:'Connection pool size', when:c=>c.role==='client'},
-  {k:'logLevel',        t:'sel', label:'Log level', opts:['info','debug','warn','error']},
+  {k:'keepAlive',       t:'int', label:'Keepalive period (seconds)',
+   hint:'How often an idle connection is poked so the path does not drop it.'},
+  {k:'heartbeat',       t:'int', label:'Heartbeat interval (seconds, 0 disables)',
+   hint:'How often the two ends check on each other. 0 turns it off entirely.'},
+  {k:'channelSize',     t:'int', label:'Channel size', when:c=>c.role==='server',
+   hint:'How many forwarded connections may queue for the tunnel at once.'},
+  {k:'connectionPool',  t:'int', label:'Connection pool size', when:c=>c.role==='client',
+   hint:'Connections kept open and ready, so a new user does not wait for a dial.'},
+  {k:'logLevel',        t:'sel', label:'Log level', opts:['info','debug','warn','error'],
+   hint:'debug is for finding a fault, not for running on — it is loud.'},
   // The one field here that is not a performance dial. Diagnose measures the
   // path MTU and names the value to put in it; a datagram transport has no TCP
   // segments to clamp, so it is not offered one.
-  {k:'mss',             t:'int', label:'TCP MSS clamp (bytes, 0 = automatic)', when:c=>!isDatagramT(c.transport)},
-  {k:'muxCon',          t:'int', label:'Mux connections / sessions', when:c=>isMuxT(c.transport)},
-  {k:'muxVersion',      t:'int', label:'Mux version (1 or 2)', when:c=>isMuxT(c.transport)},
+  {k:'mss',             t:'int', label:'TCP MSS clamp (bytes, 0 = automatic)', when:c=>!isDatagramT(c.transport),
+   hint:'Caps the largest TCP segment the tunnel sends. Keep it at 0 unless Diagnose reports that the path cannot carry full-sized packets — it prints the value, and both ends need the same one.'},
+  {k:'muxCon',          t:'int', label:'Mux connections / sessions', when:c=>isMuxT(c.transport),
+   hint:'How many carrier connections the multiplexer spreads streams over.'},
+  {k:'muxVersion',      t:'int', label:'Mux version (1 or 2)', when:c=>isMuxT(c.transport),
+   hint:'Both ends must be on the same version.'},
   {k:'muxFrameSize',    t:'int', label:'Mux frame size', when:c=>isMuxT(c.transport)},
   {k:'muxRecvBuffer',   t:'int', label:'Mux receive buffer', when:c=>isMuxT(c.transport)},
   {k:'muxStreamBuffer', t:'int', label:'Mux stream buffer', when:c=>isMuxT(c.transport)},
-  {k:'kcpMTU',          t:'int', label:'KCP MTU (bytes)', when:c=>isKCPT(c.transport)},
-  {k:'kcpInterval',     t:'int', label:'KCP interval (ms)', when:c=>isKCPT(c.transport)},
+  {k:'kcpMTU',          t:'int', label:'KCP MTU (bytes)', when:c=>isKCPT(c.transport),
+   hint:'Keep it below the path MTU — a KCP packet that has to be fragmented is a packet that gets lost as a pair.'},
+  {k:'kcpInterval',     t:'int', label:'KCP interval (ms)', when:c=>isKCPT(c.transport),
+   hint:'The retransmit tick. Lower reacts faster to loss and costs CPU.'},
   {k:'kcpSndWnd',       t:'int', label:'KCP send window (packets)', when:c=>isKCPT(c.transport)},
   {k:'kcpRcvWnd',       t:'int', label:'KCP receive window (packets)', when:c=>isKCPT(c.transport)},
-  {k:'kcpDataShards',   t:'int', label:'FEC data shards (0 disables)', when:c=>isKCPT(c.transport)},
-  {k:'kcpParityShards', t:'int', label:'FEC parity shards', when:c=>isKCPT(c.transport)},
+  {k:'kcpDataShards',   t:'int', label:'FEC data shards (0 disables)', when:c=>isKCPT(c.transport),
+   hint:'Error correction: every this many packets carry the parity below, so that many losses are repaired without waiting for a retransmit.'},
+  {k:'kcpParityShards', t:'int', label:'FEC parity shards', when:c=>isKCPT(c.transport),
+   hint:'Losses repaired per group. Costs that much extra bandwidth.'},
   {k:'nodelay',         t:'bool',label:'TCP_NODELAY — lower latency'},
-  {k:'logJSON',         t:'bool',label:'Write logs as JSON (for log collectors)'},
-  {k:'aggressivePool',  t:'bool',label:'Aggressive pool', when:c=>c.role==='client'},
-  {k:'acceptUDP',       t:'bool',label:'Forward UDP as well as TCP on the exposed ports', when:c=>c.role==='server'},
-  {k:'zeroCopy',        t:'bool',label:'Zero-copy forwarding (experimental)', when:c=>c.transport==='tcp'},
+  {k:'logJSON',         t:'bool',label:'Write logs as JSON (for log collectors)',
+   hint:'For feeding a collector or a script. Someone reading journalctl is better served by the plain text default.'},
+  {k:'aggressivePool',  t:'bool',label:'Aggressive pool', when:c=>c.role==='client',
+   hint:'Refills the pool harder after a burst. Costs idle connections.'},
+  {k:'acceptUDP',       t:'bool',label:'Forward UDP as well as TCP on the exposed ports', when:c=>c.role==='server',
+   hint:'Off by default. Turn it on for a tunnel that must carry UDP — a VPN, a game, an Xray/Shadowsocks inbound. On a plain web or proxy tunnel it also tunnels the browser’s QUIC on UDP/443, which crowds the pool the TCP forwards share.'},
+  {k:'zeroCopy',        t:'bool',label:'Zero-copy forwarding (experimental)', when:c=>c.transport==='tcp',
+   hint:'Hands forwarded traffic straight to the kernel: the fastest path and the least proven one. Try it on a spare tunnel first. Nothing about it reaches the wire, so the two ends need not agree.'},
 ];
 // The knobs whose zero is an answer rather than a blank: no heartbeat, no error
 // correction, no clamp. Everywhere else a zero means "the preset's value".
@@ -2774,41 +3034,114 @@ const FT_PATH=['mss'];
 // given values. The box remembers whether anything was touched: an untouched
 // drawer sends nothing, so a tunnel keeps its preset instead of being marked
 // custom by having been looked at.
-function renderTune(box,ctx,tune){
-  tune=tune||{};
+// renderFields draws one field table into a box and fills it from vals. Fine
+// Tune, IP Spoofing, the packet carrier and the connection drawer are all built
+// from it: the CLI asks each of them as a list of questions, and a list of
+// questions is exactly what this renders. onDirty is called the first time
+// anything in the box is touched.
+//
+// A field is {k,t,label} plus, optionally, a hint (the paragraph the wizard
+// prints before the question), a placeholder, a `when` predicate deciding
+// whether the knob means anything for this tunnel, and `full` to make it span
+// the grid. Two entries are not fields at all: `head` is a group heading and
+// `note` is one of the wizard's warnings.
+function renderFields(box,fields,ctx,vals,onDirty){
+  vals=vals||{};
   box.innerHTML='';
   box.dataset.dirty='0';
-  FT_FIELDS.forEach(function(f){
+  fields.forEach(function(f){
     if(f.when&&!f.when(ctx)) return;
-    const row=document.createElement('div');
-    row.className='frow'+(f.t==='bool'?' full':'');
-    const v=tune[f.k];
-    if(f.t==='bool'){
-      row.innerHTML='<label class="tg"><input type="checkbox" data-k="'+f.k+'"'+(v?' checked':'')+
-        '><span data-i18n>'+f.label+'</span></label>';
-    }else if(f.t==='sel'){
-      row.innerHTML='<label data-i18n>'+f.label+'</label><select class="sel" data-k="'+f.k+'">'+
-        f.opts.map(o=>'<option value="'+o+'"'+(v===o?' selected':'')+'>'+o+'</option>').join('')+'</select>';
-    }else{
-      row.innerHTML='<label data-i18n>'+f.label+'</label>'+
-        '<input inputmode="numeric" autocomplete="off" data-k="'+f.k+'" value="'+(v||0)+'">';
+    if(f.t==='head'||f.t==='note'){
+      const el=document.createElement('div');
+      el.className=f.t==='head'?'ftsec':'ftnote';
+      el.setAttribute('data-i18n','');
+      el.textContent=f.label;
+      box.appendChild(el);
+      return;
     }
-    box.appendChild(row);
+    box.appendChild(fieldRow(f,vals[f.k],ctx));
   });
-  const touched=function(){ box.dataset.dirty='1'; setTuneNote(box.id[0],true); };
+  const touched=function(){
+    if(box.dataset.dirty==='1') return;
+    box.dataset.dirty='1';
+    if(onDirty) onDirty();
+  };
   box.oninput=touched; box.onchange=touched;
   relang();
 }
-function readTune(box){
+
+// fieldRow builds one row. Built through the DOM rather than as an HTML string
+// because half of these labels are sentences with punctuation in them, and a
+// sentence pasted into innerHTML is a sentence one apostrophe away from
+// breaking the form it describes.
+function fieldRow(f,v,ctx){
+  const row=document.createElement('div');
+  row.className='frow'+(f.t==='bool'||f.full?' full':'');
+  if(f.t==='bool'){
+    const lab=document.createElement('label'); lab.className='tg';
+    const inp=document.createElement('input');
+    inp.type='checkbox'; inp.dataset.k=f.k; inp.checked=!!v;
+    const span=document.createElement('span');
+    span.setAttribute('data-i18n',''); span.textContent=f.label;
+    lab.appendChild(inp); lab.appendChild(span);
+    row.appendChild(lab);
+  }else{
+    const lab=document.createElement('label');
+    lab.setAttribute('data-i18n',''); lab.textContent=f.label;
+    row.appendChild(lab);
+    let el;
+    if(f.t==='sel'||f.t==='opt'){
+      el=document.createElement('select'); el.className='sel';
+      // A plain `sel` lists its own literal values (log levels); an `opt` builds
+      // its list at render time from what the panel was served — the interfaces
+      // this machine has, the profiles the carrier supports.
+      const list=f.t==='sel'?f.opts.map(o=>({v:o,t:o,raw:true})):f.opts(ctx);
+      list.forEach(function(o){
+        const op=document.createElement('option');
+        op.value=o.v; op.textContent=o.raw?o.t:T(o.t);
+        el.appendChild(op);
+      });
+      el.value=(v===undefined||v===null)?'':String(v);
+    }else{
+      el=document.createElement('input');
+      el.autocomplete='off'; el.spellcheck=false;
+      if(f.t==='int'){ el.inputMode='numeric'; el.value=String(v||0); }
+      else{
+        el.value=v||'';
+        if(f.ph){ el.placeholder=f.ph; el.setAttribute('data-i18n-ph',''); }
+      }
+    }
+    el.dataset.k=f.k;
+    row.appendChild(el);
+  }
+  if(f.hint){
+    const h=document.createElement('div');
+    h.className='hint'; h.setAttribute('data-i18n',''); h.textContent=f.hint;
+    row.appendChild(h);
+  }
+  return row;
+}
+
+// readFields reads a box back through its own field table, so each answer comes
+// out as the type it went in as. A field the table hid for this tunnel is simply
+// absent, which is what the server reads as "not set".
+function readFields(box,fields){
   const out={};
-  box.querySelectorAll('[data-k]').forEach(function(el){
-    const k=el.dataset.k;
-    if(el.type==='checkbox') out[k]=el.checked;
-    else if(el.tagName==='SELECT') out[k]=el.value;
-    else out[k]=parseInt(el.value,10)||0;
+  fields.forEach(function(f){
+    if(!f.k) return;
+    const el=box.querySelector('[data-k="'+f.k+'"]');
+    if(!el) return;
+    if(f.t==='bool') out[f.k]=el.checked;
+    else if(f.t==='int') out[f.k]=parseInt(el.value,10)||0;
+    else out[f.k]=(el.value||'').trim();
   });
   return out;
 }
+
+function renderTune(box,ctx,tune){
+  renderFields(box,FT_FIELDS,ctx,tune,function(){ setTuneNote(box.id[0],true); });
+}
+function readTune(box){ return readFields(box,FT_FIELDS); }
 // A zero the operator did not choose is dropped, so the preset's number fills
 // it — the same rule the server applies to what it receives.
 function tuneKeep(vals){
@@ -2820,8 +3153,206 @@ function tuneKeep(vals){
   return out;
 }
 function setTuneNote(p,custom){
-  const el=$(p==='a'?'accnote-aft':'accnote-eft');
-  el.textContent=T(custom?'custom — preset no longer applies':(p==='a'?'preset defaults':'current values'));
+  setNote($(p==='a'?'accnote-aft':'accnote-eft'),
+    custom?'custom — preset no longer applies':(p==='a'?'preset defaults':'current values'));
+}
+
+// ---- the advanced drawers ----------------------------------------------------
+// IP Spoofing, the packet carrier, and the connection block. The CLI asks these
+// in askSpoof, askPck and the client wizard's optional-settings branch, and its
+// Edit screen has an entry for each afterwards. Everything those screens can set
+// is here, under the same names and with the same warnings, so a tunnel built or
+// changed in the browser is the tunnel the CLI would have built.
+
+// The three menus that are served rather than written into this page: what this
+// machine's interfaces are called, what packet profiles the carrier has, and
+// which flag cycles the packet transport suggests.
+function ifaceOpts(){
+  const out=[{v:'',t:'Automatic — let the kernel choose the route'}];
+  ((TOPTS&&TOPTS.interfaces)||[]).forEach(function(n){ out.push({v:n,t:n,raw:true}); });
+  return out;
+}
+function profileOpts(blank){
+  const out=blank?[{v:'',t:blank}]:[];
+  ((TOPTS&&TOPTS.spoofProfiles)||[]).forEach(function(p){
+    out.push({v:p.value,t:p.label+' — '+T(p.desc),raw:true});
+  });
+  return out;
+}
+function flagOpts(){
+  const out=[{v:'',t:'Default — push+ack, what a connection carrying data sends'}];
+  ((TOPTS&&TOPTS.pckFlags)||[]).forEach(function(f){
+    out.push({v:f.value,t:f.value+' — '+T(f.desc),raw:true});
+  });
+  return out;
+}
+
+const SPOOF_FIELDS=[
+  {t:'note',label:'IP Spoofing is experimental. It forges the source address of raw IP packets, so it only carries traffic where the upstream network does not drop forged-source packets. Prove that with the spoof tester before you rely on it.'},
+  {k:'profile',t:'opt',full:true,label:'Packet profile — what the tunnel looks like on the wire',opts:()=>profileOpts(''),
+   hint:'Both ends must be on the same profile.'},
+  {k:'uplink',t:'opt',full:true,label:'Uplink profile (kharej → Iran)',opts:()=>profileOpts('Same as the packet profile'),
+   hint:'Only set the two directions apart if this path filters them differently. Test each one with the spoof tester.'},
+  {k:'downlink',t:'opt',full:true,label:'Downlink profile (Iran → kharej)',opts:()=>profileOpts('Same as the packet profile')},
+  {k:'peerIP',t:'text',full:true,label:'The other end’s REAL IPv4 address',ph:'203.0.113.10',when:c=>c.role==='server',
+   hint:'Required on this side. The kharej machine forges its source, so this server cannot see where to send the replies — it has to be told. The kharej side needs no such field: it already knows this server’s address, because it dialled it.'},
+  {k:'srcIPs',t:'text',full:true,label:'Forged source IP(s)',ph:'203.0.113.10, 198.51.100.7',
+   hint:'Stamped on outgoing packets. Give one, or several separated by commas to rotate through a pool — that is what gets past a per-IP limit or block. Empty forges nothing. Use the spoof tester to find which ones actually pass.'},
+  {k:'interface',t:'opt',full:true,label:'Egress interface for the raw packets',opts:ifaceOpts,
+   hint:'Leave on automatic unless this machine has more than one uplink and the packets must leave by a particular one.'},
+  {k:'pipe',t:'bool',label:'WireGuard pipe mode — carry a whole-device VPN instead of forwarding ports',
+   hint:'WireGuard brings its own encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.'},
+  {k:'pipeAddr',t:'text',full:true,label:'WireGuard UDP endpoint',ph:'127.0.0.1:51820',
+   hint:'Only used in pipe mode. On the Iran side: where the real WireGuard listens on this machine. On the kharej side: where the tunnel listens for WireGuard — point WireGuard’s `endpoint` at it.'},
+
+  {t:'head',label:'Fingerprint & evasion'},
+  {t:'note',label:'All off by default, and none of them is needed to make a working tunnel. They change what the packets look like to whatever inspects them. Two of them describe the other end and must match what it sends; the rest are local.'},
+  {k:'peerSrcIP',t:'text',full:true,label:'Expected forged source from the other end',ph:'198.51.100.7',
+   hint:'Must match a source the other end actually forges. Inbound packets from anything else are ignored.'},
+  {k:'dstIP',t:'text',full:true,label:'Forged destination address',ph:'198.51.100.20',
+   hint:'Written into the cosmetic header of the ICMP and TCP profiles. The UDP profile has no use for it.'},
+  {k:'mtu',t:'int',label:'Fragment above (bytes, 0 = never)',
+   hint:'Sends larger than this are split, for a path that drops big packets.'},
+  {k:'sockBuf',t:'int',label:'Socket buffer (bytes, 0 = system default)',
+   hint:'Send and receive buffer for the carrier’s raw sockets.'},
+  {k:'icmpReply',t:'bool',label:'ICMP profile: the kharej side asks, the Iran side replies',
+   hint:'Makes the exchange read as ordinary ping and its answer rather than two streams of echo requests. Set the same answer on both ends.'},
+  {k:'ttlJitter',t:'bool',label:'Vary the TTL from packet to packet'},
+  {k:'randomDSCP',t:'bool',label:'Vary the DSCP field from packet to packet'},
+  {k:'shufflePort',t:'bool',label:'Randomise the source port of every packet'},
+  {k:'portMin',t:'int',label:'Source-port range, low',hint:'Used only when the shuffle above is on. Leave both at 0 for the whole ephemeral range.'},
+  {k:'portMax',t:'int',label:'Source-port range, high'},
+  {k:'padding',t:'bool',label:'Append random padding to each frame',
+   hint:'Hides the real length of what is being carried. Costs that much bandwidth.'},
+  {k:'paddingMax',t:'int',label:'Most padding bytes per frame',hint:'Used only when padding is on.'},
+  {k:'fakeTLS',t:'bool',label:'Prepend a fake TLS record header',
+   hint:'TCP profile only — on the other two there is no record to fake, and the setting is dropped.'},
+];
+
+const PCK_FIELDS=[
+  {t:'note',label:'The packet carrier builds its own TCP segments instead of opening a socket. All three settings below are optional: it finds its own way out from the route to the other end, and reads the next hop from the neighbour table.'},
+  {k:'flags',t:'opt',full:true,label:'TCP flag pattern',opts:flagOpts,
+   hint:'What the flag field of this end’s packets says. Each end decides only its OWN packets, so this need not match the other side and changing it cannot strand it. The default is right unless the path is known to match on the pattern.'},
+  {k:'interface',t:'opt',full:true,label:'Egress interface',opts:ifaceOpts,
+   hint:'Overrides the automatic detection. Leave it automatic unless that detection picks the wrong device.'},
+  {k:'gatewayMAC',t:'text',full:true,label:'Gateway MAC address',ph:'aa:bb:cc:dd:ee:ff',
+   hint:'The next hop’s hardware address. Leave empty to read it from the neighbour table.'},
+];
+
+const CONN_FIELDS=[
+  {k:'simpleAuth',t:'bool',when:c=>needsTLST(c.transport),
+   label:'Simple token auth — for a TLS-terminating proxy in front of the tunnel',
+   hint:'If NGINX or the like terminates TLS in front of this tunnel, the default proof-of-session authorisation cannot match and the tunnel is rejected; this sends the raw token instead, which works through such a proxy. Only turn it on when a trusted proxy is doing that — it hands the token to whatever terminates the TLS. Both ends need the same answer.'},
+
+  {t:'head',label:'Reaching the other end',when:c=>c.role==='client'},
+  {k:'edgeIP',t:'text',full:true,when:c=>c.role==='client'&&isWST(c.transport),
+   label:'Edge IP (CDN)',ph:'104.16.0.1',
+   hint:'Connect to a CDN edge — Cloudflare and the like — instead of resolving the server address directly. Leave empty to skip.'},
+  {k:'proxy',t:'text',full:true,when:c=>c.role==='client'&&!isDatagramT(c.transport),
+   label:'Proxy URL',ph:'socks5://127.0.0.1:1080',
+   hint:'Reach the tunnel server through a SOCKS5 or HTTP proxy, for a machine that cannot open outbound connections directly. Empty dials the server directly.'},
+  {k:'interface',t:'opt',full:true,when:c=>c.role==='client',label:'Leave by this interface',opts:ifaceOpts,
+   hint:'Only worth setting on a machine with more than one uplink, when the tunnel should not leave by whichever route the kernel picks.'},
+  {k:'localAddr',t:'text',full:true,when:c=>c.role==='client',label:'Source address',ph:'10.0.0.5',
+   hint:'Pin the tunnel to one of this machine’s own addresses. Empty lets the kernel choose.'},
+
+  {t:'head',label:'Failover',when:c=>c.role==='client'},
+  {k:'fallbackAddrs',t:'text',full:true,when:c=>c.role==='client',
+   label:'Backup server addresses',ph:'203.0.113.9, 198.51.100.4:4443',
+   hint:'If the main address stops answering, the client fails over to these in turn. Comma separated; a bare IP reuses the tunnel port.'},
+  {k:'loadBalance',t:'bool',when:c=>c.role==='client',
+   label:'Load balancing — use every address at once instead of keeping them as spares',
+   hint:'Only turn this on if every address reaches the SAME server: a second IP of it, another port, or a CDN edge in front of it.'},
+
+  {t:'head',label:'Limits'},
+  {t:'note',label:'Caps for this tunnel as a whole — useful when several services or customers share one link and none of them should be able to take all of it. 0 means no limit, and both start there.'},
+  {k:'maxConnections',t:'int',label:'Maximum simultaneous connections',
+   hint:'Below about 10 is very low — a single browser can open more than that.'},
+  {k:'bandwidthMbps',t:'int',label:'Bandwidth limit (Mbit/s)'},
+];
+
+// Which drawers this tunnel has anything to say in. The spoof and packet
+// carriers only exist on their own transport; a drawer for a transport the
+// tunnel is not on is a drawer full of settings nothing reads.
+function needsTLST(t){ return ['wss','wssmux'].indexOf(t)>=0; }
+function isWST(t){ return ['ws','wss','wsmux','wssmux'].indexOf(t)>=0; }
+
+// The advanced drawers, addressed by the same 'a'/'e' prefix the two forms use.
+const DRAWERS=[
+  {id:'sp',box:'f-spoof',fields:SPOOF_FIELDS,when:c=>c.transport==='spoof'},
+  {id:'pk',box:'f-pck',  fields:PCK_FIELDS,  when:c=>c.transport==='pck'},
+  {id:'cn',box:'f-conn', fields:CONN_FIELDS, when:()=>true},
+];
+
+// renderDrawers draws all three for one form, hiding the ones this tunnel has no
+// use for. vals is what to fill them with — the preset-free defaults on the
+// setup form, the tunnel's own settings on the edit form.
+function renderDrawers(p,ctx,vals){
+  vals=vals||{};
+  DRAWERS.forEach(function(d){
+    const on=d.when(ctx);
+    $('acc-'+p+d.id).classList.toggle('hide',!on);
+    if(!on){ closeAcc(p+d.id); return; }
+    const box=$(p+d.box), note=$('accnote-'+p+d.id);
+    renderFields(box,d.fields,ctx,vals[d.id]||{},function(){ setNote(note,'edited'); });
+    setNote(note,p==='a'?'optional':'current values');
+  });
+}
+// setNote writes an accordion's little grey note. The English is put on the
+// element as well as the text, so the next language sweep translates what is
+// there now instead of putting the markup's original wording back.
+function setNote(el,text){ el.dataset.en=text; el.textContent=T(text); }
+// readDrawer returns what one drawer holds, or null when the form has nothing to
+// say — the drawer is hidden, or on the edit form nobody touched it.
+function readDrawer(p,id,force){
+  const d=DRAWERS.find(x=>x.id===id);
+  if($('acc-'+p+id).classList.contains('hide')) return null;
+  const box=$(p+d.box);
+  if(!force&&box.dataset.dirty!=='1') return null;
+  return readFields(box,d.fields);
+}
+// The connection drawer holds two of the server's blocks — how this end reaches
+// the other one, and what the tunnel as a whole may use. They are one drawer
+// because they are both "things most tunnels never set", and two requests
+// because they are two different settings on the tunnel.
+const LIMIT_KEYS=['maxConnections','bandwidthMbps'];
+function splitConn(v){
+  if(!v) return {conn:null,limits:null};
+  const conn={},limits={};
+  Object.keys(v).forEach(function(k){ (LIMIT_KEYS.indexOf(k)>=0?limits:conn)[k]=v[k]; });
+  return {conn:conn,limits:limits};
+}
+
+function drawerCtx(p){
+  return {role:formRole(p),transport:$(p+'f-transport').value};
+}
+// refreshDrawers redraws all three after a transport or side change, keeping
+// what was already typed. Same rule as the Fine Tune drawer: a transport change
+// makes different knobs relevant, it does not throw away the answers.
+function refreshDrawers(p){
+  const had={},dirty={};
+  DRAWERS.forEach(function(d){
+    const box=$(p+d.box);
+    if(box.querySelector('[data-k]')){
+      had[d.id]=readFields(box,d.fields);
+      dirty[d.id]=box.dataset.dirty==='1';
+    }
+  });
+  renderDrawers(p,drawerCtx(p),had);
+  DRAWERS.forEach(function(d){
+    if(!dirty[d.id]||$('acc-'+p+d.id).classList.contains('hide')) return;
+    $(p+d.box).dataset.dirty='1';
+    setNote($('accnote-'+p+d.id),'edited');
+  });
+}
+// clearDrawers empties them before a form is filled, for the same reason the
+// Fine Tune drawer is emptied: what is still in there belongs to whichever
+// tunnel the dialog was opened on last.
+function clearDrawers(p){
+  DRAWERS.forEach(function(d){
+    const box=$(p+d.box);
+    box.innerHTML=''; box.dataset.dirty='0';
+  });
 }
 
 // ---- the two forms, which share every field they have in common -------------
@@ -2857,13 +3388,14 @@ function fillTransports(p,selected,skipTune){
 async function onTransport(p,skipTune){
   const e=transportEntry($(p+'f-transport').value);
   $(p+'f-tdesc').textContent=e?T(e.desc):'';
-  if(p==='a'){
-    // The PROXY header has nowhere to live on a plain websocket or raw UDP
-    // tunnel, so the question is not asked there rather than asked and ignored.
-    const ok=supportsPPT($('af-transport').value)&&addRole==='server';
-    $('af-pprow').classList.toggle('hide',!ok);
-    $('af-pphint').classList.toggle('hide',!ok);
-  }
+  // The PROXY header has nowhere to live on a plain websocket or raw UDP
+  // tunnel, so the question is not asked there rather than asked and ignored.
+  const ok=supportsPPT($(p+'f-transport').value)&&formRole(p)==='server';
+  $(p+'f-pprow').classList.toggle('hide',!ok);
+  $(p+'f-pphint').classList.toggle('hide',!ok);
+  // The spoof and packet drawers appear and disappear with their transport; the
+  // connection drawer is redrawn because half of what it holds depends on it.
+  refreshDrawers(p);
   if(!skipTune) await refreshTune(p);
 }
 function fillPresets(p,current){
@@ -2960,6 +3492,7 @@ async function pickSide(role){
   // drawer left over from the last time this dialog was opened would carry that
   // tunnel's numbers, and its "custom" mark, into a brand new one.
   $('af-tune').innerHTML=''; $('af-tune').dataset.dirty='0';
+  clearDrawers('a');
   // The preset is chosen before the transport list is built, because building
   // that list fills the Fine Tune drawer and the drawer's numbers come from the
   // preset. The other order shows the wrong tunnel's defaults for one beat.
@@ -2969,10 +3502,12 @@ async function pickSide(role){
   // The server suggests the token and the client is asked for it: they must be
   // the same string, and only one end can be the one that invents it.
   $('af-token').value='';
+  const tb=$('af-tokenbtn');
+  tb.dataset.en=role==='server'?'Copy':'Paste';
   if(role==='server'){
     try{ $('af-token').value=(await (await fetch('/api/tunnel/suggest?what=token')).json()).token||''; }catch(e){}
   }
-  closeAcc('aft');
+  closeAcc('aft'); closeAcc('asp'); closeAcc('apk'); closeAcc('acn');
   relang();
 }
 
@@ -2993,9 +3528,40 @@ async function copyField(id,btn){
   const el=$(id);
   if(!el||!el.value) return;
   await copyText(el.value);
-  const was=btn.textContent;
-  btn.textContent=T('Copied!');
-  setTimeout(function(){ btn.textContent=was; },1300);
+  flashBtn(btn,'Copied!');
+}
+// flashBtn shows an outcome on the button for a moment and puts its own label
+// back. The label is read from dataset.en rather than from the button, so a
+// second click during the flash cannot leave "Copied!" written on it for good.
+function flashBtn(btn,text){
+  btn.textContent=T(text);
+  const back=btn.dataset.en||text;
+  clearTimeout(btn._flash);
+  btn._flash=setTimeout(function(){ btn.textContent=T(back); },1300);
+}
+// pasteField fills a field from the clipboard. Reading the clipboard needs a
+// secure context and the user's permission, and Firefox does not offer it at
+// all — so when it is refused the field is focused and selected instead, which
+// turns the button into "the box is ready, press paste".
+async function pasteField(id,btn){
+  const el=$(id);
+  if(!el) return;
+  try{
+    const text=await navigator.clipboard.readText();
+    if(!text||!text.trim()){ toast(T('There is nothing on the clipboard.'),true); return; }
+    el.value=text.trim();
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+    flashBtn(btn,'Pasted!');
+  }catch(e){
+    el.focus(); el.select();
+    toast(T('This browser will not let the page read the clipboard — the box is selected, paste into it.'),true);
+  }
+}
+// The token button does the opposite job on each side: the Iran server invents
+// the token and hands it over, the kharej client is given it. See the markup.
+function tokenAction(btn){
+  if(addRole==='server') copyField('af-token',btn);
+  else pasteField('af-token',btn);
 }
 
 async function submitAdd(){
@@ -3016,6 +3582,15 @@ async function submitAdd(){
     proxyProtocol:addRole==='server'&&$('af-pp').checked,
     tune:tuneBox.dataset.dirty==='1'?readTune(tuneBox):null,
   };
+  // The advanced drawers are sent whether or not they were opened: unlike Fine
+  // Tune, what is in them is not a preset's answer that the server can fill in
+  // for itself — an empty box means "no forged source", and a full one that was
+  // never scrolled to still has to arrive.
+  const cn=splitConn(readDrawer('a','cn',true));
+  body.spoof=readDrawer('a','sp',true);
+  body.pck=readDrawer('a','pk',true);
+  body.conn=cn.conn;
+  body.limits=cn.limits;
   try{
     const r=await fetch('/api/tunnel/create',
       {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -3054,14 +3629,18 @@ async function openEdit(name){
     // Cleared first, for the same reason the setup form clears it: what is
     // still in the drawer belongs to whichever tunnel was edited last.
     $('ef-tune').innerHTML=''; $('ef-tune').dataset.dirty='0';
+    clearDrawers('e');
+    $('ef-pp').checked=!!s.proxyProtocol;
     fillFamilies('e',familyIndexOf(s.transport));
     fillPresets('e',s.preset||'');
     fillTransports('e',s.transport,true);
-    // The drawer opens on what the tunnel actually runs, not on a preset's idea
+    // The drawers open on what the tunnel actually runs, not on a preset's idea
     // of it — a hand-tuned tunnel would otherwise show numbers it does not use.
     renderTune($('ef-tune'),{role:s.role,transport:s.transport},s.tune);
     setTuneNote('e',false);
-    closeAcc('eft');
+    renderDrawers('e',{role:s.role,transport:s.transport},
+      {sp:s.spoof,pk:s.pck,cn:Object.assign({},s.conn,s.limits)});
+    closeAcc('eft'); closeAcc('esp'); closeAcc('epk'); closeAcc('ecn');
     msg.textContent='';
     $('editform').classList.remove('hide');
     relang();
@@ -3084,6 +3663,18 @@ async function submitEdit(){
   if($('ef-transport').value!==s.transport) body.transport=$('ef-transport').value;
   if($('ef-preset').value&&$('ef-preset').value!==s.preset) body.preset=$('ef-preset').value;
   if(tuneBox.dataset.dirty==='1') body.tune=readTune(tuneBox);
+  // A drawer nobody touched is left out, so opening the dialog and saving does
+  // not restart the tunnel for nothing. The exception is a transport change into
+  // spoof or pck: the drawer that just appeared has never been touched, and its
+  // answers are the ones that carrier cannot start without.
+  const newCarrier=$('ef-transport').value!==s.transport;
+  const sp=readDrawer('e','sp',newCarrier), pk=readDrawer('e','pk',newCarrier);
+  if(sp) body.spoof=sp;
+  if(pk) body.pck=pk;
+  const cn=splitConn(readDrawer('e','cn',false));
+  if(cn.conn) body.conn=cn.conn;
+  if(cn.limits) body.limits=cn.limits;
+  if(s.role==='server'&&$('ef-pp').checked!==!!s.proxyProtocol) body.proxyProtocol=$('ef-pp').checked;
   if(Object.keys(body).length===1){
     msg.className='msg'; msg.textContent=T('Nothing has been changed yet.');
     return;

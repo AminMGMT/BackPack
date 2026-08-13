@@ -247,6 +247,14 @@ type NewTunnel struct {
 	// Tune is nil unless the operator opened the Fine Tune drawer, in which case
 	// it replaces the preset's answers.
 	Tune *FineTune `json:"tune"`
+
+	// The advanced drawers, each nil unless it was opened. Spoof and Pck only
+	// mean anything on their own transport; Conn carries the connectivity
+	// options the wizard asks the client for; Limits caps the tunnel as a whole.
+	Spoof  *SpoofTune    `json:"spoof"`
+	Pck    *PckTune      `json:"pck"`
+	Conn   *ConnTune     `json:"conn"`
+	Limits *TunnelLimits `json:"limits"`
 }
 
 // CreateTunnel builds a tunnel from a filled form and starts it. It returns the
@@ -331,8 +339,13 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 		}
 		s.TLSCert, s.TLSKey = cert, key
 	}
-	// Spoof carries a profile both ends must agree on. The wizard asks; the form
-	// does not, so it gets the same default the wizard recommends.
+	// The advanced drawers, in the order the wizard asks them. A form that never
+	// opened one sends nothing for it, and the tunnel keeps the defaults.
+	if err := applyAdvanced(&s, n.Spoof, n.Pck, n.Conn, n.Limits, port); err != nil {
+		return "", false, err
+	}
+	// Spoof carries a profile both ends must agree on. The wizard asks; a form
+	// that left the drawer shut gets the same default the wizard recommends.
 	if s.Transport == "spoof" && s.SpoofProfile == "" {
 		s.SpoofProfile = "udp"
 	}
@@ -355,6 +368,19 @@ type TunnelEdit struct {
 	Transport  string    `json:"transport"`
 	Preset     string    `json:"preset"`
 	Tune       *FineTune `json:"tune"`
+
+	// The advanced drawers, nil unless the form opened one. They are the same
+	// blocks the setup form fills, so a setting can be changed afterwards
+	// wherever it could be chosen in the first place — which is what the CLI's
+	// Edit screen offers and what the panel used to be missing.
+	Spoof  *SpoofTune    `json:"spoof"`
+	Pck    *PckTune      `json:"pck"`
+	Conn   *ConnTune     `json:"conn"`
+	Limits *TunnelLimits `json:"limits"`
+
+	// ProxyProtocol is a pointer because false is an answer: a plain bool could
+	// not tell "turn it off" from "the form did not mention it".
+	ProxyProtocol *bool `json:"proxyProtocol"`
 }
 
 // EditTunnelSettings applies every change in one pass and restarts the tunnel
@@ -374,6 +400,11 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 		if err := switchTransport(&s, t); err != nil {
 			return err
 		}
+		// Settings that belonged to the old carrier are dropped rather than left
+		// in the file for nothing to read — an edge IP on a KCP tunnel or a
+		// forged source on a websocket one is a setting that looks live and is
+		// not, which is the hardest kind to debug.
+		clearForTransport(&s)
 		changed = true
 	}
 
@@ -447,6 +478,33 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 		changed = true
 	}
 
+	// The advanced drawers come last, after the port has settled: a backup
+	// address written without one inherits the port the tunnel is being left on,
+	// not the port it had when the form was opened.
+	if e.Spoof != nil || e.Pck != nil || e.Conn != nil || e.Limits != nil {
+		port := addrPort(s.BindAddr)
+		if s.Role == "client" {
+			port = addrPort(s.RemoteAddr)
+		}
+		if err := applyAdvanced(&s, e.Spoof, e.Pck, e.Conn, e.Limits, port); err != nil {
+			return err
+		}
+		changed = true
+	}
+
+	if e.ProxyProtocol != nil {
+		if s.Role != "server" {
+			return fmt.Errorf("the PROXY protocol header is added by the server side")
+		}
+		if *e.ProxyProtocol && !supportsProxyProtocol(s.Transport) {
+			return fmt.Errorf("the %s transport has nowhere to put a PROXY protocol header", s.Transport)
+		}
+		if s.ProxyProtocol != *e.ProxyProtocol {
+			s.ProxyProtocol = *e.ProxyProtocol
+			changed = true
+		}
+	}
+
 	if !changed {
 		return fmt.Errorf("nothing to change")
 	}
@@ -465,6 +523,15 @@ type TunnelSettings struct {
 	Preset     string   `json:"preset"`
 	PresetName string   `json:"presetName"`
 	Tune       FineTune `json:"tune"`
+
+	// The advanced drawers open on what the tunnel actually runs, so a value
+	// that was set by hand in the config file — or by the CLI wizard — shows up
+	// here instead of the form pretending it was never set.
+	Spoof         SpoofTune    `json:"spoof"`
+	Pck           PckTune      `json:"pck"`
+	Conn          ConnTune     `json:"conn"`
+	Limits        TunnelLimits `json:"limits"`
+	ProxyProtocol bool         `json:"proxyProtocol"`
 }
 
 // TunnelSettingsOf reads a tunnel's editable settings from its config.
@@ -474,12 +541,17 @@ func TunnelSettingsOf(name string) (TunnelSettings, error) {
 		return TunnelSettings{}, err
 	}
 	out := TunnelSettings{
-		Name:       s.Name,
-		Role:       s.Role,
-		Transport:  s.Transport,
-		Preset:     s.Preset,
-		PresetName: presetLabel(s.Preset),
-		Tune:       tuneOf(s),
+		Name:          s.Name,
+		Role:          s.Role,
+		Transport:     s.Transport,
+		Preset:        s.Preset,
+		PresetName:    presetLabel(s.Preset),
+		Tune:          tuneOf(s),
+		Spoof:         spoofOf(s),
+		Pck:           pckOf(s),
+		Conn:          connOf(s),
+		Limits:        limitsOf(s),
+		ProxyProtocol: s.ProxyProtocol,
 	}
 	if s.Role == "server" {
 		out.TunnelPort = addrPort(s.BindAddr)

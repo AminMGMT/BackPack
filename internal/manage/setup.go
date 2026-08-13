@@ -382,46 +382,102 @@ func askSpoof(s *TunnelSpec) {
 	if s.Transport != "spoof" {
 		return
 	}
-	fmt.Println()
-	tui.Warn("IP Spoofing is experimental. It forges the source address of raw IP")
-	tui.Warn("packets. It only carries traffic where the upstream network does not")
-	tui.Warn("drop forged-source packets — prove it with the spoof tester first.")
-	fmt.Println()
-
-	// The two ends must agree on the profile(s). Most tunnels use one profile
-	// both ways; an asymmetric path can set each direction independently.
-	tui.Info("Packet profile — what the tunnel looks like on the wire. Both ends must match.")
-	s.SpoofProfile = askSpoofProfile("Profile (both directions)")
-
-	fmt.Println()
-	tui.Info("If this path filters differently by direction, set each direction on its")
-	tui.Info("own (uplink = client→server, downlink = server→client). Test each with")
-	tui.Info("the spoof tester.")
-	if tui.Confirm("Set a different profile per direction (asymmetric)", false) {
-		s.SpoofUplink = askSpoofProfile("Uplink (client→server)")
-		s.SpoofDownlink = askSpoofProfile("Downlink (server→client)")
+	// The other side of this transport is a person who picked it off a menu
+	// because it sounded like the one that gets through, and who has never seen
+	// a forged packet. So the screen explains what the thing is, what it needs
+	// from the network, and which single answer to give when unsure — and the
+	// questions that only a tuned setup needs are behind a confirm that defaults
+	// to no, rather than in the way.
+	here, there := "kharej", "Iran"
+	if s.Role == "server" {
+		here, there = "Iran", "kharej"
 	}
 
-	// The server cannot learn the client's real address from the forged packets,
-	// so it must be told it. The client already knows the server's real address
-	// from the tunnel address it dialled.
+	fmt.Println()
+	tui.Title("IP Spoofing")
+	fmt.Println()
+	tui.Info("This carrier writes its own IP packets and stamps a FAKE source address")
+	tui.Info("on them, so what leaves this machine does not look like it came from")
+	tui.Info("here. It is for a path that blocks or throttles by address.")
+	fmt.Println()
+	tui.Warn("It is experimental, and it only carries anything where the network")
+	tui.Warn("above this machine forwards packets with a forged source. Plenty of")
+	tui.Warn("providers drop them, and there is no way to tell from here.")
+	tui.Warn("Manage → IP Spoofing Tester tries a list and says which ones arrived.")
+	fmt.Println()
+	tui.Info("Both ends must be set up to match. You will answer the same questions")
+	tui.Info("on the " + there + " server, with the two addresses the other way round.")
+	fmt.Println()
+	tui.Warn("Not sure yet? Take the recommended answer at every step — press Enter")
+	tui.Warn("throughout and you get a working, unforged tunnel. Nothing here is")
+	tui.Warn("final: Manage → Edit → IP Spoofing changes any of it afterwards, and")
+	tui.Warn("so does the web panel, so come back once the tester has found a")
+	tui.Warn("source that passes.")
+
+	step := stepper(4)
+
+	// ---- 1. what the packets look like -------------------------------------
+	// One question with a recommended answer, and the full menu only for
+	// somebody who already knows they want something else.
+	step("What the packets look like on the wire")
+	tui.Info("The forged packets can be dressed as UDP, as ping (ICMP), or as a TCP")
+	tui.Info("flow. UDP is the plainest and passes nearly everywhere; the other two")
+	tui.Info("are for a path that filters UDP specifically.")
+	tui.Warn("Whatever you pick here, the " + there + " end must pick the same one.")
+	fmt.Println()
+	if tui.Confirm("Use UDP — the recommended profile", true) {
+		s.SpoofProfile = "udp"
+	} else {
+		s.SpoofProfile = askSpoofProfile("Packet profile:")
+	}
+
+	fmt.Println()
+	tui.Info("A path can filter one direction differently from the other. If it does,")
+	tui.Info("each direction can wear its own profile — uplink is kharej → Iran,")
+	tui.Info("downlink is Iran → kharej. Almost no path needs this.")
+	if tui.Confirm("Set the two directions separately", false) {
+		s.SpoofUplink = askSpoofProfile("Uplink profile (kharej → Iran):")
+		s.SpoofDownlink = askSpoofProfile("Downlink profile (Iran → kharej):")
+	}
+
+	// ---- 2. where the replies go -------------------------------------------
+	// Server only, and not optional: the forged packets do not carry the
+	// client's address, so without this the server has nowhere to answer.
+	step("Where this end sends its replies")
 	if s.Role == "server" {
-		tui.Info("The client forges its source, so the server cannot see where to send")
-		tui.Info("replies. Enter the client's REAL public IPv4 address.")
+		tui.Info("The " + there + " machine forges its source address, so its packets do not")
+		tui.Info("say where they came from. This server has to be told, or it has")
+		tui.Info("nowhere to send the answers.")
+		fmt.Println()
+		tui.Warn("Enter the REAL public IPv4 of the " + there + " server — the address you")
+		tui.Warn("SSH into it with, not a forged one.")
 		for {
-			raw := strings.TrimSpace(tui.Prompt("Client's real IPv4: "))
+			raw := strings.TrimSpace(tui.Prompt("Real IPv4 of the " + there + " server: "))
 			if net.ParseIP(raw).To4() != nil {
 				s.SpoofPeerIP = raw
 				break
 			}
-			tui.Error("Enter a valid IPv4 address, e.g. 203.0.113.10")
+			tui.Error("That is not an IPv4 address. It looks like 203.0.113.10")
 		}
+	} else {
+		tui.Info("Nothing to answer here: this end dialled the " + there + " server, so it")
+		tui.Info("already knows the address to send to. The " + there + " side is the one")
+		tui.Info("that has to be told yours.")
 	}
 
-	tui.Info("Forged source IP(s) stamped on outgoing packets. Give one, or several")
-	tui.Info("comma-separated to rotate through a pool (evades per-IP limits/blocks).")
-	tui.Warn("Use the spoof tester to find which ones actually pass. Empty spoofs nothing.")
-	raw := strings.TrimSpace(tui.PromptDefault("Spoof source IP(s)", ""))
+	// ---- 3. the forged source ----------------------------------------------
+	step("The address to forge")
+	tui.Info("This is the address stamped on the packets this machine sends.")
+	fmt.Println()
+	tui.Warn("Leave it empty and nothing is forged: the tunnel comes up on this")
+	tui.Warn("machine's real address and works normally. That is the right answer")
+	tui.Warn("for a first run — get the tunnel up, run the tester, then set an")
+	tui.Warn("address that passed from Manage → Edit → IP Spoofing.")
+	fmt.Println()
+	tui.Info("Several addresses, separated by commas, are rotated through one per")
+	tui.Info("session — that is what gets past a limit or a block that counts by")
+	tui.Info("address.")
+	raw := strings.TrimSpace(tui.PromptDefault("Forged source IPv4 (empty = do not forge)", ""))
 	if raw != "" {
 		var pool []string
 		for _, part := range strings.Split(raw, ",") {
@@ -430,7 +486,7 @@ func askSpoof(s *TunnelSpec) {
 				continue
 			}
 			if net.ParseIP(ip).To4() == nil {
-				tui.Warn(fmt.Sprintf("skipping invalid IPv4 %q", ip))
+				tui.Warn(fmt.Sprintf("skipping %q — not an IPv4 address", ip))
 				continue
 			}
 			pool = append(pool, ip)
@@ -443,9 +499,15 @@ func askSpoof(s *TunnelSpec) {
 		}
 	}
 
-	if names := routableInterfaces(); len(names) > 0 {
-		tui.Info("Egress interface to send the raw packets from (optional).")
-		tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel route.")
+	// Only worth asking on a machine that has somewhere else to go. On the
+	// single-uplink VPS this transport usually runs on, the answer is "the one
+	// route there is", and a prompt for it is a prompt to get wrong.
+	if names := routableInterfaces(); len(names) > 1 {
+		fmt.Println()
+		tui.Info("This machine has more than one network interface, so the raw packets")
+		tui.Info("can be pinned to one of them.")
+		tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the")
+		tui.Warn("kernel pick, which is right unless you know it picks wrong.")
 		for {
 			iface := strings.TrimSpace(tui.PromptDefault("Interface", ""))
 			if iface == "" {
@@ -460,23 +522,98 @@ func askSpoof(s *TunnelSpec) {
 		}
 	}
 
+	// ---- 4. WireGuard pipe --------------------------------------------------
+	step("WireGuard, instead of forwarded ports")
+	tui.Info("Normally this tunnel forwards the ports you listed. Pipe mode does")
+	tui.Info("something else: it carries one WireGuard VPN, whole, so every")
+	tui.Info("application on the device goes through it rather than the ports you")
+	tui.Info("chose. WireGuard brings its own encryption, so there is no KCP under")
+	tui.Info("it, and the forwarded ports are ignored.")
+	tui.Warn("Say no unless you are already running WireGuard and want it tunnelled.")
 	fmt.Println()
-	tui.Info("WireGuard pipe: carry a whole-device WireGuard VPN over this tunnel")
-	tui.Info("instead of forwarding ports. WireGuard brings its own encryption, so")
-	tui.Info("there is no KCP underneath. Forwarded ports are ignored in this mode.")
 	if tui.Confirm("Enable WireGuard pipe mode", false) {
 		s.SpoofPipe = true
 		def := "127.0.0.1:51820"
+		fmt.Println()
 		if s.Role == "server" {
-			tui.Info("Where the real WireGuard listens on THIS server (datagrams are forwarded here).")
+			tui.Info("Where the real WireGuard listens on THIS server — the datagrams")
+			tui.Info("coming out of the tunnel are handed to it there.")
 		} else {
-			tui.Info("Where the tunnel listens for WireGuard — point WireGuard's `endpoint` here.")
+			tui.Info("Where the tunnel should listen for WireGuard on THIS machine —")
+			tui.Info("point WireGuard's `endpoint` at exactly this address.")
 		}
 		s.SpoofPipeAddr = strings.TrimSpace(tui.PromptDefault("WireGuard UDP endpoint", def))
 		if s.SpoofPipeAddr == "" {
 			s.SpoofPipeAddr = def
 		}
 	}
+
+	spoofSummary(s, here, there)
+}
+
+// stepper returns a function that prints numbered section headings, so the
+// screen says how far through it is rather than scrolling past as one wall.
+func stepper(total int) func(title string) {
+	n := 0
+	return func(title string) {
+		n++
+		fmt.Println()
+		tui.Rule()
+		tui.Success(fmt.Sprintf("Step %d of %d — %s", n, total, title))
+		fmt.Println()
+	}
+}
+
+// spoofSummary repeats the answers back and says what has to be true on the
+// other server for them to work. Everything in a spoof setup is paired, and the
+// pairing is the part that goes wrong.
+func spoofSummary(s *TunnelSpec, here, there string) {
+	fmt.Println()
+	tui.Rule()
+	tui.Success("IP Spoofing — what this " + here + " end will do")
+	fmt.Println()
+
+	profile := s.SpoofProfile
+	if s.SpoofUplink != "" || s.SpoofDownlink != "" {
+		up, down := s.SpoofUplink, s.SpoofDownlink
+		if up == "" {
+			up = profile
+		}
+		if down == "" {
+			down = profile
+		}
+		profile = fmt.Sprintf("uplink %s, downlink %s", up, down)
+	}
+	tui.Info("Packets look like : " + profile)
+
+	switch {
+	case len(s.SpoofSrcPool) > 1:
+		tui.Info("Forged source     : " + strings.Join(s.SpoofSrcPool, ", ") + " (one per session)")
+	case s.SpoofSrcIP != "":
+		tui.Info("Forged source     : " + s.SpoofSrcIP)
+	default:
+		tui.Info("Forged source     : none — this machine's real address")
+	}
+	if s.SpoofPeerIP != "" {
+		tui.Info("Replies go to     : " + s.SpoofPeerIP + " (the " + there + " server)")
+	}
+	if s.SpoofInterface != "" {
+		tui.Info("Leaves by         : " + s.SpoofInterface)
+	}
+	if s.SpoofPipe {
+		tui.Info("WireGuard pipe    : on, at " + s.SpoofPipeAddr + " (forwarded ports ignored)")
+	}
+
+	fmt.Println()
+	tui.Warn("On the " + there + " server: the same packet profile, and if you forged a")
+	tui.Warn("source here, tell that end to expect it.")
+	if s.Role == "client" {
+		tui.Warn("That end also needs THIS machine's real public IPv4, or it has")
+		tui.Warn("nowhere to send its replies.")
+	}
+	tui.Warn("Nothing here is proven until traffic actually crosses — if the tunnel")
+	tui.Warn("comes up but carries nothing, the forged source is being dropped.")
+	tui.Warn("Manage → IP Spoofing Tester finds one that is not.")
 }
 
 // askSpoofProfile prompts for one packet profile and returns its config value.

@@ -35,13 +35,18 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 }
 
 // handleTunnelOptions serves the menus the setup form is built from: the
-// transport families with their variants, and the performance presets. They
-// come from manage rather than being written into the page, so a transport
-// added to the CLI appears in the panel without touching the HTML.
+// transport families with their variants, the performance presets, and the
+// menus the advanced drawers need — the spoof carrier's packet profiles, the
+// packet carrier's flag cycles and this machine's network interfaces. They come
+// from manage rather than being written into the page, so a transport added to
+// the CLI appears in the panel without touching the HTML.
 func (s *server) handleTunnelOptions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
-		"families": manage.TransportFamilies(),
-		"presets":  manage.Presets(),
+		"families":      manage.TransportFamilies(),
+		"presets":       manage.Presets(),
+		"spoofProfiles": manage.SpoofProfiles(),
+		"pckFlags":      manage.PckFlagCycles(),
+		"interfaces":    manage.RoutableInterfaces(),
 	})
 }
 

@@ -135,6 +135,9 @@ func editPortsMenu(name string) {
 			if spec.Transport == "pck" {
 				tui.Info("TCP packet flags      : " + pckFlagSummary(spec.PckFlags))
 			}
+			if spec.Transport == "spoof" {
+				tui.Info("Forged source         : " + spoofSourceSummary(spec))
+			}
 			if needsTLS(spec.Transport) {
 				tui.Info("Certificate           : " + certSummary(spec))
 			}
@@ -179,6 +182,13 @@ func editPortsMenu(name string) {
 				})
 				actions = append(actions, func() { editPckFlags(name, spec) })
 			}
+			if spec.Transport == "spoof" {
+				opts = append(opts, tui.Option{
+					Title: "IP Spoofing",
+					Desc:  "the forged source, the packet profile and everything else the carrier does",
+				})
+				actions = append(actions, func() { editSpoof(name, spec) })
+			}
 			if needsTLS(spec.Transport) {
 				opts = append(opts, tui.Option{
 					Title: "Certificate",
@@ -202,6 +212,9 @@ func editPortsMenu(name string) {
 			}
 			if spec.Transport == "pck" {
 				tui.Info("Packet flags   : " + pckFlagSummary(spec.PckFlags))
+			}
+			if spec.Transport == "spoof" {
+				tui.Info("Forged source  : " + spoofSourceSummary(spec))
 			}
 			fmt.Println()
 			opts := []tui.Option{
@@ -233,6 +246,13 @@ func editPortsMenu(name string) {
 					Desc:  "what this end's packets say in the flag field",
 				})
 				actions = append(actions, func() { editPckFlags(name, spec) })
+			}
+			if spec.Transport == "spoof" {
+				opts = append(opts, tui.Option{
+					Title: "IP Spoofing",
+					Desc:  "the forged source, the packet profile and everything else the carrier does",
+				})
+				actions = append(actions, func() { editSpoof(name, spec) })
 			}
 			idx := tui.ChooseOpt("Choose:", opts)
 			if idx < 0 || idx >= len(actions) {
