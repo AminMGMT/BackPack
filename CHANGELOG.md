@@ -237,6 +237,109 @@ All notable changes to Backpack are documented here.
   the same dozen lines written out twice, so the two relays cannot drift apart
   on the behaviour this fix is about.*
 
+- **The monitor page was served to the whole internet without a password, and
+  now defaults to loopback.** `web_port` opened a page that reports the host's
+  CPU, memory, disk, swap and network counters, the tunnel's status and total
+  traffic, and — with the sniffer on — the usage of every forwarded port. It
+  has never had authentication of any kind, and it was bound to every
+  interface. On a server with a public address that is a live readout of the
+  machine handed to anything that connects, with the port number as the only
+  thing in the way.
+
+  It now binds to `127.0.0.1` and is reached the way the profiling endpoint
+  already is:
+
+  ```
+  ssh -L 2060:127.0.0.1:2060 root@server
+  ```
+
+  **This changes where an existing tunnel's monitor page answers.** If you open
+  it over the network today, set `web_bind = "0.0.0.0"` to have it back exactly
+  as it was — the key is written into every config that has a `web_port`, so it
+  is there to find and edit, and unlike a hand-added setting it survives the
+  next time the menu or the panel rewrites the file. A single address works too
+  (`web_bind = "10.0.0.5"`), for serving it on a private network and nowhere
+  else. Whenever the page is bound anywhere but loopback, startup says so.
+
+  The page itself got the boundaries it never had: `GET` and `HEAD` only,
+  unknown paths answered as missing instead of rendering the dashboard,
+  `no-store` and the usual hardening headers on every response, and header,
+  read, write and idle timeouts on the server — without which a handful of
+  connections that open and go quiet hold their goroutines for as long as the
+  process lives. Two handlers that logged a failure and returned an empty `200`
+  now return a `500`, so a monitor that cannot collect stats says so rather
+  than looking like one reporting nothing.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#24](https://github.com/AminMGMT/BackPack/pull/24). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  the pull request bound the page to loopback outright, with nothing an
+  operator could do about it. Anyone watching that page from another machine
+  would have lost it on upgrade with no way back, so it is a default here
+  rather than a rule — `web_bind`, carried through the config writer and the
+  edit path so the CLI and the panel cannot silently drop it.*
+
+- **Turning profiling off, or reloading a tunnel that has it on, left the old
+  listener holding the port.** `pprof = true` started the endpoint with
+  `http.ListenAndServe`, which serves the process-wide default mux and returns
+  only on failure — so there was no server to shut down and no way to know when
+  it had. Disabling profiling in the config did not close the socket that was
+  already open, and a reload built the next generation while the previous one
+  still had 127.0.0.1:6060; if that generation wanted profiling too, it raced
+  the port and lost.
+
+  Profiling is now an explicit server tied to the generation's context, with
+  its handlers named one by one rather than inherited from the default mux —
+  which matters because that mux is shared with every package in the build that
+  registers something in an `init` function, and anything there was reachable
+  on the profiling port without a decision being made. `Start` does not return
+  until the port is released, so the reload's wait for a free port is waiting
+  for something that will actually come.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#29](https://github.com/AminMGMT/BackPack/pull/29). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  the read and write deadlines it put on the profiling server are gone, because
+  a CPU profile is a thirty-second response by default and a trace is longer —
+  deadlines there would have cut off the one thing the port exists for. The
+  header timeout and the header-size cap, which a slow client runs into and a
+  profile never does, are what remain.*
+
+- **An interrupted backup left a truncated archive under a name that said it
+  was whole.** The archive was written straight to its final path, so a backup
+  cut short by a full disk, a reboot or a killed process left a partial file
+  called `backpack-backup-….tar.gz` — which the retention policy then counted
+  as one of the ten kept, and a restore accepted as far as the point it stopped.
+
+  Worse, the write could report success over a short archive even without a
+  crash. The tar writer and the gzip writer were closed by `defer`, and a
+  deferred `Close` reports to nobody — but closing them is what writes the
+  archive's footer and the compressed trailer, so a failure exactly there was
+  discarded and the backup was called good.
+
+  Backups are now written to a temporary file beside the destination, fsynced,
+  and renamed into place only once complete, so a file under the real name is
+  always a whole archive. Both closes are checked and reported. Every file is
+  closed as it is archived rather than at the end of the walk — the close was
+  deferred inside the walk callback, which meant every file in the tree stayed
+  open until the last one was written, and a large enough config directory ran
+  the process out of descriptors. Anything in the tree that is not a directory
+  or an ordinary file is now refused by name: a symlink produced a header with
+  no target recorded and no content behind it, so the archive looked complete
+  and was not.
+
+  *Thanks to [@dr-hoseyn](https://github.com/dr-hoseyn), who raised this in
+  [#27](https://github.com/AminMGMT/BackPack/pull/27). We reviewed that pull
+  request, finished it and improved on it, and what shipped here is the result:
+  the directory entry is fsynced after the rename as well, because syncing only
+  the file leaves the rename itself able to reach the disk after a crash and
+  the archive to be correctly named and empty; the second backup taken in the
+  same second gets a suffix instead of replacing the first; and a partial file
+  abandoned by a hard crash is swept up after an hour rather than staying in
+  the backup folder for the life of the host. The archive writer and the
+  publishing are separate functions now, so both are covered by tests that need
+  neither a real `/etc/backpack` nor a real crash.*
+
 ## v1.7.1 — 2026-08-10
 
 Two halves. The web panel stops being a window and becomes a way to work: it

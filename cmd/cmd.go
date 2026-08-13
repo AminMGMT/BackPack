@@ -120,10 +120,13 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 
 		srv := server.NewServer(&cfg.Server, ctx) // server
 		reportZeroCopy(ctx)
-		go srv.Start()
-
-		// Wait for shutdown signal
-		<-ctx.Done()
+		// Start blocks until its own context ends and everything it owns has
+		// stopped. Running it in a goroutine and waiting on ctx here instead
+		// meant this returned the moment the signal arrived, while the parts of
+		// the generation that shut down in their own time were still holding
+		// their ports — and a reload starts the next generation as soon as this
+		// function returns.
+		srv.Start()
 		srv.Stop()
 		logger.Println("shutting down server...")
 	case "client":
@@ -136,10 +139,8 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 
 		clnt := client.NewClient(&cfg.Client, ctx) // client
 		reportZeroCopy(ctx)
-		go clnt.Start()
-
-		// Wait for shutdown signal
-		<-ctx.Done()
+		// Blocks until the generation is over; see the server case above.
+		clnt.Start()
 		clnt.Stop()
 		logger.Println("shutting down client...")
 

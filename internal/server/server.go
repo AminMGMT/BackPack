@@ -2,15 +2,15 @@ package server
 
 import (
 	"context"
-	"net/http"
-	_ "net/http/pprof"
 	"time"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/server/transport"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
+	"github.com/backpack/backpack/internal/web"
 
 	"github.com/sirupsen/logrus"
 )
@@ -35,6 +35,8 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	handlers.SetZeroCopy(cfg.ZeroCopy)
+	// Loopback unless this tunnel asked otherwise; see web/monitorhttp.go.
+	web.SetMonitorBind(cfg.WebBind)
 	return &Server{
 		config: cfg,
 		ctx:    ctx,
@@ -50,13 +52,21 @@ func (s *Server) Start() {
 	// dump contains whatever is in memory — including the tunnel token, which
 	// is all an attacker needs to connect. Reach it over SSH instead:
 	//   ssh -L 6060:127.0.0.1:6060 root@server
+	//
+	// It is tied to this generation's context, and Start does not return until
+	// it has let go of the port. A reload starts the next generation as soon as
+	// this one is done, so a profiling listener that outlived its generation
+	// would be holding a port the next one is about to ask for.
 	if s.config.PPROF {
+		pprofStopped := make(chan struct{})
 		go func() {
+			defer close(pprofStopped)
 			s.logger.Info("pprof listening on 127.0.0.1:6060 (loopback only)")
-			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			if err := debugserver.Serve(s.ctx, "127.0.0.1:6060"); err != nil {
 				s.logger.Errorf("pprof server stopped: %v", err)
 			}
 		}()
+		defer func() { <-pprofStopped }()
 	}
 
 	switch s.config.Transport {

@@ -10,11 +10,10 @@ import (
 	"github.com/backpack/backpack/config"
 
 	"github.com/backpack/backpack/internal/client/transport"
+	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
-
-	"net/http"
-	_ "net/http/pprof"
+	"github.com/backpack/backpack/internal/web"
 
 	"github.com/sirupsen/logrus"
 )
@@ -34,6 +33,8 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	handlers.SetZeroCopy(cfg.ZeroCopy)
+	// Loopback unless this tunnel asked otherwise; see web/monitorhttp.go.
+	web.SetMonitorBind(cfg.WebBind)
 	return &Client{
 		config: cfg,
 		ctx:    ctx,
@@ -47,13 +48,18 @@ func (c *Client) Start() {
 	// Profiling endpoint, off unless explicitly enabled in the config. Bound to
 	// loopback: pprof is unauthenticated and its heap dump would expose the
 	// tunnel token. Reach it with `ssh -L 6061:127.0.0.1:6061 root@server`.
+	// It is tied to this generation's context, and Start does not return until
+	// it has let go of the port; see the same block in internal/server.
 	if c.config.PPROF {
+		pprofStopped := make(chan struct{})
 		go func() {
+			defer close(pprofStopped)
 			c.logger.Info("pprof listening on 127.0.0.1:6061 (loopback only)")
-			if err := http.ListenAndServe("127.0.0.1:6061", nil); err != nil {
+			if err := debugserver.Serve(c.ctx, "127.0.0.1:6061"); err != nil {
 				c.logger.Errorf("pprof server stopped: %v", err)
 			}
 		}()
+		defer func() { <-pprofStopped }()
 	}
 
 	c.logger.Infof("client with remote address %s started successfully", c.config.RemoteAddr)

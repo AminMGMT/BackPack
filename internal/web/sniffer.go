@@ -59,7 +59,7 @@ type SystemStats struct {
 func NewDataStore(listenAddr string, shutdownCtx context.Context, snifferLog string, sniffer bool, tunnelStatus func() string, logger *logrus.Logger) *Usage {
 	ctx, cancel := context.WithCancel(shutdownCtx)
 	u := &Usage{
-		listenAddr:   listenAddr,
+		listenAddr:   monitorListenAddr(listenAddr),
 		shutdownCtx:  ctx,
 		cancelFunc:   cancel,
 		logger:       logger,
@@ -79,10 +79,7 @@ func (m *Usage) Monitor() {
 	if m.sniffer {
 		mux.HandleFunc("/data", m.handleData) // New route for JSON data
 	}
-	m.server = &http.Server{
-		Addr:    m.listenAddr,
-		Handler: mux,
-	}
+	m.server = newMonitorServer(m.listenAddr, monitorHTTP(mux))
 
 	go func() {
 		<-m.shutdownCtx.Done()
@@ -113,7 +110,10 @@ func (m *Usage) Monitor() {
 		}()
 	}
 	// Start the server
-	m.logger.Info("sniffer service listening on port: ", m.listenAddr)
+	if monitorIsPublic(m.listenAddr) {
+		m.logger.Warnf("the monitor page on %s has no authentication and is reachable from the network; set web_bind = \"127.0.0.1\" and reach it over SSH instead", m.listenAddr)
+	}
+	m.logger.Info("sniffer service listening on: ", m.listenAddr)
 	if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		m.logger.Errorf("sniffer server error: %v", err)
 	}
@@ -123,17 +123,26 @@ func (m *Usage) Monitor() {
 var indexHTML embed.FS
 
 func (m *Usage) handleIndex(w http.ResponseWriter, r *http.Request) {
+	// "/" is a catch-all in http.ServeMux, so without this every unknown path
+	// renders the dashboard instead of saying it does not exist.
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
 	usageData := m.getUsageFromFile()
 	readableData := m.usageDataWithReadableUsage(usageData)
 
 	tmpl, err := template.ParseFS(indexHTML, "index.html")
 	if err != nil {
 		m.logger.Errorf("error parsing template: %v", err)
+		http.Error(w, "could not render the monitor page", http.StatusInternalServerError)
 		return
 	}
 
-	err = tmpl.Execute(w, readableData)
-	if err != nil {
+	// Nothing useful can be said once Execute has started writing — the status
+	// line is long gone by then — so this one is logged and left.
+	if err := tmpl.Execute(w, readableData); err != nil {
 		m.logger.Errorf("error executing template: %v", err)
 	}
 }
@@ -152,6 +161,7 @@ func (m *Usage) statsHandler(w http.ResponseWriter, r *http.Request) {
 	stats, err := m.getSystemStats()
 	if err != nil {
 		m.logger.Error("Error fetching system stats:", err)
+		http.Error(w, "could not collect system stats", http.StatusInternalServerError)
 		return
 	}
 
