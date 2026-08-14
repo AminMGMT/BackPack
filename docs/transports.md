@@ -9,22 +9,29 @@ Not sure which to pick? Run **Manage → Link Test** on the kharej server; it
 measures your route and recommends one. See
 [Choosing a transport](choosing-a-transport.md).
 
-| Transport | Family | Encrypted handshake | PROXY protocol | Needs |
-|-----------|--------|:--:|:--:|-------|
-| TCP | TCP | — | ✅ | — |
-| TCP Mux | TCP | — | ✅ | — |
-| **TCP + Stealth** | TCP | ✅ (Noise) | ✅ | — |
-| **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root |
-| UDP | UDP | — | — | UDP open |
-| **UDP + KCP + FEC** | UDP | ✅ (token key) | ✅ | UDP open |
-| WS | WebSocket | — | — | — |
-| WS Mux | WebSocket | — | ✅ | — |
-| WSS | WebSocket | ✅ (TLS) | — | certificate |
-| WSS Mux | WebSocket | ✅ (TLS) | ✅ | certificate |
+| Transport | Family | Encrypted handshake | PROXY protocol | Needs | Setup guide |
+|-----------|--------|:--:|:--:|-------|---|
+| TCP | TCP | — | ✅ | — | [→](../tutorial/tcp.md) |
+| TCP Mux | TCP | — | ✅ | — | [→](../tutorial/tcp-mux.md) |
+| **TCP + Stealth** | TCP | ✅ (Noise) | ✅ | — | [→](../tutorial/tcp-stealth.md) |
+| **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root | [→](../tutorial/tcp-pck.md) |
+| UDP | UDP | — | — | UDP open | [→](../tutorial/udp.md) |
+| **UDP + KCP + FEC** | UDP | ✅ (token key) | ✅ | UDP open | [→](../tutorial/udp-kcp-fec.md) |
+| UDP + QUIC | UDP | ✅ (TLS 1.3) | ✅ | UDP open | [→](../tutorial/udp-quic.md) |
+| WS | WebSocket | — | — | — | [→](../tutorial/websocket.md) |
+| WS Mux | WebSocket | — | ✅ | — | [→](../tutorial/websocket.md) |
+| WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
+| WSS Mux | WebSocket | ✅ (TLS) | ✅ | certificate | [→](../tutorial/websocket-tls.md) |
+| **xDi (ICMP)** | Experimental | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
+| **IP Spoofing** | Experimental | ✅ (token key) | ✅ | Linux, root, a path that passes forged sources | [→](../tutorial/ip-spoofing.md) |
 
 "Encrypted handshake" means the tunnel's own credential is protected on the
 wire. On the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) the token is sent
 as-is, so use one of the encrypted transports on an untrusted path.
+
+Every transport can carry **UDP on its forwarded ports** — it is a per-tunnel
+setting, off by default, and independent of the transport. See
+[Forwarded UDP](forwarded-udp.md).
 
 ---
 
@@ -97,6 +104,51 @@ overhead. Datagrams are encrypted with a key derived from the tunnel token.
 segments and how many packets FEC repaired — the numbers that tell you whether
 KCP is earning its overhead on your route.
 
+### UDP + QUIC
+The tunnel inside QUIC streams: its own TLS 1.3, its own stream multiplexing,
+congestion control and loss recovery, so every byte is encrypted and there is
+nothing to hand-tune.
+
+**Offered, not recommended.** QUIC was built here once, tested on a real Iran
+route, and dropped because it never completed a handshake there while KCP on the
+same link ran at full speed. That finding still stands, which is why the Link
+Test's advisor recommends KCP for a lossy link and names QUIC only as the other
+thing to try. Test it on your own route before committing to it.
+
+---
+
+## Experimental family
+
+Not flavours of TCP or UDP but different ideas about how to move bytes at all.
+Both are Linux-only and need root.
+
+### xDi (ICMP)
+The KCP transport with its packets inside **ICMP echo requests and replies**
+instead of UDP datagrams. Everything above the packet layer — reliability, error
+correction, encryption — is identical.
+
+For the one network where UDP and TCP are filtered but ICMP is not, because ping
+is how such a network proves itself reachable. ICMP has no ports, so a raw ICMP
+socket receives every ping the host sees; each tunnel derives a **session tag**
+from its token, and a packet without this tunnel's tag is dropped without a
+second look — which is how several xDi tunnels share one host, and stay clear of
+stray pings and the kernel's own replies.
+
+Slower than everything else and heavy on ICMP rate limits. A last resort, not a
+default.
+
+### IP Spoofing
+Writes its own IP packets and stamps a **forged source address** on them, for a
+path that blocks, throttles or counts by address. Routing still uses the real
+peer, so the packet arrives; only the on-wire header says otherwise. KCP above
+the packet layer, like `xdi` and `pck`.
+
+It only carries anything where the network above the machine forwards packets
+with a forged source — plenty of providers drop them, and the built-in
+**IP Spoofing Tester** is how you find out. It also carries a whole WireGuard VPN
+instead of forwarded ports, in pipe mode. Every setting is documented in
+[IP Spoofing](ip-spoofing.md).
+
 ---
 
 ## WebSocket family
@@ -141,4 +193,36 @@ from **Edit → Certificate**.
 > over IPv6.
 
 ---
-[← Back to the main README](../README.md)
+
+<div dir="rtl">
+
+## خلاصهٔ فارسی
+
+هر تونل روی **یک ترنسپورت** حمل می‌شود که موقع ساخت انتخاب می‌شود و بعداً از
+`Edit → Change transport` قابل تعویض است (روی هر دو طرف). همه یک ترافیک را
+جابه‌جا می‌کنند؛ تفاوتشان در چیزی است که روی سیم دیده می‌شود.
+
+**خانوادهٔ TCP:** *TCP* ساده و سریع (نقطهٔ شروع)؛ *TCP Mux* برای سرویس‌هایی با
+اتصال‌های کوتاه و زیاد؛ *TCP + Stealth* رمزنگاری Noise بدون هیچ fingerprint —
+بهترین گزینه برای فیلترینگ سنگین؛ *TCP + PCK* که اصلاً از استک TCP کرنل استفاده
+نمی‌کند و برای وقتی است که تونل TCP وصل می‌شود و بعد بی‌دلیل می‌میرد.
+
+**خانوادهٔ UDP:** *UDP* خام (بدون قابلیت اطمینان)؛ *UDP + KCP + FEC* تونل
+کم‌تأخیر بازی با تصحیح خطای همیشه‌روشن؛ *UDP + QUIC* که فقط «در دسترس» است و
+پیشنهاد نمی‌شود چون روی مسیر واقعی ایران handshake را کامل نمی‌کرد.
+
+**خانوادهٔ WebSocket:** شبیه ترافیک وب معمولی و سازگار با CDN. *WSS* با
+fingerprint واقعی کروم، توکنی که فرستاده نمی‌شود، و یک **سایت تقلبی** که به هر
+کاوشگری صفحهٔ nginx نشان می‌دهد.
+
+**خانوادهٔ آزمایشی:** *xDi* که تونل را داخل پینگ می‌برد (برای شبکه‌ای که TCP و
+UDP را می‌بندد ولی ICMP را نه) و *IP Spoofing* که مبدأ پکت‌ها را جعل می‌کند
+(برای مسیری که بر اساس آدرس محدود می‌کند). هر دو لینوکس + root می‌خواهند.
+
+روی **همهٔ** ترنسپورت‌ها می‌شود UDP پورت‌های forward شده را هم عبور داد — یک
+تنظیم جدا و پیش‌فرض خاموش است: [Forwarded UDP](forwarded-udp.md).
+
+</div>
+
+---
+[← Back to the docs index](README.md) · [Setup walkthroughs →](../tutorial/README.md)

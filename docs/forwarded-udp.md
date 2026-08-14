@@ -137,6 +137,48 @@ tunnel logs a warning and carries on with TCP on that port. It is never fatal.
 
 ## Related
 
+- [Step-by-step: adding UDP to a tunnel](../tutorial/udp-forwarding.md)
 - [Transports — every one explained](transports.md)
 - [Real client IP (PROXY protocol)](real-client-ip.md)
 - [Per-tunnel limits](limits.md)
+
+---
+
+<div dir="rtl">
+
+## خلاصهٔ فارسی
+
+یک پورت forward شده می‌تواند **هم TCP و هم UDP** را حمل کند — ولی فقط وقتی که
+بخواهی. **پیش‌فرض خاموش است:** پورت ۴۴۳ را باز کنی، تونل فقط 443/tcp را می‌برد
+تا وقتی UDP را روشن کنی؛ آن‌وقت روی 443/udp هم گوش می‌دهد، هر دو را به سرور خارج
+می‌رساند و جواب‌ها را به فرستنده برمی‌گرداند.
+
+**چرا پیش‌فرض خاموش است؟** QUIC مرورگر روی UDP/443 است. اگر روشن باشد، هر تونل
+وب بی‌سروصدا شروع می‌کند به حمل همهٔ جریان‌های QUIC، و روی ترنسپورت‌های pool‌دار
+(ws، wss و خانوادهٔ mux) هر جریان یک اتصال از pool را تا زنده است نگه می‌دارد و
+forward‌های TCP گرسنه می‌مانند — سایت نصفه لود می‌شود و ری‌استارت موقتاً درستش
+می‌کند.
+
+**چه‌وقت روشنش کن:** Xray/3x-ui با خروجی UDP یا XUDP، رلهٔ UDP شدوساکس، وایرگارد
+(که کلاً UDP است)، DNS، بازی و ویس.
+
+**روشن کردن:** سر نصب سؤال «Carry UDP as well as TCP…» را `y` بزن؛ روی تونل
+موجود `Manage → Edit → Forward UDP`؛ در پنل وب از Fine Tune؛ یا دستی
+`accept_udp = true` زیر `[server]`. فقط سمت سرور (ایران) این تنظیم را دارد.
+
+**بعدش فایروال:** `ufw allow <port>/udp` هم لازم است — قانون TCP شامل UDP
+نمی‌شود، و باز کردن پورت UDP بدون روشن کردن این تنظیم هم بی‌اثر است.
+
+**اگر باز هم رد نشد:** فایروال را چک کن؛ هر دو طرف باید نسخهٔ ۱.۷.۱ به بالا
+باشند؛ روی سرور خارج با `ss -ulnp | grep <port>` ببین سرویس واقعاً روی UDP گوش
+می‌دهد؛ `grep accept_udp /etc/backpack/<tunnel>.toml` را نگاه کن؛ و در لاگ دنبال
+خط `UDP listener started successfully` بگرد.
+
+**ترنسپورت `udp` چیز دیگری است** — آن یعنی خودِ تونل روی دیتاگرام خام می‌رود و
+تقریباً هیچ‌وقت انتخاب درستی نیست. آنچه اینجا توضیح داده شد روی همهٔ
+ترنسپورت‌های استریمی کار می‌کند.
+
+</div>
+
+---
+[← Back to the docs index](README.md)

@@ -20,4 +20,24 @@ installs it as part of an update. [Health Check](health-check.md) reports if it
 is not running.
 
 ---
-[← Back to the main README](../README.md)
+
+<div dir="rtl">
+
+## خلاصهٔ فارسی
+
+واچ‌داگ، [ربات تلگرام](telegram-bot.md) و [هشدارها](alerts.md) در یک سرویس
+جداگانهٔ systemd به نام **`backpack-monitor.service`** اجرا می‌شوند، مستقل از
+[پنل وب](web-panel.md).
+
+**چرا جداست؟** قبلاً پایش داخل پروسهٔ پنل بود، یعنی پایش به پنل وابسته بود —
+که برعکس منطق است. با خاموش شدن یا کرش کردن پنل، ری‌استارت تونل‌های افتاده و
+همهٔ هشدارها بی‌صدا متوقف می‌شد. حالا پایش به هیچ چیز جز روشن بودن سرور وابسته
+نیست و اگر بمیرد خودش را دوباره بالا می‌آورد.
+
+**کاری لازم نیست بکنی:** خودکار نصب می‌شود — هم موقع اجرای CLI و هم به‌عنوان
+بخشی از آپدیت. [Health Check](health-check.md) می‌گوید اگر اجرا نشده باشد.
+
+</div>
+
+---
+[← Back to the docs index](README.md)

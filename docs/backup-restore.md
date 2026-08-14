@@ -18,4 +18,25 @@ from where the backup left off rather than resetting to zero.
 > Keep a backup file private — it contains tokens and the panel password.
 
 ---
-[← Back to the main README](../README.md)
+
+<div dir="rtl">
+
+## خلاصهٔ فارسی
+
+همه‌چیز در یک فایل `.tar.gz` قابل‌حمل: تمام تونل‌ها و توکن‌ها، رمز پنل وب،
+تنظیمات تلگرام، گواهی‌های TLS و زمان‌بندی ری‌فرش خودکار. فایل‌ها در
+`/root/BackPack/backups` ذخیره می‌شوند.
+
+**بازگردانی** همهٔ تونل‌ها را دوباره ثبت و استارت می‌کند و آمار ترافیک از همان
+جایی که بوده ادامه پیدا می‌کند، نه از صفر.
+
+از سه جا می‌شود انجامش داد: منوی CLI (گزینهٔ Backup & Restore)،
+[پنل وب](web-panel.md) در بخش Settings، یا دکمهٔ Backup در
+[ربات تلگرام](telegram-bot.md).
+
+> فایل پشتیبان را خصوصی نگه دار — توکن‌ها و رمز پنل داخلش است.
+
+</div>
+
+---
+[← Back to the docs index](README.md)

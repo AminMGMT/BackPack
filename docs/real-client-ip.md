@@ -20,4 +20,26 @@ not, it reads the header as ordinary traffic and every connection breaks. It is
 **off by default** for exactly this reason — enable it on both sides together.
 
 ---
-[← Back to the main README](../README.md)
+
+<div dir="rtl">
+
+## خلاصهٔ فارسی
+
+سرویسِ پشت تونل به‌طور عادی همهٔ اتصال‌ها را از طرف خودِ تونل می‌بیند — پس پنل
+VPN همهٔ کاربران را یک دستگاه می‌شمارد و محدودیت تعداد کاربر از کار می‌افتد.
+
+با روشن کردن `Edit → Real client IP` هر اتصال forward شده با یک هدر
+**PROXY protocol v2** حاوی آی‌پی و پورت واقعی کاربر شروع می‌شود.
+
+**در دسترس روی:** TCP، TCP Mux، KCP، WS Mux و WSS Mux. وب‌سوکت ساده و UDP خام
+جایی برای این هدر ندارند.
+
+**مهم:** **اول** باید سرویس مقصد طوری تنظیم شود که PROXY Protocol v2 را قبول
+کند (در X-UI/Marzban گزینهٔ inbound به نام «Accept Proxy Protocol»)، **بعد**
+این را روشن کنی. اگر برعکس عمل کنی، سرویس هدر را داده می‌خواند و **همهٔ
+اتصال‌ها خراب می‌شوند**. دقیقاً به همین دلیل پیش‌فرض خاموش است.
+
+</div>
+
+---
+[← Back to the docs index](README.md)

@@ -4,6 +4,36 @@ All notable changes to Backpack are documented here.
 
 ## Unreleased
 
+### Added
+- **A `tutorial/` folder: a step-by-step setup walkthrough for every transport.**
+  The docs said what each setting *is*; nothing said what to type, in what order,
+  to get a working tunnel. Each page now walks the wizard question by question —
+  the answer to give and the reason for it — for TCP, TCP Mux, Stealth, PCK, UDP,
+  KCP+FEC, QUIC, the WebSocket pair, xDi and IP Spoofing, plus
+  [before you start](tutorial/before-you-start.md) (roles, token, port mapping,
+  firewall), [adding UDP to a tunnel](tutorial/udp-forwarding.md) and
+  [behind a panel](tutorial/behind-a-panel.md). Every page ends with a Persian
+  summary, as does every page under `docs/`.
+- **[docs/ip-spoofing.md](docs/ip-spoofing.md) — the spoof carrier documented
+  setting by setting**, including the ones no menu asks about: which settings
+  must match the peer and which are local, every fingerprint and evasion knob
+  with its config key and its cost, and how to drive the two-node tester.
+- **[docs/cli-menu.md](docs/cli-menu.md) rewritten as a complete reference.** It
+  was a summary that had fallen behind the menu; it now covers every option in
+  every menu — both setup wizards prompt by prompt, all twelve Manage entries,
+  the Edit screens for each role and transport, and the whole **Fine Tune**
+  block, which was documented nowhere.
+- **[docs/install.md](docs/install.md)**, holding the offline and manual install
+  paths the README used to carry inline.
+
+### Changed
+- **The README is an introduction again.** It had grown into a manual: install,
+  offline install, quick start, the full feature list and a link farm. What is
+  left is what a first-time reader needs — what it is, how it works, install,
+  the five-minute quick start, a transport table pointing at the walkthroughs,
+  and the highlights (the long list is still there, folded away). Everything else
+  moved into `docs/` or `tutorial/`. `README_FA.md` follows the same shape.
+
 ### Fixed
 - **Server setup asks about UDP forwarding in the main flow, and its firewall
   advice now matches the answer.** v1.7.2 made forwarded UDP opt-in again, for
