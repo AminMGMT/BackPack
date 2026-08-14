@@ -119,12 +119,11 @@ func applyManualTuning(s *TunnelSpec) {
 	}
 	if s.Role == "server" {
 		s.ChannelSize = tui.PromptInt("Channel size", s.ChannelSize)
-		// Off by default: a forwarded port carries TCP only unless this is
-		// turned on. Turn it on for a tunnel that must carry UDP — a VPN, a
-		// game, an Xray/Shadowsocks inbound. A plain web or proxy tunnel should
-		// leave it off, or the browser's QUIC (UDP/443) is tunnelled too and
-		// crowds the connection pool the TCP forwards share.
-		s.AcceptUDP = tui.Confirm("Forward UDP as well as TCP on the exposed ports (only if you need UDP)", s.AcceptUDP)
+		// UDP forwarding is not asked here: it is asked in the main setup flow,
+		// next to the exposed ports it describes. Burying it under the advanced
+		// settings — which default to "no" — meant a fresh install never saw
+		// the question at all, and an Xray or WireGuard inbound came up with
+		// nothing explaining why only half of it worked.
 	} else {
 		s.ConnectionPool = tui.PromptInt("Connection pool size", s.ConnectionPool)
 		s.AggressivePool = tui.Confirm("Enable aggressive pool", s.AggressivePool)
@@ -684,7 +683,8 @@ func SetupServer() {
 	}
 
 	// AcceptUDP starts off: a forwarded port carries TCP only unless the
-	// operator turns UDP on. See config.ServerConfig.ForwardsUDP.
+	// operator turns UDP on, which is asked for below. See
+	// config.ServerConfig.ForwardsUDP.
 	s := TunnelSpec{Role: "server", Transport: transport, AcceptUDP: false}
 
 	port := tui.Prompt("Tunnel (control) port: ")
@@ -733,7 +733,20 @@ func SetupServer() {
 		tui.PressEnter()
 		return
 	}
-	showForwardTargets(s.Ports)
+
+	// Asked in the main flow, right after the ports it applies to, rather than
+	// only under the advanced settings: it is off by default, and a tunnel
+	// fronting an Xray or WireGuard inbound is then broken in a way nothing at
+	// setup accounts for. The cost of saying yes is spelled out so a plain web
+	// tunnel still says no — see config.ServerConfig.ForwardsUDP.
+	fmt.Println()
+	tui.Warn("UDP forwarding is OFF by default. Say yes for Xray/Shadowsocks UDP,")
+	tui.Warn("WireGuard, DNS or games. Say no for a plain web or proxy tunnel: a")
+	tui.Warn("browser's QUIC is UDP on 443, and tunnelling it crowds out the TCP")
+	tui.Warn("forwards sharing this tunnel. It can be changed later under Edit.")
+	s.AcceptUDP = tui.Confirm("Carry UDP as well as TCP on the exposed ports", false)
+
+	showForwardTargets(s.Ports, s.AcceptUDP)
 
 	if needsTLS(transport) && !setupServerTLS(&s) {
 		return
@@ -922,7 +935,11 @@ func finishSetup(s TunnelSpec) {
 // other machine, and that indirection is where people go wrong. Printing the
 // resolved target turns "443" into a concrete instruction they can go and
 // check, before the tunnel is built rather than after it appears broken.
-func showForwardTargets(ports []string) {
+//
+// acceptUDP decides what the firewall advice says: a rule opened for TCP is not
+// opened for UDP, and telling someone to open a UDP port on a tunnel that
+// forwards only TCP reads as a promise the tunnel does not keep.
+func showForwardTargets(ports []string, acceptUDP bool) {
 	type target struct{ exposed, dest string }
 	var targets []target
 
@@ -970,10 +987,17 @@ func showForwardTargets(ports []string) {
 	tui.Warn("A panel bound to a public IP instead of 127.0.0.1 will refuse the")
 	tui.Warn("connection — in that case map it explicitly: 443=<that IP>:443")
 	fmt.Println()
-	// Both protocols on every forwarded port, which is new — and a firewall
-	// opened for TCP is not opened for UDP, which is the thing people miss.
-	tui.Info("These ports carry UDP as well as TCP (Xray, Shadowsocks, DNS, games).")
-	tui.Warn("Open BOTH in the firewall here:  ufw allow <port>/tcp && ufw allow <port>/udp")
+	// A firewall opened for TCP is not opened for UDP, which is the thing
+	// people miss — so say which one this tunnel actually needs.
+	if acceptUDP {
+		tui.Info("These ports carry UDP as well as TCP (Xray, Shadowsocks, DNS, games).")
+		tui.Warn("Open BOTH in the firewall here:  ufw allow <port>/tcp && ufw allow <port>/udp")
+	} else {
+		tui.Info("These ports carry TCP only — UDP forwarding is off for this tunnel.")
+		tui.Warn("Open them in the firewall here:  ufw allow <port>/tcp")
+		tui.Warn("If you later need UDP, turn it on under Manage -> Edit -> Forward UDP")
+		tui.Warn("and open <port>/udp as well — opening the UDP port alone does nothing.")
+	}
 	fmt.Println()
 }
 

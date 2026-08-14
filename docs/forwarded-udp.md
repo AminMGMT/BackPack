@@ -18,8 +18,10 @@ kharej machine, and sends the replies back to whoever sent them.
 
 - **Panel** — Edit the *server* tunnel → Fine Tune → switch on **Forward UDP as
   well as TCP on the exposed ports** → Save.
-- **CLI** — answer *yes* to the UDP question under "Fine-tune the advanced
-  settings by hand" at setup.
+- **CLI, at setup** — answer *yes* to "Carry UDP as well as TCP on the exposed
+  ports", asked right after the exposed ports on the server side.
+- **CLI, afterwards** — Manage → Edit → **Forward UDP**, which restarts the
+  tunnel for you.
 - **By hand** — add `accept_udp = true` under `[server]` and restart.
 
 Turn it on because a lot of what people put behind a tunnel is not TCP-only:
@@ -82,8 +84,8 @@ If TCP works through the tunnel and UDP does not, check this first.
 Some servers already have something on the UDP side of a port they want to
 forward over TCP. Set it per tunnel:
 
-- **CLI** — Setup or Edit → fine-tune the advanced settings → *Forward UDP as
-  well as TCP on the exposed ports*
+- **CLI** — Manage → Edit → *Forward UDP*, or answer *no* to the UDP question at
+  setup
 - **Web panel** — Edit → Fine Tune → the same switch
 - **By hand** — `accept_udp = false` in the `[server]` section
 

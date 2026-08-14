@@ -2,6 +2,30 @@
 
 All notable changes to Backpack are documented here.
 
+## Unreleased
+
+### Fixed
+- **Server setup asks about UDP forwarding in the main flow, and its firewall
+  advice now matches the answer.** v1.7.2 made forwarded UDP opt-in again, for
+  the QUIC reason below, but left the setup wizard describing the old default:
+  after the exposed ports it still announced "These ports carry UDP as well as
+  TCP" and told you to run `ufw allow <port>/udp` — on a tunnel that had just
+  been created with `accept_udp = false`. The only place to turn UDP on during
+  setup was a question inside "Fine-tune the advanced settings by hand", which
+  defaults to *no*, so a fresh install never saw it. The result was reported as
+  a TCP Mux bug: a server upgraded from v1.7.1 kept forwarding UDP (its config
+  already said `accept_udp = true`, and an upgrade does not rewrite configs)
+  while a fresh v1.7.2 install on the same setup carried TCP only, with nothing
+  on screen to explain the difference.
+
+  The question is now asked in the main server flow, right after the exposed
+  ports it applies to, with the trade named on both sides — yes for
+  Xray/Shadowsocks UDP, WireGuard, DNS and games; no for a plain web or proxy
+  tunnel, whose browser QUIC would otherwise crowd out the TCP forwards. The
+  firewall line that follows then names only the protocol the tunnel actually
+  carries, and says where to change it later. The default is unchanged: still
+  off. See [docs/forwarded-udp.md](docs/forwarded-udp.md).
+
 ## v1.7.2 — 2026-08-14
 
 ### Added
