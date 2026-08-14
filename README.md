@@ -4,9 +4,9 @@
 
 <p align="center">
   <a href="go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/AminMGMT/BackPack?logo=go&label=Go"></a>
-  <a href="https://github.com/AminMGMT/BackPack/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/AminMGMT/BackPack?logo=github&label=release&color=blue"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/AminMGMT/BackPack?color=green"></a>
-  <a href="https://github.com/AminMGMT/BackPack/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/AminMGMT/BackPack?style=flat&logo=github&color=yellow"></a>
+  <a href="https://github.com/AminMGMT/BackPack/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/AminMGMT/BackPack?logo=github&label=release&color=orange"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/AminMGMT/BackPack?color=orange"></a>
+  <a href="https://github.com/AminMGMT/BackPack/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/AminMGMT/BackPack?style=flat&logo=github&color=orange"></a>
   <a href="https://github.com/AminMGMT/BackPack/releases"><img alt="Total downloads across all releases" src="https://img.shields.io/github/downloads/AminMGMT/BackPack/total?logo=github&label=total%20downloads&color=orange"></a>
 </p>
 
@@ -19,7 +19,9 @@ run and manage everything with or without a terminal.
   <b><a href="tutorial/README.md">📘 Setup tutorials</a></b> ·
   <b><a href="docs/README.md">📚 Documentation</a></b> ·
   <b><a href="README_FA.md">🇮🇷 راهنمای فارسی</a></b> ·
-  <b><a href="https://t.me/BlackProtocols">✈️ Telegram</a></b>
+  <b><a href="https://t.me/BlackProtocols">Telegram Channel</a></b>
+  <b><a href="https://t.me/BlackProtocolsGroup">Telegram Group</a></b>
+
 </p>
 
 ---
@@ -30,8 +32,8 @@ run and manage everything with or without a terminal.
 
 ```
   end users ──▶  IRAN server  ══ tunnel ══▶  KHAREJ server  ──▶  real service
-                 "Setup Server"               "Setup Client"      (X-UI, panel,
-                 exposes the ports            dials out to Iran     WireGuard…)
+                 "Setup Server"               "Setup Client"      
+                 exposes the ports            dials out to Iran     
 ```
 
 An end user connects to a **forwarded port** on the Iran server; the engine
@@ -205,6 +207,7 @@ Both sections are also summarised in Persian at the bottom of every page.
 If Backpack helps you, a star or a small tip is appreciated. 🙏
 
 - Telegram channel: **[@BlackProtocols](https://t.me/BlackProtocols)**
+- Telegram Group: **[@BlackProtocolsGroup](https://t.me/BlackProtocolsGroup)**
 
 | Coin | Address |
 |------|---------|
