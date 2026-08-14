@@ -19,7 +19,7 @@ run and manage everything with or without a terminal.
   <b><a href="tutorial/README.md">📘 Setup tutorials</a></b> ·
   <b><a href="docs/README.md">📚 Documentation</a></b> ·
   <b><a href="README_FA.md">🇮🇷 راهنمای فارسی</a></b> ·
-  <b><a href="https://t.me/BlackProtocols">Telegram Channel</a></b>
+  <b><a href="https://t.me/BlackProtocols">Telegram Channel</a></b> ·
   <b><a href="https://t.me/BlackProtocolsGroup">Telegram Group</a></b>
 
 </p>
