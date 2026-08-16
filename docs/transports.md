@@ -177,9 +177,11 @@ Two things make these more than "WS with TLS":
   the client proves it holds the token with an HMAC over that material. A man in
   the middle has a different session and cannot replay it.
 - **Decoy site.** Anything that is not a genuine tunnel connection — a browser,
-  a scanner, a probe with the wrong token — is answered with an ordinary
-  "Welcome to nginx!" page, so the server looks like a normal HTTPS website
-  rather than a tunnel. Built in and always on. See
+  a scanner, a probe with the wrong token — is answered by a stock **nginx**:
+  the "Welcome to nginx!" page at `/`, a normal `404` everywhere else, with the
+  headers a real file carries. Each install derives its own nginx version, page
+  date and `ETag` from its token, so no two servers answer alike and the fleet
+  cannot be found with one scan. Built in and always on. See
   [Decoy site (WSS camouflage)](camouflage.md).
 
 **Certificate:** at setup you can get a **Let's Encrypt** certificate

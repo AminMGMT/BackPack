@@ -296,6 +296,11 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 		},
 	}
 
+	// The decoy's identity is derived once here rather than per request: it is
+	// fixed for the life of this server, and hashing the token on every probe
+	// would be work an attacker could ask for.
+	decoy := newDecoyProfile(s.config.Token)
+
 	// Create an HTTP server
 	server := &http.Server{
 		Addr:        addr,
@@ -309,7 +314,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 			// website, so on 443 this looks like an ordinary HTTPS site rather
 			// than a tunnel that answers with 401.
 			if !isTunnelRequest(r, s.config.Token, s.config.SimpleAuth) {
-				serveDecoy(w)
+				decoy.serve(w, r)
 				return
 			}
 

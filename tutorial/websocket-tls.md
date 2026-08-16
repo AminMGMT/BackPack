@@ -13,8 +13,10 @@ Three things make it more than "WS with TLS":
   with an HMAC over that material — a man in the middle has a different session
   and cannot replay it.
 - **A decoy site.** Anything that is not a genuine tunnel connection — a browser,
-  a scanner, a probe with the wrong token — gets an ordinary "Welcome to nginx!"
-  page. Built in, always on. [More](../docs/camouflage.md).
+  a scanner, a probe with the wrong token — gets a stock nginx: the "Welcome to
+  nginx!" page at `/` and a normal `404` on every other path. Each install wears
+  its own nginx version and page date, derived from its token, so no two servers
+  look the same. Built in, always on. [More](../docs/camouflage.md).
 
 **Reach for it when:** you want a CDN in front, or where unidentifiable traffic
 would itself be suspicious. (Where it would not be, [Stealth](tcp-stealth.md) is
@@ -112,7 +114,9 @@ answering, and it is what a scanner sees.
 
 سه چیز آن را از «WS + TLS» جدا می‌کند: **fingerprint واقعی کروم**، **توکنی که
 اصلاً فرستاده نمی‌شود** (به‌جایش با HMAC روی session اثبات می‌شود)، و **سایت
-تقلبی** که به هر کاوشگر و مرورگری صفحهٔ «Welcome to nginx» نشان می‌دهد.
+تقلبی** که به هر کاوشگر و مرورگری یک nginx معمولی نشان می‌دهد — صفحهٔ «Welcome to
+nginx» روی `/` و `404` روی هر مسیر دیگر. هر نصب نسخهٔ nginx و تاریخ صفحهٔ خودش را
+از توکن خودش می‌سازد، پس دو سرور شبیه هم جواب نمی‌دهند.
 
 سر راه‌اندازی روی ایران یک صفحهٔ **گواهی** اضافه می‌شود: *self-signed* (پیش‌فرض،
 همه‌جا کار می‌کند و رمزنگاری‌اش دقیقاً به همان خوبی است)، *Let's Encrypt* (نیاز

@@ -73,6 +73,7 @@ Both survive DPI; they hide in opposite directions.
 | Needs a certificate | no | yes (self-signed or Let's Encrypt) |
 | Can sit behind a CDN | no | yes |
 | A browser hitting the port sees | nothing | a normal "Welcome to nginx" page |
+| A scanner sweeping for it finds | nothing to match on | a different nginx on every install |
 | Overhead | lower | TLS on top of WebSocket framing |
 
 Rule of thumb: on a bare IP where "unidentifiable traffic" is fine, use Stealth.

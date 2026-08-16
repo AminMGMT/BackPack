@@ -45,46 +45,6 @@ func isTunnelRequest(r *http.Request, token string, simpleAuth bool) bool {
 	return authorizeWSRequest(r, token, simpleAuth)
 }
 
-// serveDecoy answers a non-tunnel request as an ordinary web server would.
-//
-// This is what makes a wss tunnel survive scrutiny: on port 443 behind a real
-// domain and certificate, the server has to look like a website, not a tunnel.
-// A browser or an active probe that hits it — wrong path, no upgrade, wrong
-// token — must see a plausible page and a normal 200, not a 401 or a blank
-// close that gives the game away. The page is the stock "welcome" placeholder a
-// freshly set-up server serves, which is one of the most common and least
-// remarkable things on the web; the tunnel itself only answers a websocket
-// upgrade on its own path with the right credential.
-func serveDecoy(w http.ResponseWriter) {
-	w.Header().Set("Server", "nginx")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(decoyPage))
-}
-
-const decoyPage = `<!DOCTYPE html>
-<html>
-<head>
-<title>Welcome to nginx!</title>
-<style>
-body { width: 35em; margin: 0 auto; font-family: Tahoma, Verdana, Arial, sans-serif; }
-</style>
-</head>
-<body>
-<h1>Welcome to nginx!</h1>
-<p>If you see this page, the nginx web server is successfully installed and
-working. Further configuration is required.</p>
-
-<p>For online documentation and support please refer to
-<a href="http://nginx.org/">nginx.org</a>.<br/>
-Commercial support is available at
-<a href="http://nginx.com/">nginx.com</a>.</p>
-
-<p><em>Thank you for using nginx.</em></p>
-</body>
-</html>
-`
-
 // authorizeWSRequest checks the Authorization header on a websocket upgrade.
 //
 // Over plain ws there is no session to bind to, so the header carries the token

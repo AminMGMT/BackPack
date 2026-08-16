@@ -27,6 +27,35 @@ All notable changes to Backpack are documented here.
   paths the README used to carry inline.
 
 ### Changed
+- **The WSS decoy site is a different web server on every install, and answers
+  like a file server rather than a program.** The decoy existed so a probe would
+  see a website instead of a tunnel, and for one server it worked. Across the
+  fleet it did the opposite: every Backpack on earth returned byte-identical
+  bytes — the same trimmed page, `Server: nginx`, and nothing else. No
+  `Last-Modified`, no `ETag`, no `Accept-Ranges`, the same `Content-Length`
+  everywhere. One internet-wide scan for that exact response enumerated every
+  Backpack server there is, no token and no probing required; a camouflage
+  everybody wears identically is a uniform.
+
+  Each install now derives its own identity from **its tunnel token** — which
+  real distro nginx version it claims to be (and whether that build prints its
+  version at all), when its `index.html` was written, and the `ETag` computed
+  from that date and the page size in nginx's own format, so the three can never
+  contradict each other. nginx changed its default page and its error pages in
+  the 1.23 series, so each version serves the pages that version really ships.
+  The token is secret and different everywhere, so the values cannot be
+  predicted from outside; it is a hash rather than a random draw, so a server
+  keeps its identity across restarts, as a real file on a real disk does.
+
+  The responses themselves are a file server's now: `/` is served with the full
+  static-file header set and honours conditional and range requests — a probe
+  that hands back the `ETag` gets a `304`, not another `200` — and **every other
+  path gets nginx's own `404`**, the tunnel's `/channel` included. Serving the
+  welcome page on every path was the older behaviour and was a tell twice over:
+  no static site answers `200` for arbitrary paths, and the tunnel path was only
+  unremarkable next to the equally wrong `200` that every other path got. Being
+  a `404` among `404`s hides it properly. Nothing to configure, and the two ends
+  do not have to agree on any of it — the client never looks at the decoy.
 - **The README is an introduction again.** It had grown into a manual: install,
   offline install, quick start, the full feature list and a link farm. What is
   left is what a first-time reader needs — what it is, how it works, install,
