@@ -114,6 +114,7 @@ type KcpConfig struct {
 	SpoofSrcPool   []string
 	SpoofPeerIP    string
 	SpoofInterface string
+	SpoofXDPIface  string
 	SpoofSockBuf   int
 	SpoofPeerSrcIP string
 	SpoofICMPReply bool
@@ -183,6 +184,7 @@ func (c *KcpConfig) settings() network.KCPSettings {
 			SrcPool:    c.SpoofSrcPool,
 			PeerIP:     c.SpoofPeerIP,
 			Interface:  c.SpoofInterface,
+			XDPIface:   c.SpoofXDPIface,
 			SockBuf:    c.SpoofSockBuf,
 			PeerSrcIP:  c.SpoofPeerSrcIP,
 			ReplySplit: c.SpoofICMPReply,

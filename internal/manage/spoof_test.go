@@ -88,8 +88,9 @@ func TestSpoofAsymmetricRoundTrip(t *testing.T) {
 	}
 }
 
-// Pipe mode renders its keys and they survive a round trip.
-func TestSpoofPipeRoundTrip(t *testing.T) {
+// Relay mode renders the canonical spoof_mode/spoof_forward keys and they
+// survive a round trip as relay mode with the right forward target.
+func TestSpoofRelayRoundTrip(t *testing.T) {
 	s := TunnelSpec{
 		Role: "server", Name: "iran", Transport: "spoof",
 		BindAddr: "0.0.0.0:1234", Token: "t", Ports: []string{"51820"},
@@ -97,17 +98,38 @@ func TestSpoofPipeRoundTrip(t *testing.T) {
 		SpoofPipe: true, SpoofPipeAddr: "127.0.0.1:51820",
 	}
 	out := s.Render()
-	for _, want := range []string{"spoof_pipe = true", `spoof_pipe_addr = "127.0.0.1:51820"`} {
+	for _, want := range []string{`spoof_mode = "relay"`, `spoof_forward = "127.0.0.1:51820"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q\n---\n%s", want, out)
 		}
 	}
 	var cfg config.Config
 	if _, err := toml.Decode(out, &cfg); err != nil {
-		t.Fatalf("pipe config does not parse: %v", err)
+		t.Fatalf("relay config does not parse: %v", err)
 	}
-	if !cfg.Server.SpoofPipe || cfg.Server.SpoofPipeAddr != "127.0.0.1:51820" {
-		t.Fatalf("pipe fields did not survive: %+v", cfg.Server.SpoofConfig)
+	if !cfg.Server.RelayMode() || cfg.Server.RelayForward() != "127.0.0.1:51820" {
+		t.Fatalf("relay fields did not survive: %+v", cfg.Server.SpoofConfig)
+	}
+}
+
+// The legacy spoof_pipe/spoof_pipe_addr keys are still honoured as relay mode,
+// so configs written by older versions keep working after the rename.
+func TestSpoofLegacyPipeAlias(t *testing.T) {
+	const legacy = `
+[server]
+transport = "spoof"
+spoof_pipe = true
+spoof_pipe_addr = "127.0.0.1:41820"
+`
+	var cfg config.Config
+	if _, err := toml.Decode(legacy, &cfg); err != nil {
+		t.Fatalf("legacy pipe config does not parse: %v", err)
+	}
+	if !cfg.Server.RelayMode() {
+		t.Fatal("legacy spoof_pipe = true did not resolve to relay mode")
+	}
+	if got := cfg.Server.RelayForward(); got != "127.0.0.1:41820" {
+		t.Fatalf("legacy spoof_pipe_addr not honoured: got %q", got)
 	}
 }
 

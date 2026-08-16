@@ -143,17 +143,36 @@ type SpoofConfig struct {
 	// for a multi-homed host where the forged source would otherwise pick the
 	// wrong link. Empty lets the kernel route by the real destination.
 	SpoofInterface string `toml:"spoof_interface"`
-	// SpoofPipe switches the spoof transport from a KCP tunnel to a raw UDP pipe
-	// for WireGuard: instead of forwarding ports, it relays datagrams between a
-	// local WireGuard socket and the forged-source channel, so a whole-device VPN
-	// rides over it. WireGuard supplies its own encryption and loss handling, so
-	// no KCP sits underneath. Ports/mux settings are ignored in this mode.
+	// SpoofXDPInterface, when set to a NIC name (e.g. "eth0"), attaches an XDP/eBPF
+	// program to that device to receive the tunnel's forged-source packets in the
+	// kernel fast path, before the normal socket stack — higher throughput and
+	// lower CPU under load than the default raw-socket receive. Pure Go (no clang
+	// or libbpf), opt-in, and best-effort: if the kernel is too old or the attach
+	// or verifier fails, the carrier logs it and silently falls back to the
+	// ordinary raw/UDP receive, so a working tunnel is never lost to it. Empty
+	// disables it. Linux only; needs CAP_BPF/CAP_NET_ADMIN in addition to the
+	// carrier's CAP_NET_RAW.
+	SpoofXDPInterface string `toml:"spoof_xdp_interface"`
+	// SpoofPipe is the legacy alias for spoof_mode = "relay": true selects relay
+	// mode. Kept so configs written by older versions keep working; new configs
+	// use SpoofMode. Resolved through RelayMode, never read directly.
 	SpoofPipe bool `toml:"spoof_pipe"`
-	// SpoofPipeAddr is this host's WireGuard UDP endpoint. On the client it is
-	// where the tunnel listens and where WireGuard's `endpoint` points; on the
-	// server it is where the real WireGuard listens and datagrams are forwarded.
-	// Defaults to 127.0.0.1:51820.
+	// SpoofPipeAddr is the legacy alias for spoof_forward: the relay mode's local
+	// UDP target. Kept for old configs; resolved through RelayForward.
 	SpoofPipeAddr string `toml:"spoof_pipe_addr"`
+	// SpoofMode selects the carrier's shape: "kcp" (the default) wraps a reliable,
+	// encrypted KCP tunnel over the forged-source channel; "relay" strips KCP and
+	// runs a bare bidirectional datagram relay between a local UDP socket and the
+	// channel — the spoof-tunnel model, for carrying something that brings its own
+	// reliability (WireGuard, or another tunnel). Empty means "kcp", unless the
+	// legacy SpoofPipe is set, which is treated as "relay". See RelayMode.
+	SpoofMode string `toml:"spoof_mode"`
+	// SpoofForward is the relay mode's local UDP target: on the client the socket
+	// the tunnel listens on (point the inner app's endpoint here); on the server
+	// the socket datagrams out of the tunnel are forwarded to (where the inner
+	// service listens). Empty falls back to SpoofPipeAddr, then 127.0.0.1:51820.
+	// Ignored in kcp mode. See RelayForward.
+	SpoofForward string `toml:"spoof_forward"`
 	// SpoofSockBuf sizes the send and receive socket buffers (SO_SNDBUF /
 	// SO_RCVBUF) of the raw and UDP sockets the carrier owns, in bytes. A large
 	// buffer is what lets the forged-source flow reach real bandwidth: under a

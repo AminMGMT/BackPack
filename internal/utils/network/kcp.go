@@ -113,44 +113,8 @@ func (s KCPSettings) logSettings(role string) {
 		role, s.MTU, s.effectiveMTU(), fec, s.SndWnd, s.RcvWnd)
 }
 
-// SpoofCarrier is the IP-spoofing carrier's tuning, passed down to the raw
-// socket. Nil in KCPSettings means the session rides on UDP (or ICMP) instead.
-//
-// Uplink is the client→server profile, Downlink the server→client one; for a
-// symmetric tunnel they are equal. The carrier's own constructor picks which is
-// its send and which its receive from the side it is on.
-type SpoofCarrier struct {
-	Uplink     SpoofProfile
-	Downlink   SpoofProfile
-	SrcIP      string   // forged source address, empty to keep the real one
-	SrcPool    []string // forged sources to rotate through; SrcIP is a member
-	PeerIP     string   // peer's real IPv4; required on the server, derived on the client
-	Interface  string   // egress device to pin the raw socket to, empty for none
-	SockBuf    int      // SO_SNDBUF/SO_RCVBUF for the carrier's sockets, 0 = default
-	PeerSrcIP  string   // expected forged source of inbound packets, empty = accept any
-	ReplySplit bool     // icmp/icmpv6: client sends Echo Request, server sends Echo Reply
-	MTU        int      // fragment sends larger than this, 0 = default 1500
-	DPI        SpoofDPI // optional obfuscation knobs (ttl/dscp/port/padding/fake-tls)
-}
-
-// spoofOpts turns a carrier's public knobs into the internal constructor's
-// options for one side of the tunnel.
-func (c SpoofCarrier) spoofOpts(token string, realPeer net.IP) spoofConnOpts {
-	return spoofConnOpts{
-		token:      token,
-		uplink:     c.Uplink,
-		downlink:   c.Downlink,
-		realPeer:   realPeer,
-		srcIP:      c.SrcIP,
-		srcPool:    c.SrcPool,
-		iface:      c.Interface,
-		sockBuf:    c.SockBuf,
-		replySplit: c.ReplySplit,
-		peerSrc:    c.PeerSrcIP,
-		mtu:        c.MTU,
-		dpi:        c.DPI,
-	}
-}
+// SpoofCarrier, its spoofOpts, and the spoof branches of KCPDial/KCPListen live
+// in spoofkcp.go so the shared KCP path here carries no spoof-specific logic.
 
 // effectiveMTU returns the MTU KCP should use, which is smaller on the carriers
 // whose framing eats into the packet: ICMP echo, or the spoof header. Left as
@@ -160,13 +124,7 @@ func (s KCPSettings) effectiveMTU() int {
 		return s.MTU - icmpMTUOverhead
 	}
 	if s.Spoof != nil {
-		// Subtract the larger of the two directions' overhead so neither
-		// fragments, whichever way a given packet goes.
-		over := spoofOverhead(s.Spoof.Uplink)
-		if d := spoofOverhead(s.Spoof.Downlink); d > over {
-			over = d
-		}
-		return s.MTU - over
+		return s.MTU - spoofMaxOverhead(s)
 	}
 	if s.Pck != nil {
 		// The IP and TCP headers plus the timestamp option. The Ethernet header
@@ -258,25 +216,9 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 		return listener, conn, nil
 	}
 
-	// Over the spoof carrier the send side is a raw IPv4 socket and the receive
-	// side an ordinary UDP one; KCP is handed the pair as a single PacketConn and
-	// does not know the difference. The server must be told the client's real
-	// address, because the forged packets cannot reveal it.
+	// The spoof carrier's listener is built in spoofkcp.go; here we only dispatch.
 	if s.Spoof != nil {
-		peer := net.ParseIP(s.Spoof.PeerIP)
-		if peer == nil {
-			return nil, nil, fmt.Errorf("spoof: spoof_peer_ip must be set to the client's real IPv4 address on the server")
-		}
-		conn, err := newSpoofServerConn(s.Spoof.spoofOpts(token, peer))
-		if err != nil {
-			return nil, nil, err
-		}
-		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
-		if err != nil {
-			conn.Close()
-			return nil, nil, fmt.Errorf("spoof: failed to start the KCP listener: %w", err)
-		}
-		return listener, conn, nil
+		return spoofKCPListen(token, block, s)
 	}
 
 	// The pck carrier is a PacketConn like the others, so KCP is handed it and
@@ -352,26 +294,12 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 			return nil, fmt.Errorf("xdi: failed to open the KCP session: %w", err)
 		}
 	} else if s.Spoof != nil {
-		// The real destination every packet is routed to is the server: its
-		// configured real address if given, otherwise the host of remoteAddr.
-		ipAddr, err := hostToIPAddr(remoteAddr)
+		// The spoof carrier's session is built in spoofkcp.go; here we only
+		// dispatch. Tuning is applied by the shared tail below, as for every
+		// carrier.
+		session, err = spoofKCPDial(remoteAddr, token, block, s)
 		if err != nil {
 			return nil, err
-		}
-		peer := ipAddr.IP
-		if s.Spoof.PeerIP != "" {
-			if p := net.ParseIP(s.Spoof.PeerIP); p != nil {
-				peer = p
-			}
-		}
-		conn, err := newSpoofClientConn(s.Spoof.spoofOpts(token, peer))
-		if err != nil {
-			return nil, err
-		}
-		session, err = ownedKCPSession(&net.IPAddr{IP: peer}, block, s.DataShards, s.ParityShards, conn)
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("spoof: failed to open the KCP session: %w", err)
 		}
 	} else if s.Pck != nil {
 		// The client addresses its segments to the server's real address and

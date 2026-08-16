@@ -82,8 +82,9 @@ type TunnelSpec struct {
 	SpoofPeerIP    string   // peer's real IPv4; required on the server
 	SpoofDstIP     string   // forged destination in the cosmetic shim (unused by udp)
 	SpoofInterface string   // egress device to pin the raw socket to
-	SpoofPipe      bool     // WireGuard-pipe mode instead of a KCP tunnel
-	SpoofPipeAddr  string   // this host's WireGuard UDP endpoint
+	SpoofXDPIface  string   // NIC to attach the XDP receive fast path to, empty = off
+	SpoofPipe      bool     // relay mode (bare datagram relay) instead of a KCP tunnel
+	SpoofPipeAddr  string   // the relay's local UDP target (e.g. a WireGuard endpoint)
 	SpoofSockBuf   int      // SO_SNDBUF/SO_RCVBUF for the carrier's sockets (bytes)
 	SpoofPeerSrcIP string   // expected forged source of inbound packets
 	SpoofICMPReply bool     // icmp/icmpv6: client requests, server replies
@@ -236,6 +237,9 @@ func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
 	if s.SpoofDstIP != "" {
 		p("spoof_dst_ip = %q\n", s.SpoofDstIP)
 	}
+	if s.SpoofXDPIface != "" {
+		p("spoof_xdp_interface = %q\n", s.SpoofXDPIface)
+	}
 	if s.SpoofInterface != "" {
 		p("spoof_interface = %q\n", s.SpoofInterface)
 	}
@@ -276,12 +280,15 @@ func (s TunnelSpec) writeSpoof(p func(string, ...any)) {
 		p("spoof_fake_tls = true\n")
 	}
 	if s.SpoofPipe {
-		p("spoof_pipe = true\n")
+		// Relay mode: a bare datagram relay to a local UDP target (no KCP), the
+		// spoof-tunnel shape. Written with the canonical spoof_mode/spoof_forward
+		// keys; the reader still accepts the legacy spoof_pipe/spoof_pipe_addr pair.
+		p("spoof_mode = %q\n", "relay")
 		addr := s.SpoofPipeAddr
 		if addr == "" {
 			addr = "127.0.0.1:51820"
 		}
-		p("spoof_pipe_addr = %q\n", addr)
+		p("spoof_forward = %q\n", addr)
 	}
 }
 

@@ -208,6 +208,7 @@ type spoofConnOpts struct {
 	srcIP      string       // forged source, "" keeps the real one
 	srcPool    []string     // forged sources to rotate through
 	iface      string       // egress device to pin the raw socket to
+	xdpIface   string       // NIC to attach the XDP receive fast path to, "" = off
 	sockBuf    int          // SO_SNDBUF/SO_RCVBUF, 0 = default
 	replySplit bool         // icmp/icmpv6: client sends request, server sends reply
 	peerSrc    string       // expected forged source of inbound packets, "" = any

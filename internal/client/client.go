@@ -152,14 +152,11 @@ func (c *Client) Start() {
 		go tcpMuxClient.Start()
 
 	case config.KCP, config.XDI, config.SPOOF, config.PCK:
-		// The spoof transport in pipe mode is a bare datagram relay for
-		// WireGuard, not a KCP tunnel — handle it separately and stop here.
-		if c.config.Transport == config.SPOOF && c.config.SpoofPipe {
+		// The spoof transport in relay mode is a bare datagram relay, not a KCP
+		// tunnel — handle it separately and stop here.
+		if c.config.Transport == config.SPOOF && c.config.RelayMode() {
 			up, down := network.ResolveSpoofDirections(c.config.SpoofProfile, c.config.SpoofUplink, c.config.SpoofDownlink)
-			pipeAddr := c.config.SpoofPipeAddr
-			if pipeAddr == "" {
-				pipeAddr = "127.0.0.1:51820"
-			}
+			pipeAddr := c.config.RelayForward()
 			serverHost := c.config.RemoteAddr
 			if h, _, err := net.SplitHostPort(c.config.RemoteAddr); err == nil {
 				serverHost = h
@@ -174,6 +171,7 @@ func (c *Client) Start() {
 					Uplink: up, Downlink: down,
 					SrcIP: c.config.SpoofSrcIP, SrcPool: c.config.SpoofSrcPool,
 					PeerIP: c.config.SpoofPeerIP, Interface: c.config.SpoofInterface,
+					XDPIface: c.config.SpoofXDPInterface,
 					SockBuf: c.config.SpoofSockBuf, PeerSrcIP: c.config.SpoofPeerSrcIP,
 					ReplySplit: c.config.SpoofICMPReply, MTU: c.config.SpoofMTU,
 					DPI: network.SpoofDPIFromConfig(c.config.SpoofConfig),
@@ -226,6 +224,7 @@ func (c *Client) Start() {
 			SpoofSrcPool:     c.config.SpoofSrcPool,
 			SpoofPeerIP:      c.config.SpoofPeerIP,
 			SpoofInterface:   c.config.SpoofInterface,
+			SpoofXDPIface:    c.config.SpoofXDPInterface,
 			SpoofSockBuf:     c.config.SpoofSockBuf,
 			SpoofPeerSrcIP:   c.config.SpoofPeerSrcIP,
 			SpoofICMPReply:   c.config.SpoofICMPReply,

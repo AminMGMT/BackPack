@@ -21,7 +21,7 @@ arrives; only the header says something else.
 
 Above the packet layer it is [KCP](performance-presets.md), the same reliable,
 encrypted, error-correcting transport `kcp`, `xdi` and `pck` use. (The exception
-is [pipe mode](#wireguard-pipe-mode), which has no KCP under it.)
+is [relay mode](#relay-mode--spoof_mode-spoof_forward), which has no KCP under it.)
 
 It is for a path that **blocks, throttles or counts by source address**.
 
@@ -48,7 +48,7 @@ table is the whole compatibility contract:
 | Padding, fake TLS | **yes** — they change the wire |
 | Forged source ↔ the peer's "expected forged source" | **yes**, if you pin it |
 | The other end's real IPv4 | required on the **server** |
-| TTL jitter, DSCP, port shuffle, interface, socket buffer, MTU | no — local only |
+| TTL jitter, DSCP, port shuffle, interface, XDP interface, socket buffer, MTU | no — local only |
 
 ---
 
@@ -113,23 +113,62 @@ forged source would otherwise leave by the wrong link. Empty lets the kernel
 route by the real destination, which is right on a normal single-uplink VPS. Only
 asked at setup when the machine actually has more than one interface.
 
-### WireGuard pipe mode — `spoof_pipe`, `spoof_pipe_addr`
+### XDP receive fast path — `spoof_xdp_interface`
 
-Switches the transport from a KCP tunnel to a **raw UDP pipe for WireGuard**:
-instead of forwarding ports, it relays datagrams between a local WireGuard socket
-and the forged-source channel, so a whole-device VPN rides over it.
+Set to a NIC name (`eth0`, …) to receive this tunnel's forged packets through an
+**XDP/eBPF program in the kernel**, before the ordinary socket stack — higher
+throughput and lower CPU under heavy load. Empty (the default) uses the normal
+raw/UDP receive.
 
-- WireGuard supplies its own encryption and loss handling, so **no KCP sits
-  underneath**.
+- **Pure Go.** The eBPF program is assembled in-process with `cilium/ebpf`; there
+  is no clang, libbpf, or CGo, and the binary stays statically linked.
+- **Opt-in and best-effort.** If the kernel is too old (the ring-buffer and
+  `bpf_xdp_load_bytes` helpers need ~5.18+), the attach fails, or the verifier
+  rejects the program, the carrier logs it and **silently falls back** to the
+  ordinary receive — turning it on can never cost a working tunnel.
+- Needs `CAP_BPF`/`CAP_NET_ADMIN` in addition to the carrier's `CAP_NET_RAW`
+  (root has both).
+- The `ipip`/`gre` profiles have no port to demux on, so the fast path needs
+  `spoof_peer_src_ip` set to know which packets are the tunnel's; without it, it
+  falls back for those profiles.
+- Local only — it changes nothing on the wire, so the two ends need not agree,
+  and each can use it or not.
+
+> XDP runs before IP reassembly, so it sees fragments rather than reassembled
+> datagrams. The carrier sizes its packets under the tunnel MTU, so this only
+> matters for a rare oversize packet, which is dropped and recovered by KCP (or
+> the inner transport in relay mode). Lower `spoof_mtu` if you see it.
+
+### Relay mode — `spoof_mode`, `spoof_forward`
+
+`spoof_mode` selects the carrier's shape:
+
+| Value | Shape |
+|---|---|
+| **`kcp`** (default) | a reliable, encrypted KCP tunnel over the forged-source channel — carries the forwarded ports, the standard behaviour |
+| `relay` | a **bare bidirectional datagram relay** (no KCP) between a local UDP socket and the forged-source channel — the spoof-tunnel shape, for carrying something that brings its own reliability |
+
+In **relay mode** the transport strips KCP and relays datagrams to and from a
+local UDP target, so a whole-device VPN (**WireGuard**) or another tunnel rides
+over it.
+
+- The inner transport (WireGuard, …) supplies its own encryption and loss
+  handling, so **no KCP sits underneath**.
 - **The forwarded ports and the mux settings are ignored** in this mode.
 - **Both ends must be in the same mode.**
 
-`spoof_pipe_addr` (default `127.0.0.1:51820`) means different things per role:
+`spoof_forward` (default `127.0.0.1:51820`) is the local UDP target, and means
+different things per role:
 
 | Role | Meaning |
 |---|---|
-| **Client** (kharej) | where the tunnel *listens* for WireGuard — point WireGuard's `endpoint` at exactly this address |
-| **Server** (Iran) | where the real WireGuard listens on this machine — datagrams out of the tunnel are handed to it there |
+| **Client** (kharej) | where the tunnel *listens* — point the inner app's `endpoint` (e.g. WireGuard's) at exactly this address |
+| **Server** (Iran) | where the inner service (e.g. the real WireGuard) listens on this machine — datagrams out of the tunnel are handed to it there |
+
+> **Legacy keys.** `spoof_pipe = true` and `spoof_pipe_addr` from earlier
+> versions are still accepted: `spoof_pipe = true` means `spoof_mode = "relay"`,
+> and `spoof_pipe_addr` fills in `spoof_forward`. New configs are written with
+> the `spoof_mode`/`spoof_forward` keys.
 
 ---
 
@@ -249,9 +288,12 @@ jitter، DSCP، shuffle پورت، رابط شبکه، بافر سوکت و MTU.
 انتخاب می‌شود — همان چیزی که از محدودیت‌های مبتنی بر آدرس عبور می‌کند. فقط
 آدرسی را بگذار که **تستر** گفته می‌رسد.
 
-**حالت WireGuard pipe:** به‌جای پورت‌های forward، یک وایرگارد کامل را حمل
-می‌کند؛ زیرش KCP نیست و پورت‌های forward نادیده گرفته می‌شوند. دو طرف باید در
-یک حالت باشند.
+**حالت relay (`spoof_mode = "relay"`):** به‌جای تونل KCP روی پورت‌های forward،
+یک رله‌ی خام دیتاگرام (بدون KCP) به یک مقصد UDP محلی (`spoof_forward`) اجرا
+می‌کند تا چیزی که reliability خودش را دارد — مثل یک وایرگارد کامل یا یک تونل
+دیگر — را حمل کند. پورت‌های forward نادیده گرفته می‌شوند و دو طرف باید در یک
+حالت باشند. کلیدهای قدیمی `spoof_pipe`/`spoof_pipe_addr` هنوز به‌عنوان همین حالت
+پذیرفته می‌شوند.
 
 **بخش Fingerprint & evasion** همه‌اش پیش‌فرض خاموش است و هیچ‌کدام برای کارکردن
 تونل لازم نیست. مهم‌ترین‌هایشان: `spoof_sockbuf` (اگر سرعت خیلی کمتر از لینک

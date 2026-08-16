@@ -60,7 +60,7 @@ func editSpoof(name string, _ TunnelSpec) {
 			tui.Info("Replies go to    : " + orNone(spec.SpoofPeerIP))
 		}
 		tui.Info("Egress interface : " + orAuto(spec.SpoofInterface))
-		tui.Info("WireGuard pipe   : " + spoofPipeSummary(spec))
+		tui.Info("Relay mode       : " + spoofPipeSummary(spec))
 		tui.Info("Fingerprint      : " + spoofEvasionSummary(spec))
 		fmt.Println()
 		// Said here rather than only when a save is refused: without it nothing
@@ -99,7 +99,7 @@ func editSpoof(name string, _ TunnelSpec) {
 		}
 		opts = append(opts,
 			tui.Option{Title: "Egress interface", Desc: "which device the raw packets leave by"},
-			tui.Option{Title: "WireGuard pipe mode", Desc: "carry a whole WireGuard VPN instead of the forwarded ports"},
+			tui.Option{Title: "Relay mode", Desc: "bare datagram relay (no KCP) to a local UDP target — e.g. a whole WireGuard VPN"},
 			tui.Option{Title: "Fingerprint & evasion", Desc: "TTL, DSCP, port shuffle, padding, fake TLS and the sizing knobs"},
 		)
 		actions = append(actions,
@@ -268,18 +268,19 @@ func editSpoofInterface(name string, f SpoofTune) {
 
 func editSpoofPipe(name string, f SpoofTune, role string) {
 	fmt.Println()
-	tui.Title("WireGuard pipe mode")
+	tui.Title("Relay mode")
 	fmt.Println()
-	tui.Info("Normally this tunnel forwards the ports it was given. Pipe mode carries")
-	tui.Info("one WireGuard VPN whole instead, so everything on the device goes")
-	tui.Info("through it. WireGuard brings its own encryption, so there is no KCP")
-	tui.Info("underneath — and the forwarded ports are ignored.")
+	tui.Info("Normally this tunnel wraps a reliable KCP tunnel over the forged-source")
+	tui.Info("channel. Relay mode strips KCP and runs a bare datagram relay to a local")
+	tui.Info("UDP target instead, so you carry something that brings its own")
+	tui.Info("reliability — a whole WireGuard VPN, or another tunnel. The forwarded")
+	tui.Info("ports are ignored in this mode.")
 	tui.Warn("Both ends have to be in the same mode.")
 	fmt.Println()
 	tui.Info("Currently : " + onOff(f.Pipe))
 	fmt.Println()
 
-	on := tui.Confirm("Enable WireGuard pipe mode", f.Pipe)
+	on := tui.Confirm("Enable relay mode", f.Pipe)
 	if !on {
 		if !f.Pipe {
 			tui.Info("Nothing changed.")
@@ -287,25 +288,25 @@ func editSpoofPipe(name string, f SpoofTune, role string) {
 			return
 		}
 		f.Pipe = false
-		applySpoof(name, f, "Pipe mode off — the forwarded ports are carried again")
+		applySpoof(name, f, "Relay mode off — the KCP tunnel over the forwarded ports is used again")
 		return
 	}
 
 	fmt.Println()
 	if role == "server" {
-		tui.Info("Where the real WireGuard listens on THIS server — the datagrams")
-		tui.Info("coming out of the tunnel are handed to it there.")
+		tui.Info("Where the inner service listens on THIS server (e.g. the real")
+		tui.Info("WireGuard) — datagrams coming out of the tunnel are handed to it there.")
 	} else {
-		tui.Info("Where the tunnel should listen for WireGuard on THIS machine —")
-		tui.Info("point WireGuard's `endpoint` at exactly this address.")
+		tui.Info("Where the tunnel should listen on THIS machine — point the inner app's")
+		tui.Info("endpoint (e.g. WireGuard's `endpoint`) at exactly this address.")
 	}
 	def := f.PipeAddr
 	if def == "" {
 		def = "127.0.0.1:51820"
 	}
 	f.Pipe = true
-	f.PipeAddr = strings.TrimSpace(tui.PromptDefault("WireGuard UDP endpoint", def))
-	applySpoof(name, f, "Pipe mode on at "+f.PipeAddr)
+	f.PipeAddr = strings.TrimSpace(tui.PromptDefault("Local UDP endpoint", def))
+	applySpoof(name, f, "Relay mode on at "+f.PipeAddr)
 }
 
 // editSpoofEvasion is the obfuscation block. It is one screen of questions
@@ -389,13 +390,13 @@ func spoofSourceSummary(s TunnelSpec) string {
 
 func spoofPipeSummary(s TunnelSpec) string {
 	if !s.SpoofPipe {
-		return "off — the forwarded ports are carried"
+		return "off (kcp) — the KCP tunnel over the forwarded ports is used"
 	}
 	addr := s.SpoofPipeAddr
 	if addr == "" {
 		addr = "127.0.0.1:51820"
 	}
-	return "on, at " + addr
+	return "on (relay), forwarding to " + addr
 }
 
 // spoofEvasionSummary names what is turned on rather than listing every knob:
