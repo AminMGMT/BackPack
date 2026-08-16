@@ -52,10 +52,17 @@ type spoofConn struct {
 	sendPC      net.PacketConn // kept for Close
 	sendProfile SpoofProfile
 
-	udpRecv     *net.UDPConn   // set when recvProfile is udp
-	rawRecv     *ipv4.RawConn  // set when recvProfile is tcp/icmp
+	udpRecv     *net.UDPConn   // set when recvProfile is udp and XDP is off
+	rawRecv     *ipv4.RawConn  // set when recvProfile is tcp/icmp and XDP is off
 	rawRecvPC   net.PacketConn // kept for Close/LocalAddr
 	recvProfile SpoofProfile
+
+	// xdp, when set, is the kernel XDP receive fast path; it replaces udpRecv /
+	// rawRecv entirely, so both of those stay nil and the RST guard and ICMP
+	// suppression are unnecessary (the kernel never processes the dropped
+	// packets). xdpNote records why the fast path is or is not in use, for the log.
+	xdp     *spoofXDPReceiver
+	xdpNote string
 
 	server    bool
 	port      uint16
@@ -193,6 +200,32 @@ func newSpoofConn(server bool, o spoofConnOpts) (net.PacketConn, error) {
 	c.recvICMPType = rReq
 	if o.replySplit && !server {
 		c.recvICMPType = rRep // the client's peer is the server, which replies
+	}
+
+	// The XDP receive fast path, if a NIC was named. It captures this tunnel's
+	// packets in the kernel and drops them before the socket layer, so on success
+	// no ordinary receive socket is opened, and no RST guard or ICMP suppression
+	// is needed — the kernel never processes what XDP dropped. On any failure the
+	// note records why and we fall through to the ordinary receive below.
+	if o.xdpIface != "" {
+		portOff := -1
+		switch {
+		case recvProfile.isICMPFamily():
+			portOff = 4 // ICMP/ICMPv6 echo identifier
+		case recvProfile == SpoofProfileTCP, recvProfile == SpoofProfileUDP:
+			portOff = 2 // UDP/TCP destination port
+		}
+		xr, err := newSpoofXDPReceiver(spoofXDPConfig{
+			iface: o.xdpIface, proto: recvProfile.ipProtocol(),
+			port: port, portOff: portOff, expectSrc: expectSrc, sockBuf: sockBuf,
+		})
+		if err != nil {
+			c.xdpNote = "spoof: XDP receive unavailable, using the raw-socket receive: " + err.Error()
+		} else {
+			c.xdp = xr
+			c.xdpNote = "spoof: XDP receive fast path attached to " + o.xdpIface
+			return c, nil
+		}
 	}
 
 	if recvProfile == SpoofProfileUDP {
@@ -363,6 +396,47 @@ func (c *spoofConn) sendIP(src net.IP, proto int, shim []byte) error {
 func (c *spoofConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	peer := &net.IPAddr{IP: c.realPeer}
 
+	// The XDP fast path hands up the L4 segment already lifted out of the frame,
+	// with the forged source alongside it. The per-profile strip is identical to
+	// the raw-socket path below — including the udp profile, whose 8-byte header
+	// the XDP path leaves on (unlike the ordinary UDP socket, which the kernel has
+	// already stripped) so stripSpoofShim removes it here.
+	if c.xdp != nil {
+		for {
+			src, n, err := c.xdp.read(c.readBuf)
+			if err != nil {
+				return 0, nil, err
+			}
+			if n == 0 {
+				continue
+			}
+			if c.expectSrc != nil && (src == nil || !src.Equal(c.expectSrc)) {
+				continue
+			}
+			l4 := c.readBuf[:n]
+			var inner []byte
+			var ok bool
+			switch {
+			case c.recvProfile.isICMPFamily():
+				inner, ok = parseICMPEcho(c.recvICMPType, c.port, l4)
+			case c.recvProfile == SpoofProfileIPIP:
+				inner, ok = l4, true
+			case c.recvProfile == SpoofProfileGRE:
+				inner, ok = stripGREShim(l4)
+			default: // udp and tcp both carry an L4 header the strip removes
+				inner, ok = stripSpoofShim(c.recvProfile, c.port, l4)
+			}
+			if !ok {
+				continue
+			}
+			inner, ok = c.undoDPI(c.recvProfile, inner)
+			if !ok || len(inner) == 0 {
+				continue
+			}
+			return copy(p, inner), peer, nil
+		}
+	}
+
 	// The udp profile receives on an ordinary UDP socket, so the kernel has
 	// already stripped the IP and UDP headers and what arrives is the payload.
 	// It is handed up untouched; the encryption above decides whether it is the
@@ -456,20 +530,37 @@ func (c *spoofConn) Close() error {
 		c.icmpEcho = false
 	}
 	c.send.Close()
+	if c.xdp != nil {
+		return c.xdp.Close()
+	}
 	if c.udpRecv != nil {
 		return c.udpRecv.Close()
 	}
 	return c.rawRecv.Close()
 }
 
+// spoofDiag reports whether the XDP fast path is in use, for the tunnel log —
+// the mirror of pck's PckDiag. Empty when no NIC was configured for XDP.
+func (c *spoofConn) spoofDiag() string { return c.xdpNote }
+
 func (c *spoofConn) LocalAddr() net.Addr {
+	if c.xdp != nil {
+		// No receive socket in XDP mode; the send socket's local address stands in.
+		return c.sendPC.LocalAddr()
+	}
 	if c.udpRecv != nil {
 		return c.udpRecv.LocalAddr()
 	}
 	return c.rawRecvPC.LocalAddr()
 }
 
+// In XDP mode the read deadline is the ring reader's, and the write deadline the
+// send socket's; there is no single receive socket that carries both.
 func (c *spoofConn) SetDeadline(t time.Time) error {
+	if c.xdp != nil {
+		c.xdp.setReadDeadline(t)
+		return c.send.SetWriteDeadline(t)
+	}
 	if c.udpRecv != nil {
 		return c.udpRecv.SetDeadline(t)
 	}
@@ -477,6 +568,10 @@ func (c *spoofConn) SetDeadline(t time.Time) error {
 }
 
 func (c *spoofConn) SetReadDeadline(t time.Time) error {
+	if c.xdp != nil {
+		c.xdp.setReadDeadline(t)
+		return nil
+	}
 	if c.udpRecv != nil {
 		return c.udpRecv.SetReadDeadline(t)
 	}
@@ -484,6 +579,9 @@ func (c *spoofConn) SetReadDeadline(t time.Time) error {
 }
 
 func (c *spoofConn) SetWriteDeadline(t time.Time) error {
+	if c.xdp != nil {
+		return c.send.SetWriteDeadline(t)
+	}
 	if c.udpRecv != nil {
 		return c.udpRecv.SetWriteDeadline(t)
 	}

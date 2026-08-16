@@ -145,8 +145,9 @@ the packet layer, like `xdi` and `pck`.
 
 It only carries anything where the network above the machine forwards packets
 with a forged source — plenty of providers drop them, and the built-in
-**IP Spoofing Tester** is how you find out. It also carries a whole WireGuard VPN
-instead of forwarded ports, in pipe mode. Every setting is documented in
+**IP Spoofing Tester** is how you find out. It also has a **relay mode** that
+carries a whole WireGuard VPN (or another tunnel) instead of forwarded ports,
+with no KCP underneath. Every setting is documented in
 [IP Spoofing](ip-spoofing.md).
 
 ---

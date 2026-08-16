@@ -81,6 +81,7 @@ type SpoofTune struct {
 	PeerSrcIP string `json:"peerSrcIP"` // the forged source expected from the peer
 	DstIP     string `json:"dstIP"`     // forged destination in the cosmetic shim
 	Interface string `json:"interface"` // egress device for the raw socket
+	XDPIface  string `json:"xdpIface"`  // NIC for the XDP receive fast path, empty = off
 
 	Pipe     bool   `json:"pipe"`     // WireGuard-pipe mode instead of a KCP tunnel
 	PipeAddr string `json:"pipeAddr"` // this host's WireGuard UDP endpoint
@@ -115,6 +116,7 @@ func spoofOf(s TunnelSpec) SpoofTune {
 		PeerSrcIP:   s.SpoofPeerSrcIP,
 		DstIP:       s.SpoofDstIP,
 		Interface:   s.SpoofInterface,
+		XDPIface:    s.SpoofXDPIface,
 		Pipe:        s.SpoofPipe,
 		PipeAddr:    s.SpoofPipeAddr,
 		SockBuf:     s.SpoofSockBuf,
@@ -187,6 +189,9 @@ func (f SpoofTune) apply(s *TunnelSpec) error {
 	if s.SpoofInterface, err = checkInterface(f.Interface); err != nil {
 		return err
 	}
+	if s.SpoofXDPIface, err = checkInterface(f.XDPIface); err != nil {
+		return err
+	}
 
 	s.SpoofPipe = f.Pipe
 	s.SpoofPipeAddr = ""
@@ -196,7 +201,7 @@ func (f SpoofTune) apply(s *TunnelSpec) error {
 			addr = "127.0.0.1:51820"
 		}
 		if _, _, err := net.SplitHostPort(addr); err != nil {
-			return fmt.Errorf("the WireGuard endpoint must be host:port, e.g. 127.0.0.1:51820")
+			return fmt.Errorf("the relay's local UDP endpoint must be host:port, e.g. 127.0.0.1:51820")
 		}
 		s.SpoofPipeAddr = addr
 	}
@@ -509,7 +514,7 @@ func clearForTransport(s *TunnelSpec) {
 		s.SpoofProfile, s.SpoofUplink, s.SpoofDownlink = "", "", ""
 		s.SpoofSrcIP, s.SpoofSrcPool = "", nil
 		s.SpoofPeerIP, s.SpoofPeerSrcIP, s.SpoofDstIP = "", "", ""
-		s.SpoofInterface = ""
+		s.SpoofInterface, s.SpoofXDPIface = "", ""
 		s.SpoofPipe, s.SpoofPipeAddr = false, ""
 		s.SpoofSockBuf, s.SpoofMTU, s.SpoofICMPReply = 0, 0, false
 		s.SpoofTTLJitter, s.SpoofRandomDSCP = false, false

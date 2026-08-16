@@ -78,8 +78,12 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		SpoofPeerIP:      sc.SpoofPeerIP,
 		SpoofDstIP:       sc.SpoofDstIP,
 		SpoofInterface:   sc.SpoofInterface,
-		SpoofPipe:        sc.SpoofPipe,
-		SpoofPipeAddr:    sc.SpoofPipeAddr,
+		SpoofXDPIface:    sc.SpoofXDPInterface,
+		// Resolve through the config helpers so a tunnel saved with the new
+		// spoof_mode/spoof_forward keys, or the legacy spoof_pipe pair, both load
+		// back as relay mode with the right forward target.
+		SpoofPipe:        sc.RelayMode(),
+		SpoofPipeAddr:    sc.RelayForward(),
 		SpoofSockBuf:     sc.SpoofSockBuf,
 		SpoofPeerSrcIP:   sc.SpoofPeerSrcIP,
 		SpoofICMPReply:   sc.SpoofICMPReply,
@@ -161,6 +165,7 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		SpoofPeerIP:      cc.SpoofPeerIP,
 		SpoofDstIP:       cc.SpoofDstIP,
 		SpoofInterface:   cc.SpoofInterface,
+		SpoofXDPIface:    cc.SpoofXDPInterface,
 		SpoofPipe:        cc.SpoofPipe,
 		SpoofPipeAddr:    cc.SpoofPipeAddr,
 		SpoofSockBuf:     cc.SpoofSockBuf,

@@ -89,16 +89,17 @@ If the machine has **more than one** network interface you are also asked which
 one the raw packets leave by. Empty lets the kernel route, which is right unless
 you know it picks wrong.
 
-### Step 4 — WireGuard, instead of forwarded ports
+### Step 4 — Relay mode, instead of a KCP tunnel over forwarded ports
 
 ```
-Enable WireGuard pipe mode [y/N]
+Enable relay mode [y/N]
 ```
 
-`N` unless you are already running WireGuard and want it tunnelled whole. Pipe
-mode carries one WireGuard VPN instead of the forwarded ports — WireGuard brings
-its own encryption, so there is no KCP underneath, and **the forwarded ports are
-ignored**. Both ends have to be in the same mode.
+`N` unless you are already running WireGuard (or another tunnel) and want it
+carried whole. Relay mode strips KCP and runs a bare datagram relay to a local
+UDP target instead of the forwarded ports — the inner transport brings its own
+reliability and encryption, so there is no KCP underneath, and **the forwarded
+ports are ignored**. Both ends have to be in the same mode.
 
 The wizard then prints a summary of what this end will do, and what must be true
 on the other server. Read it — everything in a spoof setup is paired, and the
@@ -191,7 +192,7 @@ but carries nothing, the forged source is being dropped — go back to the teste
 
 Everything else — per-direction profiles, the egress interface, TTL jitter, DSCP
 randomisation, port shuffling, padding, fake TLS, fragmenting, socket buffers,
-WireGuard pipe mode — lives under **Edit → IP Spoofing** and is documented field
+relay mode — lives under **Edit → IP Spoofing** and is documented field
 by field in **[docs/ip-spoofing.md](../docs/ip-spoofing.md)**.
 
 All of them are **off by default and none is needed for a working tunnel**. Each
@@ -240,9 +241,9 @@ instead. Change one at a time and test.
 
 **نکات ویزارد:** پروفایل پکت را روی **UDP** بگذار و دو طرف باید یکی باشد. روی
 سرور **ایران** حتماً باید «آی‌پی واقعی سرور خارج» را وارد کنی، وگرنه سرور جایی
-برای فرستادن جواب ندارد و هیچ تنظیمی ذخیره نمی‌شود. حالت **WireGuard pipe** را
-`N` بگذار مگر بخواهی کل وایرگارد را تونل کنی (در آن حالت پورت‌های forward نادیده
-گرفته می‌شوند).
+برای فرستادن جواب ندارد و هیچ تنظیمی ذخیره نمی‌شود. حالت **relay** را
+`N` بگذار مگر بخواهی کل وایرگارد (یا تونلی دیگر) را حمل کنی (در آن حالت KCP و
+پورت‌های forward نادیده گرفته می‌شوند).
 
 بقیهٔ تنظیمات (TTL jitter، DSCP، shuffle پورت، padding، fake TLS، تکه‌تکه کردن و…)
 همه پیش‌فرض خاموش‌اند و برای کار کردن تونل لازم نیستند — توضیح تک‌تکشان در

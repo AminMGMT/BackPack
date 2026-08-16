@@ -2207,13 +2207,16 @@ const FA={
   "Egress interface for the raw packets":"اینترفیس خروج بسته‌های خام",
   "Leave on automatic unless this machine has more than one uplink and the packets must leave by a particular one.":
     "روی خودکار بگذار مگر اینکه این دستگاه بیش از یک آپلینک داشته باشد و بسته‌ها باید از یکی مشخص بیرون بروند.",
-  "WireGuard pipe mode — carry a whole-device VPN instead of forwarding ports":
-    "حالت پایپ WireGuard — به‌جای فوروارد پورت، یک وی‌پی‌ان کل‌دستگاه را ببر",
-  "WireGuard brings its own encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.":
-    "WireGuard رمزنگاری خودش را دارد، پس زیرش KCP نیست و در این حالت پورت‌های فوروارد نادیده گرفته می‌شوند.",
-  "WireGuard UDP endpoint":"اندپوینت UDP وایرگارد",
-  "Only used in pipe mode. On the Iran side: where the real WireGuard listens on this machine. On the kharej side: where the tunnel listens for WireGuard — point WireGuard’s `endpoint` at it.":
-    "فقط در حالت پایپ استفاده می‌شود. سمت ایران: جایی که WireGuard واقعی روی این دستگاه گوش می‌دهد. سمت خارج: جایی که تونل منتظر WireGuard است — `endpoint` وایرگارد را به آن بده.",
+  "XDP receive fast path — NIC to attach it to":"مسیر سریع دریافت XDP — کارت شبکه‌ای که به آن وصل شود",
+  "Experimental. Receives the tunnel’s packets in the kernel (XDP/eBPF) before the socket layer, for higher throughput under load. Pure Go, opt-in, and falls back to the ordinary receive if the kernel is too old or the attach fails. Leave empty to keep the standard receive.":
+    "آزمایشی. بسته‌های تونل را در کرنل (XDP/eBPF) پیش از لایه‌ی سوکت می‌گیرد، برای throughput بالاتر زیر بار. Go خالص، اختیاری، و اگر کرنل قدیمی باشد یا attach شکست بخورد به دریافت عادی برمی‌گردد. خالی بگذار تا دریافت استاندارد بماند.",
+  "Relay mode — bare datagram relay (no KCP) to a local UDP target, instead of forwarding ports":
+    "حالت رله — یک رله‌ی خام دیتاگرام (بدون KCP) به یک مقصد UDP محلی، به‌جای فوروارد پورت",
+  "The inner transport (e.g. WireGuard) brings its own reliability and encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.":
+    "ترنسپورت داخلی (مثل WireGuard) reliability و رمزنگاری خودش را دارد، پس زیرش KCP نیست و در این حالت پورت‌های فوروارد نادیده گرفته می‌شوند.",
+  "Local UDP endpoint":"اندپوینت UDP محلی",
+  "Only used in relay mode. On the Iran side: where the inner service (e.g. the real WireGuard) listens on this machine. On the kharej side: where the tunnel listens — point the inner app’s `endpoint` at it.":
+    "فقط در حالت رله استفاده می‌شود. سمت ایران: جایی که سرویس داخلی (مثل WireGuard واقعی) روی این دستگاه گوش می‌دهد. سمت خارج: جایی که تونل گوش می‌دهد — `endpoint` اپ داخلی را به آن بده.",
   "Fingerprint & evasion":"اثر انگشت و دور زدن",
   "All off by default, and none of them is needed to make a working tunnel. They change what the packets look like to whatever inspects them. Two of them describe the other end and must match what it sends; the rest are local.":
     "همه پیش‌فرض خاموش‌اند و هیچ‌کدام برای کارکردن تونل لازم نیست. اینها ظاهر بسته‌ها را برای هرچه بازرسی‌شان می‌کند عوض می‌کنند. دوتاشان سر دیگر را توصیف می‌کنند و باید با آنچه او می‌فرستد بخواند؛ بقیه محلی‌اند.",
@@ -3200,10 +3203,12 @@ const SPOOF_FIELDS=[
    hint:'Stamped on outgoing packets. Give one, or several separated by commas to rotate through a pool — that is what gets past a per-IP limit or block. Empty forges nothing. Use the spoof tester to find which ones actually pass.'},
   {k:'interface',t:'opt',full:true,label:'Egress interface for the raw packets',opts:ifaceOpts,
    hint:'Leave on automatic unless this machine has more than one uplink and the packets must leave by a particular one.'},
-  {k:'pipe',t:'bool',label:'WireGuard pipe mode — carry a whole-device VPN instead of forwarding ports',
-   hint:'WireGuard brings its own encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.'},
-  {k:'pipeAddr',t:'text',full:true,label:'WireGuard UDP endpoint',ph:'127.0.0.1:51820',
-   hint:'Only used in pipe mode. On the Iran side: where the real WireGuard listens on this machine. On the kharej side: where the tunnel listens for WireGuard — point WireGuard’s `endpoint` at it.'},
+  {k:'xdpIface',t:'opt',full:true,label:'XDP receive fast path — NIC to attach it to',opts:ifaceOpts,
+   hint:'Experimental. Receives the tunnel’s packets in the kernel (XDP/eBPF) before the socket layer, for higher throughput under load. Pure Go, opt-in, and falls back to the ordinary receive if the kernel is too old or the attach fails. Leave empty to keep the standard receive.'},
+  {k:'pipe',t:'bool',label:'Relay mode — bare datagram relay (no KCP) to a local UDP target, instead of forwarding ports',
+   hint:'The inner transport (e.g. WireGuard) brings its own reliability and encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.'},
+  {k:'pipeAddr',t:'text',full:true,label:'Local UDP endpoint',ph:'127.0.0.1:51820',
+   hint:'Only used in relay mode. On the Iran side: where the inner service (e.g. the real WireGuard) listens on this machine. On the kharej side: where the tunnel listens — point the inner app’s `endpoint` at it.'},
 
   {t:'head',label:'Fingerprint & evasion'},
   {t:'note',label:'All off by default, and none of them is needed to make a working tunnel. They change what the packets look like to whatever inspects them. Two of them describe the other end and must match what it sends; the rest are local.'},

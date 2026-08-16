@@ -524,27 +524,27 @@ func askSpoof(s *TunnelSpec) {
 		}
 	}
 
-	// ---- 4. WireGuard pipe --------------------------------------------------
-	step("WireGuard, instead of forwarded ports")
-	tui.Info("Normally this tunnel forwards the ports you listed. Pipe mode does")
-	tui.Info("something else: it carries one WireGuard VPN, whole, so every")
-	tui.Info("application on the device goes through it rather than the ports you")
-	tui.Info("chose. WireGuard brings its own encryption, so there is no KCP under")
-	tui.Info("it, and the forwarded ports are ignored.")
-	tui.Warn("Say no unless you are already running WireGuard and want it tunnelled.")
+	// ---- 4. Relay mode ------------------------------------------------------
+	step("Relay mode, instead of a KCP tunnel over forwarded ports")
+	tui.Info("Normally this tunnel wraps a reliable KCP tunnel over the forwarded")
+	tui.Info("ports. Relay mode does something else: it strips KCP and runs a bare")
+	tui.Info("datagram relay to a local UDP target, so you carry something that")
+	tui.Info("brings its own reliability — a whole WireGuard VPN, or another tunnel.")
+	tui.Info("The forwarded ports are ignored in this mode.")
+	tui.Warn("Say no unless you are already running WireGuard (or similar) and want it tunnelled.")
 	fmt.Println()
-	if tui.Confirm("Enable WireGuard pipe mode", false) {
+	if tui.Confirm("Enable relay mode", false) {
 		s.SpoofPipe = true
 		def := "127.0.0.1:51820"
 		fmt.Println()
 		if s.Role == "server" {
-			tui.Info("Where the real WireGuard listens on THIS server — the datagrams")
-			tui.Info("coming out of the tunnel are handed to it there.")
+			tui.Info("Where the inner service listens on THIS server (e.g. the real")
+			tui.Info("WireGuard) — datagrams coming out of the tunnel are handed to it there.")
 		} else {
-			tui.Info("Where the tunnel should listen for WireGuard on THIS machine —")
-			tui.Info("point WireGuard's `endpoint` at exactly this address.")
+			tui.Info("Where the tunnel should listen on THIS machine — point the inner")
+			tui.Info("app's endpoint (e.g. WireGuard's `endpoint`) at exactly this address.")
 		}
-		s.SpoofPipeAddr = strings.TrimSpace(tui.PromptDefault("WireGuard UDP endpoint", def))
+		s.SpoofPipeAddr = strings.TrimSpace(tui.PromptDefault("Local UDP endpoint", def))
 		if s.SpoofPipeAddr == "" {
 			s.SpoofPipeAddr = def
 		}
@@ -603,7 +603,7 @@ func spoofSummary(s *TunnelSpec, here, there string) {
 		tui.Info("Leaves by         : " + s.SpoofInterface)
 	}
 	if s.SpoofPipe {
-		tui.Info("WireGuard pipe    : on, at " + s.SpoofPipeAddr + " (forwarded ports ignored)")
+		tui.Info("Relay mode        : on, forwarding to " + s.SpoofPipeAddr + " (KCP off, forwarded ports ignored)")
 	}
 
 	fmt.Println()

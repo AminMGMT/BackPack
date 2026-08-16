@@ -300,17 +300,15 @@ func checkSpoof(cfg *config.Config) {
 		logger.Info("spoof_profile ipip/gre has no port to demultiplex on: set spoof_peer_src_ip to the peer's forged source so foreign packets of the same protocol are dropped before the encryption; without it every proto-4/47 packet reaches the cipher.")
 	}
 
-	// Pipe mode carries WireGuard rather than forwarding ports; sanity-check its
+	// Relay mode runs a bare datagram relay (no KCP) to a local UDP target that
+	// brings its own reliability, such as WireGuard; sanity-check the forward
 	// endpoint and remind the operator to leave MTU headroom for the framing.
-	if sc.SpoofPipe {
-		addr := sc.SpoofPipeAddr
-		if addr == "" {
-			addr = "127.0.0.1:51820"
-		}
+	if sc.RelayMode() {
+		addr := sc.RelayForward()
 		if _, _, err := net.SplitHostPort(addr); err != nil {
-			logger.Fatalf("spoof_pipe_addr %q must be host:port (the WireGuard UDP endpoint on this host)", addr)
+			logger.Fatalf("spoof_forward %q must be host:port (the local UDP endpoint the relay forwards to on this host)", addr)
 		}
-		logger.Infof("spoof pipe mode: WireGuard endpoint %s. Point WireGuard's `endpoint` at the client's %s, and set its MTU to ~1380 to leave room for the spoof framing.", addr, addr)
+		logger.Infof("spoof relay mode: local UDP endpoint %s (no KCP; the inner transport supplies reliability). Point the inner app's endpoint at the client's %s. For WireGuard, set its MTU to ~1380 to leave room for the spoof framing.", addr, addr)
 	}
 
 	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this with the spoof tester on your real route before relying on it.")
