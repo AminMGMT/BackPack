@@ -110,7 +110,7 @@ func (s *Server) Start() {
 					SrcIP: s.config.SpoofSrcIP, SrcPool: s.config.SpoofSrcPool,
 					PeerIP: s.config.SpoofPeerIP, Interface: s.config.SpoofInterface,
 					XDPIface: s.config.SpoofXDPInterface,
-					SockBuf: s.config.SpoofSockBuf, PeerSrcIP: s.config.SpoofPeerSrcIP,
+					SockBuf:  s.config.SpoofSockBuf, PeerSrcIP: s.config.SpoofPeerSrcIP,
 					ReplySplit: s.config.SpoofICMPReply, MTU: s.config.SpoofMTU,
 					DPI: network.SpoofDPIFromConfig(s.config.SpoofConfig),
 				},

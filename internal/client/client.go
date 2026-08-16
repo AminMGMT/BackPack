@@ -172,7 +172,7 @@ func (c *Client) Start() {
 					SrcIP: c.config.SpoofSrcIP, SrcPool: c.config.SpoofSrcPool,
 					PeerIP: c.config.SpoofPeerIP, Interface: c.config.SpoofInterface,
 					XDPIface: c.config.SpoofXDPInterface,
-					SockBuf: c.config.SpoofSockBuf, PeerSrcIP: c.config.SpoofPeerSrcIP,
+					SockBuf:  c.config.SpoofSockBuf, PeerSrcIP: c.config.SpoofPeerSrcIP,
 					ReplySplit: c.config.SpoofICMPReply, MTU: c.config.SpoofMTU,
 					DPI: network.SpoofDPIFromConfig(c.config.SpoofConfig),
 				},
