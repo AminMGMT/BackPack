@@ -544,7 +544,7 @@
   .ring{width:112px;height:112px;margin:0 auto 10px;position:relative}
   .ring svg{transform:rotate(-90deg)}
   .ring .track{stroke:rgba(255,255,255,.08)}
-  .ring .bar{stroke-linecap:round;transition:stroke-dashoffset .7s var(--ease-out),stroke .4s}
+  .ring .bar{stroke-linecap:round;transition:stroke-dashoffset .8s var(--ease-out),stroke .4s,filter .4s}
   .ring .val{position:absolute;inset:0;display:grid;place-items:center;
     font-size:23px;font-weight:700;font-variant-numeric:tabular-nums}
   .ring .val span{font-size:11px;color:var(--muted);font-weight:500;margin-top:2px}
@@ -2676,24 +2676,44 @@ function setAlertBadge(n){
 // traffic-light scale. Load still has to be readable at a glance, so instead of
 // changing hue it brightens: normal sits at the CLI accent, and anything from
 // 85% up shifts to the lighter tint the panel already uses for emphasis.
+// Red only, by design: green and amber are reserved for status (online / warning)
+// so they stay readable at a glance — see TestGreenMeansOnline. The gauge shifts
+// to a brighter red as the resource saturates, staying inside the accent family.
 function ringColor(p){ return p<85?'var(--accent)':'var(--red-soft)'; }
+function ringGlow(col){ return 'drop-shadow(0 0 5px color-mix(in srgb, '+col+' 55%, transparent))'; }
+const RING_REDUCE = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+// Count the centre number up to its new value, so a jump reads as motion rather
+// than a flicker.
+function ringCount(el,to){
+  const node=el.querySelector('.val').firstChild; to=Math.round(to);
+  const from=parseFloat(node.textContent)||0;
+  if(RING_REDUCE||from===to){ node.textContent=to; return; }
+  const t0=performance.now(),dur=600;
+  (function f(t){ const k=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-k,3);
+    node.textContent=Math.round(from+(to-from)*e);
+    if(k<1) requestAnimationFrame(f); })(t0);
+}
 function makeRing(el,p){
+  const col=ringColor(p);
   el.innerHTML =
     `<svg width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="${Math.round(p)} percent">
        <circle class="track" cx="56" cy="56" r="50" fill="none" stroke-width="9"/>
        <circle class="bar" cx="56" cy="56" r="50" fill="none" stroke-width="9"
-         stroke="${ringColor(p)}" stroke-dasharray="${C}" stroke-dashoffset="${C}"/>
+         stroke="${col}" stroke-dasharray="${C}" stroke-dashoffset="${C}" style="filter:${ringGlow(col)}"/>
      </svg>
-     <div class="val">${Math.round(p)}<span>%</span></div>`;
+     <div class="val">0<span>%</span></div>`;
   requestAnimationFrame(()=>{ el.querySelector('.bar').style.strokeDashoffset = C*(1-p/100); });
+  ringCount(el,p);
 }
 function setRing(id,p){
   const el=$(id), bar=el.querySelector('.bar');
   if(!bar){ makeRing(el,p); return; }
-  bar.style.stroke=ringColor(p);
+  const col=ringColor(p);
+  bar.style.stroke=col;
+  bar.style.filter=ringGlow(col);
   bar.style.strokeDashoffset=C*(1-p/100);
   el.querySelector('svg').setAttribute('aria-label',Math.round(p)+' percent');
-  el.querySelector('.val').firstChild.textContent=Math.round(p);
+  ringCount(el,p);
 }
 
 // The most recent /api/stats payload. Settings reads it to decide whether to

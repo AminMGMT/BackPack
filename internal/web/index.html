@@ -1,171 +1,878 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Backpack</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@^2.0/dist/tailwind.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" />
+    <meta name="color-scheme" content="dark light">
+    <title>Backpack · Telemetry</title>
+    <style>
+        /* ============================ Design tokens ============================
+           A network-telemetry console: ink background, a single "signal" teal
+           accent for data-flow, health colours for the gauges, and monospace
+           for every number so metrics line up like a real ops readout. */
+        :root {
+            --bg: #0a0e13;
+            --grid: rgba(45, 212, 191, .045);
+            --glow: rgba(45, 212, 191, .10);
+            --panel: #111922;
+            --panel-2: #0d141c;
+            --line: #1e2b37;
+            --line-2: #283a49;
+            --text: #e7eef5;
+            --muted: #8091a0;
+            --faint: #55697a;
+            --signal: #2dd4bf;
+            --signal-2: #22d3ee;
+            --ok: #22c55e;
+            --warn: #f59e0b;
+            --bad: #ef4444;
+            --info: #60a5fa;
+            --track: rgba(120, 140, 160, .16);
+            --shadow: 0 1px 0 rgba(255, 255, 255, .02) inset, 0 18px 40px -24px rgba(0, 0, 0, .8);
+        }
+
+        :root[data-theme="light"] {
+            --bg: #eef1f5;
+            --grid: rgba(13, 148, 136, .06);
+            --glow: rgba(13, 148, 136, .10);
+            --panel: #ffffff;
+            --panel-2: #f6f9fc;
+            --line: #e2e8f0;
+            --line-2: #cfd8e3;
+            --text: #0e1a26;
+            --muted: #566472;
+            --faint: #8695a4;
+            --signal: #0d9488;
+            --signal-2: #0891b2;
+            --ok: #16a34a;
+            --warn: #d97706;
+            --bad: #dc2626;
+            --info: #2563eb;
+            --track: rgba(60, 80, 100, .13);
+            --shadow: 0 1px 0 rgba(255, 255, 255, .6) inset, 0 16px 40px -28px rgba(20, 40, 60, .45);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+            /* faint control-room grid + one soft signal glow up top */
+            background-image:
+                radial-gradient(1100px 460px at 50% -160px, var(--glow), transparent 70%),
+                linear-gradient(var(--grid) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+            background-size: 100% 100%, 34px 34px, 34px 34px;
+        }
+
+        .mono {
+            font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .wrap {
+            max-width: 940px;
+            margin: 0 auto;
+            padding: 22px 18px 96px;
+        }
+
+        /* ------------------------------- header ------------------------------ */
+        .top {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 6px 2px 20px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            margin-right: auto;
+        }
+
+        .brand .logo {
+            width: 34px;
+            height: 34px;
+            display: grid;
+            place-items: center;
+            border-radius: 9px;
+            background: linear-gradient(180deg, var(--panel), var(--panel-2));
+            border: 1px solid var(--line-2);
+            font-size: 17px;
+        }
+
+        .brand h1 {
+            font-size: 15px;
+            letter-spacing: .16em;
+            text-transform: uppercase;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .brand .sub {
+            font-size: 11px;
+            letter-spacing: .18em;
+            text-transform: uppercase;
+            color: var(--faint);
+        }
+
+        .live {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 11px;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--signal);
+            box-shadow: 0 0 0 0 var(--signal);
+            animation: pulse 2.4s ease-out infinite;
+        }
+
+        .live.err .dot {
+            background: var(--bad);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal) 55%, transparent);
+            }
+
+            70% {
+                box-shadow: 0 0 0 7px transparent;
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 transparent;
+            }
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 13px;
+            border-radius: 999px;
+            border: 1px solid var(--line-2);
+            background: var(--panel);
+            font-size: 12.5px;
+            font-weight: 600;
+            letter-spacing: .02em;
+            white-space: nowrap;
+        }
+
+        .status-pill .led {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--muted);
+        }
+
+        .status-pill[data-s="ok"] {
+            color: var(--ok);
+            border-color: color-mix(in srgb, var(--ok) 35%, var(--line-2));
+        }
+
+        .status-pill[data-s="ok"] .led {
+            background: var(--ok);
+            box-shadow: 0 0 10px var(--ok);
+        }
+
+        .status-pill[data-s="bad"] {
+            color: var(--bad);
+            border-color: color-mix(in srgb, var(--bad) 35%, var(--line-2));
+        }
+
+        .status-pill[data-s="bad"] .led {
+            background: var(--bad);
+            box-shadow: 0 0 10px var(--bad);
+        }
+
+        .status-pill[data-s="warn"] {
+            color: var(--warn);
+        }
+
+        .status-pill[data-s="warn"] .led {
+            background: var(--warn);
+        }
+
+        .icon-btn {
+            width: 38px;
+            height: 38px;
+            display: grid;
+            place-items: center;
+            border-radius: 10px;
+            border: 1px solid var(--line-2);
+            background: var(--panel);
+            color: var(--muted);
+            cursor: pointer;
+            transition: color .2s, border-color .2s, transform .1s;
+        }
+
+        .icon-btn:hover {
+            color: var(--text);
+            border-color: var(--signal);
+        }
+
+        .icon-btn:active {
+            transform: translateY(1px);
+        }
+
+        :focus-visible {
+            outline: 2px solid var(--signal);
+            outline-offset: 2px;
+        }
+
+        /* -------------------------------- cards ------------------------------ */
+        .card {
+            background: linear-gradient(180deg, var(--panel), var(--panel-2));
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+        }
+
+        .eyebrow {
+            font-size: 10.5px;
+            letter-spacing: .2em;
+            text-transform: uppercase;
+            color: var(--faint);
+            font-weight: 700;
+        }
+
+        section {
+            margin-top: 16px;
+        }
+
+        /* ------------------------------- gauges ------------------------------ */
+        .gauges {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .gauge {
+            padding: 16px 8px 14px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .gauge>svg {
+            width: 100%;
+            max-width: 128px;
+            height: auto;
+            display: block;
+        }
+
+        .g-track {
+            fill: none;
+            stroke: var(--track);
+            stroke-width: 9;
+        }
+
+        .g-fill {
+            fill: none;
+            stroke-width: 9;
+            stroke-linecap: round;
+            stroke: var(--ok);
+            stroke-dasharray: 0 283;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+            transition: stroke-dasharray .85s cubic-bezier(.22, 1, .36, 1), stroke .45s ease;
+            filter: drop-shadow(0 0 5px transparent);
+        }
+
+        .g-val {
+            font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+            font-size: 21px;
+            font-weight: 700;
+            fill: var(--text);
+        }
+
+        .g-unit {
+            font-size: 9px;
+            fill: var(--faint);
+        }
+
+        .g-label {
+            font-size: 10.5px;
+            letter-spacing: .16em;
+            text-transform: uppercase;
+            color: var(--muted);
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* ---------------------------- throughput ----------------------------- */
+        .flow {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .chan {
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .chan .row {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+        }
+
+        .chan .dir {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 11px;
+            letter-spacing: .16em;
+            text-transform: uppercase;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .chan .val {
+            margin-left: auto;
+            font-size: 23px;
+            font-weight: 700;
+            letter-spacing: -.01em;
+        }
+
+        .chan .val .u {
+            font-size: 12px;
+            color: var(--muted);
+            font-weight: 600;
+            margin-left: 3px;
+        }
+
+        .spark {
+            width: 100%;
+            height: 40px;
+            display: block;
+        }
+
+        .chan.down .dir {
+            color: var(--signal);
+        }
+
+        .chan.up .dir {
+            color: var(--signal-2);
+        }
+
+        /* ------------------------------- tiles ------------------------------- */
+        .tiles {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .tile {
+            padding: 14px 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        .tile .k {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 10.5px;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .tile .v {
+            font-size: 17px;
+            font-weight: 700;
+            word-break: break-word;
+        }
+
+        /* ------------------------------- table ------------------------------- */
+        .ports {
+            padding: 16px 6px 8px;
+        }
+
+        .ports .head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px 12px;
+        }
+
+        .ports .head .eyebrow {
+            margin-right: auto;
+        }
+
+        .count {
+            font-size: 11px;
+            color: var(--faint);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            font-size: 10.5px;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--faint);
+            font-weight: 700;
+            text-align: left;
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        th.r,
+        td.r {
+            text-align: right;
+        }
+
+        td {
+            padding: 11px 14px;
+            border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+            font-size: 14px;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        tbody tr {
+            transition: background .15s;
+        }
+
+        tbody tr:hover {
+            background: color-mix(in srgb, var(--signal) 6%, transparent);
+        }
+
+        .port-cell {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            font-weight: 600;
+        }
+
+        .port-cell .tick {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--signal);
+        }
+
+        .empty {
+            text-align: center;
+            color: var(--muted);
+            padding: 26px 14px;
+            font-size: 14px;
+        }
+
+        /* icons */
+        .ic {
+            width: 15px;
+            height: 15px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 1.7;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            flex: none;
+        }
+
+        footer {
+            text-align: center;
+            color: var(--faint);
+            font-size: 11.5px;
+            letter-spacing: .04em;
+            margin-top: 34px;
+        }
+
+        @media (max-width: 620px) {
+
+            .gauges,
+            .tiles {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .flow {
+                grid-template-columns: 1fr;
+            }
+
+            .brand h1 {
+                font-size: 13px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation: none !important;
+                transition: none !important;
+            }
+        }
+    </style>
 </head>
 
+<body>
+    <!-- inline icon sprite (no CDN) -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+            <symbol id="i-cpu" viewBox="0 0 24 24">
+                <rect x="7" y="7" width="10" height="10" rx="1.5" />
+                <path d="M4 9h3M4 15h3M17 9h3M17 15h3M9 4v3M15 4v3M9 17v3M15 17v3" />
+            </symbol>
+            <symbol id="i-mem" viewBox="0 0 24 24">
+                <rect x="3" y="7" width="18" height="10" rx="2" />
+                <path d="M7 17v3M12 17v3M17 17v3M8 11v2M12 11v2M16 11v2" />
+            </symbol>
+            <symbol id="i-disk" viewBox="0 0 24 24">
+                <ellipse cx="12" cy="6" rx="8" ry="3" />
+                <path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+            </symbol>
+            <symbol id="i-swap" viewBox="0 0 24 24">
+                <path d="M4 8h13l-3-3M20 16H7l3 3" />
+            </symbol>
+            <symbol id="i-down" viewBox="0 0 24 24">
+                <path d="M12 4v14M6 12l6 6 6-6" />
+            </symbol>
+            <symbol id="i-up" viewBox="0 0 24 24">
+                <path d="M12 20V6M6 12l6-6 6 6" />
+            </symbol>
+            <symbol id="i-net" viewBox="0 0 24 24">
+                <path d="M12 20a8 8 0 0 0 0-16 8 8 0 0 0 0 16zM4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16" />
+            </symbol>
+            <symbol id="i-route" viewBox="0 0 24 24">
+                <circle cx="6" cy="18" r="2.4" />
+                <circle cx="18" cy="6" r="2.4" />
+                <path d="M8 17c8-1 7-9 8-9M6 15.6V9a3 3 0 0 1 3-3h3" />
+            </symbol>
+            <symbol id="i-conn" viewBox="0 0 24 24">
+                <path d="M9 12a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1M15 12a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1" />
+            </symbol>
+            <symbol id="i-eye" viewBox="0 0 24 24">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                <circle cx="12" cy="12" r="2.6" />
+            </symbol>
+            <symbol id="i-moon" viewBox="0 0 24 24">
+                <path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z" />
+            </symbol>
+            <symbol id="i-sun" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </symbol>
+        </defs>
+    </svg>
 
-<style>
-    .dark {
-        background-color: #000000;
-        color: #fff;
-    }
-
-    .dark .container {
-        background-color: #222123;
-    }
-
-    .dark .text-gray-800 {
-        color: #148b34;
-    }
-
-    .dark .bg-gray-200 {
-        background-color: #121010
-    }
-
-    .dark .bg-gray-800 {
-        background-color: #1e4e23
-    }
-</style>
-
-<body class="bg-gray-100 dark:bg-gray-900 flex justify-center items-start min-h-screen m-0 p-0 font-sans" id="body"
-    style="margin-bottom: 100px;">
-    <div class="dark:bg-gray-800 container mx-auto p-6 bg-white  shadow-lg rounded-lg mt-4 w-full max-w-3xl relative">
-        <button id="dark-mode-button"
-            class="absolute top-4 right-4 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 text-gray-800 dark:text-gray-200 font-bold py-2 px-4 rounded">
-            <i class="fas fa-moon"></i>
-        </button>
-        <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-200  text-center mb-6">System Stats
-            and Port Usage
-        </h1>
-        <div class="space-y-4 mb-6 p-4">
-            <div class="flex items-center"><i class="fas fa-link mr-2 "></i><strong>Tunnel Status:&nbsp;</strong>
-                <span id="tunnel-status" class="dark:text-gray-200">Loading...</span>
+    <div class="wrap">
+        <header class="top">
+            <div class="brand">
+                <span class="logo">🎒</span>
+                <div>
+                    <h1>Backpack</h1>
+                    <div class="sub">Telemetry</div>
+                </div>
             </div>
-            <div class="flex items-center"><i class="fas fa-microchip mr-2 "></i><strong>CPU
-                    Usage:&nbsp;</strong> <span id="cpu-usage" class="dark:text-gray-200">Loading...</span></div>
-            <div class="flex items-center"><i class="fas fa-memory mr-2"></i><strong>RAM Usage:&nbsp;</strong> <span
-                    id="ram-usage" class="dark:text-gray-200">Loading...</span></div>
-            <div class="flex items-center"><i class="fas fa-hdd mr-2"></i><strong>Disk Usage:&nbsp;</strong> <span
-                    id="disk-usage" class="dark:text-gray-200">Loading...</span></div>
-            <div class="flex items-center"><i class="fas fa-exchange-alt mr-2"></i><strong>Swap Usage:&nbsp;</strong>
-                <span id="swap-usage" class="dark:text-gray-200">Loading...</span>
-            </div>
-            <div class="flex items-center"><i class="fas fa-network-wired mr-2"></i><strong>Network
-                    Traffic:&nbsp;</strong> <span id="network-traffic" class="dark:text-gray-200">Loading...</span>
-            </div>
-            <div class="flex items-center"><i class="fas fa-route mr-2"></i><strong>Tunnel Traffic:&nbsp;</strong>
-                <span id="tunnel-traffic" class="dark:text-gray-200">Loading...</span>
-            </div>
+            <span class="live" id="live"><span class="dot"></span><span id="live-text">connecting…</span></span>
+            <span class="status-pill" id="status" data-s=""><span class="led"></span><span id="status-text">—</span></span>
+            <button class="icon-btn" id="theme" title="Toggle theme" aria-label="Toggle light and dark">
+                <svg class="ic"><use href="#i-moon" id="theme-ic" /></svg>
+            </button>
+        </header>
 
-            <div class="flex items-center"><i class="fas fa-download mr-2"></i><strong>Download Speed:&nbsp;</strong>
-                <span id="download-speed" class="dark:text-gray-200">Loading...</span>
+        <!-- Hero: the four health gauges -->
+        <section class="card gauges" aria-label="System resource usage">
+            <div class="gauge">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="g-track" cx="50" cy="50" r="45"></circle>
+                    <circle class="g-fill" id="cpu-fill" cx="50" cy="50" r="45"></circle>
+                    <text class="g-val" id="cpu-val" x="50" y="51" text-anchor="middle" dominant-baseline="central">–</text>
+                </svg>
+                <span class="g-label"><svg class="ic"><use href="#i-cpu" /></svg>CPU</span>
             </div>
-            <div class="flex items-center"><i class="fas fa-upload mr-2"></i><strong>Upload Speed:&nbsp;</strong> <span
-                    id="upload-speed" class="dark:text-gray-200">Loading...</span></div>
-            <div class="flex items-center"><i class="fas fa-project-diagram mr-2"></i><strong>All
-                    Connections:&nbsp;</strong>
-                <span id="all-connections" class="dark:text-gray-200">Loading...</span>
+            <div class="gauge">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="g-track" cx="50" cy="50" r="45"></circle>
+                    <circle class="g-fill" id="ram-fill" cx="50" cy="50" r="45"></circle>
+                    <text class="g-val" id="ram-val" x="50" y="51" text-anchor="middle" dominant-baseline="central">–</text>
+                </svg>
+                <span class="g-label"><svg class="ic"><use href="#i-mem" /></svg>Memory</span>
             </div>
-            <div class="flex items-center"><i class="fas fa-eye mr-2"></i><strong>Sniffer:&nbsp;</strong> <span
-                    id="sniffer" class="dark:text-gray-200">Loading...</span></div>
-        </div>
+            <div class="gauge">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="g-track" cx="50" cy="50" r="45"></circle>
+                    <circle class="g-fill" id="disk-fill" cx="50" cy="50" r="45"></circle>
+                    <text class="g-val" id="disk-val" x="50" y="51" text-anchor="middle" dominant-baseline="central">–</text>
+                </svg>
+                <span class="g-label"><svg class="ic"><use href="#i-disk" /></svg>Disk</span>
+            </div>
+            <div class="gauge">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="g-track" cx="50" cy="50" r="45"></circle>
+                    <circle class="g-fill" id="swap-fill" cx="50" cy="50" r="45"></circle>
+                    <text class="g-val" id="swap-val" x="50" y="51" text-anchor="middle" dominant-baseline="central">–</text>
+                </svg>
+                <span class="g-label"><svg class="ic"><use href="#i-swap" /></svg>Swap</span>
+            </div>
+        </section>
 
-        <table id="port-usage-table" class="dark:bg-gray-800 w-full border-collapse text-left"
-            style="margin-bottom: 10px;">
-            <thead class="border px-4 py-2 bg-gray-200 dark:bg-gray-700">
-                <tr>
-                    <th class="border px-4 py-2 bg-gray-200 dark:bg-gray-700">Port</th>
-                    <th class="border px-4 py-2 bg-gray-200 dark:bg-gray-700">Usage</th>
-                </tr>
-            </thead>
-            <tbody class="bg-gray-10">
-                <tr>
-                    <td colspan="2" class="border px-4 py-2 text-center">Loading...
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+        <!-- Signature: live throughput -->
+        <section class="flow" aria-label="Throughput">
+            <div class="card chan down">
+                <div class="row">
+                    <span class="dir"><svg class="ic"><use href="#i-down" /></svg>Downlink</span>
+                    <span class="val mono" id="down-val">–</span>
+                </div>
+                <svg class="spark" id="down-spark" viewBox="0 0 300 40" preserveAspectRatio="none">
+                    <path id="down-area" fill="var(--signal)" fill-opacity=".12" stroke="none"></path>
+                    <polyline id="down-line" fill="none" stroke="var(--signal)" stroke-width="2" stroke-linejoin="round"
+                        stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline>
+                </svg>
+            </div>
+            <div class="card chan up">
+                <div class="row">
+                    <span class="dir"><svg class="ic"><use href="#i-up" /></svg>Uplink</span>
+                    <span class="val mono" id="up-val">–</span>
+                </div>
+                <svg class="spark" id="up-spark" viewBox="0 0 300 40" preserveAspectRatio="none">
+                    <path id="up-area" fill="var(--signal-2)" fill-opacity=".12" stroke="none"></path>
+                    <polyline id="up-line" fill="none" stroke="var(--signal-2)" stroke-width="2" stroke-linejoin="round"
+                        stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline>
+                </svg>
+            </div>
+        </section>
+
+        <!-- Secondary metrics -->
+        <section class="tiles" aria-label="Traffic and connections">
+            <div class="card tile">
+                <span class="k"><svg class="ic"><use href="#i-net" /></svg>Network</span>
+                <span class="v mono" id="network-traffic">–</span>
+            </div>
+            <div class="card tile">
+                <span class="k"><svg class="ic"><use href="#i-route" /></svg>Tunnel</span>
+                <span class="v mono" id="tunnel-traffic">–</span>
+            </div>
+            <div class="card tile">
+                <span class="k"><svg class="ic"><use href="#i-conn" /></svg>Connections</span>
+                <span class="v mono" id="all-connections">–</span>
+            </div>
+            <div class="card tile">
+                <span class="k"><svg class="ic"><use href="#i-eye" /></svg>Sniffer</span>
+                <span class="v" id="sniffer">–</span>
+            </div>
+        </section>
+
+        <!-- Port usage -->
+        <section class="card ports" aria-label="Port usage">
+            <div class="head">
+                <span class="eyebrow">Port usage</span>
+                <span class="count mono" id="port-count"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Port</th>
+                        <th class="r">Traffic</th>
+                    </tr>
+                </thead>
+                <tbody id="port-body">
+                    <tr>
+                        <td colspan="2" class="empty">Loading…</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <footer>Backpack · live telemetry · refreshed every 3s</footer>
     </div>
-    <footer class="fixed bottom-0 w-full bg-gray-800 text-white text-center py-2">
-        &copy; 2025 Backpack Project
-    </footer>
-
 
     <script>
-        async function fetchData() {
+        "use strict";
+        const REDUCE = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const $ = (id) => document.getElementById(id);
+
+        /* ---------- theme ---------- */
+        (function initTheme() {
+            const saved = (function () { try { return localStorage.getItem("bp-theme"); } catch (e) { return null; } })();
+            if (saved) document.documentElement.setAttribute("data-theme", saved);
+            const btn = $("theme"), ic = $("theme-ic");
+            const paint = () => ic.setAttribute("href",
+                document.documentElement.getAttribute("data-theme") === "light" ? "#i-sun" : "#i-moon");
+            paint();
+            btn.addEventListener("click", () => {
+                const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+                document.documentElement.setAttribute("data-theme", next);
+                try { localStorage.setItem("bp-theme", next); } catch (e) { }
+                paint();
+            });
+        })();
+
+        /* ---------- gauges ---------- */
+        const GAUGE_C = 2 * Math.PI * 45;
+        const gaugeState = {};
+        // Idle → saturated: green, blue, amber, red.
+        const usageColor = (p) => p >= 90 ? "var(--bad)" : p >= 75 ? "var(--warn)" : p >= 50 ? "var(--info)" : "var(--ok)";
+        const parsePct = (s) => { const m = String(s == null ? "" : s).match(/[\d.]+/); return m ? parseFloat(m[0]) : 0; };
+
+        function setGauge(metric, pct) {
+            pct = Math.max(0, Math.min(100, isFinite(pct) ? pct : 0));
+            const fill = $(metric + "-fill"), val = $(metric + "-val");
+            if (!fill || !val) return;
+            const col = usageColor(pct);
+            fill.style.strokeDasharray = (pct / 100 * GAUGE_C).toFixed(2) + " " + GAUGE_C.toFixed(2);
+            fill.style.stroke = col;
+            fill.style.filter = "drop-shadow(0 0 5px color-mix(in srgb, " + col + " 55%, transparent))";
+            const from = gaugeState[metric] || 0; gaugeState[metric] = pct;
+            if (REDUCE) { val.textContent = Math.round(pct) + "%"; return; }
+            const t0 = performance.now(), dur = 650;
+            (function tick(t) {
+                const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+                val.textContent = Math.round(from + (pct - from) * e) + "%";
+                if (k < 1) requestAnimationFrame(tick);
+            })(t0);
+        }
+
+        /* ---------- throughput sparklines ---------- */
+        const HIST = 48;
+        const series = { down: [], up: [] };
+        // "12.4 MB/s" → bytes/s, for auto-scaling the sparkline.
+        function toBps(s) {
+            const m = String(s == null ? "" : s).match(/([\d.]+)\s*([KMGTP]?)/i);
+            if (!m) return 0;
+            const mult = { "": 1, K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15 }[(m[2] || "").toUpperCase()] || 1;
+            return (parseFloat(m[1]) || 0) * mult;
+        }
+        function drawSpark(chan) {
+            const arr = series[chan], line = $(chan + "-line"), area = $(chan + "-area");
+            if (!line) return;
+            const W = 300, H = 40, pad = 3, n = arr.length;
+            if (n < 2) { line.setAttribute("points", ""); area.setAttribute("d", ""); return; }
+            const max = Math.max.apply(null, arr) || 1;
+            const dx = W / (HIST - 1);
+            const pts = arr.map((v, i) => {
+                const x = W - (n - 1 - i) * dx;
+                const y = H - pad - (v / max) * (H - pad * 2);
+                return x.toFixed(1) + "," + y.toFixed(1);
+            });
+            line.setAttribute("points", pts.join(" "));
+            const first = pts[0].split(",")[0], last = pts[pts.length - 1].split(",")[0];
+            area.setAttribute("d", "M" + first + "," + H + " L" + pts.join(" L") + " L" + last + "," + H + " Z");
+        }
+        function pushFlow(chan, raw) {
+            series[chan].push(toBps(raw));
+            if (series[chan].length > HIST) series[chan].shift();
+            drawSpark(chan);
+            // split "12.4 MB/s" into value + unit for the mono readout
+            const el = $(chan + "-val"), s = String(raw == null ? "–" : raw).trim();
+            const m = s.match(/^([\d.]+)\s*(.*)$/);
+            el.innerHTML = m ? m[1] + '<span class="u">' + (m[2] || "") + "</span>" : s;
+        }
+
+        /* ---------- status pill ---------- */
+        function setStatus(txt) {
+            const pill = $("status"), t = $("status-text");
+            const s = String(txt == null ? "" : txt);
+            t.textContent = s || "Unknown";
+            const l = s.toLowerCase();
+            pill.dataset.s = /disconnect|offline|error|down|stopped|fail/.test(l) ? "bad"
+                : /connect|online|up|active|running|listen/.test(l) ? "ok" : "warn";
+        }
+
+        /* ---------- freshness indicator ---------- */
+        let lastOK = 0;
+        function tickFresh() {
+            const live = $("live"), txt = $("live-text");
+            if (!lastOK) return;
+            const age = Math.round((Date.now() - lastOK) / 1000);
+            const stale = age > 8;
+            live.classList.toggle("err", stale);
+            txt.textContent = stale ? "reconnecting…" : (age <= 1 ? "live · just now" : "live · " + age + "s ago");
+        }
+        setInterval(tickFresh, 1000);
+
+        /* ---------- data fetch ---------- */
+        async function fetchStats() {
             try {
-                const response = await fetch('/data'); // Replace with your data endpoint
-                if (!response.ok) throw new Error('Network response was not ok');
-                const data = await response.json();
+                const r = await fetch("/stats");
+                if (!r.ok) throw new Error("bad status");
+                const s = await r.json();
+                setStatus(s.tunnelStatus);
+                setGauge("cpu", parsePct(s.cpuUsage));
+                setGauge("ram", parsePct(s.ramUsage));
+                setGauge("disk", parsePct(s.diskUsage));
+                setGauge("swap", parsePct(s.swapUsage));
+                pushFlow("down", s.downloadSpeed);
+                pushFlow("up", s.uploadSpeed);
+                $("network-traffic").textContent = s.networkTraffic || "–";
+                $("tunnel-traffic").textContent = s.tunnelTraffic || "–";
+                $("all-connections").textContent = s.allConnections || "–";
+                $("sniffer").textContent = s.sniffer || "–";
+                lastOK = Date.now(); tickFresh();
+            } catch (e) {
+                $("live").classList.add("err"); $("live-text").textContent = "reconnecting…";
+            }
+        }
 
-                const tableBody = document.querySelector('#port-usage-table tbody');
-                tableBody.innerHTML = ''; // Clear existing rows
-
-                if (data.length === 0) {
-                    tableBody.innerHTML = '<tr><td colspan="2" class="border px-4 py-2 text-center">No data available</td></tr>';
-                } else {
-                    data.forEach(item => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `<td class="border px-4 py-2">${item.Port}</td><td class="border px-4 py-2">${item.ReadableUsage}</td>`;
-                        tableBody.appendChild(row);
-                    });
+        async function fetchPorts() {
+            const body = $("port-body"), count = $("port-count");
+            try {
+                const r = await fetch("/data");
+                if (!r.ok) throw new Error("bad status");
+                const rows = await r.json();
+                if (!rows || rows.length === 0) {
+                    body.innerHTML = '<tr><td colspan="2" class="empty">No forwarded ports yet.</td></tr>';
+                    count.textContent = "";
+                    return;
                 }
-            } catch (error) {
-                console.error('Error fetching data:', error);
-                const tableBody = document.querySelector('#port-usage-table tbody');
-                tableBody.innerHTML = '<tr><td colspan="2" class="border px-4 py-2 text-center">Error loading data</td></tr>';
+                count.textContent = rows.length + (rows.length === 1 ? " port" : " ports");
+                body.innerHTML = rows.map((it) =>
+                    '<tr><td><span class="port-cell mono"><span class="tick"></span>' +
+                    escapeHtml(it.Port) + '</span></td><td class="r mono">' +
+                    escapeHtml(it.ReadableUsage) + "</td></tr>"
+                ).join("");
+            } catch (e) {
+                body.innerHTML = '<tr><td colspan="2" class="empty">Couldn’t reach the server — retrying.</td></tr>';
             }
         }
-
-        async function fetchSystemStats() {
-            try {
-                const response = await fetch('/stats'); // Replace with your stats endpoint
-                if (!response.ok) throw new Error('Network response was not ok');
-                const stats = await response.json();
-                document.getElementById('tunnel-status').textContent = stats.tunnelStatus;
-                document.getElementById('cpu-usage').textContent = stats.cpuUsage;
-                document.getElementById('ram-usage').textContent = stats.ramUsage;
-                document.getElementById('disk-usage').textContent = stats.diskUsage;
-                document.getElementById('swap-usage').textContent = stats.swapUsage;
-                document.getElementById('network-traffic').textContent = stats.networkTraffic;
-                document.getElementById('download-speed').textContent = stats.downloadSpeed;
-                document.getElementById('upload-speed').textContent = stats.uploadSpeed;
-                document.getElementById('tunnel-traffic').textContent = stats.tunnelTraffic;
-                document.getElementById('sniffer').textContent = stats.sniffer;
-                document.getElementById('all-connections').textContent = stats.allConnections;
-            } catch (error) {
-                console.error('Error fetching system stats:', error);
-                document.querySelector('.space-y-4').innerHTML = '<div>Error loading stats</div>';
-            }
+        function escapeHtml(v) {
+            return String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
+                ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
         }
 
-        // Fetch data every 3 seconds
-        setInterval(() => {
-            fetchData();
-            fetchSystemStats();
-        }, 3000);
-
-        // Initial fetch
-        fetchData();
-        fetchSystemStats();
-
-        // Dark mode button
-        const darkModeButton = document.getElementById('dark-mode-button');
-        darkModeButton.addEventListener('click', () => {
-            const body = document.getElementById('body');
-            body.classList.toggle('dark'); // Toggle the dark class
-            if (body.classList.contains('dark')) {
-                darkModeButton.innerHTML = '<i class="fas fa-sun"></i>';
-            } else {
-                darkModeButton.innerHTML = '<i class="fas fa-moon"></i>';
-            }
-        });
+        function refresh() { fetchStats(); fetchPorts(); }
+        refresh();
+        setInterval(refresh, 3000);
     </script>
 </body>
 
