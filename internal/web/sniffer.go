@@ -466,8 +466,8 @@ func (m *Usage) collectSystemStats() (*SystemStats, error) {
 		totalNetwork = netStats[0].BytesSent + netStats[0].BytesRecv
 	}
 
-	// Get all active network connections (TCP, UDP, etc.)
-	connections, err := net.Connections("all")
+	// Count sockets without materialising every connection record on Linux.
+	connectionCount, err := socketCount()
 	if err != nil {
 		return nil, err
 	}
@@ -491,7 +491,7 @@ func (m *Usage) collectSystemStats() (*SystemStats, error) {
 		UploadSpeed:    m.formatSpeed(uploadSpeed),
 		TunnelTraffic:  m.convertBytesToReadable(m.totalTraffic.Load()),
 		Sniffer:        map[bool]string{true: "Running", false: "Not running"}[m.sniffer],
-		AllConnections: fmt.Sprintf("%d", len(connections)),
+		AllConnections: fmt.Sprintf("%d", connectionCount),
 	}
 
 	return stats, nil
