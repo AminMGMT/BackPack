@@ -290,11 +290,6 @@ func bar(pct float64) string {
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
-// AlertsText reports the current alert settings.
-func AlertsText() string {
-	return Load().Alerts.Summary()
-}
-
 // helpText lists what the bot understands. The command list is generated from
 // commandList so the help screen and Telegram's own slash menu are the same
 // list, written once.

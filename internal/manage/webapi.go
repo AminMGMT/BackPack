@@ -62,22 +62,11 @@ type PresetOption struct {
 }
 
 // Presets returns the performance profiles in menu order. It lists every one,
-// including those that only apply to some transports; PresetsFor narrows the
-// list, and KCPOnly says which entries it would drop.
+// including those that only apply to some transports; KCPOnly says which
+// entries a transport would drop, so the panel filters them client-side.
 func Presets() []PresetOption {
 	out := make([]PresetOption, len(presetOptions))
 	for i, o := range presetOptions {
-		out[i] = PresetOption{Label: o.label, Desc: o.desc, Value: o.value, KCPOnly: o.kcpOnly}
-	}
-	return out
-}
-
-// PresetsFor returns the profiles offerable for a transport, so the panel does
-// not present a choice that would be refused on submit.
-func PresetsFor(transport string) []PresetOption {
-	options := presetOptionsFor(transport)
-	out := make([]PresetOption, len(options))
-	for i, o := range options {
 		out[i] = PresetOption{Label: o.label, Desc: o.desc, Value: o.value, KCPOnly: o.kcpOnly}
 	}
 	return out

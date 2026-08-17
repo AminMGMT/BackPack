@@ -17,7 +17,6 @@ import (
 type SpoofPipeServer struct {
 	config *SpoofPipeConfig
 	ctx    context.Context
-	cancel context.CancelFunc
 	logger *logrus.Logger
 }
 
@@ -32,8 +31,7 @@ type SpoofPipeConfig struct {
 }
 
 func NewSpoofPipeServer(parentCtx context.Context, config *SpoofPipeConfig, logger *logrus.Logger) *SpoofPipeServer {
-	ctx, cancel := context.WithCancel(parentCtx)
-	return &SpoofPipeServer{config: config, ctx: ctx, cancel: cancel, logger: logger}
+	return &SpoofPipeServer{config: config, ctx: parentCtx, logger: logger}
 }
 
 func (s *SpoofPipeServer) Start() {
@@ -55,8 +53,6 @@ func (s *SpoofPipeServer) Start() {
 		}
 	}
 }
-
-func (s *SpoofPipeServer) Stop() { s.cancel() }
 
 func (s *SpoofPipeServer) runOnce() error {
 	peer := net.ParseIP(s.config.PeerIP)

@@ -464,30 +464,6 @@ func SetLoadBalance(name string, on bool) error {
 	return applySpec(s)
 }
 
-// SetHealthFailover turns automatic health-scored failover on or off for a
-// client tunnel. It measures every configured address and keeps traffic on the
-// healthiest, so it needs a backup address to have anything to fail over to.
-func SetHealthFailover(name string, on bool) error {
-	s, err := LoadSpec(name)
-	if err != nil {
-		return err
-	}
-	if s.Role != "client" {
-		return fmt.Errorf("failover is a client-side setting")
-	}
-	if on && len(s.FallbackAddrs) == 0 {
-		return fmt.Errorf("add at least one backup server address first — there is nothing to fail over to")
-	}
-	if s.HealthFailover == on {
-		return fmt.Errorf("automatic failover is already %s", map[bool]string{true: "on", false: "off"}[on])
-	}
-	s.HealthFailover = on
-	if on {
-		s.LoadBalance = false // steering overrides spread
-	}
-	return applySpec(s)
-}
-
 // SetProxyProtocol turns the real-client-IP header on or off for a server
 // tunnel.
 func SetProxyProtocol(name string, on bool) error {

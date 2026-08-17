@@ -16,7 +16,6 @@ import (
 type SpoofPipeClient struct {
 	config *SpoofPipeConfig
 	ctx    context.Context
-	cancel context.CancelFunc
 	logger *logrus.Logger
 }
 
@@ -32,8 +31,7 @@ type SpoofPipeConfig struct {
 }
 
 func NewSpoofPipeClient(parentCtx context.Context, config *SpoofPipeConfig, logger *logrus.Logger) *SpoofPipeClient {
-	ctx, cancel := context.WithCancel(parentCtx)
-	return &SpoofPipeClient{config: config, ctx: ctx, cancel: cancel, logger: logger}
+	return &SpoofPipeClient{config: config, ctx: parentCtx, logger: logger}
 }
 
 func (c *SpoofPipeClient) Start() {
@@ -55,8 +53,6 @@ func (c *SpoofPipeClient) Start() {
 		}
 	}
 }
-
-func (c *SpoofPipeClient) Stop() { c.cancel() }
 
 func (c *SpoofPipeClient) runOnce() error {
 	sa, err := net.ResolveIPAddr("ip4", c.config.ServerIP)

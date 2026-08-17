@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"sort"
 	"strings"
 	"sync"
 
@@ -460,17 +459,6 @@ func parseMAC(s string) (net.HardwareAddr, error) {
 		return nil, fmt.Errorf("pck: %q is not a 6-byte Ethernet address", s)
 	}
 	return mac, nil
-}
-
-// sortedFlagLetters is used only by tests and diagnostics that want a stable
-// rendering of the letters this package understands.
-func sortedFlagLetters() string {
-	out := make([]string, 0, len(flagLetters))
-	for _, fl := range flagLetters {
-		out = append(out, string(fl.c))
-	}
-	sort.Strings(out)
-	return strings.Join(out, "")
 }
 
 // pckBPFProgram is the kernel-side filter: IPv4 TCP segments, not fragments,

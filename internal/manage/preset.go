@@ -77,11 +77,6 @@ func presetSuitsTransport(preset, transport string) bool {
 	return transport == "kcp"
 }
 
-// PresetSuitsTransport is the exported form, for the web panel's validation.
-func PresetSuitsTransport(preset, transport string) bool {
-	return presetSuitsTransport(preset, transport)
-}
-
 // presetOptionsFor returns the presets offerable for a transport, in menu order.
 func presetOptionsFor(transport string) []struct {
 	label, desc, value string
