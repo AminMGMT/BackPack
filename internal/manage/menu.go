@@ -298,18 +298,61 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 	tui.PressEnter()
 }
 
-// changeForwardedPorts prompts for and applies a new forwarded-ports list.
+// changeForwardedPorts lets the operator change one forwarded-port entry at a
+// time. Keeping the full-list replacement as an advanced option is useful for
+// bulk changes, but ordinary edits should not require retyping every port.
 func changeForwardedPorts(name string, spec TunnelSpec) {
+	ports := VisiblePorts(spec.Ports, spec.Token)
 	fmt.Println()
-	tui.Info("Current: " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
-	tui.Warn("Enter the FULL new list (comma separated, e.g. 443,8080 or 443=1.1.1.1:443).")
-	raw := tui.Prompt("New forwarded ports: ")
-	ports := parsePorts(raw)
-	if len(ports) == 0 {
-		tui.Error("No valid ports entered.")
+	tui.Info("Current: " + strings.Join(ports, ", "))
+
+	options := []tui.Option{
+		{Title: "Add a port", Desc: "keep all current entries and append one"},
+	}
+	if len(ports) > 0 {
+		options = append(options, tui.Option{Title: "Edit a port", Desc: "change one entry without retyping the others"})
+	}
+	if len(ports) > 1 {
+		options = append(options, tui.Option{Title: "Remove a port", Desc: "delete one entry and keep the rest"})
+	}
+	options = append(options, tui.Option{Title: "Replace the full list", Desc: "bulk edit with a comma-separated list"})
+
+	choice := tui.ChooseOpt("What do you want to change?", options)
+	if choice < 0 {
+		return
+	}
+
+	var err error
+	switch options[choice].Title {
+	case "Add a port":
+		entry := tui.Prompt("New port or mapping: ")
+		ports, err = addForwardedPort(ports, entry)
+	case "Edit a port":
+		idx := chooseForwardedPort("Select the port to edit:", ports)
+		if idx < 0 {
+			return
+		}
+		entry := tui.PromptDefault("Port or mapping", ports[idx])
+		if entry == ports[idx] {
+			return
+		}
+		ports, err = replaceForwardedPort(ports, idx, entry)
+	case "Remove a port":
+		idx := chooseForwardedPort("Select the port to remove:", ports)
+		if idx < 0 || !tui.Confirm("Remove "+ports[idx]+"?", false) {
+			return
+		}
+		ports, err = removeForwardedPort(ports, idx)
+	case "Replace the full list":
+		tui.Warn("Enter the FULL new list (comma separated, e.g. 443,8080 or 443=1.1.1.1:443).")
+		ports, err = replaceForwardedPorts(tui.Prompt("New forwarded ports: "))
+	}
+	if err != nil {
+		tui.Error("Invalid entry: " + err.Error())
 		tui.PressEnter()
 		return
 	}
+
 	if err := EditTunnel(name, "", "", ports); err != nil {
 		tui.Error("Failed: " + err.Error())
 		tui.PressEnter()
@@ -317,6 +360,59 @@ func changeForwardedPorts(name string, spec TunnelSpec) {
 	}
 	tui.Success("Forwarded ports updated and the tunnel was restarted.")
 	tui.PressEnter()
+}
+
+func chooseForwardedPort(title string, ports []string) int {
+	options := make([]tui.Option, len(ports))
+	for i, port := range ports {
+		options[i] = tui.Option{Title: port}
+	}
+	return tui.ChooseOpt(title, options)
+}
+
+func addForwardedPort(ports []string, entry string) ([]string, error) {
+	entry = strings.TrimSpace(entry)
+	updated := append([]string(nil), ports...)
+	updated = append(updated, entry)
+	if err := validatePortSpecs(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func replaceForwardedPort(ports []string, index int, entry string) ([]string, error) {
+	if index < 0 || index >= len(ports) {
+		return nil, fmt.Errorf("port selection is out of range")
+	}
+	entry = strings.TrimSpace(entry)
+	updated := append([]string(nil), ports...)
+	updated[index] = entry
+	if err := validatePortSpecs(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func removeForwardedPort(ports []string, index int) ([]string, error) {
+	if len(ports) <= 1 {
+		return nil, fmt.Errorf("at least one forwarded port is required")
+	}
+	if index < 0 || index >= len(ports) {
+		return nil, fmt.Errorf("port selection is out of range")
+	}
+	updated := append([]string(nil), ports[:index]...)
+	return append(updated, ports[index+1:]...), nil
+}
+
+func replaceForwardedPorts(raw string) ([]string, error) {
+	ports := parsePorts(raw)
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("at least one forwarded port is required")
+	}
+	if err := validatePortSpecs(ports); err != nil {
+		return nil, err
+	}
+	return ports, nil
 }
 
 // fallbackSummary renders the backup-address list for the Edit header.
