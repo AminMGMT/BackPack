@@ -261,11 +261,11 @@ func Serve() error {
 		ACMECacheDir: app.ConfigDir + "/acme",
 	}
 	if settings.ACMEDomain == "" {
-		host := cfg.TLSDomain
-		if host == "" {
-			host = manage.PublicIPv4()
-		}
-		certFile, keyFile, err := manage.EnsureSelfSignedCert("webui", host)
+		// EnsurePanelCert builds the SAN set from the machine's own interfaces
+		// (plus loopback, the public IP when reachable, and an optional operator
+		// host), so the certificate validates on whatever address the panel is
+		// reached on — not a single guess that is "-" on a filtered network.
+		certFile, keyFile, err := manage.EnsurePanelCert(cfg.TLSSelfHost)
 		if err != nil {
 			return fmt.Errorf("web panel certificate: %w", err)
 		}

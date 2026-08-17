@@ -46,6 +46,13 @@ type Config struct {
 	HTTPS     bool   `json:"https,omitempty"`
 	TLSDomain string `json:"tls_domain,omitempty"`
 	TLSEmail  string `json:"tls_email,omitempty"`
+	// TLSSelfHost is an optional domain or IP to add to the self-signed
+	// certificate's SANs, for reaching the panel by a name that has no public
+	// DNS for Let's Encrypt (an internal domain, a host that is only in the
+	// operator's /etc/hosts). It changes nothing about which addresses already
+	// work — every local IP and loopback are always included — it only adds one
+	// the machine cannot discover on its own. Empty is the common case.
+	TLSSelfHost string `json:"tls_self_host,omitempty"`
 }
 
 // Scheme is the URL scheme the panel answers on.

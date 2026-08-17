@@ -38,6 +38,8 @@ type certView struct {
 	Domain string `json:"domain,omitempty"`
 	Email  string `json:"email,omitempty"`
 	Port   int    `json:"port"`
+	// SelfHost is the optional extra name/IP on the self-signed certificate.
+	SelfHost string `json:"selfHost,omitempty"`
 
 	// CurrentURL is where the panel answers now; NextURL is where it would
 	// answer under the proposed mode. The page shows the second one before
@@ -78,7 +80,7 @@ func (s *server) handlePanelCert(w http.ResponseWriter, r *http.Request) {
 func certSnapshot() certView {
 	c := Load()
 
-	v := certView{Mode: "http", Domain: c.TLSDomain, Email: c.TLSEmail, Port: c.Port}
+	v := certView{Mode: "http", Domain: c.TLSDomain, Email: c.TLSEmail, Port: c.Port, SelfHost: c.TLSSelfHost}
 	switch {
 	case !c.HTTPS:
 		v.Mode = "http"
@@ -99,7 +101,7 @@ func certSnapshot() certView {
 	// in autocert's cache in a format that is its business, and it renews
 	// itself, so there is nothing useful to say about its expiry here.
 	if v.Mode == "self" {
-		if certFile, _, err := manage.EnsureSelfSignedCert("webui", host); err == nil {
+		if certFile, _, err := manage.EnsurePanelCert(c.TLSSelfHost); err == nil {
 			if notAfter, err := manage.CertExpiry(certFile); err == nil {
 				v.Expires = notAfter.Format("2006-01-02")
 				v.ExpiresDays = int(time.Until(notAfter).Hours() / 24)
@@ -158,15 +160,22 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 
 	switch mode {
 	case "http":
-		next.HTTPS, next.TLSDomain, next.TLSEmail = false, "", ""
+		next.HTTPS, next.TLSDomain, next.TLSEmail, next.TLSSelfHost = false, "", "", ""
 	case "self":
-		next.HTTPS, next.TLSDomain, next.TLSEmail = true, "", ""
+		// The domain field is optional for self-signed: an extra SAN, not a
+		// requirement. An IP typed here is fine too. Every local address is
+		// covered regardless.
+		if domain != "" && net.ParseIP(domain) == nil && !validHostname(domain) {
+			http.Error(w, fmt.Sprintf("%q is not a valid domain or IP", domain), http.StatusBadRequest)
+			return
+		}
+		next.HTTPS, next.TLSDomain, next.TLSEmail, next.TLSSelfHost = true, "", "", domain
 	case "acme":
 		if err := validateACME(domain, c.Port); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		next.HTTPS, next.TLSDomain, next.TLSEmail = true, domain, email
+		next.HTTPS, next.TLSDomain, next.TLSEmail, next.TLSSelfHost = true, domain, email, ""
 	default:
 		http.Error(w, "unknown mode", http.StatusBadRequest)
 		return
@@ -174,7 +183,13 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 
 	host := next.TLSDomain
 	if host == "" {
+		host = next.TLSSelfHost
+	}
+	if host == "" || host == "-" {
 		host = manage.PublicIPv4()
+	}
+	if host == "-" {
+		host = "" // panelURL renders the placeholder rather than a bare dash
 	}
 	url := panelURL(next.Scheme(), host, next.Port)
 
@@ -188,7 +203,7 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 	// instead of into a log after the panel has already restarted onto a
 	// listener that cannot complete a handshake.
 	if next.HTTPS && next.TLSDomain == "" {
-		if _, _, err := manage.EnsureSelfSignedCert("webui", host); err != nil {
+		if _, _, err := manage.EnsurePanelCert(next.TLSSelfHost); err != nil {
 			http.Error(w, "could not generate a certificate: "+err.Error(),
 				http.StatusInternalServerError)
 			return

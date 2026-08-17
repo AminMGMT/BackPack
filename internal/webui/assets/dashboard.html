@@ -1383,7 +1383,7 @@
             <input type="radio" name="certmode" value="self" onchange="pickCertMode()">
             <span class="co-t">
               <b data-i18n>HTTPS, self-signed</b>
-              <i data-i18n>Works on a bare IP. The browser warns once, then trusts it.</i>
+              <i data-i18n>Works on this server's IP out of the box. The browser warns once, then trusts it.</i>
             </span>
           </label>
           <label class="certopt" id="certopt-acme">
@@ -1393,6 +1393,12 @@
               <i id="co-acme-why" data-i18n data-i18n-ph-only>Trusted certificate, renews itself. Needs a domain pointing here.</i>
             </span>
           </label>
+        </div>
+        <div id="certself" hidden>
+          <label for="certselfhost" data-i18n>Domain or IP for the certificate (optional)</label>
+          <input id="certselfhost" type="text" autocomplete="off" inputmode="url"
+                 placeholder="panel.example.com" spellcheck="false">
+          <p class="cert-now" data-i18n>This server's own IP addresses and localhost are always covered — add a name here only to reach the panel by one this machine can't discover on its own.</p>
         </div>
         <div id="certacme" hidden>
           <label for="certdomain" data-i18n>Domain</label>
@@ -2060,7 +2066,9 @@ const FA={
   "Plain HTTP":"HTTP ساده",
   "No certificate. Cannot be installed as an app.":"بدون گواهی. به‌عنوان برنامه نصب نمی‌شود.",
   "HTTPS, self-signed":"HTTPS با گواهی self-signed",
-  "Works on a bare IP. The browser warns once, then trusts it.":"روی آی‌پی خالی کار می‌کند. مرورگر یک بار اخطار می‌دهد، بعد قبولش می‌کند.",
+  "Works on this server's IP out of the box. The browser warns once, then trusts it.":"روی آی‌پیِ همین سرور بدون تنظیم کار می‌کند. مرورگر یک بار اخطار می‌دهد، بعد قبولش می‌کند.",
+  "Domain or IP for the certificate (optional)":"دامنه یا آی‌پی برای گواهی (اختیاری)",
+  "This server's own IP addresses and localhost are always covered — add a name here only to reach the panel by one this machine can't discover on its own.":"آی‌پی‌های خودِ این سرور و localhost همیشه پوشش داده می‌شوند — فقط اگر می‌خواهی پنل را با نامی باز کنی که این دستگاه خودش نمی‌شناسد، اینجا اضافه‌اش کن.",
   "HTTPS, Let's Encrypt":"HTTPS با Let’s Encrypt",
   "HTTPS, Let’s Encrypt":"HTTPS با Let’s Encrypt",
   "Trusted certificate, renews itself. Needs a domain pointing here.":"گواهی معتبر که خودش تمدید می‌شود. به دامنه‌ای نیاز دارد که به این سرور اشاره کند.",
@@ -4368,6 +4376,7 @@ async function loadPanelCert(){
   const sel=document.querySelector('.certopts input[value="'+s.mode+'"]');
   if(sel) sel.checked=true;
   if(s.domain) $('certdomain').value=s.domain;
+  if(s.selfHost) $('certselfhost').value=s.selfHost;
   if(s.email) $('certemail').value=s.email;
   pickCertMode();
 
@@ -4378,6 +4387,7 @@ async function loadPanelCert(){
 function pickCertMode(){
   const m=document.querySelector('.certopts input:checked');
   $('certacme').hidden = !m || m.value!=='acme';
+  $('certself').hidden = !m || m.value!=='self';
 }
 
 async function savePanelCert(){
@@ -4385,7 +4395,10 @@ async function savePanelCert(){
   const sel=document.querySelector('.certopts input:checked');
   if(!sel){ m.className='msg err'; m.textContent=T('Choose an option first.'); return; }
   const mode=sel.value;
-  const domain=$('certdomain').value.trim(), email=$('certemail').value.trim();
+  const email=$('certemail').value.trim();
+  // For self-signed the optional host lives in its own field; the server reads
+  // both under "domain" (a required domain for ACME, an optional SAN for self).
+  const domain=(mode==='self' ? $('certselfhost').value : $('certdomain').value).trim();
 
   if(mode==='acme' && !domain){
     m.className='msg err'; m.textContent=T('A domain is required for Let’s Encrypt.'); return;
