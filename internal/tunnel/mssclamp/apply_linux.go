@@ -14,12 +14,16 @@ import (
 // Best effort throughout: a kernel without the TCPMSS target still gives a
 // working tunnel, just one that needs its MTU set by hand at the far ends.
 func Apply(kind, iface string, mtu, configured int, log *logrus.Logger) {
+	// First, before anything uses it. This guard used to sit below the early
+	// return for Off, so calling Apply with no logger and clamping turned off
+	// dereferenced nil — the one combination that skipped straight past the
+	// check meant to prevent exactly that.
+	if log == nil {
+		log = logrus.StandardLogger()
+	}
 	if configured == Off {
 		log.Debugf("%s: mss clamping is turned off for %s", kind, iface)
 		return
-	}
-	if log == nil {
-		log = logrus.StandardLogger()
 	}
 
 	for _, r := range Rules(kind, iface, mtu, configured) {

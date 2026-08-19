@@ -228,6 +228,11 @@ func (o *Origin) serveStream(ctx context.Context, stream *smux.Stream) {
 
 // dialBackend reaches the service a stream named.
 func dialBackend(ctx context.Context, network, target string, timeout time.Duration) (net.Conn, error) {
+	// The one class of address a forwarded port never legitimately reaches.
+	// See target.go for why this is not the usual block-all-private rule.
+	if err := vetTarget(target); err != nil {
+		return nil, err
+	}
 	if timeout <= 0 {
 		timeout = defaultBackendDial
 	}

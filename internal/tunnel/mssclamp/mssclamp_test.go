@@ -113,3 +113,22 @@ func TestNoRuleWhenNothingFits(t *testing.T) {
 		}
 	}
 }
+
+// Apply must tolerate a nil logger on every path, including the one that
+// returns early.
+//
+// It did not, and the shape of the bug is worth remembering: the nil guard sat
+// below the early return for Off, so the single combination of "no logger" and
+// "clamping turned off" walked straight past the check that existed to prevent
+// it. Locally it passed, because the non-Linux build of Apply does nothing at
+// all; CI runs Linux and panicked.
+func TestApplyToleratesANilLogger(t *testing.T) {
+	// Off is the path that used to panic.
+	Apply("l3", "bp0", 1400, Off, nil)
+	Remove("l3", "bp0", 1400, Off)
+
+	// And the ordinary path, which reaches iptables and is expected to fail in
+	// a test environment — failing is fine, panicking is not.
+	Apply("l3", "bp0-test-nonexistent", 1400, 0, nil)
+	Remove("l3", "bp0-test-nonexistent", 1400, 0)
+}
