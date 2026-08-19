@@ -10,6 +10,17 @@ two roles, the token, the ports and the firewall — the four things that accoun
 for nearly every "the tunnel is up but nothing works" report. Every other page
 assumes it.
 
+## The direction
+
+Every page below sets up a **reverse** tunnel: kharej dials Iran. If that will
+not come up — the provider filters inbound connections, or the tunnel port is
+blocked one way — turn it round.
+
+| Tutorial | Use it when | Needs |
+|---|---|---|
+| **[Direct tunnel](direct-tunnel.md)** | the reverse tunnel will not connect; Iran dials out instead | a port open on kharej |
+| **[Layer-3 tunnel](../docs/l3-direct-tunnel.md)** | you want one private network, or protocols with no ports | Linux, root |
+
 ## The transports
 
 | Tutorial | Use it when | Needs |

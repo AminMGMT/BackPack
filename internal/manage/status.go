@@ -67,7 +67,10 @@ func printStatusTable(tunnels []Tunnel) {
 		state := colorPad(tui.Color(color, plainState), plainState, 8)
 
 		detail := t.Addr
-		if t.Role == "server" && len(t.Ports) > 0 {
+		// The side that exposes the ports is the interesting one to show them
+		// for, and in a direct tunnel that side also dials out — so this asks
+		// about the ports rather than about the role. See HoldsPorts.
+		if HoldsPorts(t) && len(t.Ports) > 0 {
 			detail = strings.Join(t.Ports, ",")
 		}
 		fmt.Printf("%-16s %-8s %-8s %s %s\n",

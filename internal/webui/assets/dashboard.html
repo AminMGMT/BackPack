@@ -631,6 +631,14 @@
   .badge .ic{width:12px;height:12px}
   .badge.role{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.28);color:var(--red-soft)}
   .badge.bot{background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.26);color:var(--red-soft)}
+  /* The direction badge sits first and is deliberately quieter than the
+     carrier next to it: which way a tunnel was built is the thing you check
+     once, and what carries it is the thing you scan for. */
+  /* The direction badge takes the theme's own accent rather than a colour of
+     its own, so changing the theme moves it too. A hard-coded blue stayed blue
+     while everything around it changed, which reads as a bug in the theme. */
+  .badge.dir{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14);color:var(--muted);letter-spacing:.4px}
+  .badge.dir.d{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.30);color:var(--red-soft)}
   .badge.online{background:rgba(48,209,88,.14);border-color:rgba(48,209,88,.3);color:var(--green)}
   .badge.offline{background:rgba(255,159,10,.14);border-color:rgba(255,159,10,.3);color:var(--amber)}
   .badge.stopped{background:rgba(var(--accent-rgb),.14);border-color:rgba(var(--accent-rgb),.3);color:var(--red-soft)}
@@ -1593,16 +1601,37 @@
     <h3 id="addtitle" data-i18n>Add Tunnel</h3>
     <p id="addsub" data-i18n data-i18n-ph-only>Which side of the tunnel is this machine?</p>
 
-    <div class="sides" id="addsides">
+    <!-- Which way the tunnel is built comes before which machine this is.
+         An operator always knows which server they are sitting on; they may not
+         yet know which direction they need, so the certain question is asked
+         second, once the two options have been described side by side. -->
+    <div class="sides" id="adddirs">
+      <button class="side" onclick="pickDirection('reverse')">
+        <span class="sflag">↩</span>
+        <span class="st" data-i18n>Reverse</span>
+        <span class="sd" data-i18n>Kharej dials in to Iran — the usual choice, and what to try first.</span>
+      </button>
+      <button class="side" onclick="pickDirection('direct')">
+        <span class="sflag">➜</span>
+        <span class="st" data-i18n>Direct</span>
+        <span class="sd" data-i18n>Iran dials out to kharej — use it when an inbound connection to Iran does not get through.</span>
+      </button>
+    </div>
+
+    <div class="sides hide" id="addsides">
+      <!-- Just the two names. "Server" and "Client" were true of a reverse
+           tunnel and the opposite of true of a direct one, where Iran is the
+           side that dials; and by this point the direction has already been
+           chosen, so the sentence under each was describing a tunnel that may
+           not be the one being built. Geography is the part that does not
+           change either way. -->
       <button class="side" onclick="pickSide('server')">
         <span class="sflag">🇮🇷</span>
-        <span class="st" data-i18n>Iran — Server</span>
-        <span class="sd" data-i18n>The edge that exposes the ports. Clients dial in to it.</span>
+        <span class="st" data-i18n>Iran</span>
       </button>
       <button class="side" onclick="pickSide('client')">
         <span class="sflag">🌍</span>
-        <span class="st" data-i18n>Kharej — Client</span>
-        <span class="sd" data-i18n>The machine abroad. It dials out to the Iran server.</span>
+        <span class="st" data-i18n>Kharej</span>
       </button>
     </div>
 
@@ -1717,6 +1746,64 @@
     </div>
 
     <div class="msg" id="addmsg"></div>
+    <!-- The direct form. Its own grid rather than rows bolted onto the reverse
+         one: a direct tunnel shares almost no fields with a reverse tunnel, and
+         a form that showed and hid half of itself would be a form nobody could
+         read. -->
+    <div class="fgrid hide" id="dform">
+      <div class="frow">
+        <label for="df-carrier" data-i18n>How should the packets travel?</label>
+        <select id="df-carrier" class="sel" onchange="onDirectCarrier()"></select>
+        <div class="tdesc" id="df-cdesc"></div>
+      </div>
+      <div class="frow d-iran">
+        <label for="df-addr" data-i18n>Kharej server address</label>
+        <input id="df-addr" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="IP or domain of the kharej server">
+      </div>
+      <div class="frow">
+        <label for="df-name" data-i18n>Tunnel name</label>
+        <input id="df-name" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="letters, digits, dots and dashes">
+      </div>
+      <div class="frow">
+        <label for="df-port" data-i18n>Tunnel port</label>
+        <div class="fjoin">
+          <input id="df-port" inputmode="numeric" autocomplete="off" data-i18n-ph placeholder="e.g. 9000">
+          <button class="btn-sm d-kharej" onclick="rollPort('df-port')" title="Suggest a free port">
+            <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 8h.01M16 8h.01M8 16h.01M16 16h.01M12 12h.01"/></svg>
+            <span data-i18n>Random</span></button>
+        </div>
+        <div class="hint d-iran" data-i18n>The same port the kharej server listens on.</div>
+      </div>
+      <div class="frow">
+        <label for="df-token" data-i18n>Security token</label>
+        <input id="df-token" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="must match the other machine exactly">
+        <div class="hint d-iran" data-i18n>Paste the token from the kharej server. A token that does not match looks exactly like a blocked port.</div>
+        <div class="hint d-kharej" data-i18n>Copy this to the Iran server.</div>
+      </div>
+      <div class="frow d-iran">
+        <label for="df-ports" data-i18n>Forwarded ports</label>
+        <input id="df-ports" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="443, 8080=80, 2053-2060">
+        <div class="hint" data-i18n>Exposed on this machine. A bare port goes to the same port on the kharej side.</div>
+      </div>
+      <div class="frow d-iran">
+        <label class="chk"><input type="checkbox" id="df-udp"><span data-i18n>Carry UDP as well as TCP</span></label>
+      </div>
+      <div class="frow d-spoof hide">
+        <label for="df-spoofpeer" data-i18n>The Iran server's real IP</label>
+        <input id="df-spoofpeer" autocomplete="off" spellcheck="false" data-i18n-ph placeholder="e.g. 1.2.3.4">
+        <div class="hint" data-i18n>The spoof carrier forges the source of every packet, so this side has to be told where its replies go.</div>
+      </div>
+      <div class="frow">
+        <label for="df-preset" data-i18n>Performance</label>
+        <select id="df-preset" class="sel"></select>
+        <div class="hint" data-i18n>The MTU is measured once the tunnel is up, so there is nothing to set here.</div>
+      </div>
+    </div>
+
     <div class="actions">
       <button class="btn-ghost" onclick="closeAdd()" data-i18n>Cancel</button>
       <button class="btn-primary hide" id="addsave" onclick="submitAdd()" data-i18n>Create tunnel</button>
@@ -2331,6 +2418,40 @@ const FA={
     "یکی را عوض کن یا همه را — تونل یک بار ری‌استارت می‌شود و اگر بالا نیامد به تنظیمات قبلی برمی‌گردد.",
   "Both ends must run the same transport — change the other side too.":
     "هر دو سر باید یک ترنسپورت داشته باشند — سمت دیگر را هم عوض کن.",
+  // The direct tunnel form.
+  "Iran":"ایران",
+  "Kharej":"خارج",
+  "Reverse":"معکوس",
+  "Direct":"مستقیم",
+  "Which way should the tunnel be built?":"تونل به کدام صورت ساخته شود؟",
+  "Kharej dials in to Iran — the usual choice, and what to try first.":
+    "خارج به ایران وصل می‌شود — گزینهٔ معمول، و همانی که اول امتحان کن.",
+  "Iran dials out to kharej — use it when an inbound connection to Iran does not get through.":
+    "ایران به خارج وصل می‌شود — وقتی اتصال ورودی به ایران رد نمی‌شود از این استفاده کن.",
+  "Iran side — this machine exposes the ports and dials out to kharej.":
+    "سمت ایران — این ماشین پورت‌ها را باز می‌کند و به خارج وصل می‌شود.",
+  "Kharej side — this machine waits to be dialled and holds the real service.":
+    "سمت خارج — این ماشین منتظر اتصال می‌ماند و سرویس اصلی را دارد.",
+  "How should the packets travel?":"بسته‌ها چطور منتقل شوند؟",
+  "Kharej server address":"آدرس سرور خارج",
+  "The same port the kharej server listens on.":"همان پورتی که سرور خارج روی آن گوش می‌دهد.",
+  "Paste the token from the kharej server. A token that does not match looks exactly like a blocked port.":
+    "توکن سرور خارج را اینجا بگذار. توکنی که یکی نباشد دقیقاً شبیه پورت بسته به نظر می‌رسد.",
+  "Copy this to the Iran server.":"این را در سرور ایران وارد کن.",
+  "Exposed on this machine. A bare port goes to the same port on the kharej side.":
+    "روی این ماشین باز می‌شود. پورت خالی به همان پورت در سمت خارج می‌رود.",
+  "Carry UDP as well as TCP":"علاوه بر TCP، یو‌دی‌پی هم منتقل شود",
+  "The Iran server's real IP":"آی‌پی واقعی سرور ایران",
+  "The spoof carrier forges the source of every packet, so this side has to be told where its replies go.":
+    "کریر spoof مبدأ هر بسته را جعل می‌کند، پس این سمت باید بداند پاسخ‌ها کجا بروند.",
+  "Performance":"کارایی",
+  "The MTU is measured once the tunnel is up, so there is nothing to set here.":
+    "MTU بعد از بالا آمدن تونل خودش اندازه‌گیری می‌شود، پس اینجا چیزی برای تنظیم نیست.",
+  "Tunnel created and running.":"تونل ساخته شد و در حال اجراست.",
+  "Tunnel created, but it is not running yet — check its log.":
+    "تونل ساخته شد ولی هنوز اجرا نشده — لاگش را ببین.",
+  "Could not create the tunnel.":"ساخت تونل ممکن نشد.",
+  "Creating…":"در حال ساخت…",
   "Save changes":"ذخیرهٔ تغییرات",
   "Nothing has been changed yet.":"هنوز چیزی عوض نشده.",
   "Applying — the tunnel restarts once…":"در حال اعمال — تونل یک بار ری‌استارت می‌شود…",
@@ -2816,6 +2937,7 @@ function buildCard(t){
       <span class="dot" title=""></span>
       <span class="flag"></span>
       <span class="name" title="${n}">${n}</span>
+      <span class="badge dir"></span>
       <span class="badge tr"></span>
       <span class="badge bot" style="display:none" title="This tunnel relays the Telegram bot">${ICON.bot}</span>
     </div>
@@ -2855,7 +2977,15 @@ function updateCard(el,t){
   const fl=el.querySelector('.flag'), fe=cc?flagEmoji(cc):'';
   if(fl.textContent!==fe){ fl.textContent=fe; fl.title=cc?countryName(cc):''; }
 
-  setText(el.querySelector('.badge.tr'),(t.transport||'').toUpperCase());
+  // Two facts, two badges: how the tunnel was built, and what carries it.
+  // The server splits them — see manage.TunnelDirection — so the browser never
+  // has to know that "l3/" means direct.
+  const dirEl=el.querySelector('.badge.dir');
+  const dir=(t.direction||'').toUpperCase();
+  setText(dirEl,dir);
+  const dirClass='badge dir'+(t.direction==='direct'?' d':'');
+  if(dirEl.className!==dirClass) dirEl.className=dirClass;
+  setText(el.querySelector('.badge.tr'),(t.carrier||t.transport||'').toUpperCase());
   el.querySelector('.badge.bot').style.display=t.botRelay?'':'none';
 
   const pe=el.querySelector('.ping'), pc='v ping '+pingClass(t.ping);
@@ -3494,19 +3624,148 @@ async function refreshTune(p){
 }
 
 // ---- add ---------------------------------------------------------------------
+// addDir is which way the tunnel is being built: 'reverse' or 'direct'. It
+// decides which of the two forms below is filled in and which endpoint the
+// Create button posts to. The two share the dialog and nothing else.
+let addDir='reverse';
+
 async function openAdd(){
   const msg=$('addmsg'); msg.className='msg'; msg.textContent='';
-  $('addsides').classList.remove('hide');
+  $('adddirs').classList.remove('hide');
+  $('addsides').classList.add('hide');
   $('addform').classList.add('hide');
+  $('dform').classList.add('hide');
   $('addsave').classList.add('hide');
-  $('addsub').textContent=T('Which side of the tunnel is this machine?');
+  $('addsub').textContent=T('Which way should the tunnel be built?');
   $('addtun').classList.add('on');
   try{ await tunnelOptions(); }
   catch(e){ msg.className='msg err'; msg.textContent=T('Could not reach the panel.'); }
 }
 function closeAdd(){ $('addtun').classList.remove('on'); }
 
+// pickDirection settles reverse or direct and moves on to the side question,
+// which is the same question either way and is worded the same way.
+function pickDirection(dir){
+  addDir=dir;
+  $('adddirs').classList.add('hide');
+  $('addsides').classList.remove('hide');
+  $('addsub').textContent=T('Which side of the tunnel is this machine?');
+}
+
+// ---- add: the direct half ----------------------------------------------------
+
+// pickDirectSide fills the direct form for one machine. Iran reaches out and
+// owns the ports; kharej waits and holds the real service, and needs neither an
+// address to dial nor a port list.
+async function pickDirectSide(side){
+  const msg=$('addmsg'); msg.className='msg'; msg.textContent='';
+  $('addsides').classList.add('hide');
+  $('dform').classList.remove('hide');
+  $('addsave').classList.remove('hide');
+  $('addsub').textContent=T(side==='iran'
+    ? 'Iran side — this machine exposes the ports and dials out to kharej.'
+    : 'Kharej side — this machine waits to be dialled and holds the real service.');
+  document.querySelectorAll('#dform .d-iran').forEach(el=>el.classList.toggle('hide',side!=='iran'));
+  document.querySelectorAll('#dform .d-kharej').forEach(el=>el.classList.toggle('hide',side!=='kharej'));
+
+  ['df-addr','df-name','df-port','df-ports','df-token','df-spoofpeer'].forEach(id=>{ $(id).value=''; });
+  $('df-udp').checked=false;
+
+  try{
+    const o=await getJSON('/api/direct/options');
+    fillSel($('df-carrier'),o.carriers);
+    fillSel($('df-preset'),o.presets);
+    onDirectCarrier();
+
+    const d=await getJSON('/api/direct/defaults?side='+encodeURIComponent(side));
+    $('df-port').value=d.tunnelPort||'';
+    // Only the listening side is offered a token. Offering one on both ends
+    // means somebody accepts the default twice and ends up with two different
+    // tokens — and a mismatched token is answered with silence, so it presents
+    // as a blocked port rather than as the typo it is.
+    if(d.token) $('df-token').value=d.token;
+    if(d.preset) $('df-preset').value=d.preset;
+  }catch(e){
+    msg.className='msg err'; msg.textContent=T('Could not reach the panel.');
+  }
+}
+
+// fillSel builds a picker from the list the server sent, so the panel and the
+// CLI wizard cannot drift into offering different things.
+function fillSel(sel,items){
+  sel.innerHTML='';
+  (items||[]).forEach(it=>{
+    const o=document.createElement('option');
+    o.value=it.value; o.textContent=it.label; o.dataset.desc=it.desc||'';
+    sel.appendChild(o);
+  });
+}
+
+// onDirectCarrier shows the one field that only the spoof carrier needs, and
+// only on the side that cannot work it out for itself.
+function onDirectCarrier(){
+  const sel=$('df-carrier');
+  const opt=sel.options[sel.selectedIndex];
+  setText($('df-cdesc'),opt?(opt.dataset.desc||''):'');
+  // Only the kharej side needs it: the Iran side knows where it is dialling,
+  // and the listening side cannot tell, because every packet it receives
+  // carries a forged source.
+  const onKharej = document.querySelector('#dform .d-kharej:not(.hide)')!==null;
+  const need = sel.value==='spoof' && onKharej;
+  document.querySelectorAll('#dform .d-spoof').forEach(el=>el.classList.toggle('hide',!need));
+}
+
+// submitDirect posts the direct form.
+async function submitDirect(){
+  const msg=$('addmsg'); msg.className='msg'; msg.textContent=T('Creating…');
+  const iran = document.querySelector('#dform .d-iran:not(.hide)')!==null;
+  const body={
+    side: iran?'iran':'kharej',
+    carrier: $('df-carrier').value,
+    name: $('df-name').value.trim(),
+    token: $('df-token').value.trim(),
+    peerAddr: $('df-addr').value.trim(),
+    tunnelPort: $('df-port').value.trim(),
+    ports: $('df-ports').value.trim(),
+    acceptUdp: $('df-udp').checked,
+    preset: $('df-preset').value,
+    spoofPeerIp: $('df-spoofpeer').value.trim()
+  };
+  const btn=$('addsave'); btn.disabled=true;
+  try{
+    const r=await fetch('/api/direct/create',
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=(await r.text()).trim();
+    if(!r.ok){
+      // The server's own words. It refuses the same things the wizard refuses
+      // and says why, and repeating that verbatim is more use than a generic
+      // failure line.
+      msg.className='msg err'; msg.textContent=text||T('Could not create the tunnel.');
+      btn.disabled=false; return;
+    }
+    let res={}; try{ res=JSON.parse(text); }catch(e){}
+    closeAdd();
+    toast(res.active?T('Tunnel created and running.')
+                    :T('Tunnel created, but it is not running yet — check its log.'));
+    refresh();
+  }catch(e){
+    msg.className='msg err'; msg.textContent=T('Could not reach the panel.');
+  }finally{ btn.disabled=false; }
+}
+
+// getJSON is the one-liner the rest of this file writes out by hand. It exists
+// because the direct form needs it three times, and an invented helper that did
+// not exist is what stopped the form working at all the first time.
+async function getJSON(url){
+  const r=await fetch(url);
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 async function pickSide(role){
+  // The side buttons are shared, so the direct half branches away here rather
+  // than duplicating a pair of buttons that would say exactly the same thing.
+  if(addDir==='direct'){ return pickDirectSide(role==='server'?'iran':'kharej'); }
   addRole=role;
   const msg=$('addmsg'); msg.className='msg'; msg.textContent='';
   $('addsides').classList.add('hide');
@@ -3598,6 +3857,9 @@ function tokenAction(btn){
 }
 
 async function submitAdd(){
+  // One button, two forms. The direct half posts somewhere else and carries a
+  // different body, so it branches before any of the reverse form is read.
+  if(addDir==='direct'){ return submitDirect(); }
   const msg=$('addmsg'), btn=$('addsave');
   msg.className='msg'; msg.textContent=T('Creating the tunnel…');
   btn.disabled=true;

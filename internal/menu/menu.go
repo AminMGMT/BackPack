@@ -58,10 +58,13 @@ func Run() {
 		printMenu()
 
 		switch tui.Prompt("Select an option: ") {
+		// Both entries ask which direction the tunnel should be built in, and
+		// a reverse one is then built by exactly the code that has always
+		// built it. See manage.SetupIran.
 		case "1":
-			manage.SetupServer()
+			manage.SetupIran()
 		case "2":
-			manage.SetupClient()
+			manage.SetupKharej()
 		case "3":
 			manageMenu()
 		case "4":
@@ -101,8 +104,8 @@ func printUpdateBanner() {
 // printMenu renders the main menu: red numbers, white titles, gray descriptions.
 func printMenu() {
 	fmt.Println()
-	menuItem(1, "Setup Server", "Iran side — exposes ports to users")
-	menuItem(2, "Setup Client", "Kharej side — dials out to the Iran server")
+	menuItem(1, "Setup Iran", "the server your users connect to — it exposes the ports")
+	menuItem(2, "Setup Kharej", "the server abroad — it holds the real service")
 	menuItem(3, "Manage", "tunnels, ports, transport, status, health check")
 	menuItem(4, "Backup & Restore", "save or restore the full configuration")
 	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")

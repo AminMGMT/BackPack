@@ -77,6 +77,24 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 				h.Connected = connected
 			}
 		}
+
+		// The direct kinds get their own answer and their own wording. Here,
+		// unlike in the watchdog, a check that cannot see the tunnel says so
+		// rather than showing green — a light that is on because nothing
+		// looked is worse than one that admits it does not know.
+		if IsDirectKind(t) {
+			connected, known := directHealthy(t, pairs)
+			h.Connected = connected && known
+			h.Detail = directStateDetail(t, connected, known)
+			h.State = "offline"
+			if h.Connected {
+				h.State = "online"
+			} else if !known {
+				h.State = "unknown"
+			}
+			return h
+		}
+
 		if h.Connected {
 			h.State = "online"
 			h.Detail = "peer connected"

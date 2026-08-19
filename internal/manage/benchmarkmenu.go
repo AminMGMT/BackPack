@@ -269,7 +269,14 @@ func offerKeepAlive(t Tunnel, q PathQuality) {
 	fmt.Println()
 }
 
-// clientTunnels returns only the tunnels that dial out.
+// clientTunnels returns the reverse tunnels that dial out.
+//
+// A direct tunnel's Iran side also dials out, and is deliberately not included
+// here. The screens this feeds — Exit Health, Link Test, the benchmark — do
+// not merely read: they rewrite remote_addr, fallback_addrs and
+// health_failover through LoadSpec, and those live in [client], which a direct
+// config does not have. Widening this test without giving them somewhere to
+// write would corrupt the file it was pointed at.
 func clientTunnels() []Tunnel {
 	var out []Tunnel
 	for _, t := range List() {

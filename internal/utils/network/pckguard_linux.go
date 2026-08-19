@@ -78,6 +78,9 @@ func installPckGuard(lo, hi uint16) *pckGuard {
 	}
 	for _, r := range g.rules {
 		table, body := r[0], r[1:]
+		// Anything identical still in the table is ours, left behind by a
+		// process that did not exit cleanly. See sweepPckRule.
+		sweepPckRule(table, body)
 		args := append([]string{"-t", table, "-I"}, body...)
 		if err := exec.Command("iptables", args...).Run(); err == nil {
 			g.added = append(g.added, r)
@@ -85,6 +88,32 @@ func installPckGuard(lo, hi uint16) *pckGuard {
 	}
 	guardShared[key] = &sharedGuard{g: g, ref: 1}
 	return g
+}
+
+// sweepPckRule deletes every copy of one rule before it is installed again.
+//
+// The rules are only removed when a carrier closes cleanly. A crash, a kill, a
+// `systemctl restart` or a failed start leaves them in the table — and because
+// the port is derived from the tunnel's token rather than drawn at random, the
+// next start asks for the *identical* rule. iptables is happy to hold a
+// thousand copies of the same line, so without this they accumulate for as
+// long as the tunnel is ever restarted, and every packet is matched against
+// all of them.
+//
+// One tunnel that had been restarted through an afternoon of configuration was
+// found with several hundred copies of a single rule. Nothing warns about it:
+// the tunnel works, the firewall just gets slower and less readable forever.
+//
+// Deleting first and adding once leaves exactly one, and clears whatever an
+// earlier run left behind. The cap is there so that a delete which reports
+// success without removing anything cannot spin.
+func sweepPckRule(table string, body []string) {
+	args := append([]string{"-t", table, "-D"}, body...)
+	for i := 0; i < 1024; i++ {
+		if err := exec.Command("iptables", args...).Run(); err != nil {
+			return // no more copies, which is the ordinary first-start case
+		}
+	}
 }
 
 // remove drops this carrier's reference and deletes the rules once the last one

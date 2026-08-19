@@ -22,7 +22,7 @@ an ordinary TCP flow) — use [TCP + Stealth](tcp-stealth.md) there.
 ```bash
 sudo backpack
 ```
-Choose **1) Setup Server**.
+Choose **1) Setup Iran**, then **Reverse**.
 
 ### Select transport family → `TCP`
 ### Select TCP transport → `TCP`
@@ -88,7 +88,7 @@ ufw allow 443/tcp       # each forwarded port
 ```bash
 sudo backpack
 ```
-Choose **2) Setup Client**.
+Choose **2) Setup Kharej**, then **Reverse**.
 
 ### Select transport family → `TCP` → `TCP`
 Must match the server exactly.
@@ -167,7 +167,7 @@ transport**, on both ends.
 ترنسپورت **TCP** ساده‌ترین و سبک‌ترین گزینه است و نقطهٔ شروع درست. اگر مسیر تمیز
 باشد، همین بهترین کارایی را می‌دهد.
 
-**روی سرور ایران:** `sudo backpack` → گزینهٔ ۱ (Setup Server) → خانوادهٔ TCP →
+**روی سرور ایران:** `sudo backpack` → گزینهٔ ۱ (Setup Iran) → Reverse → خانوادهٔ TCP →
 TCP → پورت تونل (مثلاً 8443) → IPv6 را `N` → نام را Enter → **توکن را کپی کن** →
 پورت‌های forward (مثلاً `443` یا `443=127.0.0.1:2096`) → سؤال UDP (برای وب `N`،
 برای Xray/وایرگارد `y`) → PROXY protocol را `N` بگذار مگر پنل تنظیمش کرده باشی →
@@ -176,7 +176,7 @@ TCP → پورت تونل (مثلاً 8443) → IPv6 را `N` → نام را En
 بعد فایروال ایران: `ufw allow 8443/tcp` (پورت تونل) و `ufw allow 443/tcp` (هر
 پورت forward شده).
 
-**روی سرور خارج:** `sudo backpack` → گزینهٔ ۲ (Setup Client) → همان ترنسپورت →
+**روی سرور خارج:** `sudo backpack` → گزینهٔ ۲ (Setup Kharej) → Reverse → همان ترنسپورت →
 آی‌پی ایران + همان پورت تونل → نام → **همان توکن** → تنظیمات اختیاری `N` → همان
 پریست.
 

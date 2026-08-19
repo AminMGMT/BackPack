@@ -80,6 +80,12 @@ func ClearPeer() {
 	peerAddr.Store(nil)
 }
 
+// SnapshotPeer is what the next snapshot would record as the peer, or "" if
+// there is none. Read-only, and exported so an engine in another package can be
+// tested against what the panel would actually show — which for a layer-3
+// tunnel is the only thing that can say whether it is up.
+func SnapshotPeer() string { return currentPeer() }
+
 // currentPeer returns the reported peer, or "" if there is none.
 func currentPeer() string {
 	if p := peerAddr.Load(); p != nil {

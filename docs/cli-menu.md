@@ -16,8 +16,8 @@ long form. For *how to set a tunnel up*, use the
 
 | # | Option | What it does |
 |---|--------|--------------|
-| 1 | **Setup Server** | Create the **Iran-side** tunnel that exposes ports. Always build this first. |
-| 2 | **Setup Client** | Create the **kharej-side** tunnel that dials the Iran server and forwards to the real service. |
+| 1 | **Setup Iran** | Create the **Iran-side** tunnel that exposes ports. Asks the direction first — reverse or direct. |
+| 2 | **Setup Kharej** | Create the **kharej-side** tunnel that holds the real service. Asks the direction first. |
 | 3 | **Manage** | Everything about existing tunnels, plus the diagnostics. [↓](#3-manage) |
 | 4 | **Backup & Restore** | The whole configuration as one `.tar.gz`. [↓](#4-backup--restore) |
 | 5 | **Web Panel** | The monitoring dashboard — port, login, certificate. [↓](#5-web-panel) |
@@ -36,7 +36,7 @@ cached answer, so a slow or blocked GitHub never delays the menu.
 
 The questions, in the order they are asked. `[Y/n]` marks the default.
 
-### Setup Server (Iran)
+### Setup Iran
 
 | Prompt | Notes |
 |---|---|
@@ -56,7 +56,7 @@ The questions, in the order they are asked. `[Y/n]` marks the default.
 | **Performance preset** | [Presets](performance-presets.md) |
 | **Fine-tune the advanced settings by hand** `[y/N]` | [↓ the advanced settings](#the-advanced-settings-fine-tune) |
 
-### Setup Client (kharej)
+### Setup Kharej
 
 | Prompt | Notes |
 |---|---|

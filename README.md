@@ -10,10 +10,14 @@
   <a href="https://github.com/AminMGMT/BackPack/releases"><img alt="Total downloads across all releases" src="https://img.shields.io/github/downloads/AminMGMT/BackPack/total?logo=github&label=total%20downloads&color=orange"></a>
 </p>
 
-**Backpack** is a high-performance **reverse tunnel** engine written entirely in
+**Backpack** is a high-performance **tunnel** engine written entirely in
 **Go**, purpose-built for Iran ⇄ abroad (kharej) server setups. One
 self-contained binary with an interactive CLI **and** a secured web dashboard —
 run and manage everything with or without a terminal.
+
+It carries a tunnel three ways: **reverse** (kharej dials Iran), **direct**
+(Iran dials out), and a **full IP tunnel** that puts both servers on one
+private network.
 
 <p align="center">
   <b><a href="tutorial/README.md">📘 Setup tutorials</a></b> ·
@@ -32,14 +36,31 @@ run and manage everything with or without a terminal.
 
 ```
   end users ──▶  IRAN server  ══ tunnel ══▶  KHAREJ server  ──▶  real service
-                 "Setup Server"               "Setup Client"      
+                 "Setup Iran"                 "Setup Kharej"      
                  exposes the ports            dials out to Iran     
 ```
 
 An end user connects to a **forwarded port** on the Iran server; the engine
 carries it through **one transport** to the kharej client, which hands it to the
-**real service**. The tunnel is always dialed **by the client** (kharej → Iran),
-so the far side needs no open inbound port.
+**real service**. In the **reverse** tunnel above the connection is dialed **by
+the client** (kharej → Iran), so the far side needs no open inbound port.
+
+### Three shapes
+
+The ports never move: Iran exposes them, kharej holds the real service. What
+changes is who reaches out first, and what the tunnel carries.
+
+| | Who dials | What it carries | Use it when |
+|---|---|---|---|
+| **Reverse** | kharej → Iran | forwarded ports | the usual case — Iran can accept an inbound connection |
+| **Direct** | Iran → kharej | forwarded ports | an inbound connection to Iran does not get through |
+| **Layer 3** | either | whole IP packets | you want one private network, or protocols with no ports |
+
+All three are built from **Setup Iran** and **Setup Kharej**: pick the machine
+you are on, and the wizard asks which direction you want and writes the config
+itself.
+
+**→ [Direct tunnel](docs/direct-tunnel.md) · [Layer-3 tunnel](docs/l3-direct-tunnel.md)**
 
 ---
 
@@ -67,20 +88,20 @@ Reopen the menu any time with `sudo backpack`.
 
 | Server | Where | Menu option | Why |
 |--------|-------|-------------|-----|
-| **Iran** | entry point | **1. Setup Server** | It exposes the ports; users connect to the **Iran IP**. |
-| **Kharej** | exit / origin | **2. Setup Client** | It dials the Iran server and forwards to the real service. |
+| **Iran** | entry point | **1. Setup Iran** | It exposes the ports; users connect to the **Iran IP**. |
+| **Kharej** | exit / origin | **2. Setup Kharej** | It dials the Iran server and forwards to the real service. |
 
 **Always set up the Iran server first** — the client needs the Iran address and
 the token the server generates.
 
 ```bash
 # on the IRAN server
-sudo backpack   →  1. Setup Server
+sudo backpack   →  1. Setup Iran
 #   transport → tunnel port → name → COPY THE TOKEN → exposed ports
 #   → UDP? → preset (Turbo) → done
 
 # on the KHAREJ server
-sudo backpack   →  2. Setup Client
+sudo backpack   →  2. Setup Kharej
 #   same transport → Iran IP + same tunnel port → name → SAME TOKEN
 #   → same preset → done
 ```

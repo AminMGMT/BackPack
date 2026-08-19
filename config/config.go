@@ -464,4 +464,13 @@ type ClientConfig struct {
 type Config struct {
 	Server ServerConfig `toml:"server"`
 	Client ClientConfig `toml:"client"`
+	// L3 is a direct layer-3 tunnel, and is present only in a configuration
+	// that asks for one. It shares nothing with Server and Client: a file
+	// without an [l3] table leaves this zero, L3.Enabled() reads false, and
+	// the reverse tunnel runs exactly as it always has. See config/l3.go.
+	L3 L3Config `toml:"l3"`
+	// Direct is a direct layer-4 tunnel — the same forwarded ports, dialled
+	// the other way round. Present only in a configuration that asks for one,
+	// on the same terms as L3 above. See config/direct.go.
+	Direct DirectConfig `toml:"direct"`
 }

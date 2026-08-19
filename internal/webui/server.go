@@ -205,6 +205,10 @@ func Serve() error {
 	mux.HandleFunc("/api/tunnel/suggest", srv.requireAuth(srv.handleTunnelSuggest))
 	mux.HandleFunc("/api/tunnel/defaults", srv.requireAuth(srv.handleTunnelDefaults))
 	mux.HandleFunc("/api/tunnel/create", srv.requireAuth(srv.handleTunnelCreate))
+	// The direct half, on its own endpoints so the reverse ones are untouched.
+	mux.HandleFunc("/api/direct/options", srv.requireAuth(srv.handleDirectOptions))
+	mux.HandleFunc("/api/direct/defaults", srv.requireAuth(srv.handleDirectDefaults))
+	mux.HandleFunc("/api/direct/create", srv.requireAuth(srv.handleDirectCreate))
 	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
 	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
 	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))

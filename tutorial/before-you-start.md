@@ -12,14 +12,14 @@ traffic flows the other way. So the roles are not what people expect:
 
 ```
   end users ──▶  IRAN server  ══ tunnel ══▶  KHAREJ server  ──▶  real service
-                 "Setup Server"                "Setup Client"      (X-UI, panel,
+                 "Setup Iran"                  "Setup Kharej"      (X-UI, panel,
                  exposes the ports             dials out to Iran     WireGuard…)
 ```
 
 | Machine | Menu option | What it does |
 |---|---|---|
-| **Iran** (entry point) | **1. Setup Server** | Listens on the tunnel port, exposes the forwarded ports. Your users connect **here**. |
-| **Kharej** (exit) | **2. Setup Client** | Dials the Iran server and hands traffic to the real service on itself. |
+| **Iran** (entry point) | **1. Setup Iran** | Listens on the tunnel port, exposes the forwarded ports. Your users connect **here**. |
+| **Kharej** (exit) | **2. Setup Kharej** | Dials the Iran server and hands traffic to the real service on itself. |
 
 Two consequences worth memorising:
 
@@ -105,7 +105,7 @@ port anyway does nothing. Full detail: [Adding UDP to a tunnel](udp-forwarding.m
 On the **Iran** server:
 
 ```bash
-sudo backpack        →  1. Setup Server
+sudo backpack        →  1. Setup Iran  →  Reverse
 ```
 transport → tunnel port → name → **copy the token** → forwarded ports → UDP? →
 preset (**Turbo**) → done.
@@ -113,7 +113,7 @@ preset (**Turbo**) → done.
 On the **kharej** server:
 
 ```bash
-sudo backpack        →  2. Setup Client
+sudo backpack        →  2. Setup Kharej  →  Reverse
 ```
 same transport → Iran IP + same tunnel port → name → **same token** → same preset
 → done.
@@ -140,8 +140,8 @@ Then check both sides with **Manage → Status**, and if anything is off,
 
 ## خلاصهٔ فارسی
 
-**نقش‌ها:** سرور **ایران** با گزینهٔ «Setup Server» ساخته می‌شود و پورت‌ها را در
-معرض کاربر می‌گذارد؛ سرور **خارج** با «Setup Client» ساخته می‌شود و به ایران وصل
+**نقش‌ها:** سرور **ایران** با گزینهٔ «Setup Iran» ساخته می‌شود و پورت‌ها را در
+معرض کاربر می‌گذارد؛ سرور **خارج** با «Setup Kharej» ساخته می‌شود و به ایران وصل
 می‌شود. همیشه **اول سمت ایران** را بساز، چون کلاینت به آدرس و توکن آن نیاز دارد.
 سمت خارج هیچ پورت ورودی بازی لازم ندارد.
 

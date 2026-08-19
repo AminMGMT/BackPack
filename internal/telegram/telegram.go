@@ -163,13 +163,18 @@ func tunnelBlock(lang string, t manage.Tunnel, h manage.Health) string {
 	}
 	b.WriteString("\n")
 
-	if t.Role == "server" {
+	// See the same block in tunnels.go: where the tunnel's socket is and
+	// whether this side holds the ports are two questions, and a direct
+	// tunnel answers them with different sides.
+	if manage.DialsOut(t) {
+		fmt.Fprintf(&b, tr(lang, "Server")+" : %s\n", code(t.Addr))
+	} else {
 		fmt.Fprintf(&b, tr(lang, "Tunnel Port")+" : %s\n", code(portOf(t.Addr)))
+	}
+	if manage.HoldsPorts(t) {
 		if ports := manage.VisiblePorts(t.Ports, manage.TunnelToken(t.Name)); len(ports) > 0 {
 			fmt.Fprintf(&b, tr(lang, "Forwarded Port")+" : %s\n", code(strings.Join(ports, ", ")))
 		}
-	} else {
-		fmt.Fprintf(&b, tr(lang, "Server")+" : %s\n", code(t.Addr))
 	}
 
 	if snap, err := metrics.Read(app.ConfigDir, t.Name); err == nil {
@@ -201,15 +206,17 @@ func tunnelFlag(t manage.Tunnel) string {
 
 // peerIP finds the address of the tunnel's far end.
 func peerIP(t manage.Tunnel) string {
-	if t.Role == "client" {
+	// A side that dials out already knows where the far end is: it is the
+	// address it was told to reach.
+	if manage.DialsOut(t) {
 		host, _, err := net.SplitHostPort(t.Addr)
 		if err != nil {
 			return ""
 		}
 		return host
 	}
-	// A server does not know its peer from its own config; the engine records
-	// it while the control channel is up.
+	// A listening side does not know its peer from its own config; the engine
+	// records it while the tunnel is up.
 	snap, err := metrics.Read(app.ConfigDir, t.Name)
 	if err != nil || snap.Peer == "" {
 		return ""

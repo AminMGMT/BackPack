@@ -33,11 +33,28 @@ func tunnelNameFromPath(configPath string) string {
 // It is best-effort: a tunnel must never fail because diagnostics could not be
 // written.
 func startMetrics(ctx context.Context, configPath, transport, role string) {
+	startMetricsWithTraffic(ctx, configPath, transport, role, nil, nil)
+}
+
+// startMetricsWithTraffic is the same, for an engine that counts its own
+// traffic rather than reporting it through metrics.AddBytes.
+//
+// The reverse transports call AddBytes from inside their copy loops, which is
+// where the bytes pass. The layer-3 engine has no copy loop — it moves whole
+// packets between a device and a carrier — and already keeps exact counters of
+// its own, so it hands them over to be read once per snapshot instead. Without
+// this its panel card showed 0 in and 0 out for a tunnel that was carrying
+// traffic, which reads as a tunnel that is up but doing nothing.
+func startMetricsWithTraffic(
+	ctx context.Context,
+	configPath, transport, role string,
+	bytesIn, bytesOut func() uint64,
+) {
 	name := tunnelNameFromPath(configPath)
 	if name == "" {
 		return
 	}
-	c := metrics.NewCollector(filepath.Dir(configPath), name, transport, role, nil, nil)
+	c := metrics.NewCollector(filepath.Dir(configPath), name, transport, role, bytesIn, bytesOut)
 	go func() {
 		done := make(chan struct{})
 		go func() { <-ctx.Done(); close(done) }()
@@ -99,6 +116,20 @@ func Run(configPath string, ctx context.Context) {
 
 // runEngine runs one tunnel until ctx ends.
 func runEngine(cfg *config.Config, ctx context.Context, configPath string, applyTuning bool) {
+	// A layer-3 tunnel is a different thing from a port forwarder and shares
+	// none of the machinery below. It is dispatched here, before any of it, so
+	// that the reverse path is reached by exactly the configurations that
+	// always reached it: an [l3] table is the only way past this branch, and
+	// no configuration written before it existed has one.
+	if cfg.L3.Enabled() {
+		runL3Tunnel(cfg, ctx, configPath)
+		return
+	}
+	if cfg.Direct.Enabled() {
+		runDirectTunnel(cfg, ctx, configPath)
+		return
+	}
+
 	configType := ""
 	if cfg.Server.BindAddr != "" {
 		configType = "server"

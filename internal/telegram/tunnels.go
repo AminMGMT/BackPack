@@ -157,13 +157,19 @@ func tunnelScreen(lang string, t manage.Tunnel) reply {
 	}
 	out.WriteString("\n\n")
 
-	if t.Role == "server" {
+	// Two independent questions, which a reverse tunnel lets you answer with
+	// one test and a direct tunnel does not: where the tunnel's own socket is,
+	// and whether this side exposes the forwarded ports. In a direct tunnel
+	// the Iran side does both dial out and hold the ports.
+	if manage.DialsOut(t) {
+		fmt.Fprintf(&out, tr(lang, "Server")+" : %s\n", code(t.Addr))
+	} else {
 		fmt.Fprintf(&out, tr(lang, "Tunnel Port")+" : %s\n", code(portOf(t.Addr)))
+	}
+	if manage.HoldsPorts(t) {
 		if ports := manage.VisiblePorts(t.Ports, manage.TunnelToken(t.Name)); len(ports) > 0 {
 			fmt.Fprintf(&out, tr(lang, "Forwarded Port")+" : %s\n", code(strings.Join(ports, ", ")))
 		}
-	} else {
-		fmt.Fprintf(&out, tr(lang, "Server")+" : %s\n", code(t.Addr))
 	}
 
 	if snap, err := metrics.Read(app.ConfigDir, t.Name); err == nil {

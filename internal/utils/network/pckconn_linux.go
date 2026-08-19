@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/bpf"
@@ -78,6 +79,18 @@ type pckConn struct {
 	txRaw   *ipv4.RawConn
 	txRawPC net.PacketConn
 	txFile  *os.File // AF_PACKET send, when the link has an L2 header we can build
+
+	// The send path, resolved once instead of per packet.
+	//
+	// sendFrame used to call txFile.SyscallConn() and build a fresh
+	// SockaddrLinklayer on every datagram. Both are constant for the life of
+	// the connection — the descriptor does not change and neither does the next
+	// hop — and both allocate. At a few thousand packets a second that is two
+	// allocations per packet handed to the garbage collector for no reason,
+	// which shows up as CPU that climbs with the packet rate and has nothing to
+	// do with the work being done.
+	txConn syscall.RawConn
+	txAddr *unix.SockaddrLinklayer
 
 	egress *pckEgress
 	port   uint16 // the port our segments are addressed TO on the peer
@@ -245,6 +258,24 @@ func (c *pckConn) openTx() error {
 			_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, 8*1024*1024)
 			if err = unix.SetNonblock(fd, true); err == nil {
 				c.txFile = os.NewFile(uintptr(fd), "pck-tx")
+				// Resolved once. Both are constant for the life of the socket,
+				// and building them per packet was two allocations on the
+				// hottest path in the carrier.
+				if raw, rerr := c.txFile.SyscallConn(); rerr == nil {
+					c.txConn = raw
+					sll := &unix.SockaddrLinklayer{
+						Protocol: htons(unix.ETH_P_IP),
+						Ifindex:  c.egress.Iface.Index,
+						Halen:    6,
+					}
+					copy(sll.Addr[:6], c.egress.NextHop)
+					c.txAddr = sll
+					return nil
+				}
+				// Without a usable RawConn there is no link-layer send path;
+				// fall through to the raw IP socket below.
+				_ = c.txFile.Close()
+				c.txFile = nil
 				return nil
 			}
 			unix.Close(fd)
@@ -412,20 +443,19 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 
 // sendFrame writes a finished Ethernet frame to the packet socket, taking the
 // descriptor from the runtime so it cannot be closed underneath the syscall.
+//
+// The RawConn and the destination are resolved once at open; see the fields on
+// pckConn for why they used to be rebuilt per packet and why that mattered.
 func (c *pckConn) sendFrame(frame []byte) error {
-	sc, err := c.txFile.SyscallConn()
-	if err != nil {
-		return err
+	sc, sll := c.txConn, c.txAddr
+	if sc == nil {
+		// Only reachable if the socket was never opened for link-layer
+		// injection, which the caller has already checked.
+		return net.ErrClosed
 	}
-	sll := &unix.SockaddrLinklayer{
-		Protocol: htons(unix.ETH_P_IP),
-		Ifindex:  c.egress.Iface.Index,
-		Halen:    6,
-	}
-	copy(sll.Addr[:6], c.egress.NextHop)
 
 	var sendErr error
-	err = sc.Write(func(fd uintptr) bool {
+	err := sc.Write(func(fd uintptr) bool {
 		sendErr = unix.Sendto(int(fd), frame, 0, sll)
 		// EAGAIN means the device queue is full; let the poller wait and retry.
 		return !errors.Is(sendErr, unix.EAGAIN)

@@ -74,6 +74,15 @@ func RunWatchdog(ctx context.Context) {
 // tunnelHealthy reports whether a running tunnel currently has its connection up,
 // based on the established TCP sockets in `pairs` ([local, peer] address pairs).
 func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
+	// The direct kinds are judged on their own terms: their roles are
+	// geographic, and a layer-3 tunnel has no TCP socket to observe at all.
+	// See directHealthy for why the reverse phrasing below cannot answer for
+	// them. An unanswerable check reports healthy, because restarting
+	// something whose state cannot be seen would mean restarting it forever.
+	if IsDirectKind(t) {
+		healthy, known := directHealthy(t, pairs)
+		return healthy || !known
+	}
 	// UDP-based transports (udp, kcp) hold no TCP sockets at all, so the TCP
 	// table says nothing about them.
 	//

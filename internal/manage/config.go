@@ -335,6 +335,23 @@ func IsDatagram(t string) bool { return isDatagram(t) }
 // tunnel never shows up in the TCP listen table and cannot be probed with a
 // TCP connect, so every check that assumes TCP has to skip it.
 func isDatagram(t string) bool {
+	// The two direct kinds carry their carrier in the name, so the bare
+	// comparisons below never match them. Answering "no" for a layer-3 tunnel
+	// was what made the web panel probe a pck tunnel with a TCP connect —
+	// against a carrier that has no socket to connect to — and then read the
+	// inevitable failure as the tunnel being down. The Iran card went offline
+	// while the tunnel was carrying traffic and the kharej card stayed green,
+	// because only the dialling side runs that probe.
+	if strings.HasPrefix(t, "l3/") {
+		// Every layer-3 carrier is a datagram one, and no reliable carrier can
+		// ever be added — see the l3 package doc.
+		return true
+	}
+	if strings.HasPrefix(t, "direct/") {
+		// All four direct transports are stream transports over TCP, so a TCP
+		// probe is exactly the right thing for them.
+		return false
+	}
 	return t == "udp" || t == "kcp" || t == "xdi" || t == "quic" || t == "spoof" || t == "pck"
 }
 

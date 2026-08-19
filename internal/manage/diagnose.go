@@ -292,6 +292,16 @@ func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
 			Detail: h.Detail, Fix: "start it from Manage → Manage Tunnels"})
 	}
 
+	// The two direct kinds keep their settings in their own tables, so LoadSpec
+	// — which reads [server] and [client] — cannot read one and says so by
+	// refusing it. Sent down that path, a perfectly healthy layer-3 tunnel was
+	// reported as "Config unreadable: not a client tunnel" and the operator was
+	// told to restore from a backup. Nothing was wrong with the file; the check
+	// was reading the wrong half of it.
+	if IsDirectKind(t) {
+		return append(out, directChecks(g, t)...)
+	}
+
 	// Config parses and is complete.
 	spec, err := LoadSpec(t.Name)
 	if err != nil {
@@ -499,4 +509,93 @@ func Locations() []Location {
 		)
 	}
 	return out
+}
+
+// directChecks are the per-tunnel checks for a direct or layer-3 tunnel.
+//
+// They ask what these tunnels actually have. A layer-3 tunnel has an interface
+// and a pair of addresses and no forwarded ports unless it was asked for some;
+// a direct tunnel has the ports on the Iran side and nothing to list on the
+// kharej side. Neither has a bind address to test for a listening socket,
+// which is the one thing the reverse checks spend most of their effort on.
+func directChecks(g string, t Tunnel) []Check {
+	var out []Check
+
+	cfg, err := LoadTunnelConfig(t.Name)
+	if err != nil {
+		return append(out, Check{Group: g, Name: "Config", Level: CheckFail,
+			Detail: "unreadable: " + err.Error(), Fix: "restore from a backup"})
+	}
+
+	if cfg.L3.Enabled() {
+		l := cfg.L3
+		out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
+			Detail: "layer-3 over " + orDefault(l.Carrier, "udp") + ", " + l3EncapLabel(l)})
+
+		// The interface is the tunnel. If it is not there, nothing else matters.
+		iface := orDefault(l.Iface, "bp0")
+		if ifaceExists(iface) {
+			out = append(out, Check{Group: g, Name: "Interface", Level: CheckOK,
+				Detail: iface + "  " + l.LocalIP + " -> " + l.PeerIP + ", mtu " + strconv.Itoa(l.MTU)})
+		} else {
+			out = append(out, Check{Group: g, Name: "Interface", Level: CheckFail,
+				Detail: iface + " does not exist",
+				Fix:    "a layer-3 tunnel needs root and the tun module — check its log"})
+		}
+
+		if len(l.Ports) > 0 {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+				Detail: strings.Join(l.Ports, ", ")})
+			if err := validatePortSpecs(l.Ports); err != nil {
+				out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+					Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
+			}
+		}
+		return out
+	}
+
+	d := cfg.Direct
+	out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
+		Detail: "direct tunnel over " + orDefault(d.Transport, "tcp")})
+
+	if HoldsPorts(t) {
+		if len(d.Ports) == 0 {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
+				Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+				Detail: strings.Join(d.Ports, ", ")})
+			if err := validatePortSpecs(d.Ports); err != nil {
+				out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+					Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
+			}
+		}
+		out = append(out, Check{Group: g, Name: "Kharej server", Level: CheckInfo, Detail: d.Addr})
+		return out
+	}
+
+	// The kharej side listens, so its port must actually be bound — and unlike
+	// a layer-3 carrier, every direct transport is real TCP, so the listen
+	// table can answer.
+	if p := addrPort(d.Addr); p != "" {
+		if n, _ := strconv.Atoi(p); n > 0 {
+			if listening(n) {
+				out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK,
+					Detail: p + " listening"})
+			} else {
+				out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
+					Detail: p + " not listening",
+					Fix:    "the service may have failed to bind — check its log"})
+			}
+		}
+	}
+	out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckInfo,
+		Detail: "set on the Iran server — this side needs none"})
+	return out
+}
+
+// ifaceExists reports whether a network interface is present.
+func ifaceExists(name string) bool {
+	_, err := net.InterfaceByName(name)
+	return err == nil
 }

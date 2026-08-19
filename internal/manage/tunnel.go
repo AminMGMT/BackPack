@@ -42,6 +42,21 @@ func List() []Tunnel {
 			t.Role = "client"
 			t.Transport = string(cfg.Client.Transport)
 			t.Addr = cfg.Client.RemoteAddr
+		// The two direct kinds are listed on the same terms as a reverse
+		// tunnel, so they can be started, stopped, watched and deleted from
+		// the same menu. Without these they would run perfectly well and be
+		// invisible to every management screen, which is worse than not
+		// working: nothing would say why.
+		case cfg.Direct.Enabled():
+			t.Role = directRole(cfg.Direct.ResolvedRole())
+			t.Transport = "direct/" + orDefault(cfg.Direct.Transport, "tcp")
+			t.Addr = cfg.Direct.Addr
+			t.Ports = cfg.Direct.Ports
+		case cfg.L3.Enabled():
+			t.Role = l3Role(cfg.L3.Mode)
+			t.Transport = "l3/" + orDefault(cfg.L3.Carrier, "udp")
+			t.Addr = cfg.L3.Addr
+			t.Ports = cfg.L3.Ports
 		default:
 			continue
 		}

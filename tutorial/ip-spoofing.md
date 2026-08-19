@@ -33,7 +33,7 @@ nothing — which looks exactly like every other fault there is.
 
 ## Part 1 — build it unforged
 
-On both machines: `sudo backpack` → Setup Server (Iran) / Setup Client (kharej) →
+On both machines: `sudo backpack` → Setup Iran / Setup Kharej → Reverse →
 **`Experimental` → `IP Spoofing`**.
 
 After the usual questions the wizard runs a **4-step** spoof screen.

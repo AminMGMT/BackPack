@@ -113,6 +113,19 @@ func (s *server) handleTunnelSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing name", http.StatusBadRequest)
 		return
 	}
+	// A direct tunnel keeps its settings in its own table, and TunnelSettingsOf
+	// reads [server] and [client] — so sending one there came back as "not a
+	// client tunnel" and the Edit button did nothing at all.
+	if t, ok := manage.Find(name); ok && manage.IsDirectKind(t) {
+		set, err := manage.DirectSettingsOf(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]any{"kind": "direct", "direct": set})
+		return
+	}
+
 	set, err := manage.TunnelSettingsOf(name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -125,6 +138,12 @@ func (s *server) handleTunnelSettings(w http.ResponseWriter, r *http.Request) {
 type tunnelEditRequest struct {
 	Name string `json:"name"`
 	manage.TunnelEdit
+
+	// Direct carries the direct form's own fields. Separate from the embedded
+	// reverse edit rather than merged into it, because the two share almost no
+	// keys and a merged struct would let a reverse form silently set a
+	// layer-3-only value.
+	Direct manage.DirectEdit `json:"direct"`
 }
 
 // handleTunnelEdit applies the Edit form. Every change lands in one write and
@@ -142,6 +161,14 @@ func (s *server) handleTunnelEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		http.Error(w, "missing name", http.StatusBadRequest)
+		return
+	}
+	if t, ok := manage.Find(req.Name); ok && manage.IsDirectKind(t) {
+		if err := manage.EditDirectSettings(req.Name, req.Direct); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
 		return
 	}
 	if err := manage.EditTunnelSettings(req.Name, req.TunnelEdit); err != nil {
@@ -198,4 +225,63 @@ func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// The direct-tunnel half of the panel's setup form.
+//
+// Separate handlers from the reverse ones, on the same terms as everything else
+// in the direct work: the reverse create path is in production, and there is no
+// version of "add a branch to it" that cannot break it.
+
+// handleDirectOptions serves the lists the direct form is built from — the
+// carriers and the tuning presets — so the panel and the CLI wizard cannot
+// drift into offering different things.
+func (s *server) handleDirectOptions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{
+		"carriers": manage.DirectCarriers(),
+		"presets":  manage.DirectPresets(),
+	})
+}
+
+// handleDirectDefaults fills a blank direct form: a free subnet, a free
+// interface, a suggested port, and a token.
+//
+// The token is offered to the kharej side only. Offering one on both ends means
+// somebody accepts the default twice and ends up with two different tokens —
+// and a mismatched token is answered with silence by design, so it presents as
+// a blocked port rather than as the typo it is. The CLI wizard is asymmetric
+// for the same reason; the panel has to be too, or the two disagree about the
+// one value that must match.
+func (s *server) handleDirectDefaults(w http.ResponseWriter, r *http.Request) {
+	side := r.URL.Query().Get("side")
+	out := manage.SuggestDirectDefaults(side)
+	out["tunnelPort"] = manage.SuggestDirectPort()
+	if !strings.EqualFold(strings.TrimSpace(side), "kharej") {
+		delete(out, "token")
+	}
+	writeJSON(w, out)
+}
+
+// handleDirectCreate builds a direct tunnel from the form.
+func (s *server) handleDirectCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var n manage.NewDirectTunnel
+	if err := decodeJSON(w, r, &n); err != nil {
+		http.Error(w, "could not read the form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	service, active, err := manage.CreateDirectTunnel(n)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"status":  "ok",
+		"name":    strings.TrimSpace(n.Name),
+		"service": service,
+		"active":  active,
+	})
 }

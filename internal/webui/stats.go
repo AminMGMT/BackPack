@@ -104,9 +104,25 @@ type SystemStats struct {
 
 // TunnelInfo is one row for /api/tunnels.
 type TunnelInfo struct {
-	Name         string `json:"name"`
-	Role         string `json:"role"`
-	Transport    string `json:"transport"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+
+	// Transport is the raw value the rest of the panel keys off — "tcp",
+	// "l3/pck", "direct/wss". Kept exactly as it was, because the edit form and
+	// several capability checks compare against it.
+	Transport string `json:"transport"`
+
+	// Direction and Carrier are the same thing split for the card, which has
+	// two badges rather than one: whether the tunnel is dialled from Iran or
+	// from kharej, and what carries it.
+	//
+	// Split here rather than in the browser because the browser would have to
+	// know which prefixes mean what — and would then be a second place that
+	// has to learn about every new tunnel kind, and the place nobody remembers
+	// to update. "l3/pck" on a card was the symptom: an internal name, leaking
+	// out because there was one field where there are two facts.
+	Direction    string `json:"direction"`
+	Carrier      string `json:"carrier"`
 	Addr         string `json:"addr"`
 	Ports        string `json:"ports"`
 	State        string `json:"state"`
@@ -439,9 +455,16 @@ func GatherTunnels() []TunnelInfo {
 				TunnelPort: tunnelPortOf(t.Addr),
 				Country:    manage.TunnelCountry(t.Name),
 				Ping:       -1,
+				Direction:  manage.TunnelDirection(t),
+				Carrier:    manage.TunnelCarrier(t),
 			}
-			if t.Role == "server" {
-				// Server (e.g. the Iran node): we can't ping our own bind_addr,
+			// The question is whether this side can ping the far end from its
+			// own config, or has to detect whoever connected to it. A reverse
+			// server listens and a reverse client dials; a direct tunnel has
+			// the same split, with Iran on the dialling side. See DialsOut.
+			if !manage.DialsOut(t) {
+				// Listening side (e.g. the Iran node of a reverse tunnel): we
+				// can't ping our own bind_addr,
 				// but we can detect the connected client(s) — the kharej peers
 				// dialing in — and measure/geo-locate them. This gives the Iran
 				// web panel real per-tunnel health + latency to each kharej.
@@ -755,6 +778,13 @@ func fillConfig(info *TunnelInfo, t manage.Tunnel) {
 	if err != nil {
 		return
 	}
+	// The direct kinds keep their settings in their own tables. Reading
+	// [server] or [client] for one of them would not be wrong so much as
+	// empty, and would quietly report a preset and limits it does not have.
+	if manage.IsDirectKind(t) {
+		fillDirectConfig(info, cfg)
+		return
+	}
 	if t.Role == "server" {
 		sc := cfg.Server
 		// Now that the token is known, split the ports again: one of the relay
@@ -804,4 +834,41 @@ func peerHost(peer string) string {
 		return peer
 	}
 	return host
+}
+
+// fillDirectConfig reports what a direct or layer-3 tunnel actually has.
+//
+// Neither carries a performance preset or a connection limit — those belong to
+// the reverse transports' tuning, which these do not share — so the panel
+// leaves those fields empty rather than showing a zero that looks like a
+// setting. What it does show is the certificate, which is the one thing an
+// operator of a wss direct tunnel has to keep an eye on.
+func fillDirectConfig(info *TunnelInfo, cfg config.Config) {
+	if cfg.L3.Enabled() {
+		info.MaxConnections = cfg.L3.MaxConnections
+		info.BandwidthMbps = cfg.L3.BandwidthMbps
+		return // and no certificate: a layer-3 tunnel has none
+	}
+	if !cfg.Direct.Enabled() {
+		return
+	}
+	info.MaxConnections = cfg.Direct.MaxConnections
+	info.BandwidthMbps = cfg.Direct.BandwidthMbps
+	info.Preset = manage.PresetValueLabel(cfg.Direct.Preset)
+	if cfg.Direct.Transport != "wss" {
+		return
+	}
+	switch {
+	case cfg.Direct.ACMEDomain != "":
+		info.CertType, info.CertDomain = "letsencrypt", cfg.Direct.ACMEDomain
+	case cfg.Direct.TLSCertFile != "":
+		info.CertType = "file"
+		if exp, err := manage.CertExpiry(cfg.Direct.TLSCertFile); err == nil {
+			info.CertExpiry = exp.Format("2006-01-02")
+		}
+	default:
+		// Generated in memory at start-up, so there is no file to inspect and
+		// no expiry that outlives the process.
+		info.CertType = "generated"
+	}
 }
