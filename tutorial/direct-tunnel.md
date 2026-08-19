@@ -1,4 +1,11 @@
-# Setting up a direct tunnel
+# Setting up a direct tunnel (stream transports)
+
+> **The wizard no longer builds this one.** Since v1.7.3, **Setup Iran → Direct**
+> creates a [full IP tunnel](../docs/l3-direct-tunnel.md) — one carrier question, always
+> Backpack's own GRE — because that shape covers the same job and measures its
+> own MTU. The `[direct]` engine below is unchanged and still runs: an existing
+> tunnel keeps working, the panel and the menu still manage, edit and restart
+> it, and a hand-written config still starts. Only the wizard entry is gone.
 
 The tunnel every other page describes is **reverse**: the Iran server listens,
 and the kharej server dials in. This one is the other way round — Iran dials
@@ -188,9 +195,9 @@ service is on another port, say so: `443=127.0.0.1:2096`. See
 [Behind a panel](behind-a-panel.md).
 
 **Only some things work; large downloads stall**
-That is an MTU symptom, and it belongs to the [layer-3
-tunnel](l3-direct-tunnel.md), not this one. A direct tunnel forwards streams
-and has no MTU of its own.
+That is an MTU symptom, and it belongs to the [full IP
+tunnel](../docs/l3-direct-tunnel.md), not this one. A stream tunnel forwards
+streams and has no MTU of its own.
 
 ---
 
@@ -207,9 +214,9 @@ the screen says, rather than presenting an empty form.
 ## A private network instead
 
 If you want the two servers to reach each other by address and carry anything —
-protocols with no ports, routing, ICMP — that is the other option under
-**Direct → Full IP tunnel**. It creates a network interface rather than
-forwarding ports.
+protocols with no ports, routing, ICMP — that is what **Setup Iran → Direct**
+builds now. It creates a network interface rather than forwarding streams, and
+forwards ports over it as well.
 
 **→ [Direct layer-3 tunnel](../docs/l3-direct-tunnel.md)**
 

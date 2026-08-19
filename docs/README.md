@@ -11,9 +11,9 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [Server layout (file locations)](server-layout.md)
 
 ### Tunnel direction
-- [Direct tunnel](direct-tunnel.md) — the same forwarded ports, with Iran dialling
+- [Direct tunnel — stream transports](direct-tunnel.md) — the `[direct]` engine, no longer offered by the wizard; the same forwarded ports, with Iran dialling
   out instead of waiting to be dialled
-- [Direct layer-3 tunnel](l3-direct-tunnel.md) — a private network between the two
+- [Direct tunnel](l3-direct-tunnel.md) — **what the wizard builds**: a private network between the two
   servers, carrying whole IP packets (GRE/IPIP over a TUN device)
 
 ### Transports

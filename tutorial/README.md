@@ -18,8 +18,8 @@ blocked one way — turn it round.
 
 | Tutorial | Use it when | Needs |
 |---|---|---|
-| **[Direct tunnel](direct-tunnel.md)** | the reverse tunnel will not connect; Iran dials out instead | a port open on kharej |
-| **[Layer-3 tunnel](../docs/l3-direct-tunnel.md)** | you want one private network, or protocols with no ports | Linux, root |
+| **[Direct tunnel](../docs/l3-direct-tunnel.md)** | the reverse tunnel will not connect; Iran dials out instead | Linux, root, a port open on kharej |
+| **[Direct, stream transports](direct-tunnel.md)** | you already run a `[direct]` tunnel — the wizard no longer builds these | a port open on kharej |
 
 ## The transports
 

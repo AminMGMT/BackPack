@@ -1,4 +1,11 @@
-# Direct tunnel
+# Direct tunnel (stream transports)
+
+> **The wizard no longer builds this one.** Since v1.7.3, **Setup Iran → Direct**
+> creates a [full IP tunnel](l3-direct-tunnel.md) — one carrier question, always
+> Backpack's own GRE — because that shape covers the same job and measures its
+> own MTU. The `[direct]` engine below is unchanged and still runs: an existing
+> tunnel keeps working, the panel and the menu still manage, edit and restart
+> it, and a hand-written config still starts. Only the wizard entry is gone.
 
 The same forwarded ports Backpack has always served, with the tunnel dialled
 the other way round.

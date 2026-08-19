@@ -2,9 +2,87 @@
 
 All notable changes to Backpack are documented here.
 
-## Unreleased
+## v1.7.3 — 2026-08-19
 
 ### Added
+
+- **Direct tunnelling: Iran dials out instead of waiting to be dialled.**
+
+  A reverse tunnel needs kharej to reach a port on Iran. Where that inbound
+  connection cannot be made — a provider that filters connections arriving from
+  abroad, a port blocked in one direction only — the tunnel never comes up, even
+  though the user-facing ports on Iran are perfectly fine. A direct tunnel turns
+  it around: Iran reaches out, which is the ordinary direction and the one a
+  filter is least likely to touch. The ports do not move. Iran still exposes
+  them and kharej still holds the real service.
+
+  It is a **full IP tunnel**: a network interface on each host carrying whole IP
+  packets, so the two servers get a point-to-point link over which anything can
+  be routed, plus the same `ports = [...]` forwarding a reverse tunnel has. The
+  packets are framed as **GRE and sealed in a Noise session**, then handed to
+  one of three carriers — `pck` (raw TCP segments with no socket a firewall can
+  hold), `udp`, or `spoof` (a forged source address).
+
+  This is not the kernel's GRE. Kernel GRE travels as bare IP protocol 47:
+  unencrypted, unmistakable, and removed by one firewall rule. Backpack writes
+  the same header — RFC 2784, with the RFC 2890 key — and then encrypts it and
+  hides it inside a carrier, so there is no protocol 47 to block. The cost is
+  that it talks only to Backpack.
+
+  **Menu → Setup Iran** (or **Setup Kharej**) **→ Direct**. Linux only: it needs
+  `/dev/net/tun` and root.
+
+- **The MTU is measured, not guessed.**
+
+  The MTU is the one setting on a layer-3 tunnel that cannot be derived from the
+  configuration, and the one that fails worst when it is wrong: set it too high
+  and the tunnel comes up, answers every health check, carries ping and SSH —
+  and stalls every download and every TLS handshake, because the packets that
+  matter are the large ones and they are dropped out on the path with nothing
+  coming back to say so.
+
+  Once a session is up, each end sends probes padded to exactly the size a full
+  data packet would be and binary-searches for the largest that is acknowledged,
+  then sets the interface to match. On one pair of servers the true figure was
+  **1371** against a configured **1400**, and those 29 bytes were the difference
+  between a tunnel that looked healthy and one that worked.
+
+  Probes are sealed under the tunnel session, so only a peer holding the token
+  can answer one. Re-measured every 30 minutes. A peer too old to answer leaves
+  the configured MTU untouched. `auto_mtu = false` turns it off.
+
+- **The TCP segment size is clamped to fit the tunnel.** The same fault from the
+  other side: two endpoints agree a segment size from *their* interfaces and
+  then send segments the tunnel cannot carry, and the ICMP message that would
+  correct them is dropped by a great many networks. Backpack rewrites the MSS in
+  the SYN of every TCP connection leaving the interface, on both chains and both
+  address families, so nothing has to be discovered.
+
+- **Performance presets for a full IP tunnel** — Balance, Turbo and Aggressive.
+  They tune the queue between the kernel and the tunnel and the carrier's socket
+  buffers. All three queue with `fq_codel`, which is what lets a deep queue
+  absorb a burst without becoming latency: it drops when packets start waiting,
+  so the sender backs off before the queue turns into jitter.
+
+- **Speed Test** (Manage → Speed Test). Measures what a tunnel actually carries,
+  end to end — encapsulation, encryption, carrier and path together. Link Test
+  next door measures latency, jitter and loss and says nothing about throughput,
+  and finding out used to mean `dd | nc` on both servers by hand.
+
+- **Direct tunnels can be created and edited from the web panel.** Add Tunnel
+  now asks the direction first, then the side, then the carrier. The lists it
+  offers come from the server, so the panel and the CLI wizard cannot drift into
+  offering different things.
+
+- **The kharej side refuses to dial a cloud metadata service.** The origin dials
+  whatever address the stream names — that is the design, and it is why changing
+  the forwarded ports touches only one machine. Private addresses stay allowed,
+  because forwarding to a backend on kharej's own network is a documented use.
+  The metadata addresses are the exception: they answer credentials to anything
+  on the instance, so a peer holding the token could have read the kharej
+  server's whole cloud identity.
+
+### Added (documentation)
 - **A `tutorial/` folder: a step-by-step setup walkthrough for every transport.**
   The docs said what each setting *is*; nothing said what to type, in what order,
   to get a working tunnel. Each page now walks the wizard question by question —
@@ -27,6 +105,31 @@ All notable changes to Backpack are documented here.
   paths the README used to carry inline.
 
 ### Changed
+
+- **"Setup Server" and "Setup Client" are now "Setup Iran" and "Setup Kharej".**
+  The old names were already a little confusing — in a reverse tunnel the Iran
+  machine is the server — and with a direct tunnel they become actively wrong,
+  because there the Iran machine is the one that dials. Geography is the part
+  that does not change with the direction. Each entry asks reverse or direct
+  first, and the rest of the wizard follows from that answer.
+
+- **A tunnel card shows two badges instead of one.** It used to print the
+  internal name — `l3/pck` — because there was a single field where there were
+  always two facts: which way the tunnel was built, and what carries it. Now it
+  reads **DIRECT · PCK**, and the direction badge takes the theme's accent
+  colour rather than one of its own.
+
+- **The direct wizard asks one question about how the tunnel travels.** It used
+  to ask what kind of tunnel, then how to wrap the packets. Both have a single
+  sensible answer now, so both are gone; the carriers are offered in the order
+  worth trying them — PCK, UDP, Spoof.
+
+- **`nodelay` is on in every direct preset.** The engine calls
+  `SetNoDelay(cfg.Nodelay)`, so leaving the key unset did not leave the socket
+  alone — it turned Nagle *on*, over Go's own default of off. On a tunnel where
+  one mux session carries every connection, that delays every stream at once.
+
+### Changed (documentation)
 - **The WSS decoy site is a different web server on every install, and answers
   like a file server rather than a program.** The decoy existed so a probe would
   see a website instead of a tunnel, and for one server it worked. Across the
@@ -64,6 +167,126 @@ All notable changes to Backpack are documented here.
   moved into `docs/` or `tutorial/`. `README_FA.md` follows the same shape.
 
 ### Fixed
+
+Everything below is a direct-tunnel fault found while running one on real
+servers between Iran and abroad. They are listed because several presented as
+the same thing — "the tunnel is up and nothing works" — and each had a different
+cause.
+
+- **A tunnel whose two ends wrapped packets differently came up and carried
+  nothing.** The handshake had no encapsulation in it, so a pair with `ipip` on
+  one end and `gre` on the other agreed on keys, established a session, reported
+  a peer, and showed green on both panels. Every data packet then decrypted
+  perfectly and was discarded one layer later, because an IPIP sender's payload
+  is an IP packet and a GRE receiver reads its first four bytes as a GRE header.
+  Both interfaces showed zero packets received. Nothing logged above debug.
+
+  The encapsulation now travels in the handshake, encrypted and authenticated
+  with everything else, and a mismatch is refused **by name on both ends** —
+  including a GRE key mismatch, which fails in exactly the same silent way. An
+  older peer that announces nothing is not judged, so an upgrade cannot take a
+  working pair down.
+
+- **The panel showed the Iran side offline while the tunnel was carrying
+  traffic.** The dialling side runs a liveness probe the listening side does
+  not, and the probe was a TCP connect — chosen because the transport was not
+  recognised as a datagram one. `l3/pck` never matched the bare names the check
+  compared against, so the panel dialled a carrier that has no socket to dial by
+  design, read the inevitable refusal as the tunnel being down, and overrode a
+  perfectly good "online". The kharej card stayed green because only the
+  dialling side runs that probe.
+
+- **The listening side reported no peer until traffic happened to cross it.** A
+  session is promoted on the first authenticated *data* packet, which is right
+  for deciding which keys to seal with and wrong for deciding what the screens
+  say. An idle tunnel therefore read online on one machine and offline on the
+  other. A completed handshake now publishes the peer.
+
+- **A session was never retired.** `rejectAfterTime` was documented as the point
+  a session stops being usable and was only ever applied to the replaced and
+  pending ones, so a tunnel whose peer had gone away held its last session for
+  as long as the process lived — and with it the peer in the metrics file, so
+  the panel showed "peer connected" for a tunnel that had been down for hours.
+
+- **Health Check told you to restore from a backup.** Its per-tunnel checks went
+  through the reverse config loader, which reads `[server]` and `[client]` and
+  refuses anything else by design. A healthy layer-3 tunnel came back as
+  *"Config unreadable: not a client tunnel"* with *"restore from a backup"* as
+  the suggested fix. It now checks what these tunnels actually have.
+
+- **Edit did nothing for a direct tunnel in the web panel**, for the same
+  reason, which is why the only way to build one was the CLI.
+
+- **The panel reported no traffic for direct tunnels.** The reverse transports
+  count inside their copy loops; these engines had no copy loop to inherit it
+  from, so the card showed nothing for a tunnel moving real data.
+
+- **A rekey was logged as a new connection.** The dialling side rekeys every two
+  minutes by design, and every one printed "session ... established" — which
+  read, quite reasonably, as a tunnel dropping and redialling every two minutes,
+  and was reported as exactly that.
+
+- **The MSS clamp was never installed.** The whole command was kept in one list
+  and the verb was written over index 2 — which held the chain — so every
+  invocation came out as `iptables -t mangle -A -o bp0 …` with no chain at all.
+  iptables refused all of them and the refusal was logged at debug level, so the
+  clamp was absent from every machine it was meant to protect while the code
+  that built it passed its tests: they inspected the rule description, never the
+  command line. The same shape was in the kernel-GRE rules.
+
+- **Firewall rules accumulated.** A rule added on every start and removed only
+  on a clean stop is a rule that piles up; one machine in the field had 546 of
+  them. Every rule Backpack installs is now deleted until the delete fails
+  before a new one is added, so a process that was killed rather than stopped
+  leaves nothing for the next start to add to.
+
+- **A token containing a backslash produced a config that would not parse.** The
+  direct renderer wrapped strings in quotes by hand; a backslash is an escape
+  character in a TOML basic string exactly as it is in a Go one. The failure was
+  either a file that did not load or, worse, one that loaded a *different* token
+  — and a mismatched token is answered with silence by design, so it presents as
+  a blocked port.
+
+- **Editing a direct tunnel silently deleted settings it never showed.** The
+  editor re-renders the file from a spec, so every key the spec could not hold
+  disappeared on an edit that had nothing to do with it: changing the MTU
+  reverted a whole spoof carrier to its defaults. The carrier tables are now
+  carried whole.
+
+- **Pressing 0 to leave the layer-3 editor changed a setting.** The kharej side
+  is offered fewer entries, so its indices were shifted up to compensate — and
+  the shift was applied to the "go back" answer too, which landed on the UDP
+  toggle and restarted the tunnel.
+
+- **UDP flows were not counted against the connection cap.** A flow is
+  recognised by its source address and UDP source addresses cost nothing to
+  invent, so the one protocol where the cap matters most was the one outside it.
+
+- **A goroutine leaked per session on the kharej side**, each holding a dead mux
+  session. Nothing on a steady tunnel; a month of a flapping link is a leak with
+  no symptom until the process is large.
+
+- **CPU climbed with the packet rate for no reason.** Three allocations per
+  packet: the raw connection and the destination address were rebuilt on every
+  send although neither changes for the life of the socket, and the receive path
+  compared the peer's address by formatting both sides into strings. At a few
+  thousand packets a second that is the garbage collector doing the work rather
+  than the network.
+
+- **A tunnel with clamping turned off and no logger panicked.** The nil-logger
+  guard sat below the early return, so the one combination that skipped it was
+  the one that dereferenced it. Caught by CI on Linux; the non-Linux build of
+  that function does nothing, so it passed locally.
+
+- **A typo in `role` built the wrong side of the tunnel.** Both constructors set
+  the role themselves before validating, so the engine's own "unknown role"
+  branch could never be reached and `role = "kharje"` fell through to the Iran
+  side.
+
+- **Two layer-3 tunnels on one host collided.** The wizard offered every tunnel
+  the same interface name and the same `10.10.0.1/30` — on the same screen that
+  suggested running more than one between the same two servers.
+
 - **Server setup asks about UDP forwarding in the main flow, and its firewall
   advice now matches the answer.** v1.7.2 made forwarded UDP opt-in again, for
   the QUIC reason below, but left the setup wizard describing the old default:

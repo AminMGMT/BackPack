@@ -53,14 +53,18 @@ changes is who reaches out first, and what the tunnel carries.
 | | Who dials | What it carries | Use it when |
 |---|---|---|---|
 | **Reverse** | kharej → Iran | forwarded ports | the usual case — Iran can accept an inbound connection |
-| **Direct** | Iran → kharej | forwarded ports | an inbound connection to Iran does not get through |
-| **Layer 3** | either | whole IP packets | you want one private network, or protocols with no ports |
+| **Direct** | Iran → kharej | a private network, and forwarded ports over it | an inbound connection to Iran does not get through |
 
-All three are built from **Setup Iran** and **Setup Kharej**: pick the machine
-you are on, and the wizard asks which direction you want and writes the config
+Both are built from **Setup Iran** and **Setup Kharej**: pick the machine you
+are on, and the wizard asks which direction you want and writes the config
 itself.
 
-**→ [Direct tunnel](docs/direct-tunnel.md) · [Layer-3 tunnel](docs/l3-direct-tunnel.md)**
+A direct tunnel is a full IP tunnel — an interface on each host carrying whole
+IP packets, wrapped in Backpack's own GRE inside a Noise session and handed to
+one of three carriers. It measures its own MTU once it is up, which is the
+setting that fails worst when it is wrong.
+
+**→ [Direct tunnel](docs/l3-direct-tunnel.md)**
 
 ---
 
