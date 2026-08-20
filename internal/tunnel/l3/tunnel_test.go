@@ -36,10 +36,11 @@ func newFakeDevice(mtu int) *fakeDevice {
 	}
 }
 
-func (d *fakeDevice) Read(p []byte) (int, error) {
+func (d *fakeDevice) Read(bufs [][]byte, sizes []int) (int, error) {
 	select {
 	case pkt := <-d.inject:
-		return copy(p, pkt), nil
+		sizes[0] = copy(bufs[0], pkt)
+		return 1, nil
 	case <-d.closed:
 		return 0, io.EOF
 	}
@@ -48,14 +49,16 @@ func (d *fakeDevice) Read(p []byte) (int, error) {
 // Write blocks when the output is full rather than dropping, which is what a
 // real device does and what stops a test from silently losing packets. Close
 // unblocks it, so a test that never drains still tears down.
-func (d *fakeDevice) Write(p []byte) (int, error) {
-	packet := append([]byte(nil), p...)
-	select {
-	case d.emitted <- packet:
-		return len(p), nil
-	case <-d.closed:
-		return 0, io.EOF
+func (d *fakeDevice) Write(bufs [][]byte) (int, error) {
+	for _, p := range bufs {
+		packet := append([]byte(nil), p...)
+		select {
+		case d.emitted <- packet:
+		case <-d.closed:
+			return 0, io.EOF
+		}
 	}
+	return len(bufs), nil
 }
 
 func (d *fakeDevice) Close() error {
@@ -63,6 +66,11 @@ func (d *fakeDevice) Close() error {
 	return nil
 }
 func (d *fakeDevice) Name() string { return "fake0" }
+
+// BatchSize is 1: the fake moves one packet at a time, which keeps the tests
+// about the engine rather than about batching. The batched path is exercised by
+// the real device and by TestPumpDrainsAWholeBatch.
+func (d *fakeDevice) BatchSize() int { return 1 }
 func (d *fakeDevice) MTU() int {
 	d.mtuMu.Lock()
 	defer d.mtuMu.Unlock()
@@ -109,7 +117,9 @@ func quietLogger() *logrus.Logger {
 // terminates. Closing the device alone stops the two pumps but leaves the
 // handshake loop retrying, so a teardown that waited first would hang — which
 // it did, until it was written this way.
-func start(t *testing.T, ctx context.Context, cancel context.CancelFunc, tun *Tunnel, dev *fakeDevice) {
+// dev is any closer, so a test can stand in a device with different behaviour
+// — a batched one, a slow one — without a second copy of this.
+func start(t *testing.T, ctx context.Context, cancel context.CancelFunc, tun *Tunnel, dev io.Closer) {
 	t.Helper()
 	done := make(chan struct{})
 	go func() { defer close(done); _ = tun.Run(ctx) }()

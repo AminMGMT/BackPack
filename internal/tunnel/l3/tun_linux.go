@@ -3,16 +3,16 @@
 package l3
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"unsafe"
 
 	"github.com/backpack/backpack/internal/tunnel/mssclamp"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 // The TUN device.
@@ -35,9 +35,17 @@ import (
 
 // tunDevice is an open TUN interface.
 type tunDevice struct {
-	file *os.File
+	dev  wgtun.Device
 	name string
 	mtu  int
+
+	// The batch machinery, allocated once. Read needs somewhere to put the
+	// virtio header the kernel prefixes each read with when offload is on, and
+	// Write needs room in front of each packet for the same thing on the way
+	// out — so both go through a staging buffer rather than the caller's.
+	rbuf  []byte
+	wbufs [][]byte
+	wbuf  []byte
 
 	// What Close has to undo. A firewall rule outlives the interface it names,
 	// so it has to be taken back out by whoever put it in.
@@ -76,10 +84,49 @@ func run(cmd string, args ...string) error {
 
 // Read returns one IP packet. A TUN device is packet-oriented: each read
 // yields exactly one packet, never a partial one and never two.
-func (t *tunDevice) Read(p []byte) (int, error) { return t.file.Read(p) }
+// Read returns up to BatchSize packets from one syscall.
+//
+// The offsets are what make the kernel's segmentation offload usable. With
+// IFF_VNET_HDR the device prefixes a virtio header to what it hands over and
+// expects one on what it is given, and the library needs somewhere to put it —
+// so every buffer carries virtioOffset bytes of slack in front of the packet.
+// Without that slack the library copies, which is most of what the batching
+// was for.
+func (t *tunDevice) Read(bufs [][]byte, sizes []int) (int, error) {
+	return t.dev.Read(bufs, sizes, 0)
+}
 
 // Write injects one IP packet into the kernel's routing.
-func (t *tunDevice) Write(p []byte) (int, error) { return t.file.Write(p) }
+// Write injects packets into the kernel's routing.
+//
+// Each packet is staged behind virtioOffset bytes of room, which is where the
+// library writes the header the kernel wants. Handing it several at once is
+// what lets it coalesce them into fewer writes.
+func (t *tunDevice) Write(bufs [][]byte) (int, error) {
+	if len(bufs) == 0 {
+		return 0, nil
+	}
+	t.wbufs = t.wbufs[:0]
+	off := 0
+	for _, p := range bufs {
+		end := off + virtioOffset + len(p)
+		if end > len(t.wbuf) {
+			// More than the staging buffer holds: write what is staged and
+			// send the rest on its own rather than truncating.
+			break
+		}
+		copy(t.wbuf[off+virtioOffset:], p)
+		t.wbufs = append(t.wbufs, t.wbuf[off:end])
+		off = end
+	}
+	if len(t.wbufs) == 0 {
+		return 0, nil
+	}
+	return t.dev.Write(t.wbufs, virtioOffset)
+}
+
+// BatchSize is the most packets one Read or Write may move.
+func (t *tunDevice) BatchSize() int { return t.dev.BatchSize() }
 
 // Close removes what the device installed and then destroys it. The clamp goes
 // first: once the file is closed the interface is gone, and a rule naming an
@@ -87,19 +134,34 @@ func (t *tunDevice) Write(p []byte) (int, error) { return t.file.Write(p) }
 // pck carrier in the field.
 func (t *tunDevice) Close() error {
 	mssclamp.Remove("l3", t.name, t.mtu, t.mssClamp)
-	return t.file.Close()
+	return t.dev.Close()
 }
 
-// ifreq is the structure TUNSETIFF expects: a 16-byte interface name followed
-// by a union whose first member here is the flags word.
-type ifreq struct {
-	name  [unix.IFNAMSIZ]byte
-	flags uint16
-	_     [22]byte
-}
+// virtioOffset is the room left in front of every packet for the virtio-net
+// header the kernel prefixes when segmentation offload is on. Ten bytes is what
+// the header is; the buffers carry it whether or not offload ends up enabled,
+// because the device decides that at open time and the cost is ten bytes.
+const virtioOffset = 10
 
-// openTUN creates or attaches to a TUN interface and brings it up with the
-// given address and MTU.
+// tunStageSize is the staging buffer the write path copies into. Big enough for
+// a full batch of MTU-sized packets with their offsets, so a busy write is one
+// syscall rather than one per packet.
+const tunStageSize = 1 << 20
+
+// openTUNTuned creates a TUN interface and brings it up with the given address
+// and MTU.
+//
+// The device itself comes from wireguard-go's tun package rather than a raw
+// ioctl on /dev/net/tun, which is what this used to do. What that buys is the
+// batched read and write above: with IFF_VNET_HDR the kernel will hand over a
+// whole segmentation-offload run in one syscall, and the library does the
+// splitting and the coalescing — several hundred lines of checksum and
+// sequence-number fixups that are not worth writing twice.
+//
+// Everything after the device is unchanged and still goes through ip(8): the
+// addresses, the MTU, the queue length, the queueing discipline and the MSS
+// clamp. wireguard's package creates a device; it has no opinion about how the
+// interface is configured, which suits this exactly.
 func openTUNTuned(name, localIP, peerIP string, mtu, mssClamp, txQueueLen int, qdisc string, log *logrus.Logger) (*tunDevice, error) {
 	if log == nil {
 		log = logrus.StandardLogger()
@@ -111,45 +173,34 @@ func openTUNTuned(name, localIP, peerIP string, mtu, mssClamp, txQueueLen int, q
 		return nil, fmt.Errorf("l3: interface name %q is longer than %d characters", name, unix.IFNAMSIZ-1)
 	}
 
-	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	wdev, err := wgtun.CreateTUN(name, mtu)
 	if err != nil {
-		if err == unix.EACCES || err == unix.EPERM {
-			return nil, fmt.Errorf("l3: opening /dev/net/tun: %w (a layer-3 tunnel needs root or CAP_NET_ADMIN)", err)
+		if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+			return nil, fmt.Errorf("l3: creating the TUN interface %q: %w "+
+				"(a layer-3 tunnel needs root or CAP_NET_ADMIN)", name, err)
 		}
-		if err == unix.ENOENT {
-			return nil, fmt.Errorf("l3: /dev/net/tun does not exist: %w (the tun module may not be loaded)", err)
+		if errors.Is(err, unix.ENOENT) {
+			return nil, fmt.Errorf("l3: creating the TUN interface %q: %w "+
+				"(/dev/net/tun is missing — the tun module may not be loaded)", name, err)
 		}
-		return nil, fmt.Errorf("l3: opening /dev/net/tun: %w", err)
+		return nil, fmt.Errorf("l3: creating the TUN interface %q: %w", name, err)
 	}
 
-	var req ifreq
-	copy(req.name[:], name)
-	// IFF_TUN is a layer-3 device; IFF_NO_PI drops the per-packet prefix.
-	req.flags = unix.IFF_TUN | unix.IFF_NO_PI
-
-	if _, _, errno := unix.Syscall(
-		unix.SYS_IOCTL,
-		uintptr(fd),
-		uintptr(unix.TUNSETIFF),
-		uintptr(unsafe.Pointer(&req)),
-	); errno != 0 {
-		unix.Close(fd)
-		return nil, fmt.Errorf("l3: creating the TUN interface %q: %w", name, errno)
-	}
-
-	// The kernel writes back the name it actually used, which differs from the
-	// requested one when the name contained a %d template.
-	actual := strings.TrimRight(string(req.name[:]), "\x00")
-	if actual == "" {
+	// The kernel may hand back a different name than the one asked for, which
+	// is what happens when the name carried a %d template.
+	actual, err := wdev.Name()
+	if err != nil || actual == "" {
 		actual = name
 	}
 
 	dev := &tunDevice{
-		file:     os.NewFile(uintptr(fd), "/dev/net/tun"),
+		dev:      wdev,
 		name:     actual,
 		mtu:      mtu,
 		mssClamp: mssClamp,
 		log:      log,
+		wbufs:    make([][]byte, 0, wdev.BatchSize()),
+		wbuf:     make([]byte, tunStageSize),
 	}
 
 	if err := configureInterface(actual, localIP, peerIP, mtu, txQueueLen); err != nil {

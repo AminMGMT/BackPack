@@ -16,12 +16,13 @@ import (
 
 type tunDevice struct{}
 
-func (t *tunDevice) Name() string                { return "" }
-func (t *tunDevice) MTU() int                    { return 0 }
-func (t *tunDevice) Read(p []byte) (int, error)  { return 0, errNoTUN() }
-func (t *tunDevice) Write(p []byte) (int, error) { return 0, errNoTUN() }
-func (t *tunDevice) Close() error                { return nil }
-func (t *tunDevice) SetMTU(int) error            { return errNoTUN() }
+func (t *tunDevice) Name() string                                 { return "" }
+func (t *tunDevice) MTU() int                                     { return 0 }
+func (t *tunDevice) Read(bufs [][]byte, sizes []int) (int, error) { return 0, errNoTUN() }
+func (t *tunDevice) Write(bufs [][]byte) (int, error)             { return 0, errNoTUN() }
+func (t *tunDevice) BatchSize() int                               { return 1 }
+func (t *tunDevice) Close() error                                 { return nil }
+func (t *tunDevice) SetMTU(int) error                             { return errNoTUN() }
 
 func openTUNTuned(name, localIP, peerIP string, mtu, mssClamp, txQueueLen int, qdisc string, log *logrus.Logger) (*tunDevice, error) {
 	return nil, errNoTUN()

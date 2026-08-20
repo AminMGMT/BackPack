@@ -94,8 +94,21 @@ type Stats struct {
 // session handling and its two pumps be exercised on any platform against a
 // device that is not a device.
 type packetDevice interface {
-	Read(p []byte) (int, error)
-	Write(p []byte) (int, error)
+	// Read fills bufs with up to BatchSize packets and their lengths in sizes,
+	// returning how many arrived.
+	//
+	// Batched, because a TUN read is a syscall and a busy tunnel does thousands
+	// a second. With the kernel's segmentation offload on, one read can return
+	// a whole 64 KB run of one TCP stream already split into MTU-sized packets
+	// — forty-odd packets for the cost of one syscall. See tun_linux.go.
+	Read(bufs [][]byte, sizes []int) (int, error)
+
+	// Write injects packets into the kernel's routing.
+	Write(bufs [][]byte) (int, error)
+
+	// BatchSize is the most packets one Read or Write may move.
+	BatchSize() int
+
 	Close() error
 	Name() string
 	MTU() int
@@ -501,54 +514,70 @@ func (t *Tunnel) retireSessions(now time.Time) {
 // pumpFromTUN reads packets the kernel routed into the interface, seals them
 // and sends them to the peer.
 func (t *Tunnel) pumpFromTUN(ctx context.Context) {
-	packet := make([]byte, t.cfg.MTU)
+	batch := t.tun.BatchSize()
+	if batch < 1 {
+		batch = 1
+	}
+	bufs := make([][]byte, batch)
+	for i := range bufs {
+		bufs[i] = make([]byte, t.cfg.MTU)
+	}
+	sizes := make([]int, batch)
+
 	frame := make([]byte, 0, t.cfg.MTU+t.encap.Overhead())
 	out := make([]byte, 0, t.cfg.MTU+t.encap.Overhead()+dataOverhead)
 
 	for {
-		n, err := t.tun.Read(packet)
+		count, err := t.tun.Read(bufs, sizes)
 		if err != nil {
 			if ctx.Err() == nil {
 				t.log.Errorf("l3: reading from %s: %v", t.cfg.Iface, err)
 			}
 			return
 		}
-		if n == 0 {
-			continue
-		}
 
+		// Resolved once per batch rather than once per packet. Both take the
+		// state lock, and at a few thousand packets a second it was being taken
+		// twice as often as anything in it changed.
 		sess := t.sendSession()
 		peer := t.peerAddr()
-		if sess == nil || peer == nil {
-			// Nothing to send under yet. Dropping is correct: the layer above
-			// owns retransmission, and queueing here would only deliver a
-			// burst of stale packets once the tunnel came up.
-			t.stats.dropped.Add(1)
-			continue
-		}
 
-		wrapped, err := t.encap.Wrap(frame[:0], packet[:n])
-		if err != nil {
-			t.stats.dropped.Add(1)
-			t.log.Debugf("l3: not forwarding a packet off %s: %v", t.cfg.Iface, err)
-			continue
-		}
-		sealed, err := sess.seal(out[:0], wrapped)
-		if err != nil {
-			t.stats.dropped.Add(1)
-			t.log.Warnf("l3: sealing a packet: %v", err)
-			continue
-		}
-		if _, err := t.carrier.WriteTo(sealed, peer); err != nil {
-			if ctx.Err() != nil {
-				return
+		for i := 0; i < count; i++ {
+			n := sizes[i]
+			if n == 0 {
+				continue
 			}
-			t.stats.dropped.Add(1)
-			t.log.Debugf("l3: sending to %s: %v", peer, err)
-			continue
+			if sess == nil || peer == nil {
+				// Nothing to send under yet. Dropping is correct: the layer
+				// above owns retransmission, and queueing here would only
+				// deliver a burst of stale packets once the tunnel came up.
+				t.stats.dropped.Add(1)
+				continue
+			}
+
+			wrapped, err := t.encap.Wrap(frame[:0], bufs[i][:n])
+			if err != nil {
+				t.stats.dropped.Add(1)
+				t.log.Debugf("l3: not forwarding a packet off %s: %v", t.cfg.Iface, err)
+				continue
+			}
+			sealed, err := sess.seal(out[:0], wrapped)
+			if err != nil {
+				t.stats.dropped.Add(1)
+				t.log.Warnf("l3: sealing a packet: %v", err)
+				continue
+			}
+			if _, err := t.carrier.WriteTo(sealed, peer); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				t.stats.dropped.Add(1)
+				t.log.Debugf("l3: sending to %s: %v", peer, err)
+				continue
+			}
+			t.stats.packetsOut.Add(1)
+			t.stats.bytesOut.Add(uint64(n))
 		}
-		t.stats.packetsOut.Add(1)
-		t.stats.bytesOut.Add(uint64(n))
 	}
 }
 
@@ -717,7 +746,7 @@ func (t *Tunnel) handleData(plain []byte, h header, body []byte, from net.Addr) 
 		t.log.Debugf("l3: discarding a malformed inner packet from %s: %v", from, err)
 		return plain
 	}
-	if _, err := t.tun.Write(inner); err != nil {
+	if _, err := t.tun.Write([][]byte{inner}); err != nil {
 		t.stats.dropped.Add(1)
 		t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
 		return plain

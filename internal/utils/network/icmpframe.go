@@ -3,6 +3,7 @@ package network
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"sync"
 )
 
 // The framing that carries the tunnel inside ICMP echo, and keeps two tunnels
@@ -85,6 +86,28 @@ func encodeXdiPayload(tag [xdiTagLen]byte, dir byte, payload []byte) []byte {
 	out[xdiTagLen] = dir
 	copy(out[xdiHeaderLen:], payload)
 	return out
+}
+
+// appendXdiPayload is encodeXdiPayload without the allocation: it writes into a
+// buffer the caller owns and reuses.
+//
+// The allocating form is kept for the places that genuinely want a fresh slice.
+// The send path is not one of them — it runs once per packet, and a few
+// thousand packets a second of short-lived slices is the garbage collector
+// doing work the network asked nobody to do.
+func appendXdiPayload(dst []byte, tag [xdiTagLen]byte, dir byte, payload []byte) []byte {
+	dst = append(dst[:0], tag[:]...)
+	dst = append(dst, dir)
+	return append(dst, payload...)
+}
+
+// xdiBuffers backs both directions of the ICMP carrier. Sized for the largest
+// echo this will ever build or read.
+var xdiBuffers = sync.Pool{
+	New: func() any {
+		b := make([]byte, 65536)
+		return &b
+	},
 }
 
 // decodeXdiPayload checks an incoming ICMP echo payload against this tunnel's

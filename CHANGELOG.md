@@ -74,6 +74,16 @@ All notable changes to Backpack are documented here.
   offers come from the server, so the panel and the CLI wizard cannot drift into
   offering different things.
 
+- **The TUN device moves packets in batches.** A read used to be one packet and
+  one syscall, and a busy tunnel does thousands a second. The device now comes
+  from wireguard-go's `tun` package, which turns on the kernel's segmentation
+  offload: one read can return a whole 64 KB run of a single TCP stream, already
+  split into MTU-sized packets, for the cost of one syscall. The session and
+  peer lookups moved out of the per-packet path with it — both take the state
+  lock, and it was being taken twice per packet for values that change every two
+  minutes. Everything above the device is unchanged: the addresses, the MTU, the
+  queue, the queueing discipline and the MSS clamp still go through `ip`.
+
 - **The kharej side refuses to dial a cloud metadata service.** The origin dials
   whatever address the stream names — that is the design, and it is why changing
   the forwarded ports touches only one machine. Private addresses stay allowed,
@@ -265,6 +275,10 @@ cause.
 - **A goroutine leaked per session on the kharej side**, each holding a dead mux
   session. Nothing on a steady tunnel; a month of a flapping link is a leak with
   no symptom until the process is large.
+
+- **The ICMP carrier allocated twice per packet**, once to frame the payload and
+  once to read one — both now come from a pool, as the pck carrier's already
+  did.
 
 - **CPU climbed with the packet rate for no reason.** Three allocations per
   packet: the raw connection and the destination address were rebuilt on every

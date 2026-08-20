@@ -141,3 +141,56 @@ func TestEffectiveMTUShrinksOverICMP(t *testing.T) {
 		t.Errorf("overhead %d is too small for the ICMP and framing headers", icmpMTUOverhead)
 	}
 }
+
+// The pooled encoder must produce exactly what the allocating one does.
+//
+// The send path uses the pooled form because it runs once per packet; the two
+// drifting apart would mean the tunnel frames its packets one way and the tests
+// check another.
+func TestPooledXdiEncodingMatchesTheAllocatingOne(t *testing.T) {
+	var tag [xdiTagLen]byte
+	copy(tag[:], []byte{0xDE, 0xAD, 0xBE, 0xEF})
+
+	for _, payload := range [][]byte{
+		nil,
+		{1},
+		[]byte("a short packet"),
+		make([]byte, 1400),
+	} {
+		want := encodeXdiPayload(tag, xdiDirClient, payload)
+
+		buf := make([]byte, 0, 64) // deliberately too small, to force growth
+		got := appendXdiPayload(buf, tag, xdiDirClient, payload)
+
+		if !bytes.Equal(got, want) {
+			t.Fatalf("payload of %d bytes: pooled encoding differs from the allocating one",
+				len(payload))
+		}
+		// And it must still decode as this tunnel's inbound traffic.
+		back, ok := decodeXdiPayload(tag, xdiDirClient, got)
+		if !ok || !bytes.Equal(back, payload) {
+			t.Fatalf("payload of %d bytes did not survive the round trip", len(payload))
+		}
+	}
+}
+
+// Reusing the buffer must not leave anything of the previous packet behind.
+func TestPooledXdiEncodingDoesNotLeakThePreviousPacket(t *testing.T) {
+	var tag [xdiTagLen]byte
+	buf := make([]byte, 0, 4096)
+
+	long := bytes.Repeat([]byte{0xAA}, 2000)
+	_ = appendXdiPayload(buf, tag, xdiDirServer, long)
+
+	short := []byte{1, 2, 3}
+	got := appendXdiPayload(buf, tag, xdiDirServer, short)
+
+	if len(got) != xdiHeaderLen+len(short) {
+		t.Fatalf("a short packet after a long one came out %d bytes, want %d",
+			len(got), xdiHeaderLen+len(short))
+	}
+	back, ok := decodeXdiPayload(tag, xdiDirServer, got)
+	if !ok || !bytes.Equal(back, short) {
+		t.Fatalf("the short packet decoded as %x", back)
+	}
+}

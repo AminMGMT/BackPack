@@ -99,10 +99,17 @@ func (c *icmpConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 	if c.server {
 		typ = icmpEchoReply
 	}
+	// Both buffers come from the pool: the framed payload, and the marshalled
+	// echo underneath it. Each was a fresh allocation per packet, and this runs
+	// once for every datagram the tunnel sends.
+	fp := xdiBuffers.Get().(*[]byte)
+	defer xdiBuffers.Put(fp)
+	framed := appendXdiPayload(*fp, c.tag, outboundDir(c.server), p)
+
 	body := &icmp.Echo{
 		ID:   c.id,
 		Seq:  int(c.seq.Add(1) & 0xffff),
-		Data: encodeXdiPayload(c.tag, outboundDir(c.server), p),
+		Data: framed,
 	}
 	msg := &icmp.Message{Type: typ, Code: 0, Body: body}
 	wire, err := msg.Marshal(nil)
@@ -121,7 +128,12 @@ func (c *icmpConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 // traffic that belongs to another tunnel, to a bare ping, or to the kernel's
 // automatic reply. It respects the read deadline across those drops.
 func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	buf := make([]byte, len(p)+icmpMTUOverhead+64)
+	// Pooled, not allocated. This is called once per received datagram, and a
+	// fresh multi-kilobyte slice each time is the garbage collector setting the
+	// tunnel's pace rather than the network.
+	bp := xdiBuffers.Get().(*[]byte)
+	defer xdiBuffers.Put(bp)
+	buf := *bp
 	wantType := icmpEchoRequest // the server reads requests
 	if !c.server {
 		wantType = icmpEchoReply // the client reads replies
