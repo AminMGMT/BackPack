@@ -17,6 +17,16 @@ func Logs(name string, n int) string {
 	if n <= 0 {
 		n = 100
 	}
+	// Shared and briefly cached, because the panel's log drawer polls this on a
+	// two-second timer and every caller used to get its own journalctl. See
+	// logscache.go for what that did to journald.
+	return journalCache.get(name+"\x00"+strconv.Itoa(n), func() string {
+		return readLogs(name, n)
+	})
+}
+
+// readLogs is the uncached read, and the only place that runs journalctl.
+func readLogs(name string, n int) string {
 	out, err := exec.Command("journalctl",
 		"-u", app.ServiceName(name),
 		"-n", strconv.Itoa(n),

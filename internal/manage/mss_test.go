@@ -25,8 +25,11 @@ func TestSuggestedClampIsAlwaysAccepted(t *testing.T) {
 	// top of the search range.
 	for mtu := 64 + 28; mtu <= 1472+28; mtu++ {
 		// The tunnel is sending more than the path carries — the only case
-		// that produces a suggestion at all.
-		c := pathMTUCheck("g", mtu, safeMSS(mtu)+1)
+		// that produces a suggestion at all. The threshold is oversizeMSS, not
+		// safeMSS: the kernel's snd_mss has the option bytes out of it already,
+		// so a segment is only genuinely too large once it passes mtu-40. The
+		// suggestion is still safeMSS, which is what this asserts is settable.
+		c := pathMTUCheck("g", mtu, oversizeMSS(mtu)+1, true)
 		if c.Level != CheckFail {
 			t.Fatalf("mtu %d: oversized segments were not reported as a fault (%v)", mtu, c.Level)
 		}
@@ -55,7 +58,7 @@ func TestHealthyPathIsNotAFault(t *testing.T) {
 		{1500, 1400}, // already inside the path
 		{1400, 1348}, // a smaller path the tunnel has adapted to
 	} {
-		if c := pathMTUCheck("g", tc.mtu, tc.negotiated); c.Level != CheckOK {
+		if c := pathMTUCheck("g", tc.mtu, tc.negotiated, true); c.Level != CheckOK {
 			t.Fatalf("mtu %d with mss %d reported as %v: %s", tc.mtu, tc.negotiated, c.Level, c.Detail)
 		}
 	}
@@ -64,7 +67,7 @@ func TestHealthyPathIsNotAFault(t *testing.T) {
 // A connection the kernel has not reported an mss for yet must not be read as
 // "sending zero-byte segments" and turned into a fault.
 func TestUnknownSegmentSizeIsNotAFault(t *testing.T) {
-	if c := pathMTUCheck("g", 1260, 0); c.Level == CheckFail {
+	if c := pathMTUCheck("g", 1260, 0, true); c.Level == CheckFail {
 		t.Fatalf("an unmeasured connection was reported as a fault: %s", c.Detail)
 	}
 }

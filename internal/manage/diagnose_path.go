@@ -158,7 +158,27 @@ func pingOK(host string, payload int) bool {
 // which Linux enables by default. The textbook figure of mtu-40 assumes a
 // bare 20-byte TCP header and produces segments 12 bytes too large on exactly
 // the paths where 12 bytes is the difference.
+//
+// This is the value to *set*. It is deliberately not the value to *test*
+// against — see oversizeMSS.
 func safeMSS(mtu int) int { return mtu - 20 - 32 }
+
+// oversizeMSS is the segment size above which packets genuinely cannot fit
+// inside mtu.
+//
+// The distinction from safeMSS is the whole of a false alarm that reported
+// healthy tunnels as broken. The kernel's snd_mss — what `ss` prints as mss:
+// and what this compares — already has the option bytes taken out of it: on a
+// 1500-byte path a socket using timestamps reports 1448 and one without them
+// reports 1460, and both fit. Testing either against safeMSS, which subtracts
+// the options a second time, condemns the second as oversized while it is
+// carrying traffic perfectly well.
+//
+// So detection subtracts only the headers that are always there, and the
+// advice keeps its room for options. A clamp is still worth recommending at
+// safeMSS, because a clamp is a ceiling that has to hold whether the options
+// are in use or not.
+func oversizeMSS(mtu int) int { return mtu - 40 }
 
 // minPathMTU is the smallest IPv4 datagram every path is required to carry.
 const minPathMTU = 576
@@ -187,10 +207,29 @@ var (
 // hold — that any clamp it prints is one SetMSS accepts — can be tested across
 // the whole range the probe can report, rather than only on the paths someone
 // happened to have.
-func pathMTUCheck(g string, mtu, negotiated int) Check {
+func pathMTUCheck(g string, mtu, negotiated int, fromKernel bool) Check {
 	clamp := safeMSS(mtu)
+	oversize := negotiated > oversizeMSS(mtu)
+
+	// An ICMP probe that disagrees with a socket carrying traffic is the probe
+	// being wrong, not the tunnel.
+	//
+	// probePathMTU binary-searches with ping and the don't-fragment bit, and on
+	// a path that filters or rate-limits large ICMP — which is ordinary on the
+	// routes this project exists for — the search bottoms out far below what
+	// the path really carries. The old check took that figure as fact and
+	// declared a working tunnel broken, on every run, no matter what the
+	// tunnel's own MTU was set to. The sockets are the better witness: they are
+	// moving bytes at this size right now.
+	if oversize && !fromKernel {
+		return Check{Group: g, Name: "Path MTU", Level: CheckWarn,
+			Detail: fmt.Sprintf("the ICMP probe reached only %d bytes, but the tunnel's sockets are sending segments of %d — this path filters large pings, so the probe is understating it",
+				mtu, negotiated),
+			Fix: fmt.Sprintf("nothing, unless transfers actually stall — if they do, set the MSS clamp to %d on both ends", clamp)}
+	}
+
 	switch {
-	case negotiated > clamp && clamp < minMSS:
+	case oversize && clamp < minMSS:
 		// Below what IPv4 guarantees every route carries. No clamp rescues
 		// this: the value it would need is one no TCP stack is obliged to
 		// accept, and the tunnel would crawl even if both ends took it. Saying
@@ -199,7 +238,7 @@ func pathMTUCheck(g string, mtu, negotiated int) Check {
 			Detail: fmt.Sprintf("path carries only %d bytes, below the %d every IPv4 route must — too small to tunnel over", mtu, minPathMTU),
 			Fix:    "this is a fault in the route rather than in the tunnel — look for a broken tunnel or VPN in front of it"}
 
-	case negotiated > clamp:
+	case oversize:
 		// The measured limit is below what the sockets are already sending.
 		// Nothing reports this on its own: the oversized segments are dropped
 		// without an ICMP reply, so the kernel keeps sending them and the
@@ -271,7 +310,12 @@ func pathChecks(g string, t Tunnel) []Check {
 			humanSize(int(saturatingSub(sent, was))), humanSize(int(saturatingSub(recv, wasRecv))))})
 
 	// And the question that costs the most to answer by hand.
-	mtu := probePathMTU(peer)
+	//
+	// The kernel is asked first. It has been running PMTU discovery on these
+	// very connections and prints the answer in `ss` as pmtu:, which was being
+	// parsed and then thrown away while a ping probe re-derived it less
+	// reliably. Where both have an answer the kernel's is the one to trust.
+	mtu, fromKernel := pathMTU(before, peer)
 	if mtu == 0 {
 		out = append(out, Check{Group: g, Name: "Path MTU", Level: CheckInfo,
 			Detail: "could not probe — the path drops ICMP"})
@@ -285,7 +329,28 @@ func pathChecks(g string, t Tunnel) []Check {
 		}
 	}
 
-	return append(out, pathMTUCheck(g, mtu, negotiated))
+	return append(out, pathMTUCheck(g, mtu, negotiated, fromKernel))
+}
+
+// pathMTU settles which figure the check is judged against, and whether it came
+// from the kernel or from the ping probe.
+//
+// The sockets are asked first because they cannot be fooled by a middlebox that
+// drops large ICMP: their number is what the TCP stack learned from carrying
+// real traffic to this peer. The probe stays as the fallback for when the
+// kernel has not recorded one — a connection too young or too idle to have
+// discovered anything.
+func pathMTU(sockets []sockStat, peer string) (mtu int, fromKernel bool) {
+	best := 0
+	for _, s := range sockets {
+		if s.pmtu > best {
+			best = s.pmtu
+		}
+	}
+	if best > 0 {
+		return best, true
+	}
+	return probePathMTU(peer), false
 }
 
 // saturatingSub avoids a wild figure when a connection is replaced between the

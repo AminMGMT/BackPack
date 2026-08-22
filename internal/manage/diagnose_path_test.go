@@ -1,6 +1,9 @@
 package manage
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Real `ss -tin state established` output, from the server side of a tunnel on
 // port 5050. The info lines are what they actually look like — which is the
@@ -150,5 +153,78 @@ func TestSaturatingSub(t *testing.T) {
 	}
 	if got := saturatingSub(0, 0); got != 0 {
 		t.Errorf("saturatingSub(0,0) = %d, want 0", got)
+	}
+}
+
+// The false alarm the field reported as "it complains about the path MTU in
+// every case, automatic or manual".
+//
+// Two separate mistakes produced it, and either alone is enough to condemn a
+// working tunnel.
+
+// One: the kernel's snd_mss already has the TCP option bytes taken out of it,
+// so testing it against safeMSS — which takes them out a second time — calls a
+// perfectly ordinary socket oversized.
+func TestASocketWithoutTimestampsIsNotOversized(t *testing.T) {
+	// A 1500-byte path. With timestamps the kernel reports 1448, without them
+	// 1460. Both fit: 1460 + 20 + 20 = 1500 exactly.
+	for _, mss := range []int{1448, 1460} {
+		c := pathMTUCheck("g", 1500, mss, true)
+		if c.Level != CheckOK {
+			t.Errorf("a 1500-byte path carrying mss %d was reported as %v: %s",
+				mss, c.Level, c.Detail)
+		}
+	}
+	// And the segment that genuinely cannot fit still is a fault.
+	if c := pathMTUCheck("g", 1500, 1461, true); c.Level != CheckFail {
+		t.Errorf("mss 1461 does not fit in 1500 and must be a fault, got %v", c.Level)
+	}
+}
+
+// Two: the ping probe under-reports on any path that filters large ICMP, which
+// is ordinary on the routes this project exists for. A socket moving traffic at
+// a size the probe says is impossible is the probe being wrong.
+func TestAnICMPFilteringPathDoesNotCondemnTheTunnel(t *testing.T) {
+	// The probe bottomed out at 1000 while the sockets carry 1308.
+	probe := pathMTUCheck("g", 1000, 1308, false)
+	if probe.Level == CheckFail {
+		t.Errorf("a probe-only figure was treated as fact and failed a working tunnel: %s",
+			probe.Detail)
+	}
+	if probe.Level != CheckWarn {
+		t.Errorf("the disagreement is worth mentioning, so it should warn, got %v", probe.Level)
+	}
+	if !strings.Contains(probe.Detail, "1308") || !strings.Contains(probe.Detail, "1000") {
+		t.Errorf("the warning should name both figures so the operator can judge: %s", probe.Detail)
+	}
+
+	// The same numbers from the kernel are a real fault, because the kernel
+	// learned them by carrying traffic rather than by pinging.
+	kernel := pathMTUCheck("g", 1000, 1308, true)
+	if kernel.Level != CheckFail {
+		t.Errorf("the kernel's own pmtu should be believed, got %v: %s", kernel.Level, kernel.Detail)
+	}
+}
+
+// The kernel's pmtu is preferred over the probe, and the probe is used only
+// when the kernel has nothing to say. This is what stops the probe from being
+// consulted at all on a healthy tunnel.
+func TestTheKernelIsAskedBeforeThePingProbe(t *testing.T) {
+	sockets := []sockStat{
+		{peer: "203.0.113.9", mss: 1308, pmtu: 1456},
+		{peer: "203.0.113.9", mss: 1308, pmtu: 1456},
+	}
+	mtu, fromKernel := pathMTU(sockets, "203.0.113.9")
+	if !fromKernel {
+		t.Fatal("the kernel reported a pmtu and it was ignored in favour of pinging")
+	}
+	if mtu != 1456 {
+		t.Errorf("path mtu = %d, want the kernel's 1456", mtu)
+	}
+
+	// With no kernel figure and nowhere to ping, there is simply no answer —
+	// which must be reported as unknown rather than guessed.
+	if mtu, fromKernel := pathMTU([]sockStat{{mss: 1308}}, ""); mtu != 0 || fromKernel {
+		t.Errorf("with nothing to go on, got mtu %d fromKernel %v; want 0 and false", mtu, fromKernel)
 	}
 }

@@ -4021,13 +4021,28 @@ async function restartAllTunnels(){
   loadTunnels();
 }
 
-let logTimer=null, logName=null, logRaw='';
+let logTimer=null, logName=null, logRaw='', logInFlight=false;
+// One request at a time, and none at all while the tab is hidden.
+//
+// The timer fires every two seconds whether or not the last request came back.
+// On a host with a large journal the read behind this endpoint can take longer
+// than that, and the requests then overlap: each tick adds another, every one
+// of them costing journald a full pass over the unit. The pile-up is what took
+// journald — and rsyslog reading from it — to the top of `top`. A drawer left
+// open in a background tab did the same thing more slowly.
+//
+// The server refuses to multiply this as well (see manage.Logs), so the two
+// guards are independent: this one keeps a single panel honest, that one holds
+// however many panels there are.
 async function fetchLog(){
-  if(!logName)return;
+  if(!logName || logInFlight) return;
+  if(document.hidden) return;
+  logInFlight=true;
   try{
     logRaw=await (await fetch('/api/logs?name='+encodeURIComponent(logName))).text();
     renderLog();
   }catch(e){}
+  finally{ logInFlight=false; }
 }
 // renderLog applies the filter and colors the lines that matter. The text is
 // escaped first — journal lines carry whatever the tunnel logged.

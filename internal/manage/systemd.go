@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/backpack/backpack/internal/app"
 )
@@ -23,10 +24,33 @@ func DaemonReload() error {
 	return err
 }
 
+// unitStateTTL is how long "is this unit running" is reused for.
+//
+// It is the answer the panel asks for most, and the one it used to pay the most
+// for: GatherSystem asks it per tunnel every four seconds, GatherTunnels asks
+// it again through AllHealth every six, and each ask forked systemctl and made
+// a round trip to systemd over D-Bus. On a host with several tunnels and a
+// panel open, that is a process every few hundred milliseconds doing nothing
+// but confirming what it confirmed a moment ago.
+//
+// Two seconds is well inside the poll intervals it serves, so the display is no
+// less live than before; what changes is that the two pollers and every panel
+// share one answer instead of each forking their own. Anything that changes a
+// unit's state clears this on the way out, so a Start or Stop from the panel is
+// reflected at once rather than after the window.
+const unitStateTTL = 2 * time.Second
+
+// unitStatePrune is how long an untouched unit is remembered.
+const unitStatePrune = 5 * time.Minute
+
+var unitCache = newTTLCache[bool](unitStateTTL, unitStatePrune)
+
 // IsActive reports whether a unit is currently running.
 func IsActive(service string) bool {
-	out, _ := systemctl("is-active", service)
-	return out == "active"
+	return unitCache.get("is-active\x00"+service, func() bool {
+		out, _ := systemctl("is-active", service)
+		return out == "active"
+	})
 }
 
 // IsEnabled reports whether a unit is enabled at boot.
@@ -38,24 +62,28 @@ func IsEnabled(service string) bool {
 // StartService starts and enables a unit.
 func StartService(service string) error {
 	_, err := systemctl("enable", "--now", service)
+	unitCache.forget()
 	return err
 }
 
 // StopService stops a unit (leaves it enabled).
 func StopService(service string) error {
 	_, err := systemctl("stop", service)
+	unitCache.forget()
 	return err
 }
 
 // RestartService restarts a unit.
 func RestartService(service string) error {
 	_, err := systemctl("restart", service)
+	unitCache.forget()
 	return err
 }
 
 // DisableService stops and disables a unit.
 func DisableService(service string) error {
 	_, err := systemctl("disable", "--now", service)
+	unitCache.forget()
 	return err
 }
 
