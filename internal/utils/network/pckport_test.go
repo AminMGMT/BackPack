@@ -21,10 +21,22 @@ func TestPckClientPortsAreDistinctWithinTheGuardedRange(t *testing.T) {
 
 	// Ask for more ports than any pool would open, to prove the allocation keeps
 	// handing out distinct ones rather than repeating immediately.
+	//
+	// It calls the allocator rather than restating its arithmetic. Doing the
+	// latter is why this passed while the tunnel was dropping: the copy here
+	// stayed correct for the first span of carriers, which is all the test ever
+	// asked for, while the real one wrapped onto live ports beyond it. See
+	// TestChurningThePoolNeverStealsTheControlChannelPort.
+	resetPckPorts()
+	defer resetPckPorts()
+
 	const want = pckPortSpan
 	seen := make(map[uint16]int, want)
 	for i := 0; i < want; i++ {
-		p := base + uint16(pckPortSeq.Add(1)-1)%pckPortSpan
+		p, err := nextPckClientPort(base)
+		if err != nil {
+			t.Fatalf("allocation %d was refused: %v", i, err)
+		}
 		seen[p]++
 		if p < base || p > base+pckPortSpan-1 {
 			t.Fatalf("port %d fell outside the guarded range %d-%d", p, base, base+pckPortSpan-1)

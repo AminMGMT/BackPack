@@ -105,6 +105,11 @@ type pckConn struct {
 
 	guard *pckGuard
 
+	// holdsPort is set on the client side, where the source port is claimed out
+	// of the tunnel's range and has to be handed back on Close. The server's
+	// port is its listen port and is not allocated, so nothing is held.
+	holdsPort bool
+
 	// Per-peer sequence state. A real connection's numbers advance with the
 	// bytes it has sent and acknowledge the bytes it has received; anything
 	// tracking the flow checks exactly that, so it is tracked exactly that way.
@@ -185,15 +190,31 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 		c.local = listenPort
 	} else {
 		base := pckClientPortBase(carrier.Token)
-		c.local = nextPckClientPort(base)
+		port, err := nextPckClientPort(base)
+		if err != nil {
+			return nil, err
+		}
+		c.local = port
+		c.holdsPort = true
 		guardLo, guardHi = base, base+pckPortSpan-1
 	}
 
+	// From here the port is claimed, so every path out has to give it back or
+	// the range leaks one on each failed dial and eventually fills.
+	release := func() {
+		if c.holdsPort {
+			releasePckClientPort(c.local)
+			c.holdsPort = false
+		}
+	}
+
 	if err := c.openRx(); err != nil {
+		release()
 		return nil, err
 	}
 	if err := c.openTx(); err != nil {
 		c.rx.Close()
+		release()
 		return nil, err
 	}
 	// One rule set covers the whole range and is shared by every carrier in this
@@ -523,6 +544,9 @@ func (c *pckConn) Close() error {
 		return nil
 	}
 	c.guard.remove()
+	if c.holdsPort {
+		releasePckClientPort(c.local)
+	}
 	if c.rx != nil {
 		_ = c.rx.Close()
 	}

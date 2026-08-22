@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
-	"sync/atomic"
+	"sync"
 )
 
 // Which source ports the pck carrier's segments come from, and how the firewall
@@ -24,9 +24,28 @@ import (
 // it rather than escaping, so the guard's range always covers what is in use.
 const pckPortSpan = 128
 
-// pckPortSeq hands out the offset within that range. One tunnel runs per
-// process, so a package-level counter is exactly the right scope.
-var pckPortSeq atomic.Uint32
+// pckPortsInUse records which ports inside the range are held by a live
+// carrier, so one is never handed to two.
+//
+// This was an incrementing counter taken modulo the span, which is correct for
+// the first pckPortSpan carriers and wrong for every one after them: the
+// counter never came back down, so carrier 128 was given the same port as
+// carrier 0 — and carrier 0 is the control channel, which is still on it.
+//
+// What that does is not subtle, and newPckConn already describes it: kcp-go
+// demultiplexes on the sender's address alone, so two carriers on one port
+// arrive as one peer, and a packet claiming a new conversation on an existing
+// entry closes the old one. The control channel died, the client timed out and
+// reconnected, and the operator saw a tunnel that dropped every so often and
+// had to be restarted by hand — which worked, because a fresh process starts
+// the counter at zero again.
+//
+// A pool dialling a connection every sixteen seconds, which is what the logs
+// from the field showed, walks through the whole span in about half an hour.
+var (
+	pckPortMu     sync.Mutex
+	pckPortsInUse = map[uint16]bool{}
+)
 
 // pckClientPortBase derives the bottom of the client's source-port range from
 // the tunnel token.
@@ -49,10 +68,32 @@ func pckClientPortBase(token string) uint16 {
 	return 32768 + binary.BigEndian.Uint16(sum[:2])%(28000-pckPortSpan)
 }
 
-// nextPckClientPort returns the source port for one more carrier on a tunnel
-// whose range starts at base.
-func nextPckClientPort(base uint16) uint16 {
-	return base + uint16(pckPortSeq.Add(1)-1)%pckPortSpan
+// nextPckClientPort claims a free source port for one more carrier on a tunnel
+// whose range starts at base, or reports that the range is full.
+//
+// Exhaustion is an error rather than a silent reuse. The span is 128 and a pool
+// is a couple of dozen at the outside, so reaching the end means carriers are
+// being leaked somewhere — and handing out a port that is already in use is
+// exactly the fault this exists to prevent, so it must not be the fallback.
+func nextPckClientPort(base uint16) (uint16, error) {
+	pckPortMu.Lock()
+	defer pckPortMu.Unlock()
+
+	for i := uint16(0); i < pckPortSpan; i++ {
+		port := base + i
+		if !pckPortsInUse[port] {
+			pckPortsInUse[port] = true
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("pck: all %d source ports from %d are in use", pckPortSpan, base)
+}
+
+// releasePckClientPort gives a port back when its carrier closes.
+func releasePckClientPort(port uint16) {
+	pckPortMu.Lock()
+	defer pckPortMu.Unlock()
+	delete(pckPortsInUse, port)
 }
 
 // portSpec renders a port or a port range in the spelling iptables expects.
