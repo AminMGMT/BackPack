@@ -41,7 +41,7 @@ func directHealthy(t Tunnel, pairs [][2]string) (healthy, known bool) {
 		// into one that says whether it is up. A snapshot too old to mean
 		// anything still reports unknown, which is the honest answer when the
 		// process has stopped writing.
-		return datagramServerPeer(app.ConfigDir, t.Name)
+		return datagramPeer(app.ConfigDir, t.Name)
 	}
 	if !strings.HasPrefix(t.Transport, "direct/") {
 		return false, false

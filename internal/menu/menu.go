@@ -172,7 +172,7 @@ func manageMenu() {
 			{Title: "Status", Desc: "live tunnel table"},
 			{Title: "Health Check", Desc: "find problems and get a fix for each one"},
 			{Title: "Link Test", Desc: "measure the link and get a transport recommendation"},
-			{Title: "Speed Test", Desc: "measure what a full IP tunnel actually carries, end to end"},
+			{Title: "Speed Test", Desc: "measure what a tunnel actually carries, end to end"},
 			{Title: "Game Latency Test", Desc: "estimate in-game ping to popular game servers through this exit"},
 			{Title: "Exit Health", Desc: "score & rank every server address, pin the healthiest (multi-exit failover)"},
 			{Title: "IP Spoofing Tester", Desc: "find which forged source IPs cross the firewall (for the spoof transport)"},

@@ -72,8 +72,17 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 		// stopped: the peer and the ping both vanished, because those come from
 		// somewhere that knew the truth, while the light stayed on because this
 		// did not. The transport does know, and writes it down — so ask that.
-		if isDatagram(t.Transport) && t.Role == "server" {
-			if connected, known := datagramServerPeer(app.ConfigDir, t.Name); known {
+		//
+		// Both roles, not just the server. The dialling side was left to the
+		// socket table, which can only see the carriers that leave a socket
+		// behind: plain kcp, udp and quic dial a connected UDP socket, but xdi
+		// rides in ICMP, pck builds its own TCP segments through a packet
+		// socket and spoof sends from a raw one. For those the table has
+		// nothing to report and said so, which is how a tunnel that was
+		// carrying traffic showed offline on one machine and online on the
+		// other. Both ends write the peer down now, so both are asked.
+		if isDatagram(t.Transport) {
+			if connected, known := datagramPeer(app.ConfigDir, t.Name); known {
 				h.Connected = connected
 			}
 		}
@@ -115,19 +124,22 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 // few intervals says nothing about now.
 const datagramPeerWindow = 90 * time.Second
 
-// datagramServerPeer reports whether a datagram server currently has a peer,
-// and whether that could be determined at all.
+// datagramPeer reports whether a datagram tunnel currently has a peer, and
+// whether that could be determined at all. It answers for either end.
 //
 // A UDP listener is one unconnected socket and keeps no record of who is
 // talking to it, so the kernel cannot answer this — which is why it used to go
-// unanswered. The transport can, and records the peer in the tunnel's metrics
-// snapshot, clearing it when the control channel drops.
+// unanswered. Nor can it answer for a dialling side whose carrier opens no
+// socket the kernel knows about, which is every carrier that exists to leave
+// nothing observable behind. The transport can answer in both cases, and
+// records the peer in the tunnel's metrics snapshot, clearing it when the
+// control channel drops.
 //
 // Not knowing is reported separately from knowing there is nobody there. A
 // tunnel that has only just started has not written a snapshot yet, and calling
 // that "no peer" would show every freshly started tunnel as down for its first
 // half minute.
-func datagramServerPeer(dir, name string) (connected, known bool) {
+func datagramPeer(dir, name string) (connected, known bool) {
 	snap, err := metrics.Read(dir, name)
 	if err != nil {
 		return false, false // no snapshot yet

@@ -118,7 +118,7 @@ func TestDatagramServerWithNoPeerReportsOffline(t *testing.T) {
 		t.Run(tr, func(t *testing.T) {
 			dir := stageSnapshot(t, "t", "", time.Now())
 
-			connected, known := datagramServerPeer(dir, "t")
+			connected, known := datagramPeer(dir, "t")
 			if !known {
 				t.Fatal("a fresh snapshot was treated as unreadable")
 			}
@@ -132,7 +132,7 @@ func TestDatagramServerWithNoPeerReportsOffline(t *testing.T) {
 func TestDatagramServerWithAPeerReportsOnline(t *testing.T) {
 	dir := stageSnapshot(t, "t", "203.0.113.9:41234", time.Now())
 
-	connected, known := datagramServerPeer(dir, "t")
+	connected, known := datagramPeer(dir, "t")
 	if !known || !connected {
 		t.Errorf("a reported peer was not read back: connected=%v known=%v", connected, known)
 	}
@@ -144,13 +144,13 @@ func TestDatagramServerWithAPeerReportsOnline(t *testing.T) {
 func TestUnknownIsNotTheSameAsDisconnected(t *testing.T) {
 	dir := stageSnapshot(t, "other", "", time.Now()) // nothing for "t"
 
-	if _, known := datagramServerPeer(dir, "t"); known {
+	if _, known := datagramPeer(dir, "t"); known {
 		t.Error("a missing snapshot was treated as a definite answer")
 	}
 
 	// The same goes for a snapshot too old to describe now.
 	dir = stageSnapshot(t, "t", "203.0.113.9:41234", time.Now().Add(-10*time.Minute))
-	if _, known := datagramServerPeer(dir, "t"); known {
+	if _, known := datagramPeer(dir, "t"); known {
 		t.Error("a stale snapshot was treated as current")
 	}
 }
@@ -161,6 +161,60 @@ func TestWatchdogStillNeverRestartsADatagramServer(t *testing.T) {
 	stageSnapshot(t, "t", "", time.Now()) // no peer: the panel now calls this offline
 
 	for _, tr := range []string{"kcp", "udp"} {
+		tun := Tunnel{Name: "t", Role: "server", Transport: tr, Addr: "[::]:8989"}
+		if !tunnelHealthy(tun, nil) {
+			t.Errorf("%s server reported unhealthy to the watchdog; it would be restarted in a loop", tr)
+		}
+	}
+}
+
+// The carriers that exist to leave nothing observable behind are the ones the
+// socket table cannot answer for, on either end.
+//
+// This is the regression test for a tunnel that carried traffic while one
+// machine's card showed offline and the other's showed online. The listening
+// side had been taught to write its peer into the snapshot and read it back;
+// the dialling side was still left to the socket table. That works for the
+// carriers that dial a connected UDP socket — plain kcp, udp, quic — and finds
+// nothing for xdi, pck and spoof, which is exactly the point of them.
+func TestObservabilityFreeCarriersCountAsDatagram(t *testing.T) {
+	for _, tr := range []string{"xdi", "pck", "spoof", "kcp", "udp", "quic"} {
+		if !isDatagram(tr) {
+			t.Errorf("%s must be judged from the snapshot, not the socket table", tr)
+		}
+	}
+}
+
+// The snapshot answers for either end. Nothing in it is about a role, and the
+// panel now asks it for both — a client that reports a peer is connected, and
+// one that has cleared it is not.
+func TestTheSnapshotAnswersForTheDiallingSideToo(t *testing.T) {
+	t.Run("a client that reported its peer is online", func(t *testing.T) {
+		dir := stageSnapshot(t, "t", "198.51.100.7:8443", time.Now())
+		connected, known := datagramPeer(dir, "t")
+		if !known || !connected {
+			t.Errorf("a dialling side's peer was not read back: connected=%v known=%v", connected, known)
+		}
+	})
+
+	t.Run("a client whose control channel dropped is offline", func(t *testing.T) {
+		dir := stageSnapshot(t, "t", "", time.Now())
+		connected, known := datagramPeer(dir, "t")
+		if !known {
+			t.Fatal("a fresh snapshot was treated as unreadable")
+		}
+		if connected {
+			t.Error("a cleared peer was read as a live connection")
+		}
+	})
+}
+
+// The watchdog's answer for a datagram server must not have moved: restarting
+// something whose peer cannot be observed would mean restarting it forever.
+func TestExtendingTheSnapshotCheckLeftTheWatchdogAlone(t *testing.T) {
+	stageSnapshot(t, "t", "", time.Now())
+
+	for _, tr := range []string{"xdi", "pck", "spoof"} {
 		tun := Tunnel{Name: "t", Role: "server", Transport: tr, Addr: "[::]:8989"}
 		if !tunnelHealthy(tun, nil) {
 			t.Errorf("%s server reported unhealthy to the watchdog; it would be restarted in a loop", tr)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -51,6 +53,12 @@ const (
 	// throughputBuf is the write size. Large enough that the syscall rate is
 	// not what is being measured.
 	throughputBuf = 256 << 10
+
+	// throughputSinkWindow is how long the receiver waits for a sender before
+	// giving up. It has to cover somebody walking to the other server and
+	// finding the same menu entry there, which is the whole reason the two
+	// halves are separate screens.
+	throughputSinkWindow = 5 * time.Minute
 )
 
 // ThroughputResult is one measurement.
@@ -75,7 +83,17 @@ func (r ThroughputResult) String() string {
 // ServeThroughput listens on the tunnel address and sinks whatever arrives,
 // until ctx ends. This is the receiving half, run on the other machine.
 func ServeThroughput(ctx context.Context, bind string) error {
-	ln, err := net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(throughputPort)))
+	return ServeThroughputOn(ctx, bind, throughputPort)
+}
+
+// ServeThroughputOn is the same sink on a port of the caller's choosing.
+//
+// A layer-3 tunnel always uses throughputPort, because it has a private subnet
+// where nothing else is listening. A port forwarder has to borrow the backend
+// port of one of its own mappings, since that is the only address the far end
+// can reach through the tunnel — see throughputforward.go.
+func ServeThroughputOn(ctx context.Context, bind string, port int) error {
+	ln, err := net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(port)))
 	if err != nil {
 		return err
 	}
@@ -101,13 +119,19 @@ func ServeThroughput(ctx context.Context, bind string) error {
 
 // MeasureThroughput pushes bytes to the far end and reports the rate.
 func MeasureThroughput(ctx context.Context, peer string) (ThroughputResult, error) {
+	return MeasureThroughputOn(ctx, peer, throughputPort)
+}
+
+// MeasureThroughputOn is the same measurement against a port of the caller's
+// choosing. See ServeThroughputOn for why a port forwarder needs one.
+func MeasureThroughputOn(ctx context.Context, peer string, port int) (ThroughputResult, error) {
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp",
-		net.JoinHostPort(peer, fmt.Sprint(throughputPort)))
+		net.JoinHostPort(peer, fmt.Sprint(port)))
 	if err != nil {
 		return ThroughputResult{}, fmt.Errorf(
 			"could not reach the other end on %s:%d — is the receiver running there? %w",
-			peer, throughputPort, err)
+			peer, port, err)
 	}
 	defer conn.Close()
 
@@ -195,35 +219,90 @@ func ThroughputReceiver() {
 	tui.Clear()
 	tui.Title("Speed Test — receiver")
 
-	tunnels := directTunnels()
+	tunnels := measurableTunnels()
 	if len(tunnels) == 0 {
-		tui.Info("No full IP tunnel found on this server.")
-		tui.Warn("This measures a tunnel's own capacity, so it needs one to measure.")
-		tui.PressEnter()
+		explainNoMeasurableTunnel()
 		return
 	}
 	t := pickTunnel(tunnels, "Which tunnel should receive?")
 	if t == nil {
 		return
 	}
-	local := tunnelLocalIP(t.Name)
-	if local == "" {
-		tui.Error("This tunnel has no address on its own interface to listen on.")
-		tui.PressEnter()
-		return
+
+	// Where the sink goes depends on what kind of tunnel this is: a layer-3
+	// tunnel has an address of its own to listen on, a port forwarder does not
+	// and has to borrow a mapping's backend port instead.
+	var local string
+	var port int
+	if isForwardKind(*t) {
+		if HoldsPorts(*t) {
+			wrongSideForForward(*t, true)
+			return
+		}
+		p, ok := askBackendPort(*t)
+		if !ok {
+			return
+		}
+		local, port = forwardBackendHost, p
+	} else {
+		local, port = tunnelLocalIP(t.Name), throughputPort
+		if local == "" {
+			tui.Error("This tunnel has no address on its own interface to listen on.")
+			tui.PressEnter()
+			return
+		}
 	}
 
 	fmt.Println()
-	tui.Success("Listening on " + local + fmt.Sprintf(":%d", throughputPort))
+	tui.Success("Listening on " + local + fmt.Sprintf(":%d", port))
 	tui.Info("Now run Speed Test on the OTHER server and choose the same tunnel.")
 	fmt.Println()
 	tui.Warn("Press Ctrl+C when the other end reports its result.")
 	fmt.Println()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// The interrupt has to be caught here, because this screen is the one that
+	// asks for it.
+	//
+	// Without this the instruction above was a trap: nothing in the menu
+	// installs a handler, so Ctrl+C took Go's default and killed the whole CLI.
+	// Somebody following the screen exactly lost the menu, the tunnel list and
+	// whatever they were in the middle of — which reads as the speed test being
+	// broken, because the one action it tells you to take is the one that ends
+	// the program. Every other screen that asks for Ctrl+C already handles it;
+	// see StatusLive.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+
+	ctx, cancel := context.WithTimeout(context.Background(), throughputSinkWindow)
 	defer cancel()
-	if err := ServeThroughput(ctx, local); err != nil {
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		select {
+		case <-sig:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	err := ServeThroughputOn(ctx, local, port)
+	cancel()
+	<-stopped
+
+	fmt.Println()
+	switch {
+	case err != nil:
 		tui.Error("The receiver stopped: " + err.Error())
+	case ctx.Err() == context.DeadlineExceeded:
+		// Silence here used to be indistinguishable from success. It is not:
+		// nobody ever connected.
+		tui.Warn(fmt.Sprintf("No sender arrived within %s — the receiver has stopped.",
+			throughputSinkWindow))
+		tui.Info("Start the receiver again, then run the sender promptly on the other server.")
+	default:
+		tui.Success("Receiver stopped.")
 	}
 	tui.PressEnter()
 }
@@ -237,30 +316,56 @@ func ThroughputSender() {
 	tui.Warn("other server first.")
 	fmt.Println()
 
-	tunnels := directTunnels()
+	tunnels := measurableTunnels()
 	if len(tunnels) == 0 {
-		tui.Info("No full IP tunnel found on this server.")
-		tui.PressEnter()
+		explainNoMeasurableTunnel()
 		return
 	}
 	t := pickTunnel(tunnels, "Which tunnel should be measured?")
 	if t == nil {
 		return
 	}
-	peer := tunnelPeerIP(t.Name)
-	if peer == "" {
-		tui.Error("This tunnel has no peer address to measure against.")
-		tui.PressEnter()
-		return
+
+	// A layer-3 tunnel is measured across its private subnet; a port forwarder
+	// through one of the mappings it already carries, from this side's own
+	// loopback. Either way what follows sends to one address and one port.
+	var peer string
+	var port int
+	if isForwardKind(*t) {
+		if !HoldsPorts(*t) {
+			wrongSideForForward(*t, false)
+			return
+		}
+		m, ok := pickForwardMapping(*t)
+		if !ok {
+			return
+		}
+		fmt.Println()
+		tui.Warn(fmt.Sprintf("The receiver on the other server must be sinking on port %d,", m.TargetPort))
+		tui.Warn("which means the real backend there is stopped for the moment.")
+		fmt.Println()
+		if !tui.Confirm("Is the receiver running there now", false) {
+			tui.Info("Start it there first, then come back.")
+			tui.PressEnter()
+			return
+		}
+		peer, port = forwardBackendHost, m.ListenPort
+	} else {
+		peer, port = tunnelPeerIP(t.Name), throughputPort
+		if peer == "" {
+			tui.Error("This tunnel has no peer address to measure against.")
+			tui.PressEnter()
+			return
+		}
 	}
 
 	fmt.Println()
-	tui.Info(fmt.Sprintf("Measuring to %s — about %s, warm-up excluded...",
-		peer, (throughputWarmup + throughputRun).Round(time.Second)))
+	tui.Info(fmt.Sprintf("Measuring to %s:%d — about %s, warm-up excluded...",
+		peer, port, (throughputWarmup + throughputRun).Round(time.Second)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := MeasureThroughput(ctx, peer)
+	res, err := MeasureThroughputOn(ctx, peer, port)
 	if err != nil {
 		fmt.Println()
 		tui.Error(err.Error())
@@ -282,14 +387,58 @@ func ThroughputSender() {
 	tui.PressEnter()
 }
 
-// directTunnels are the full IP tunnels on this machine, which are the ones
-// that have an interface to measure across.
-func directTunnels() []Tunnel {
+// explainNoMeasurableTunnel is what this screen says when there is nothing it
+// can measure.
+//
+// It used to say "No full IP tunnel found on this server." and stop, which was
+// true and useless: the menu offers this entry to everybody, and an operator
+// with three working tunnels reads a flat denial as the feature being broken.
+// Now that a port forwarder can be measured too, reaching this at all means
+// something specific — the tunnels here expose ports but none are configured —
+// so it says that instead.
+func explainNoMeasurableTunnel() {
+	others := List()
+
+	fmt.Println()
+	if len(others) == 0 {
+		tui.Info("There are no tunnels on this server yet.")
+		tui.PressEnter()
+		return
+	}
+
+	tui.Info("None of the tunnels on this server can be measured yet.")
+	fmt.Println()
+	for _, t := range others {
+		fmt.Printf("  · %s%s%s — %s\n", tui.Bold, t.Name, tui.Reset, TunnelCarrier(t))
+	}
+	fmt.Println()
+	tui.Warn("A port forwarder is measured through one of the ports it carries, and")
+	tui.Warn("these have none configured. Add a port mapping in Manage Tunnels and")
+	tui.Warn("this screen will be able to use it.")
+	fmt.Println()
+	tui.Info("Link Test works on any tunnel meanwhile — it measures latency, jitter")
+	tui.Info("and loss, and is what the transport recommendation is built on.")
+	tui.PressEnter()
+}
+
+// measurableTunnels is every tunnel this screen can put a number on.
+//
+// It used to be the layer-3 ones alone, which made the entry a dead end for
+// anybody running a port forwarder — which is most people. Both kinds are
+// measurable, by different routes: a layer-3 tunnel across the private subnet
+// it already has, a port forwarder through one of the mappings it already
+// carries. See throughputforward.go for the second.
+func measurableTunnels() []Tunnel {
 	var out []Tunnel
 	for _, t := range List() {
-		if strings.HasPrefix(t.Transport, "l3/") {
-			out = append(out, t)
+		// A forwarder with nothing to forward has no route for a measurement,
+		// and the side that holds the backends keeps no port list of its own —
+		// that side is judged when it is chosen, not here, or it would vanish
+		// from the list on the very machine the receiver runs on.
+		if isForwardKind(t) && HoldsPorts(t) && len(t.Ports) == 0 {
+			continue
 		}
+		out = append(out, t)
 	}
 	return out
 }

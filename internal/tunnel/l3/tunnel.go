@@ -482,7 +482,7 @@ func (t *Tunnel) setCurrentMTU(mtu int) {
 //
 // The engine does know, so it writes it down. This is the same channel the
 // datagram transports already use for the same reason; see
-// manage.datagramServerPeer for the reading half, which treats a snapshot
+// manage.datagramPeer for the reading half, which treats a snapshot
 // older than a couple of intervals as saying nothing rather than as a peer.
 func (t *Tunnel) publishPeer() {
 	if peer := t.peerAddr(); peer != nil {

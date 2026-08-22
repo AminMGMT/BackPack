@@ -161,6 +161,8 @@ func (c *QuicTransport) Restart() {
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	metrics.ClearPool()
+	// The peer belongs to the generation that just ended.
+	metrics.ClearPeer()
 	drain(c.controlFlow)
 
 	c.logger.SetLevel(level)
@@ -246,6 +248,11 @@ func (c *QuicTransport) channelDialer() {
 			c.setQUICConn(conn)
 			c.state.SetConn(control)
 			c.logger.Info("control channel established successfully")
+
+			// Recorded on this side too, so the panel does not have to infer a
+			// datagram tunnel's state from a socket table. See the KCP client's
+			// channelDialer for what the inference got wrong.
+			metrics.ReportPeer(conn.RemoteAddr().String())
 
 			c.status.set("Connected (QUIC)")
 

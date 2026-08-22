@@ -251,6 +251,10 @@ func (c *KcpTransport) Restart() {
 	// behind, the panel would keep showing the size and throughput of a
 	// connection that is gone until the new run's first tick replaced them.
 	metrics.ClearPool()
+	// Likewise the peer: this generation's control channel is gone, and a
+	// stale address would keep the card green across a reconnect that has not
+	// happened yet.
+	metrics.ClearPeer()
 	drain(c.controlFlow)
 
 	c.logger.SetLevel(level)
@@ -345,6 +349,20 @@ func (c *KcpTransport) channelDialer() {
 
 			c.state.SetConn(tunnelConn)
 			c.logger.Info("control channel established successfully")
+
+			// The dialling side has to record its peer for the same reason the
+			// listening side does, and it was the only one not doing it.
+			//
+			// The panel asks the socket table whether a tunnel is up. That
+			// works for the carriers that leave a socket behind — plain kcp,
+			// udp and quic dial a connected UDP socket the kernel will name a
+			// peer for — and answers "no" for the ones whose whole purpose is
+			// to leave nothing there: xdi rides in ICMP, pck builds its own TCP
+			// segments through a packet socket, spoof sends from a raw socket.
+			// Those tunnels carried traffic perfectly while this side's card
+			// showed offline and the other end's showed online, because only
+			// the far end wrote down what it knew.
+			metrics.ReportPeer(tunnelConn.RemoteAddr().String())
 
 			c.status.set("Connected (" + c.transportLabel() + ")")
 

@@ -82,3 +82,53 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+// The receiver has to come back to the menu when it is interrupted.
+//
+// This is the regression test for the one action the screen tells you to take.
+// It printed "Press Ctrl+C when the other end reports its result" and installed
+// no handler, so the interrupt took Go's default and killed the whole CLI —
+// menu, tunnel list and all. What the sink does on cancellation is the half of
+// that which can be tested here: it must stop promptly and report no error, so
+// the caller returns to the menu rather than showing a failure.
+func TestTheSinkStopsWhenItIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() { done <- ServeThroughput(ctx, "127.0.0.1") }()
+
+	// Give it a moment to bind, then interrupt it the way the screen does.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("an interrupted receiver reported an error, so the screen "+
+				"would show a failure instead of returning quietly: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the receiver did not stop when cancelled; Ctrl+C would have to " +
+			"kill the process to end it, which is the bug")
+	}
+}
+
+// Cancelling has to release the port, or a second run cannot bind.
+func TestTheSinkReleasesItsPortOnTheWayOut(t *testing.T) {
+	for i := 0; i < 2; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- ServeThroughput(ctx, "127.0.0.1") }()
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("run %d: %v", i+1, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("run %d did not stop", i+1)
+		}
+	}
+}
