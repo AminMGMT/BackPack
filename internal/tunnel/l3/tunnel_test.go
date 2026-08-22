@@ -568,3 +568,62 @@ func TestMTUFor(t *testing.T) {
 		t.Fatalf("MTUFor(1500, 28, 8) = %d, want 1435", got)
 	}
 }
+
+// A generation that loses one of its two devices has to end, so that the
+// restart loop in cmd/l3.go can build another one.
+//
+// This is the regression test for a tunnel that stayed down until the process
+// was restarted by hand. The pumps stopped when their device failed, but the
+// handshake and probe loops watched the caller's context — which outlives every
+// generation — so they went on running against a closed carrier and held Run
+// inside wg.Wait() forever. Nothing was ever reopened, while the handshake loop
+// logged a retry every few seconds and made it look like the tunnel was busy
+// reconnecting.
+//
+// Each side is held open by a different loop, so both are covered: the dialling
+// side by the handshake loop, the listening side by the probe loop.
+func TestRunReturnsWhenTheDeviceFails(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    string
+		addr    string
+		autoMTU bool
+	}{
+		{"dialling side, held open by the handshake loop", ModeDial, "127.0.0.1:9", false},
+		{"listening side, held open by the probe loop", ModeListen, "127.0.0.1:0", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun, err := New(Config{
+				Mode: tc.mode, Addr: tc.addr, Token: "a-token-for-the-regression",
+				LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
+				AutoMTU: tc.autoMTU,
+			}, quietLogger())
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			dev := newFakeDevice(1400)
+			tun.openDevice = func(deviceSpec) (packetDevice, error) { return dev, nil }
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			done := make(chan error, 1)
+			go func() { done <- tun.Run(ctx) }()
+			awaitBind(t, tun)
+
+			// The device goes away and the carrier does not, which is what a
+			// real device failure looks like: nothing closes the socket, so the
+			// receive pump stays blocked on a read until something ends the
+			// generation for it.
+			dev.Close()
+
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("Run did not return after the device failed: the tunnel can never be rebuilt, " +
+					"and stays down until the process is restarted by hand")
+			}
+		})
+	}
+}

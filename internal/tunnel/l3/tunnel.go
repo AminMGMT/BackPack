@@ -288,34 +288,53 @@ func (t *Tunnel) Run(ctx context.Context) error {
 			t.cfg.MTU, suggested)
 	}
 
-	// Unblock both pumps when the context ends. A read on either device
+	// One generation of the tunnel lives exactly as long as the carrier and the
+	// device opened above. Every goroutine started below watches this context
+	// rather than the caller's, so that when any one of them stops they all do
+	// and Run can return to be rebuilt.
+	//
+	// Watching the caller's context instead was a tunnel that never came back.
+	// The pumps stop when the carrier or the device they read fails, but
+	// handshakeLoop and probeLoop only ever watched ctx — which outlives any
+	// number of generations — so they kept running against a carrier that had
+	// already been closed, holding Run inside wg.Wait() forever. The restart in
+	// cmd/l3.go therefore never fired: the handshake loop went on logging a
+	// retry every few seconds, which reads exactly like a tunnel trying to
+	// reconnect, while nothing was ever reopened. Only restarting the process
+	// brought it back.
+	genCtx, endGeneration := context.WithCancel(ctx)
+	defer endGeneration()
+
+	// Unblock both pumps when the generation ends. A read on either device
 	// blocks indefinitely, and closing is the portable way to interrupt it.
-	stopped := make(chan struct{})
-	defer close(stopped)
+	// Because this now fires when the generation ends rather than only when
+	// the caller's context does, a failure on one device also releases the
+	// pump blocked on the other, which would otherwise wait on a read that was
+	// never going to return.
 	go func() {
-		select {
-		case <-ctx.Done():
-		case <-stopped:
-		}
+		<-genCtx.Done()
 		carrier.Close()
 		tun.Close()
 	}()
 
 	var wg sync.WaitGroup
+
+	// A pump that stops ends the generation: whatever it was reading is gone,
+	// and nothing else in the tunnel has anything left to do.
 	wg.Add(2)
-	go func() { defer wg.Done(); t.pumpFromCarrier(ctx) }()
-	go func() { defer wg.Done(); t.pumpFromTUN(ctx) }()
+	go func() { defer wg.Done(); defer endGeneration(); t.pumpFromCarrier(genCtx) }()
+	go func() { defer wg.Done(); defer endGeneration(); t.pumpFromTUN(genCtx) }()
 
 	if t.cfg.Mode == ModeDial {
 		wg.Add(1)
-		go func() { defer wg.Done(); t.handshakeLoop(ctx) }()
+		go func() { defer wg.Done(); t.handshakeLoop(genCtx) }()
 	}
 
 	// Both ends probe: each measures what it can send, and sets its own
 	// interface. See mtuprobe.go for why that is better than agreeing on one
 	// shared figure.
 	wg.Add(1)
-	go func() { defer wg.Done(); t.probeLoop(ctx) }()
+	go func() { defer wg.Done(); t.probeLoop(genCtx) }()
 
 	wg.Wait()
 	if ctx.Err() != nil {
@@ -590,10 +609,21 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 
 	// Retiring old sessions is timer work with nothing else to do it, and the
 	// receive pump is the one goroutine guaranteed to exist on both sides.
+	//
+	// It is tied to this pump's own return as well as to the context, so it
+	// cannot outlive the generation that started it. Watching the context
+	// alone leaked one of these on every restart: the ticker was stopped on
+	// the way out, leaving the goroutine parked on a channel that would never
+	// fire again until the process ended.
+	done := make(chan struct{})
+	defer close(done)
+
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-done:
 				return
 			case now := <-ticker.C:
 				t.retireSessions(now)
