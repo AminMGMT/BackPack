@@ -1,7 +1,9 @@
 package network
 
 import (
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,4 +92,70 @@ func TestPlainListenerCarrierCloserIsANoop(t *testing.T) {
 	if err := carrier.Close(); err != nil {
 		t.Fatalf("the no-op carrier closer returned an error: %v", err)
 	}
+}
+
+// The startup notes are the only thing an operator has to go on when a KCP
+// tunnel will not carry traffic, so what they say has to be true and has to be
+// distinguishable from a healthy start.
+//
+// This is the regression test for a single line that ended "both ends MUST
+// match MTU and FEC or the tunnel never connects" and printed on every start,
+// healthy or not. It read as an error report to everyone who saw it, and its
+// advice was wrong: MTU sizes only the segments this end sends, so the two ends
+// need not agree on it, and equalising it fixes nothing. Operators followed it
+// and their tunnels stayed down.
+func TestStartupNotesDoNotClaimMTUMustMatch(t *testing.T) {
+	capture := func(s KCPSettings) string {
+		var sb strings.Builder
+		s.Logf = func(format string, args ...any) {
+			fmt.Fprintf(&sb, format+"\n", args...)
+		}
+		s.logSettings("server")
+		return sb.String()
+	}
+
+	base := KCPSettings{MTU: 1350, SndWnd: 1024, RcvWnd: 1024}
+
+	t.Run("the parameters are always reported", func(t *testing.T) {
+		got := capture(base)
+		for _, want := range []string{"MTU=1350", "FEC=off", "sndwnd=1024"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("startup notes do not report %q:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("no note tells the operator to match MTU", func(t *testing.T) {
+		for _, s := range []KCPSettings{base, withFEC(base, 10, 3)} {
+			got := strings.ToLower(capture(s))
+			// The advice may say what MTU has to do; it must never say it has
+			// to equal the other end's, which is the claim that misled people.
+			if strings.Contains(got, "match mtu") || strings.Contains(got, "mtu and fec") {
+				t.Errorf("startup notes still tell the operator to match MTU:\n%s", got)
+			}
+		}
+	})
+
+	t.Run("a tunnel without FEC gets no FEC advice", func(t *testing.T) {
+		if got := capture(base); strings.Contains(got, "not negotiated") {
+			t.Errorf("a tunnel with FEC off should not be warned about shard counts:\n%s", got)
+		}
+	})
+
+	t.Run("a tunnel with FEC is told the shards must match and why to lower the MTU", func(t *testing.T) {
+		got := capture(withFEC(base, 10, 3))
+		if !strings.Contains(got, "FEC 10:3") {
+			t.Errorf("the FEC advice does not name the shard counts in use:\n%s", got)
+		}
+		for _, want := range []string{"kcp_datashards", "not negotiated", "lower kcp_mtu"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the FEC advice omits %q:\n%s", want, got)
+			}
+		}
+	})
+}
+
+func withFEC(s KCPSettings, data, parity int) KCPSettings {
+	s.DataShards, s.ParityShards = data, parity
+	return s
 }

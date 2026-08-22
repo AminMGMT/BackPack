@@ -81,7 +81,7 @@ type KCPSettings struct {
 	// the source is this machine's real one, so the server learns each client
 	// from the wire exactly as a UDP socket would. See pckconn_linux.go.
 	Pck *PcapCarrier
-	// Logf, when set, receives one-line startup notes: the effective MTU and FEC
+	// Logf, when set, receives the startup notes: the effective MTU and FEC
 	// on both ends, and — for the pck carrier — the egress it discovered and
 	// whether the kernel-RST guard installed. It exists because a KCP tunnel that
 	// never connects is otherwise silent: FEC is not negotiated, so a shard
@@ -101,16 +101,46 @@ type pckDiagnoser interface{ PckDiag() string }
 // logSettings emits the effective session parameters, so a mismatch between the
 // two ends — which never negotiates and so fails silently — is visible in the
 // log of each. Safe to call with a nil Logf.
+//
+// # Why the parameters and the advice are separate lines
+//
+// This used to be one line that ended "both ends MUST match MTU and FEC or the
+// tunnel never connects", printed on every start of every KCP-family transport
+// whether or not anything was wrong. Operators read it as an error report —
+// it is the only line on a healthy startup that sounds like one — and went
+// looking for a fault that was not there.
+//
+// Worse, half of it was untrue. MTU does not have to match: kcp-go's SetMtu
+// only sizes the segments this end sends, and a receiver parses whatever
+// arrives, so the two ends may run different values quite happily. What MTU has
+// to do is fit the path. So the advice sent people to equalise a figure that was
+// never the problem, and the real fault — an MTU larger than the path carries —
+// survived the change they were told to make.
+//
+// FEC is the parameter that genuinely must match, and it is worth saying loudly
+// because the failure is total and silent. So the parameters print plainly for
+// everyone, and the advice prints only for the tunnels it applies to.
 func (s KCPSettings) logSettings(role string) {
 	if s.Logf == nil {
 		return
 	}
+	fecOn := s.DataShards > 0 && s.ParityShards > 0
 	fec := "off"
-	if s.DataShards > 0 && s.ParityShards > 0 {
+	if fecOn {
 		fec = fmt.Sprintf("%d:%d", s.DataShards, s.ParityShards)
 	}
-	s.Logf("KCP %s parameters: MTU=%d (effective %d) FEC=%s sndwnd=%d rcvwnd=%d — both ends MUST match MTU and FEC or the tunnel never connects",
+	s.Logf("KCP %s parameters: MTU=%d (effective %d) FEC=%s sndwnd=%d rcvwnd=%d",
 		role, s.MTU, s.effectiveMTU(), fec, s.SndWnd, s.RcvWnd)
+
+	if !fecOn {
+		return
+	}
+	// Only the FEC tunnels get this, and only because both halves of it are
+	// things an operator cannot discover any other way: the shard counts are
+	// never negotiated, and the reason a FEC tunnel is the first to fail on a
+	// short path is not visible from the outside.
+	s.Logf("KCP %s: FEC %s is not negotiated — kcp_datashards and kcp_parityshards have to be identical on the other end, or every packet is discarded with nothing further in the log. kcp_mtu does not have to match the other end; it has to fit the path. If this tunnel will not carry traffic, lower kcp_mtu before changing anything else: FEC pads every parity packet out to the largest in its group, so a path that quietly carries small packets can still lose all the full-size ones.",
+		role, fec)
 }
 
 // SpoofCarrier, its spoofOpts, and the spoof branches of KCPDial/KCPListen live

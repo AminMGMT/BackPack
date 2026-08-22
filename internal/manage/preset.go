@@ -242,7 +242,22 @@ func ApplyPreset(s *TunnelSpec, preset string) {
 func applyKCPPreset(s *TunnelSpec, preset string) {
 	// MTU stays below the common 1500 path MTU with room for the KCP, FEC and
 	// encryption headers, so a KCP packet never fragments in transit.
-	s.KCPMTU = 1350
+	//
+	// 1250 rather than the 1350 this used to be, because every preset here
+	// carries FEC and FEC is what makes a too-large MTU fatal rather than
+	// merely wasteful. kcp-go pads every shard in a group out to the largest
+	// packet in it, so the parity packets are always full size — where a
+	// tunnel without FEC sends whatever the payload happened to be and slips
+	// its small packets through a short path, one with FEC offers that path a
+	// steady stream of maximum-size packets and loses all of them. The routes
+	// this runs on are frequently short of 1500: a PPPoE uplink, a provider
+	// that encapsulates, a tunnel somewhere upstream nobody controls.
+	//
+	// The 100 bytes buys nothing measurable — at these window sizes it is
+	// under 8% of the per-packet payload — and it is the difference between a
+	// FEC tunnel that works on an unremarkable server and one that stalls with
+	// nothing in the log to say why.
+	s.KCPMTU = 1250
 
 	// Latency-first ARQ, identical on every preset. This is the "fast mode"
 	// KCP was built for: NoDelay skips the delayed-ACK wait, a 10 ms tick (the
@@ -263,7 +278,7 @@ func applyKCPPreset(s *TunnelSpec, preset string) {
 		// The lightest gaming profile. With congestion control off the window
 		// is the ceiling on in-flight data, so keeping it small is what keeps
 		// buffering — and therefore worst-case ping — bounded on a modest link.
-		// 512 × 1350 / 100 ms ≈ 55 Mbit/s, ample for game traffic plus light
+		// 512 × 1250 / 100 ms ≈ 51 Mbit/s, ample for game traffic plus light
 		// browsing through the same tunnel.
 		s.KCPSndWnd = 512
 		s.KCPRcvWnd = 512
@@ -274,7 +289,7 @@ func applyKCPPreset(s *TunnelSpec, preset string) {
 		s.KCPParityShards = 2
 
 	case PresetTurbo:
-		// The recommended default. Twice the window — ~110 Mbit/s of headroom at
+		// The recommended default. Twice the window — ~102 Mbit/s of headroom at
 		// 100 ms — for room to also pull a download through the tunnel without
 		// starving the game packets, still small enough to keep queueing low.
 		s.KCPSndWnd = 1024
@@ -286,7 +301,7 @@ func applyKCPPreset(s *TunnelSpec, preset string) {
 
 	case PresetAggressive:
 		// The strongest profile, for a bad route on a server with headroom.
-		// 2048 × 1350 / 100 ms ≈ 220 Mbit/s — larger, but deliberately far below
+		// 2048 × 1250 / 100 ms ≈ 205 Mbit/s — larger, but deliberately far below
 		// the old 8192: past the bandwidth-delay product the extra window buys a
 		// gaming tunnel nothing but bufferbloat.
 		s.KCPSndWnd = 2048
@@ -310,10 +325,10 @@ func applyKCPPreset(s *TunnelSpec, preset string) {
 		// — and on a saturated transfer it very nearly doubles the packets on the
 		// wire, every one of them competing with the data for the same link.
 		s.KCPAckNoDelay = false
-		// 4096 × 1298 bytes ≈ 5.3 MB in flight. This is the number that decides
+		// 4096 × 1198 bytes ≈ 4.9 MB in flight. This is the number that decides
 		// the ceiling on a long path: at 200 ms round trip it allows roughly
-		// 210 Mbit/s for a single stream, where Aggressive's 2048 caps the same
-		// stream near 105. It is also why this is not a gaming preset — with
+		// 196 Mbit/s for a single stream, where Aggressive's 2048 caps the same
+		// stream near 98. It is also why this is not a gaming preset — with
 		// congestion control off, a window that large is a queue that deep, and
 		// a queue that deep is bufferbloat under load.
 		s.KCPSndWnd = 4096

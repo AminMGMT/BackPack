@@ -74,8 +74,30 @@ type KCPConfig struct {
 // written by an older version — or by hand — can never produce a KCP session
 // with a zero window or a zero tick interval.
 func (k KCPConfig) WithDefaults() KCPConfig {
+	// Settled before the MTU, because whether FEC is on decides what the MTU
+	// default should be.
+	//
+	// Parity without data shards is meaningless to the encoder, so treat a
+	// half-configured pair as FEC disabled rather than failing to start.
+	if k.DataShards <= 0 || k.ParityShards <= 0 {
+		k.DataShards, k.ParityShards = 0, 0
+	}
 	if k.MTU <= 0 {
-		k.MTU = 1350
+		// A FEC session gets the smaller figure. kcp-go pads every shard in a
+		// group out to the largest packet in it, so its parity packets are
+		// always full size: a path shorter than 1500 that a plain session
+		// slips its small packets through will drop every one of them. Without
+		// FEC the larger value costs nothing and is worth the payload.
+		//
+		// This is the fallback for a config that never named the key — one
+		// written by hand, or by a version that predated it. A config with
+		// kcp_mtu in it keeps whatever it says; see applyKCPPreset for what a
+		// freshly generated one gets.
+		if k.DataShards > 0 {
+			k.MTU = 1250
+		} else {
+			k.MTU = 1350
+		}
 	}
 	if k.Interval <= 0 {
 		k.Interval = 20
@@ -88,11 +110,6 @@ func (k KCPConfig) WithDefaults() KCPConfig {
 	}
 	if k.RcvWnd <= 0 {
 		k.RcvWnd = 1024
-	}
-	// Parity without data shards is meaningless to the encoder, so treat a
-	// half-configured pair as FEC disabled rather than failing to start.
-	if k.DataShards <= 0 || k.ParityShards <= 0 {
-		k.DataShards, k.ParityShards = 0, 0
 	}
 	return k
 }
