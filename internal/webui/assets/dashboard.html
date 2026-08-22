@@ -1907,6 +1907,50 @@
       <div class="hint srv-only" id="ef-pphint" data-i18n>Only turn this on if that service is set to accept the PROXY protocol; if it is not, every connection breaks.</div>
     </div>
 
+    <!-- The direct tunnel's own editor.
+         A direct tunnel keeps its settings in an [l3] table and shares almost
+         no keys with a reverse one, so it cannot be edited through the form
+         above: doing that opened an empty reverse form, because none of the
+         fields it reads exist on a direct tunnel. What is offered here is
+         exactly what DirectEdit accepts; everything else about the tunnel — the
+         carrier, the addresses, the token — is settled at creation and shown
+         read-only so it is clear which tunnel is being changed. -->
+    <div class="fgrid hide" id="editdform">
+      <div class="frow">
+        <div class="tdesc" id="edf-about"></div>
+      </div>
+      <div class="frow edf-ports">
+        <label for="edf-ports" data-i18n>Forwarded ports</label>
+        <input id="edf-ports" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="443, 8080=80, 2053-2060">
+        <div class="hint" data-i18n>Exposed on this machine. A bare port goes to the same port on the kharej side.</div>
+      </div>
+      <div class="frow edf-ports">
+        <label class="chk"><input type="checkbox" id="edf-udp"><span data-i18n>Carry UDP as well as TCP</span></label>
+      </div>
+      <div class="frow">
+        <label for="edf-preset" data-i18n>Performance preset</label>
+        <select id="edf-preset" class="sel"></select>
+      </div>
+      <div class="frow">
+        <label class="chk"><input type="checkbox" id="edf-automtu" onchange="onDirectAutoMTU()">
+          <span data-i18n>Measure the path and set the MTU automatically</span></label>
+      </div>
+      <div class="frow" id="edf-mturow">
+        <label for="edf-mtu" data-i18n>MTU</label>
+        <input id="edf-mtu" inputmode="numeric" autocomplete="off">
+        <div class="hint" data-i18n>Lower it if large packets stall. Leave automatic on unless you have measured the path yourself.</div>
+      </div>
+      <div class="frow">
+        <label for="edf-maxconn" data-i18n>Maximum connections</label>
+        <input id="edf-maxconn" inputmode="numeric" autocomplete="off" data-i18n-ph placeholder="0 = unlimited">
+      </div>
+      <div class="frow">
+        <label for="edf-bw" data-i18n>Bandwidth limit (Mbit/s)</label>
+        <input id="edf-bw" inputmode="numeric" autocomplete="off" data-i18n-ph placeholder="0 = unlimited">
+      </div>
+    </div>
+
     <div class="msg" id="editmsg"></div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeEdit()" data-i18n>Cancel</button>
@@ -2388,6 +2432,10 @@ const FA={
   "Below about 10 is very low — a single browser can open more than that.":
     "زیر حدود ۱۰ خیلی کم است — یک مرورگر تنها بیشتر از این باز می‌کند.",
   "Bandwidth limit (Mbit/s)":"سقف پهنای باند (مگابیت بر ثانیه)",
+  "MTU":"MTU",
+  "Maximum connections":"حداکثر تعداد اتصال",
+  "Measure the path and set the MTU automatically":"مسیر اندازه‌گیری شود و MTU خودکار تنظیم شود",
+  "Lower it if large packets stall. Leave automatic on unless you have measured the path yourself.":"اگر بسته‌های بزرگ گیر می‌کنند پایین‌ترش بیاورید. تا وقتی خودتان مسیر را اندازه نگرفته‌اید، حالت خودکار را روشن بگذارید.",
 
   "Performance preset":"پروفایل کارایی",
   "Fine Tune":"تنظیم دقیق",
@@ -3906,14 +3954,28 @@ async function submitAdd(){
 async function openEdit(name){
   const msg=$('editmsg'); msg.className='msg'; msg.textContent=T('Loading…');
   $('editform').classList.add('hide');
+  $('editdform').classList.add('hide');
   $('edittitle').textContent=T('Edit tunnel')+' · '+name;
   $('edittun').classList.add('on');
   try{
-    await tunnelOptions();
     const r=await fetch('/api/tunnel/settings?name='+encodeURIComponent(name));
     if(!r.ok) throw new Error(await r.text());
     const s=await r.json();
     editName=name; editOrig=s;
+
+    // A direct tunnel is a different thing with different settings, and the
+    // server says so. Without this branch its answer fell through into the
+    // reverse form below, which reads s.role and s.transport — neither of which
+    // a direct tunnel has — so the drawer opened blank on the wrong fields and
+    // saving sent a reverse edit with nothing in it.
+    if(s.kind==='direct'){
+      await openDirectEdit(s.direct||{});
+      msg.textContent='';
+      relang();
+      return;
+    }
+
+    await tunnelOptions();
 
     document.querySelectorAll('#editform .srv-only').forEach(el=>el.classList.toggle('hide',s.role!=='server'));
     document.querySelectorAll('#editform .cli-only').forEach(el=>el.classList.toggle('hide',s.role!=='client'));
@@ -3946,8 +4008,52 @@ async function openEdit(name){
 }
 function closeEdit(){ $('edittun').classList.remove('on'); editName=null; editOrig=null; }
 
+// openDirectEdit fills the direct tunnel's own form.
+//
+// Only the fields DirectEdit accepts are editable. The rest — which side this
+// is, what carries it, the addresses either end holds — is settled when the
+// tunnel is created and changing it is a new tunnel, not an edit, so it is
+// shown as a line of context instead of as inputs somebody can half-change.
+async function openDirectEdit(d){
+  $('editdform').classList.remove('hide');
+
+  const side = d.side==='iran' ? T('Iran side') : T('Kharej side');
+  const bits = [side, (d.carrier||'').toUpperCase()];
+  if(d.addr) bits.push(d.addr);
+  if(d.localIp||d.peerIp) bits.push((d.localIp||'?')+' ↔ '+(d.peerIp||'?'));
+  setText($('edf-about'), bits.filter(Boolean).join(' · '));
+
+  // Only the side that exposes ports has a port list; the other learns every
+  // target from the stream that asks for it.
+  document.querySelectorAll('#editdform .edf-ports')
+    .forEach(el=>el.classList.toggle('hide', !d.holdsPorts));
+
+  $('edf-ports').value = d.ports||'';
+  $('edf-udp').checked = !!d.acceptUdp;
+  $('edf-mtu').value = d.mtu||'';
+  $('edf-automtu').checked = !!d.autoMtu;
+  $('edf-maxconn').value = d.maxConnections||'';
+  $('edf-bw').value = d.bandwidthMbps||'';
+  onDirectAutoMTU();
+
+  // The preset list comes from the same endpoint the create form uses, so the
+  // two can never offer different presets.
+  try{
+    const o=await getJSON('/api/direct/options');
+    fillSel($('edf-preset'),o.presets);
+    if(d.preset) $('edf-preset').value=d.preset;
+  }catch(e){ /* leave whatever is in the picker; the rest of the form works */ }
+}
+
+// A measured MTU is not something to also type in, so the box goes away when
+// the measurement is on.
+function onDirectAutoMTU(){
+  $('edf-mturow').classList.toggle('hide', $('edf-automtu').checked);
+}
+
 async function submitEdit(){
   if(!editName||!editOrig) return;
+  if(editOrig.kind==='direct'){ return submitDirectEdit(); }
   const msg=$('editmsg'), btn=$('editsave'), s=editOrig, tuneBox=$('ef-tune');
   const body={name:editName};
   // Only what actually changed is sent: an unchanged field left in the request
@@ -3979,6 +4085,61 @@ async function submitEdit(){
   try{
     const r=await fetch('/api/tunnel/edit',
       {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=(await r.text()).trim();
+    if(!r.ok){ msg.className='msg err'; msg.textContent=text||T('The change was refused.'); btn.disabled=false; return; }
+    closeEdit();
+    toast(T('Saved — the tunnel restarted on the new settings.'));
+    loadTunnels();
+  }catch(e){ msg.className='msg err'; msg.textContent=T('Could not reach the panel.'); }
+  btn.disabled=false;
+}
+
+// submitDirectEdit posts the direct form.
+//
+// It sends only what changed, like the reverse form does and for the same
+// reason: an unchanged field counted as a change would restart the tunnel for
+// nothing. DirectEdit takes pointers precisely so an absent key and a zero can
+// be told apart, and a zero is meaningful for three of these — it is how a
+// limit is removed.
+async function submitDirectEdit(){
+  const msg=$('editmsg'), btn=$('editsave'), d=editOrig.direct||{};
+  const direct={};
+
+  if(d.holdsPorts){
+    const ports=$('edf-ports').value.trim();
+    if(ports!==(d.ports||'')) direct.ports=ports;
+    if($('edf-udp').checked!==!!d.acceptUdp) direct.acceptUdp=$('edf-udp').checked;
+  }
+  if($('edf-preset').value && $('edf-preset').value!==(d.preset||'')) direct.preset=$('edf-preset').value;
+
+  const auto=$('edf-automtu').checked;
+  if(auto!==!!d.autoMtu) direct.autoMtu=auto;
+  // A hand-set MTU only means anything while the measurement is off.
+  if(!auto){
+    const mtu=parseInt($('edf-mtu').value,10);
+    if(!isNaN(mtu) && mtu!==(d.mtu||0)) direct.mtu=mtu;
+  }
+
+  const num=(id,was)=>{
+    const v=$(id).value.trim();
+    if(v==='') return undefined;
+    const n=parseInt(v,10);
+    return (!isNaN(n) && n!==(was||0)) ? n : undefined;
+  };
+  const mc=num('edf-maxconn',d.maxConnections); if(mc!==undefined) direct.maxConnections=mc;
+  const bw=num('edf-bw',d.bandwidthMbps);       if(bw!==undefined) direct.bandwidthMbps=bw;
+
+  if(Object.keys(direct).length===0){
+    msg.className='msg'; msg.textContent=T('Nothing has been changed yet.');
+    return;
+  }
+
+  msg.className='msg'; msg.textContent=T('Applying — the tunnel restarts once…');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/tunnel/edit',
+      {method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({name:editName,direct:direct})});
     const text=(await r.text()).trim();
     if(!r.ok){ msg.className='msg err'; msg.textContent=text||T('The change was refused.'); btn.disabled=false; return; }
     closeEdit();
