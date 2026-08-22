@@ -184,6 +184,26 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 
 	cfg := m.TLSConfig()
 	cfg.MinVersion = tls.VersionTLS12
+
+	// A handshake that carries no SNI is answered with the one domain this
+	// listener has.
+	//
+	// autocert identifies the certificate to serve by the name in the
+	// ClientHello and refuses outright when there is none — "missing server
+	// name". That is the right default for a host serving many domains and the
+	// wrong one here, where exactly one was configured. It also bit in a way
+	// nobody could see: a tunnel's remote address is usually the server's IP,
+	// the client sends no SNI when it dials an address literal, and so every
+	// connection was refused before autocert ever tried to obtain anything.
+	issue := cfg.GetCertificate
+	cfg.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if hello.ServerName == "" {
+			clone := *hello
+			clone.ServerName = s.ACMEDomain
+			return issue(&clone)
+		}
+		return issue(hello)
+	}
 	// TLSConfig() already advertises acme-tls/1, which is what lets Let's
 	// Encrypt validate over the listener itself when it is on port 443 — no
 	// second port, nothing else to open.
@@ -197,7 +217,79 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 	// not started afresh here.
 	acmeResponder.use(m, logf)
 
+	primeACMECert(m, s.ACMEDomain, logf)
+
 	return cfg, nil
+}
+
+// acmePrimeTimeout bounds the startup attempt. autocert applies five minutes of
+// its own to issuance; this is only the outer bound on the goroutine.
+const acmePrimeTimeout = 6 * time.Minute
+
+// primeACMECert obtains the certificate now instead of waiting for a client.
+//
+// autocert issues lazily: nothing is requested until a handshake asks for a
+// name, and a failure then surfaces as a broken handshake on whoever happened
+// to connect. From the server there was nothing at all — the operator set a
+// domain, restarted, watched the tunnel not work, and had no way to learn why.
+// Two reports of this arrived from two people who had each tried two servers,
+// and both had concluded Let's Encrypt was down.
+//
+// Asking at startup changes when the work happens, not what it does: the same
+// manager, the same cache, the same challenge. What it buys is that the
+// answer — issued, or the exact reason not — lands in the tunnel's own log
+// beside everything else about why it did or did not come up.
+//
+// The hello is built to look like the clients that will actually arrive.
+// autocert picks between an RSA and an ECDSA certificate from the cipher
+// suites and signature schemes offered (see supportsECDSA), and a bare
+// ClientHelloInfo reads as an ancient client — so priming with one would fetch
+// an RSA certificate that the first real handshake then misses in the cache,
+// and issue everything a second time. Doing that on every start is how a host
+// walks into Let's Encrypt's rate limits.
+//
+// It runs in the background because issuance talks to Let's Encrypt and waits
+// on a challenge, which is far too long to hold up a listener, and it is best
+// effort: a cached certificate is served whatever happens here, and a failure
+// now is retried by the ordinary lazy path on the next handshake.
+func primeACMECert(m *autocert.Manager, domain string, logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	go func() {
+		done := make(chan error, 1)
+		go func() {
+			_, err := m.GetCertificate(&tls.ClientHelloInfo{
+				ServerName: domain,
+				CipherSuites: []uint16{
+					tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				},
+				SupportedCurves: []tls.CurveID{tls.CurveP256},
+				SignatureSchemes: []tls.SignatureScheme{
+					tls.ECDSAWithP256AndSHA256,
+					tls.PSSWithSHA256,
+				},
+				SupportedVersions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
+			})
+			done <- err
+		}()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				logf("certificate for %s could not be obtained: %v — TLS will not come up until this succeeds. "+
+					"Check that %s resolves to this server, that port 80 is reachable from outside (or that this "+
+					"tunnel listens on 443), and that this server can reach acme-v02.api.letsencrypt.org",
+					domain, err, domain)
+				return
+			}
+			logf("certificate for %s is ready", domain)
+		case <-time.After(acmePrimeTimeout):
+			logf("certificate for %s did not arrive within %s — still trying on the next connection",
+				domain, acmePrimeTimeout)
+		}
+	}()
 }
 
 func hasProto(list []string, want string) bool {

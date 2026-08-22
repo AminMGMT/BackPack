@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"time"
 
@@ -45,6 +46,11 @@ func uTLSClientConn(ctx context.Context, raw net.Conn, serverName string, timeou
 	}
 	uconn := utls.UClient(raw, cfg, utls.HelloChrome_Auto)
 
+	if err := pinClientALPNToHTTP11(uconn); err != nil {
+		raw.Close()
+		return nil, err
+	}
+
 	if timeout > 0 {
 		_ = raw.SetDeadline(time.Now().Add(timeout))
 	}
@@ -78,4 +84,46 @@ func sniFromAddr(addr string) string {
 		return ""
 	}
 	return host
+}
+
+// pinClientALPNToHTTP11 removes h2 from the ClientHello's ALPN offer.
+//
+// The Chrome fingerprint offers "h2" then "http/1.1", because that is what a
+// browser sends. Against our own server that is harmless: it pins http/1.1 on
+// its side (see pinHTTP11ALPN) and so never selects h2. Against a CDN it is
+// not, because the CDN terminates the TLS and has no such instruction — it sees
+// h2 on offer, selects it, and answers the websocket upgrade with an HTTP/2
+// SETTINGS frame. What the client reports is:
+//
+//	malformed HTTP response "\x00\x00\x12\x04\x00\x00\x00\x00\x00..."
+//
+// which is that frame: three length bytes, type 0x04 (SETTINGS), and a zero
+// stream id. Behind Cloudflare the tunnel could not come up at all, while a
+// direct connection to the same server worked perfectly.
+//
+// Offering a protocol we cannot speak is the bug. An RFC 6455 websocket needs
+// the HTTP/1.1 Upgrade mechanism, which HTTP/2 does not have — carrying one
+// over h2 is a different protocol (RFC 8441 extended CONNECT) that gorilla does
+// not implement. So the offer is narrowed to what the client can actually use,
+// and every peer, CDN or not, is left with one choice.
+//
+// The cost is a fingerprint that no longer matches Chrome's byte for byte:
+// JA3 and JA4 both cover the ALPN list. It is a small deviation — an
+// HTTP/1.1-only client is an ordinary thing to be — and the alternative is a
+// transport that cannot work behind any CDN worth putting in front of it.
+func pinClientALPNToHTTP11(uconn *utls.UConn) error {
+	// The preset's extensions do not exist until the hello is built, and the
+	// ALPN list inside it is hardcoded by the fingerprint rather than read from
+	// the config — so setting NextProtos alone changes nothing here.
+	if err := uconn.BuildHandshakeState(); err != nil {
+		return fmt.Errorf("wss: building the client hello: %w", err)
+	}
+	for _, ext := range uconn.Extensions {
+		if alpn, ok := ext.(*utls.ALPNExtension); ok {
+			alpn.AlpnProtocols = []string{"http/1.1"}
+		}
+	}
+	// The handshake re-marshals the hello from these extensions, so the change
+	// is on the wire without anything else being touched.
+	return nil
 }

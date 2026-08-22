@@ -7,11 +7,30 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/backpack/backpack/internal/utils/network"
 )
+
+// controlClaimTimeout is how long the server waits for a freshly accepted peer
+// to say who it is before dropping it.
+//
+// It is the server's half of the number the client calls controlAckTimeout, and
+// it is generous for the same reason. The token arrives in the first segment
+// after the connection is up, so on a lossy path the wait is not a round trip
+// but a round trip plus however many retransmissions it takes to land: TCP's
+// first retransmission is a second out, the next three, the next seven. Two
+// seconds — which is what the udp transport asked for — covers barely one of
+// those, so on the kind of path this tunnel exists for the handshake failed,
+// the client backed off and dialled again, and the tunnel flapped without ever
+// being disconnected in any way the operator could see.
+//
+// Waiting longer costs one goroutine per silent peer and nothing else:
+// admission runs in the connection's own goroutine precisely so that a peer
+// which connects and says nothing never delays the ones behind it.
+const controlClaimTimeout = 15 * time.Second
 
 // listenAddrFor turns the left-hand side of a `local=remote` forwarding
 // mapping into an address to listen on. A bare number is shorthand for "this

@@ -289,7 +289,7 @@ func (s *QuicTransport) handleConn(g *quicGen, conn *quic.Conn, handshake chan<-
 func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.Stream, handshake chan<- net.Conn) {
 	wrapped := network.NewQUICStreamConn(stream, conn)
 
-	if err := stream.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := stream.SetReadDeadline(time.Now().Add(controlClaimTimeout)); err != nil {
 		stream.Close()
 		return
 	}

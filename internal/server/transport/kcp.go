@@ -503,7 +503,7 @@ func (s *KcpTransport) acceptTunnelConn(g *kcpGen, listener *kcp.Listener) {
 // the server reject them forever while it waited for a control channel that
 // the client had no reason to re-open.
 func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
-	if err := session.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := session.SetReadDeadline(time.Now().Add(controlClaimTimeout)); err != nil {
 		session.Close()
 		return
 	}

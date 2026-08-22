@@ -165,7 +165,7 @@ func (c *UdpTransport) channelDialer() {
 			}
 
 			// Set a read deadline for the token response
-			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(controlAckTimeout)); err != nil {
 				c.logger.Errorf("failed to set read deadline: %v", err)
 				tunnelTCPConn.Close()
 				bo.Wait(c.state.Ctx())

@@ -260,7 +260,7 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 // closes it when this returns false.
 func (s *UdpTransport) validControlClaim(conn net.Conn) bool {
 	// Set a read deadline for the token response
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(controlClaimTimeout)); err != nil {
 		s.logger.Errorf("failed to set read deadline: %v", err)
 		return false
 	}
