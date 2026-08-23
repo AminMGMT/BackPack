@@ -2,6 +2,183 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.7.4 — 2026-08-23
+
+Almost all of this release came from the field: tunnels that dropped every so
+often and had to be restarted by hand, a certificate that would not issue, a
+panel that could take journald to the top of `top`. Every fix below has a
+regression test that fails without it.
+
+### Added
+
+- **The TUN device moves packets in batches.** A read used to be one packet and
+  one syscall, and a busy tunnel does thousands a second. The device now comes
+  from wireguard-go's `tun` package, which turns on the kernel's segmentation
+  offload: one read can return a whole 64 KB run of a single TCP stream, already
+  split into MTU-sized packets, for the cost of one syscall. The session and
+  peer lookups moved out of the per-packet path with it — both take the state
+  lock, and it was being taken twice per packet for values that change every two
+  minutes. Everything above the device is unchanged: the addresses, the MTU, the
+  queue, the queueing discipline and the MSS clamp still go through `ip`.
+
+- **Speed Test measures a port forwarder, not just a full IP tunnel.** It used
+  to answer "No full IP tunnel found on this server." and stop, which is true
+  and useless: the menu offers the entry to everybody and most tunnels forward
+  ports. A layer-3 tunnel is still measured across its private subnet; a port
+  forwarder is now measured through one of the mappings it already carries — the
+  side that exposes the ports connects to one on its own loopback, the side that
+  holds the backends puts the sink where that mapping points. What travels is a
+  real forwarded connection over the real transport, which is the thing being
+  measured.
+
+  The cost is stated rather than hidden: the sink has to bind the port the real
+  backend uses, so that service is down for the length of the measurement. The
+  receiver checks the port is free, says plainly what it is about to displace,
+  and refuses to start on top of something. Mappings that cannot carry a
+  measurement — a backend on another machine, one load-balanced across several —
+  are listed with the reason instead of being offered and then failing.
+
+### Fixed
+
+- **A layer-3 tunnel never came back after its device or carrier failed.** The
+  restart loop was in place and correct, and it was never reached. `Run` waits
+  for its goroutines, and the handshake and MTU-probe loops watched the caller's
+  context — which outlives every generation of the tunnel — so when the pumps
+  stopped, those two carried on running against a carrier that had already been
+  closed, holding `Run` inside its wait forever. Nothing was reopened, while the
+  handshake loop logged a retry every few seconds and made it look like the
+  tunnel was busy reconnecting. Only restarting the process brought it back.
+
+  Each generation now has its own context, cancelled the moment either pump
+  stops, so the whole generation ends together and the restart happens. A
+  failure on one device also releases the pump blocked on the other, which used
+  to wait on a read that was never going to return.
+
+- **A `pck` tunnel dropped every half hour or so and had to be restarted by
+  hand.** Each of the client's carriers must send from its own source port:
+  kcp-go tells peers apart by address alone, so two carriers sharing a port
+  arrive as one peer, and a packet claiming a new conversation on an existing
+  entry closes the old one. The allocator was a counter taken modulo a 128-port
+  span and it never came back down, so carrier 128 was handed carrier 0's port —
+  and carrier 0 is the control channel. A pool dialling every sixteen seconds,
+  which is what the logs from the field showed, walks the whole span in about
+  thirty-four minutes. Restarting the process worked because it started the
+  counter again from zero.
+
+  Ports are now claimed and released. One that belongs to a live carrier is
+  never handed out again, however long the tunnel stays up, and exhausting the
+  span is an error rather than a silent reuse.
+
+- **The startup notes told operators to match a number that does not have to
+  match.** Every KCP-family tunnel printed `both ends MUST match MTU and FEC or
+  the tunnel never connects` on every start, healthy or not — the only line on a
+  clean startup that sounds like a fault, so people went looking for one. Half
+  of it was untrue: `SetMtu` sizes only the segments this end sends and a
+  receiver parses whatever arrives, so the two ends may run different values
+  quite happily. What MTU has to do is fit the path. The advice therefore sent
+  people to equalise a figure that was never the problem while the real fault
+  survived the change they were told to make.
+
+  The parameters now print plainly for everyone, and the advice prints only for
+  the tunnels it applies to: FEC shard counts genuinely must match, and if a FEC
+  tunnel will not carry traffic the first thing to try is a lower `kcp_mtu`.
+
+- **`kcp_mtu` defaults to 1250 when FEC is on**, down from 1350. FEC is what
+  makes a too-large MTU fatal rather than merely wasteful: kcp-go pads every
+  shard in a group out to the largest packet in it, so the parity packets are
+  always full size. A tunnel without FEC slips its small packets through a short
+  path; one with FEC offers that path a steady stream of maximum-size packets
+  and loses all of them. Existing configs name the key and keep whatever they
+  say; the two ends need not match, so a server can be changed on its own.
+
+- **A tunnel could not come up behind Cloudflare over WSS**, while the same
+  server worked perfectly on its IP. The client wears a browser TLS fingerprint,
+  and a browser offers `h2` before `http/1.1`. Our own server pins `http/1.1` and
+  so never took the `h2` on offer; a CDN terminates the TLS itself and has no
+  such instruction, took it, and answered the websocket upgrade with an HTTP/2
+  SETTINGS frame — which the HTTP/1.1 parser reported as
+  `malformed HTTP response "\x00\x00\x12\x04..."`. A websocket cannot be
+  carried over HTTP/2 at all, so offering it was the fault. The offer is now
+  narrowed to what the client can actually speak.
+
+- **Let's Encrypt certificates were never obtained.** Two faults, and either
+  alone is enough. `autocert` identifies the certificate to serve by the name in
+  the ClientHello and refuses outright when there is none — and a tunnel's
+  remote address is normally the server's IP, which a client dials without
+  sending a name. Every handshake was refused before an issuance was ever
+  attempted. A handshake that carries no name is now answered with the one
+  domain the listener was configured for.
+
+  And issuance was lazy: nothing was requested until a handshake asked, so a
+  failure surfaced only as a broken connection on whoever happened to arrive,
+  with nothing at all on the server. The certificate is now fetched at startup
+  and the answer — issued, or the exact reason not — goes in the tunnel's own
+  log. Nothing was wrong with Let's Encrypt.
+
+- **The control-channel handshake was too tight for a lossy path.** On a path
+  that drops a packet the wait is not a round trip but a round trip plus however
+  long TCP takes to retransmit: a second, then three, then seven. The `udp`
+  transport allowed two seconds for the whole exchange on both ends, so one lost
+  packet failed it — the client closed, backed off and dialled again, and the
+  tunnel churned without ever reporting a disconnection. Every transport now
+  uses the same named budget, generous for the same reason: failing fast here
+  costs a full redial, which is far more than waiting would have.
+
+- **The Path MTU check condemned healthy tunnels.** Two mistakes. The kernel's
+  `snd_mss` already has the TCP option bytes taken out of it, so testing it
+  against a figure that subtracts them a second time calls an ordinary socket
+  oversized. And the ICMP probe under-reports on any path that filters large
+  pings, which is ordinary on the routes this project exists for. The check now
+  asks the kernel for the path MTU it learned from these very connections, uses
+  the probe only as a fallback, and treats a probe that contradicts sockets
+  which are visibly moving traffic as the probe being wrong.
+
+- **One end of a datagram tunnel showed offline while the other showed online**,
+  with traffic flowing the whole time. The panel asked the socket table, which
+  can only see carriers that leave a socket behind — plain `kcp`, `udp` and
+  `quic` dial a connected UDP socket the kernel names a peer for, but `xdi`
+  rides in ICMP, `pck` builds its own TCP segments through a packet socket and
+  `spoof` sends from a raw one. Only the listening side wrote down what it knew.
+  Both ends record their peer now, and both are asked.
+
+- **The panel's log drawer could take `systemd-journald` and `rsyslogd` to the
+  top of `top`.** It polls every two seconds while open and every poll forked
+  `journalctl -n 150`. On a host with a large journal one read can take longer
+  than the gap to the next, at which point the requests overlap, each overlap
+  adds another journalctl, and the load climbs on its own until the tab is
+  closed. A journal read is now shared: whoever asks while one is running waits
+  for it, and a result stands for two seconds — so the cost is bounded however
+  many panels are open. The page also refuses to overlap its own requests and
+  stops asking while its tab is hidden.
+
+- **The panel forked `systemctl` once per tunnel per poll.** "Is this unit
+  running" is the question it asks most: once per tunnel every four seconds for
+  the system card, again every six for the tunnel list, each one a process and a
+  round trip to systemd. The answer is now shared for two seconds — well inside
+  both intervals, so nothing is less live — and anything that starts, stops or
+  restarts a unit clears it, so a button press is reflected at once.
+
+- **Editing a direct tunnel in the panel opened the reverse editor.** The server
+  had answered correctly all along; the page never looked at which kind it had
+  been given and fell straight through into the reverse form, which reads fields
+  a direct tunnel does not have. Every box came up blank, the transport picker
+  offered the wrong transports, and saving posted an empty edit that restarted
+  the tunnel having changed nothing. Direct tunnels now get their own editor,
+  showing what can be changed and naming — read-only — the carrier, addresses
+  and side that are settled when the tunnel is made.
+
+- **Speed Test's receiver killed the whole CLI.** The screen said "Press Ctrl+C
+  when the other end reports its result" and installed no handler for it, so the
+  interrupt took Go's default and ended the program — menu, tunnel list and
+  whatever else was in progress. It now stops the sink and returns to the menu,
+  as every other screen that asks for Ctrl+C already did. A receiver that times
+  out waiting for a sender says so, rather than being indistinguishable from one
+  that finished.
+
+- **The ICMP carrier allocated twice per packet**, once to frame the payload and
+  once to read one — both now come from a pool, as the pck carrier's already
+  did.
+
 ## v1.7.3 — 2026-08-19
 
 ### Added
@@ -73,16 +250,6 @@ All notable changes to Backpack are documented here.
   now asks the direction first, then the side, then the carrier. The lists it
   offers come from the server, so the panel and the CLI wizard cannot drift into
   offering different things.
-
-- **The TUN device moves packets in batches.** A read used to be one packet and
-  one syscall, and a busy tunnel does thousands a second. The device now comes
-  from wireguard-go's `tun` package, which turns on the kernel's segmentation
-  offload: one read can return a whole 64 KB run of a single TCP stream, already
-  split into MTU-sized packets, for the cost of one syscall. The session and
-  peer lookups moved out of the per-packet path with it — both take the state
-  lock, and it was being taken twice per packet for values that change every two
-  minutes. Everything above the device is unchanged: the addresses, the MTU, the
-  queue, the queueing discipline and the MSS clamp still go through `ip`.
 
 - **The kharej side refuses to dial a cloud metadata service.** The origin dials
   whatever address the stream names — that is the design, and it is why changing
@@ -275,10 +442,6 @@ cause.
 - **A goroutine leaked per session on the kharej side**, each holding a dead mux
   session. Nothing on a steady tunnel; a month of a flapping link is a leak with
   no symptom until the process is large.
-
-- **The ICMP carrier allocated twice per packet**, once to frame the payload and
-  once to read one — both now come from a pool, as the pck carrier's already
-  did.
 
 - **CPU climbed with the packet rate for no reason.** Three allocations per
   packet: the raw connection and the destination address were rebuilt on every
