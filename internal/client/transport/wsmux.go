@@ -34,6 +34,7 @@ type WsMuxTransport struct {
 	poolConnections int32
 	loadConnections int32
 	controlFlow     chan struct{}
+	sessionSlots    *sessionSlots
 }
 type WsMuxConfig struct {
 	RemoteAddr string
@@ -88,6 +89,7 @@ func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logr
 		poolConnections: 0,
 		loadConnections: 0,
 		controlFlow:     make(chan struct{}, 100),
+		sessionSlots:    newSessionSlots(muxPoolLimit(config.ConnPoolSize, config.MaxReceiveBuffer)),
 	}
 
 	// Seed the first generation through the same path a restart uses, so
@@ -200,6 +202,10 @@ func (c *WsMuxTransport) channelDialer() {
 }
 
 func (c *WsMuxTransport) poolMaintainer() {
+	maxPoolSize := c.sessionSlots.max()
+	if maxPoolSize < c.config.ConnPoolSize*poolGrowthLimit {
+		c.logger.Infof("automatic SMUX pool growth capped at %d sessions (receive buffer: %d bytes)", maxPoolSize, c.config.MaxReceiveBuffer)
+	}
 	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
 		go c.tunnelDialer()
 	}
@@ -258,8 +264,8 @@ func (c *WsMuxTransport) poolMaintainer() {
 			metrics.ReportPool(poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, mbps)
 
 			// Dynamically adjust the pool size based on current connections
-			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrow(newPoolSize, c.config.ConnPoolSize)) ||
-				load.wantsMore(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize) {
+			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrowWithin(newPoolSize, c.config.ConnPoolSize, maxPoolSize)) ||
+				load.wantsMoreWithin(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, maxPoolSize) {
 				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections, mbps)
 				newPoolSize++
 
@@ -350,6 +356,12 @@ func (c *WsMuxTransport) channelHandler() {
 }
 
 func (c *WsMuxTransport) tunnelDialer() {
+	if !c.sessionSlots.tryAcquire() {
+		c.logger.Debugf("SMUX session limit reached (%d); skipping tunnel dial", c.sessionSlots.max())
+		return
+	}
+	defer c.sessionSlots.release()
+
 	c.logger.Debugf("initiating new %s tunnel connection to address %s", c.config.Mode, c.config.RemoteAddr)
 
 	// Dial to the tunnel server

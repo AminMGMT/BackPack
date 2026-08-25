@@ -1,6 +1,10 @@
 package transport
 
-import "testing"
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+)
 
 // The blind spot this exists to close: a few long-lived streams saturate the
 // connections they already have without ever asking for a new one, so the
@@ -65,5 +69,63 @@ func TestFirstReadingAndCounterResetAreNotMeasurements(t *testing.T) {
 func TestUnconfiguredPoolDoesNotGrow(t *testing.T) {
 	if poolCanGrow(1, 0) {
 		t.Fatal("an unconfigured pool size must not grow")
+	}
+}
+
+func TestMuxPoolLimitBoundsReceiveWindows(t *testing.T) {
+	tests := []struct {
+		name          string
+		configured    int
+		receiveBuffer int
+		want          int
+	}{
+		{name: "default keeps fourfold growth", configured: 8, receiveBuffer: 4 * 1024 * 1024, want: 32},
+		{name: "turbo stops at configured pool", configured: 8, receiveBuffer: 16 * 1024 * 1024, want: 8},
+		{name: "aggressive stops at configured pool", configured: 16, receiveBuffer: 32 * 1024 * 1024, want: 16},
+		{name: "explicit pool is always honoured", configured: 64, receiveBuffer: 4 * 1024 * 1024, want: 64},
+		{name: "invalid receive buffer uses normal cap", configured: 8, receiveBuffer: 0, want: 32},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := muxPoolLimit(tt.configured, tt.receiveBuffer); got != tt.want {
+				t.Fatalf("muxPoolLimit(%d, %d) = %d, want %d", tt.configured, tt.receiveBuffer, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSessionSlotsCannotRacePastLimit(t *testing.T) {
+	const limit = 8
+	slots := newSessionSlots(limit)
+	start := make(chan struct{})
+	var acquired atomic.Int32
+	var wg sync.WaitGroup
+
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if slots.tryAcquire() {
+				acquired.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := acquired.Load(); got != limit {
+		t.Fatalf("acquired %d session slots, want %d", got, limit)
+	}
+	if slots.tryAcquire() {
+		t.Fatal("slot guard allowed a session past its limit")
+	}
+
+	for range limit {
+		slots.release()
+	}
+	if !slots.tryAcquire() {
+		t.Fatal("released slots should be reusable")
 	}
 }

@@ -288,8 +288,8 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 func (s *WsTransport) tunnelListener(g *wsGen) {
 	addr := s.config.BindAddr
 	upgrader := websocket.Upgrader{
-		ReadBufferSize:   16 * 1024,
-		WriteBufferSize:  16 * 1024,
+		// Zero sizes reuse the HTTP server buffers instead of retaining another
+		// pair of 16 KiB buffers for every upgraded connection.
 		HandshakeTimeout: 45 * time.Second,
 		CheckOrigin: func(r *http.Request) bool {
 			return true

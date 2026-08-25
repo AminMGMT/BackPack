@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/metrics"
@@ -40,7 +41,44 @@ const (
 	// Both triggers respect it: growth was previously unbounded, so a burst of
 	// requests could keep adding connections with nothing to stop it.
 	poolGrowthLimit = 4
+
+	// smuxPoolMemoryBudget preserves the maximum receive-window footprint of
+	// the historical default (8 sessions * 4 growth * 4 MiB). Larger receive
+	// windows therefore trade automatic pool growth for a predictable ceiling
+	// instead of silently multiplying the process's memory exposure.
+	smuxPoolMemoryBudget = 128 * 1024 * 1024
 )
+
+// sessionSlots prevents concurrent pool and control-channel requests from
+// racing past a transport's calculated session limit.
+type sessionSlots struct {
+	limit int32
+	used  atomic.Int32
+}
+
+func newSessionSlots(limit int) *sessionSlots {
+	return &sessionSlots{limit: int32(limit)}
+}
+
+func (s *sessionSlots) tryAcquire() bool {
+	for {
+		used := s.used.Load()
+		if used >= s.limit {
+			return false
+		}
+		if s.used.CompareAndSwap(used, used+1) {
+			return true
+		}
+	}
+}
+
+func (s *sessionSlots) release() {
+	s.used.Add(-1)
+}
+
+func (s *sessionSlots) max() int {
+	return int(s.limit)
+}
 
 // poolLoad turns the tunnel's cumulative byte counters into a per-interval
 // throughput reading.
@@ -78,10 +116,14 @@ func (p *poolLoad) mbps() int {
 // dividing by it is what makes this a statement about how hard each connection
 // is working rather than about the tunnel's total speed.
 func (p *poolLoad) wantsMore(mbps, liveConns, poolSize, configuredSize int) bool {
+	return p.wantsMoreWithin(mbps, liveConns, poolSize, configuredSize, configuredSize*poolGrowthLimit)
+}
+
+func (p *poolLoad) wantsMoreWithin(mbps, liveConns, poolSize, configuredSize, maxSize int) bool {
 	if mbps <= 0 || liveConns <= 0 {
 		return false
 	}
-	if !poolCanGrow(poolSize, configuredSize) {
+	if !poolCanGrowWithin(poolSize, configuredSize, maxSize) {
 		return false
 	}
 	return mbps/liveConns >= poolScaleMbpsPerConn
@@ -89,8 +131,35 @@ func (p *poolLoad) wantsMore(mbps, liveConns, poolSize, configuredSize int) bool
 
 // poolCanGrow bounds the pool so neither trigger can grow it without limit.
 func poolCanGrow(poolSize, configuredSize int) bool {
-	if configuredSize <= 0 {
+	return poolCanGrowWithin(poolSize, configuredSize, configuredSize*poolGrowthLimit)
+}
+
+func poolCanGrowWithin(poolSize, configuredSize, maxSize int) bool {
+	if configuredSize <= 0 || maxSize < configuredSize {
 		return false
 	}
-	return poolSize < configuredSize*poolGrowthLimit
+	return poolSize < maxSize
+}
+
+// muxPoolLimit applies the normal 4x growth cap while also bounding the
+// aggregate SMUX receive windows. An explicitly configured initial pool is
+// always honoured, even when it exceeds the automatic-growth budget.
+func muxPoolLimit(configuredSize, maxReceiveBuffer int) int {
+	if configuredSize <= 0 {
+		return 0
+	}
+
+	growthLimit := configuredSize * poolGrowthLimit
+	if maxReceiveBuffer <= 0 {
+		return growthLimit
+	}
+
+	memoryLimit := smuxPoolMemoryBudget / maxReceiveBuffer
+	if memoryLimit < configuredSize {
+		return configuredSize
+	}
+	if memoryLimit < growthLimit {
+		return memoryLimit
+	}
+	return growthLimit
 }
