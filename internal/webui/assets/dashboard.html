@@ -4983,6 +4983,61 @@ const ACC_SECTIONS=['update','access','security','telegram','backup'];
 
 // Only one section is open at a time. Each one is tall enough that two open
 // together brings back the scrolling this replaced.
+// How long the height animations below run for, in milliseconds. It has to
+// match the .32s written into the two transitions.
+const ACC_MS=320;
+
+// accRendered reports whether a drawer is actually being laid out.
+//
+// An element inside a display:none subtree has no boxes, and an element with no
+// boxes runs no transitions — so nothing waiting on transitionend is ever told
+// the animation finished, because it never started. Both dialogs collapse their
+// drawers while their form is still .hide, which is exactly that case.
+function accRendered(b){ return b.getClientRects().length>0; }
+
+// accBegin claims a drawer for a new animation and invalidates any still in
+// flight on it, returning the token that says so.
+//
+// Everything an animation does after the call that started it — the frame that
+// sets the target height, the cleanup that follows — has to check the token
+// first. Without that, opening and closing in quick succession lets the open's
+// queued frame land after the close has already shut the drawer, which leaves
+// it hidden but pinned to a height, and pinned to a height is the state that
+// wedges it.
+function accBegin(b){
+  const gen=String((+b.dataset.accGen||0)+1);
+  b.dataset.accGen=gen;
+  return gen;
+}
+
+// accSettle runs fn once this animation is over: on the height transition
+// ending, or on a backstop timer if the transition never runs at all.
+//
+// Waiting on transitionend alone is what wedged the Fine Tune drawer. Edit
+// collapses the drawers while its form is still display:none, so the collapse
+// produced no transition and therefore no event, and the drawer was left
+// un-hidden with the collapse half-applied — height pinned to 0. Every later
+// click then read that as "already open" and tried to close it again, and
+// closing something already at zero height transitions a value to itself, which
+// fires no event either. The drawer could not be reopened for the life of the
+// page, which is why the only way out was a refresh.
+function accSettle(b, gen, fn){
+  let done=false;
+  function finish(){
+    if(done) return;
+    done=true;
+    b.removeEventListener('transitionend',onEnd);
+    clearTimeout(timer);
+    if(b.dataset.accGen!==gen) return; // a newer animation owns the drawer now
+    fn();
+  }
+  function onEnd(e){ if(e.propertyName==='height') finish(); }
+  b.addEventListener('transitionend',onEnd);
+  // The backstop. A transition that never runs never ends, so the cleanup
+  // cannot be left to the event alone.
+  const timer=setTimeout(finish, ACC_MS+80);
+}
+
 function toggleAcc(id){
   const wasOpen=!$('accb-'+id).hidden;
   // Fine Tune, in the setup and edit dialogs, is built from this same accordion
@@ -4995,19 +5050,20 @@ function toggleAcc(id){
 // auto so the section can still grow as async content lands. The bouncy easing
 // lives in CSS; here we only drive the two heights.
 function openAcc(id){
-  const b=$('accb-'+id);
+  const b=$('accb-'+id), gen=accBegin(b);
   b.hidden=false;
   $('acch-'+id).setAttribute('aria-expanded','true');
+  // Nothing to animate against: land on the open state directly, so the drawer
+  // is already correct the moment its dialog is shown.
+  if(!accRendered(b)){ b.style.height='auto'; b.style.transition=''; return; }
   // Opening bounces: the overshoot easing lets the height spring slightly past
   // and settle.
   b.style.transition='height .32s var(--ease-spring)';
   b.style.height='0px';
   requestAnimationFrame(function(){
+    if(b.dataset.accGen!==gen) return;
     b.style.height=b.scrollHeight+'px';
-    b.addEventListener('transitionend',function done(e){
-      if(e.propertyName!=='height') return;
-      b.style.height='auto'; b.removeEventListener('transitionend',done);
-    });
+    accSettle(b,gen,function(){ b.style.height='auto'; });
   });
   // A section opened from the bottom of the list can land off-screen once the
   // ones above it collapse.
@@ -5017,17 +5073,23 @@ function closeAcc(id){
   const b=$('accb-'+id);
   $('acch-'+id).setAttribute('aria-expanded','false');
   if(b.hidden){ return; } // already shut — nothing to animate
+  const gen=accBegin(b);
+  const shut=function(){ b.hidden=true; b.style.height=''; b.style.transition=''; };
+  // Either the drawer is not being laid out, or it is already sitting at the
+  // height the collapse would animate it to. Both would transition a value to
+  // itself, which fires no transitionend. The reading has to be the inline
+  // height: .accb is border-box with padding, so a collapsed drawer still
+  // measures 25px on screen and no computed height can say "collapsed".
+  if(!accRendered(b) || b.style.height==='0px'){ shut(); return; }
   // Closing does NOT bounce: an overshoot easing would drive the height below
   // zero, where it clamps and stalls — the little hitch that read as lag. A
   // plain ease-out collapses cleanly instead.
   b.style.transition='height .32s cubic-bezier(.4,0,.2,1)';
   b.style.height=b.scrollHeight+'px'; // pin the current height before collapsing
   requestAnimationFrame(function(){
+    if(b.dataset.accGen!==gen) return;
     b.style.height='0px';
-    b.addEventListener('transitionend',function done(e){
-      if(e.propertyName!=='height') return;
-      b.hidden=true; b.style.height=''; b.style.transition=''; b.removeEventListener('transitionend',done);
-    });
+    accSettle(b,gen,shut);
   });
 }
 
