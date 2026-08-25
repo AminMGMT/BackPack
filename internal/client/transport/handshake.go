@@ -22,8 +22,8 @@ import (
 // negotiation trivial in one direction and cheap in the other. A server that
 // already speaks it answers with the nonce. A server that does not never
 // recognises the signal and closes the connection, and the client notices that
-// and drops back to the old handshake for the rest of the process. The cost of
-// meeting an old server is one failed connection attempt, once.
+// and drops back to the old handshake. The cost of meeting an old server is a
+// couple of failed connection attempts.
 
 // controlAckTimeout is how long to wait for the server's answer to the
 // handshake.
@@ -37,27 +37,129 @@ import (
 // waiting a few seconds longer would have.
 const controlAckTimeout = 15 * time.Second
 
-// controlSignal picks which handshake to ask for.
-func controlSignal(legacy *atomic.Bool) byte {
-	if legacy.Load() {
+// The bounds on how long a client waits for any word from the server before
+// deciding the tunnel is dead. See controlDeadline.
+const (
+	controlIdleFallback = 120 * time.Second
+	controlIdleFloor    = 30 * time.Second
+)
+
+// controlDeadline is how long to wait for any word from the server on the
+// control channel before treating the tunnel as gone.
+//
+// Without one, a stream transport is left relying on TCP to notice, and TCP is
+// in no hurry: with the default keepalive_period of 75s the kernel sends nine
+// probes 75s apart after 15s of silence, so a tunnel that died seconds after it
+// came up is reported healthy for another eleven and a half minutes. The
+// watchdog cannot cover for that either — the socket stays ESTABLISHED for the
+// whole of it, which is the only thing the watchdog can see.
+//
+// The server heartbeats every heartbeat seconds and the tuner writes
+// keepalive_period as twice that, so keepAlive is worth two heartbeat intervals
+// here. Half again on top is what survives a single lost heartbeat: at two
+// intervals exactly, one dropped heartbeat on a lossy link is enough to tear
+// down a tunnel that is alive, which is the failure worth avoiding most —
+// RecommendKeepAlive is built around the same rule. On the defaults this
+// notices a dead tunnel in under two minutes instead of eleven.
+//
+// The floor is only there to stop a hand-written keepalive_period of a second
+// or two from turning into a restart loop.
+func controlDeadline(keepAlive time.Duration) time.Duration {
+	if keepAlive <= 0 {
+		return controlIdleFallback
+	}
+	if d := keepAlive + keepAlive/2; d > controlIdleFloor {
+		return d
+	}
+	return controlIdleFloor
+}
+
+// legacyMissThreshold is how many unanswered v2 handshakes it takes to conclude
+// the server does not speak one.
+//
+// One is not enough, and assuming it was is what made a healthy tunnel worse: a
+// server that had already answered a v2 handshake minutes earlier was declared
+// old on a single EOF, when all the EOF meant was that the path was still down
+// from the disconnect being reconnected after. An old server refuses every
+// time, so asking twice separates the two at the cost of one extra attempt in
+// the case that is going away.
+const legacyMissThreshold = 2
+
+// legacyProbe decides which handshake to ask for, and keeps what the server has
+// actually proved about itself separate from what a failure might suggest.
+type legacyProbe struct {
+	// legacy is set once the server is believed not to understand SG_ChanV2.
+	legacy atomic.Bool
+	// answered records that this server has completed a v2 handshake at least
+	// once. It is proof, and it outranks any later failure: a server does not
+	// become old.
+	answered atomic.Bool
+	// misses counts consecutive unanswered v2 attempts.
+	misses atomic.Int32
+	// warned keeps the explanation to once per process however often the
+	// probe is re-armed.
+	warned atomic.Bool
+}
+
+// signal picks which handshake to ask for.
+func (p *legacyProbe) signal() byte {
+	if p.legacy.Load() {
 		return utils.SG_Chan
 	}
 	return utils.SG_ChanV2
 }
 
-// noteLegacyServer records that a v2 handshake went unanswered, so the next
-// attempt asks for the old one.
+// ack records the server's answer to a handshake that succeeded.
+//
+// A v2 answer clears the fallback as well as arming the proof, so a client that
+// guessed wrong — or that has been moved to a server which has since been
+// upgraded — goes back to the nonce instead of staying degraded for the life of
+// the process.
+func (p *legacyProbe) ack(ackSignal byte) {
+	p.misses.Store(0)
+	if ackSignal == utils.SG_ChanV2 {
+		p.answered.Store(true)
+		p.legacy.Store(false)
+	}
+}
+
+// miss records a v2 handshake that went unanswered, and falls back once there
+// is enough of them to mean something.
 //
 // It is called only for a non-timeout failure. An older server rejects the
 // signal it does not know by closing the connection, which surfaces as a read
 // error immediately; a filtered or broken path times out instead. Treating a
-// timeout as evidence of an old server would give up the nonce for the life of
-// the process over a momentary outage.
-func noteLegacyServer(logger *logrus.Logger, legacy *atomic.Bool, sent byte) {
-	if sent != utils.SG_ChanV2 || legacy.Swap(true) {
+// timeout as evidence of an old server would give up the nonce over a momentary
+// outage. A close is not proof on its own either, which is what the threshold
+// and the proof below are for.
+func (p *legacyProbe) miss(logger *logrus.Logger, sent byte) {
+	if sent != utils.SG_ChanV2 {
+		return
+	}
+	// This server has answered a v2 handshake before. Whatever just closed the
+	// connection, it was not a server that does not know the signal.
+	if p.answered.Load() {
+		return
+	}
+	if p.misses.Add(1) < legacyMissThreshold {
+		return
+	}
+	if p.legacy.Swap(true) || p.warned.Swap(true) {
 		return
 	}
 	logger.Warn("the server did not answer the current handshake, so it is running an older version. Falling back to the previous one, in which the server has to identify this client's pool connections by their source address — which fails if this machine dials out from more than one address. Upgrade the server to remove that limitation.")
+}
+
+// reset re-arms the probe for a fresh run of the tunnel.
+//
+// The fallback used to be a one-way latch that nothing cleared, so a single
+// dropped connection cost the nonce until the process was restarted — on a
+// server that spoke v2 perfectly well. A run that is starting over has no
+// reason to carry that verdict, and re-asking costs at most a couple of
+// attempts against a server that really is old.
+func (p *legacyProbe) reset() {
+	p.legacy.Store(false)
+	p.misses.Store(0)
 }
 
 // decodeControlAck reads the server's answer, returning the token to check it

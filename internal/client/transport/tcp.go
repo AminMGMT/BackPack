@@ -34,11 +34,11 @@ type TcpTransport struct {
 	// presents it so the server need not judge them by source address. Empty
 	// against a server too old to issue one.
 	poolNonce network.PoolNonce
-	// legacyServer records that the server did not understand the nonce
-	// handshake, so later attempts skip straight to the old one instead of
-	// spending a connection discovering it again. It is not reset on restart:
-	// an upgraded server means an upgraded binary, which means a new process.
-	legacyServer atomic.Bool
+	// legacyServer decides which handshake to ask for, and remembers what this
+	// server has actually proved about itself. It is re-armed on restart: the
+	// fallback is a guess drawn from a closed connection, and a closed
+	// connection is far more often a dead path than an old server.
+	legacyServer legacyProbe
 }
 type TcpConfig struct {
 	RemoteAddr string
@@ -152,6 +152,10 @@ func (c *TcpTransport) Restart() {
 	// The next control channel issues its own nonce; carrying this one over
 	// would have the pool announcing a value the server has already forgotten.
 	c.poolNonce.Clear()
+	// Ask for the current handshake again. A fallback decided during the
+	// outage that caused this restart was a guess about the server drawn from
+	// a broken path, and carrying it forward costs the nonce for nothing.
+	c.legacyServer.reset()
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
 	// The published pool figures belong to the run that just ended. Left
@@ -205,7 +209,7 @@ func (c *TcpTransport) channelDialer() {
 			// Sending security token. The nonce-carrying handshake is asked for
 			// first; a server that predates it closes the connection without
 			// answering, which is what flips the fallback below.
-			signal := controlSignal(&c.legacyServer)
+			signal := c.legacyServer.signal()
 			err = utils.SendBinaryTransportString(tunnelTCPConn, c.config.Token, signal)
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
@@ -229,7 +233,7 @@ func (c *TcpTransport) channelDialer() {
 					c.logger.Warn("timeout while waiting for control channel response")
 				} else {
 					c.logger.Errorf("failed to receive control channel response: %v", err)
-					noteLegacyServer(c.logger, &c.legacyServer, signal)
+					c.legacyServer.miss(c.logger, signal)
 				}
 				tunnelTCPConn.Close() // Close connection on error or timeout
 				bo.Wait(c.state.Ctx())
@@ -243,6 +247,9 @@ func (c *TcpTransport) channelDialer() {
 			token, nonce, _ := decodeControlAck(message, ackSignal)
 
 			if token == c.config.Token {
+				// The server answered, so whatever it answered with is what it
+				// speaks — proof that outranks any later closed connection.
+				c.legacyServer.ack(ackSignal)
 				// Before the control channel is published, so the pool
 				// connections poolMaintainer starts below already have it.
 				c.poolNonce.Set(nonce)
@@ -353,6 +360,18 @@ func (c *TcpTransport) channelHandler() {
 			case <-c.state.Ctx().Done():
 				return
 			default:
+				// A control channel that has gone quiet has to be noticed
+				// here, because nothing else notices it in time: TCP takes
+				// eleven minutes to give up on the default keepalive_period,
+				// and the watchdog sees an ESTABLISHED socket for every
+				// second of it. See controlDeadline.
+				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
+					if c.state.Cancel() != nil {
+						c.logger.Errorf("failed to set control channel deadline: %v", err)
+						go c.Restart()
+					}
+					return
+				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
 					if c.state.Cancel() != nil {

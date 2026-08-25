@@ -288,6 +288,18 @@ func (c *WsMuxTransport) channelHandler() {
 				return
 
 			default:
+				// A control channel that has gone quiet has to be noticed
+				// here, because nothing else notices it in time: TCP takes
+				// eleven minutes to give up on the default keepalive_period,
+				// and the watchdog sees an ESTABLISHED socket for every
+				// second of it. See controlDeadline.
+				if err := c.state.WSConn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
+					if c.state.Cancel() != nil {
+						c.logger.Errorf("failed to set control channel deadline: %v", err)
+						go c.Restart()
+					}
+					return
+				}
 				messageType, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
 					if c.state.Cancel() != nil {

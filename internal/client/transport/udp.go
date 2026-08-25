@@ -283,6 +283,20 @@ func (c *UdpTransport) channelHandler() {
 			case <-c.state.Ctx().Done():
 				return
 			default:
+				// The worst case of the three: this control channel had no
+				// deadline at all, and the datagram transports have no
+				// keepalive story to fall back on, so a read on a tunnel whose
+				// peer had gone blocked until the process was restarted. The
+				// server heartbeats, so silence past the deadline is the peer
+				// being gone. See controlDeadline; UdpConfig carries no
+				// keepalive period, so this takes the fallback.
+				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(0))); err != nil {
+					if c.state.Cancel() != nil {
+						c.logger.Errorf("failed to set control channel deadline: %v", err)
+						go c.Restart()
+					}
+					return
+				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
 					if c.state.Cancel() != nil {

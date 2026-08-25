@@ -328,16 +328,6 @@ func (c *QuicTransport) poolMaintainer() {
 	}
 }
 
-// controlDeadline is how long the client waits for any word from the server
-// before deciding the tunnel is dead. It has to comfortably exceed the server's
-// heartbeat interval, or a healthy but quiet tunnel would be torn down.
-func (c *QuicTransport) controlDeadline() time.Duration {
-	if c.config.KeepAlive > 0 {
-		return c.config.KeepAlive
-	}
-	return 90 * time.Second
-}
-
 func (c *QuicTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
@@ -350,7 +340,7 @@ func (c *QuicTransport) channelHandler() {
 				// The server heartbeats regularly, so silence for longer than the
 				// keepalive period means the peer is gone. QUIC's own idle timeout
 				// would eventually notice too, but this reconnects promptly.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(c.controlDeadline())); err != nil {
+				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
 					c.logger.Errorf("failed to set control channel deadline: %v", err)
 					go c.Restart()
 					return
