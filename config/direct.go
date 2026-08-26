@@ -115,6 +115,25 @@ type DirectConfig struct {
 	// Nodelay disables Nagle on the tunnel connection.
 	Nodelay bool `toml:"nodelay"`
 
+	// MSS clamps the largest TCP payload this end puts in one segment on the
+	// tunnel connection. Zero — the default — leaves the decision to the
+	// kernel.
+	//
+	// It is the same key, and the same fix, the reverse tunnel takes: where a
+	// path carries less than a full-sized packet and drops the oversized ones
+	// without an ICMP reply, nothing on either machine learns. The handshake
+	// and the mux's keepalives are small enough to arrive, so the tunnel comes
+	// up and looks healthy while every real transfer stalls on the first full
+	// segment — and because the socket stays ESTABLISHED throughout, the
+	// watchdog sees nothing wrong either.
+	//
+	// Direct was the only one of the three tunnel kinds with no way to set
+	// this. The reverse tunnel has had it since the same failure was diagnosed
+	// there, and [l3] measures the path itself.
+	//
+	// It has to be set at both ends: each end clamps only what it sends.
+	MSS int `toml:"mss"`
+
 	// MuxVersion, MaxFrameSize, MaxReceiveBuffer and MaxStreamBuffer tune the
 	// mux session. They are the same keys the reverse mux transports take.
 	MuxVersion       int `toml:"mux_version"`

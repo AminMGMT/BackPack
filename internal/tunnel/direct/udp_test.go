@@ -40,7 +40,7 @@ func newUDPTunnel(t *testing.T, backend string) *tunnel {
 
 	origin, err := NewOrigin(Config{
 		Role: RoleOrigin, Addr: "127.0.0.1:0", Token: token,
-	}, quietLogger())
+	}, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewOrigin: %v", err)
 	}
@@ -68,7 +68,7 @@ func newUDPTunnel(t *testing.T, backend string) *tunnel {
 		Ports:      []string{fmt.Sprintf("127.0.0.1:%d=%s", port, backend)},
 		AcceptUDP:  true,
 		RetryDelay: 200 * time.Millisecond,
-	}, quietLogger())
+	}, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewEdge: %v", err)
 	}

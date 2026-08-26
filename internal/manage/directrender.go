@@ -50,6 +50,7 @@ type directSpec struct {
 	MuxVersion    int
 	DialTimeout   int
 	RetryInterval int
+	MSS           int
 }
 
 func (s directSpec) render() string {
@@ -104,6 +105,13 @@ func (s directSpec) render() string {
 		// reverse preset turns it off for the same reason; see preset.go.
 		if s.Nodelay {
 			writeKV(&b, "nodelay", "true")
+		}
+		// Off unless somebody set it, and worth a word when they have: this is
+		// the knob for a path that silently drops full-sized packets, where the
+		// tunnel comes up and looks healthy while every real transfer stalls.
+		// Both ends need it — each clamps only what it sends.
+		if s.MSS > 0 {
+			writeKV(&b, "mss", fmt.Sprint(s.MSS))
 		}
 		if s.MuxVersion > 0 {
 			writeKV(&b, "mux_version", fmt.Sprint(s.MuxVersion))

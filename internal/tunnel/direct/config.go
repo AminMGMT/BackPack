@@ -136,6 +136,11 @@ type Config struct {
 
 	// Keepalive is the TCP keepalive period on the tunnel connection.
 	Keepalive time.Duration
+
+	// MSS clamps the largest TCP payload this end sends on the tunnel
+	// connection. Zero leaves it to the kernel. See config.DirectConfig.MSS
+	// for what it is for.
+	MSS int
 }
 
 // Validate fills in what was left out and refuses what cannot work.

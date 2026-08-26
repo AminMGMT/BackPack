@@ -19,6 +19,54 @@ func quietLogger() *logrus.Logger {
 	return log
 }
 
+// capturedLog holds what a tunnel said, for a test to print if it fails.
+//
+// The engine reports a port it could not bind, and every one of these tests
+// used to throw that away. What CI showed instead was "the udp tunnel never
+// came up" twenty seconds later, with nothing to say why — and a failure whose
+// cause is not in its own output is one that gets answered by raising a
+// timeout, which is not an answer.
+type capturedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *capturedLog) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *capturedLog) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// testLogger keeps the tunnel's own account of itself and prints it only when
+// the test has failed, so a passing run stays quiet.
+func testLogger(t *testing.T) *logrus.Logger {
+	log, _ := testLoggerCapturing(t)
+	return log
+}
+
+// testLoggerCapturing is testLogger for a test that wants to read what was
+// logged rather than only have it printed on failure.
+func testLoggerCapturing(t *testing.T) (*logrus.Logger, *capturedLog) {
+	t.Helper()
+	captured := &capturedLog{}
+	log := logrus.New()
+	log.SetOutput(captured)
+	t.Cleanup(func() {
+		if t.Failed() {
+			if out := captured.String(); out != "" {
+				t.Logf("tunnel log:\n%s", out)
+			}
+		}
+	})
+	return log, captured
+}
+
 // echoBackend stands in for the real service on the kharej machine. It echoes
 // what it is sent behind a label, so a test can tell two backends apart.
 func echoBackend(t *testing.T, label string) string {
@@ -55,15 +103,42 @@ func echoBackend(t *testing.T, label string) string {
 	return listener.Addr().String()
 }
 
+// freePort finds a loopback port that is free for both TCP and UDP.
+//
+// Asking the kernel for a TCP port and handing the number to something that
+// also binds UDP is two assumptions, and both of them fail on a busy machine.
+// A port free for TCP says nothing about the same number on UDP, and the whole
+// thing is a race either way: the socket is closed before the caller binds, so
+// anything else on the host may take it in between. `go test ./...` runs
+// packages in parallel and CI runs the suite twice, once under -race, which is
+// when a window like that stops being theoretical.
+//
+// Both sockets are held until the last moment and both families are checked, so
+// the number that comes back was free for the thing it is about to be used for.
+// The race cannot be closed entirely without binding on the caller's behalf,
+// but a collision now fails loudly at the bind — see testLogger — instead of as
+// a silent twenty-second wait for a reply that was never coming.
 func freePort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
+	for attempt := 0; attempt < 20; attempt++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+
+		packet, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			// Taken on UDP by something else. Try another.
+			listener.Close()
+			continue
+		}
+		packet.Close()
+		listener.Close()
+		return port
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	return port
+	t.Fatal("could not find a loopback port free on both TCP and UDP")
+	return 0
 }
 
 // tunnel is a running edge/origin pair on loopback.

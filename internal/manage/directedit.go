@@ -81,6 +81,7 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		{Title: "UDP forwarding", Desc: "carry UDP as well as TCP — currently " + onOff(d.AcceptUDP)},
 		{Title: "Limits", Desc: "connections and bandwidth — currently " + limitsLabel(d.MaxConnections, d.BandwidthMbps)},
 		{Title: "Performance tuning", Desc: "currently " + presetLabel(d.Preset)},
+		{Title: "TCP segment cap", Desc: "for a path that stalls on full-sized packets — currently " + directMSSLabel(d.MSS)},
 		{Title: "Show the token", Desc: "reveal it, to copy to the other machine"},
 	}) {
 	case 0:
@@ -118,6 +119,24 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		saveDirect(t, d)
 	case 4:
 		fmt.Println()
+		tui.Info("Some paths carry less than a full-sized packet and drop the")
+		tui.Info("oversized ones without an ICMP reply. Nothing on either machine")
+		tui.Info("learns: the handshake and the keepalives are small enough to")
+		tui.Info("arrive, so the tunnel comes up and stays up while every real")
+		tui.Info("transfer stalls on the first full segment.")
+		fmt.Println()
+		tui.Warn("Set this on BOTH machines — each end clamps only what it sends.")
+		tui.Info("1360 is a safe first try. 0 hands the decision back to the kernel.")
+		mss := tui.PromptInt("TCP segment cap in bytes (0 = let the kernel decide)", d.MSS)
+		if mss != 0 && (mss < minMSS || mss > maxMSS) {
+			tui.Error(fmt.Sprintf("A segment cap must be between %d and %d bytes, or 0.", minMSS, maxMSS))
+			tui.PressEnter()
+			return true
+		}
+		d.MSS = mss
+		saveDirect(t, d)
+	case 5:
+		fmt.Println()
 		tui.Info("Token (must match the other machine exactly):")
 		fmt.Println("  " + tui.Color(tui.Bold+tui.White, d.Token))
 		tui.PressEnter()
@@ -125,6 +144,15 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		return false
 	}
 	return true
+}
+
+// directMSSLabel renders the setting for a menu line, saying what a zero
+// actually means rather than printing it.
+func directMSSLabel(mss int) string {
+	if mss <= 0 {
+		return "off (the kernel decides)"
+	}
+	return fmt.Sprintf("%d bytes", mss)
 }
 
 // editL3Ports does the same for an [l3] tunnel.
@@ -269,6 +297,7 @@ func saveDirect(t Tunnel, d config.DirectConfig) {
 		TLSCertFile: d.TLSCertFile, TLSKeyFile: d.TLSKeyFile,
 		MuxVersion:  d.MuxVersion,
 		DialTimeout: d.DialTimeout, RetryInterval: d.RetryInterval,
+		MSS: d.MSS,
 	}
 	applyEdit(t, spec.render())
 }

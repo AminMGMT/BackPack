@@ -52,6 +52,7 @@ func runDirectTunnel(cfg *config.Config, ctx context.Context, configPath string)
 		RetryDelay:       time.Duration(dc.RetryInterval) * time.Second,
 		Keepalive:        time.Duration(dc.Keepalive) * time.Second,
 		Nodelay:          dc.Nodelay,
+		MSS:              dc.MSS,
 		MuxVersion:       dc.MuxVersion,
 		MaxFrameSize:     dc.MaxFrameSize,
 		MaxReceiveBuffer: dc.MaxReceiveBuffer,
