@@ -27,7 +27,7 @@ jobs:
 
       - name: Verify formatting
         run: |
-          unformatted="$(gofmt -l . | grep -v '^Sorce/' || true)"
+          unformatted="$(gofmt -l . || true)"
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt'd:"
             echo "$unformatted"

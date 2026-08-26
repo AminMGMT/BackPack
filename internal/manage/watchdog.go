@@ -2,6 +2,7 @@ package manage
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os/exec"
 	"strings"
@@ -19,6 +20,34 @@ const (
 	wdCooldown  = 3 * time.Minute  // minimum time between restarts of one tunnel
 )
 
+// Noticing that a tunnel is not failing once but failing repeatedly.
+//
+// A restart is reported on its own, which is right for a one-off: "why did my
+// tunnel reset overnight" should be answerable. It is wrong for a tunnel that
+// is doing it all day. At one restart per cooldown a sick tunnel can produce
+// twenty lines an hour, and twenty separate lines are indistinguishable from
+// twenty unrelated events across a week — nobody reads that list and concludes
+// the tunnel is flapping.
+//
+// Which matters because flapping is how several real faults present. A path
+// that drops full-sized packets kills the session on the first real transfer
+// and it reconnects; a liveness deadline set too tight tears down a tunnel that
+// is merely slow. From the outside all of them look like a tunnel that mostly
+// works, which is worse than one that is plainly down: nobody investigates.
+//
+// So repeated restarts are reported as one condition. The restarting itself
+// does not change — a flapping tunnel still gets restarted, because not
+// restarting it would only make it a stopped one.
+const (
+	// flapWindow is how far back the count reaches.
+	flapWindow = time.Hour
+
+	// flapThreshold is how many restarts inside that window stop being a
+	// coincidence. With the cooldown at three minutes, four restarts span at
+	// least nine minutes of trouble.
+	flapThreshold = 4
+)
+
 // RunWatchdog periodically checks every tunnel and restarts any that is running
 // but has lost its tunnel connection (a "dropped" tunnel that the engine didn't
 // recover on its own). It works on both ends:
@@ -32,6 +61,11 @@ const (
 func RunWatchdog(ctx context.Context) {
 	fails := map[string]int{}
 	lastRestart := map[string]time.Time{}
+	// When each tunnel was restarted, most recent last, pruned to flapWindow.
+	restarts := map[string][]time.Time{}
+	// When flapping was last reported for a tunnel, so a tunnel that keeps it
+	// up for days is reported once a window rather than once and then never.
+	lastFlapReport := map[string]time.Time{}
 	seenHealthy := map[string]bool{} // only "was up, then dropped" counts as a drop
 
 	ticker := time.NewTicker(wdInterval)
@@ -61,11 +95,10 @@ func RunWatchdog(ctx context.Context) {
 				fails[t.Name]++
 				if fails[t.Name] >= wdThreshold && time.Since(lastRestart[t.Name]) > wdCooldown {
 					RestartService(t.Service)
-					lastRestart[t.Name] = time.Now()
-					// On the record: "why did my tunnel reset overnight" should
-					// be answerable from the panel's alert view.
-					alerthist.RecordEvent("🔁 Watchdog restarted tunnel " + t.Name +
-						" — it was running but not connected")
+					now := time.Now()
+					lastRestart[t.Name] = now
+					restarts[t.Name] = recentRestarts(restarts[t.Name], now)
+					reportRestart(t.Name, restarts[t.Name], lastFlapReport, now)
 					fails[t.Name] = 0
 				}
 			}
@@ -73,8 +106,6 @@ func RunWatchdog(ctx context.Context) {
 	}
 }
 
-// tunnelHealthy reports whether a running tunnel currently has its connection up,
-// based on the established TCP sockets in `pairs` ([local, peer] address pairs).
 // engineSaysConnected asks the tunnel's own engine whether it holds a control
 // channel.
 //
@@ -105,6 +136,9 @@ func engineSaysConnected(name string) (connected, known bool) {
 	return *snap.Connected, true
 }
 
+// tunnelHealthy reports whether a running tunnel currently has its connection
+// up. It prefers what the engine says; `pairs` ([local, peer] address pairs from
+// the socket table) is the fallback for the engines that have not said.
 func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
 	// The direct kinds are judged on their own terms: their roles are
 	// geographic, and a layer-3 tunnel has no TCP socket to observe at all.
@@ -249,4 +283,40 @@ func portOf(hostPort string) string {
 		return p
 	}
 	return ""
+}
+
+// recentRestarts appends now and drops what has fallen out of the window.
+func recentRestarts(prev []time.Time, now time.Time) []time.Time {
+	out := make([]time.Time, 0, len(prev)+1)
+	for _, t := range prev {
+		if now.Sub(t) < flapWindow {
+			out = append(out, t)
+		}
+	}
+	return append(out, now)
+}
+
+// reportRestart puts one restart on the record — as itself while it is still a
+// one-off, and as flapping once it is not.
+//
+// The change at the threshold is deliberate. Going on emitting a line per
+// restart would bury the finding under exactly the noise that made it invisible
+// in the first place, so past that point the individual lines stop and the
+// condition is stated instead, once a window for as long as it lasts.
+func reportRestart(name string, at []time.Time, lastReport map[string]time.Time, now time.Time) {
+	if len(at) < flapThreshold {
+		alerthist.RecordEvent("🔁 Watchdog restarted tunnel " + name +
+			" — it was running but not connected")
+		return
+	}
+	if last, ok := lastReport[name]; ok && now.Sub(last) < flapWindow {
+		return // already said so this window; the restarts continue regardless
+	}
+	lastReport[name] = now
+	alerthist.RecordEvent(fmt.Sprintf(
+		"⚠️ Tunnel %s is flapping — restarted %d times in the last hour. "+
+			"It is not failing once, it is failing repeatedly, which usually means the "+
+			"path drops full-sized packets (try a TCP MSS clamp) or the link is too "+
+			"lossy for the preset. Individual restart alerts for it are suppressed "+
+			"while this lasts.", name, len(at)))
 }
