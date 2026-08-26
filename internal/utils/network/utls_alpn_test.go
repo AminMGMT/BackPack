@@ -48,93 +48,117 @@ func alpnEchoServer(t *testing.T, offers []string) net.Listener {
 	return ln
 }
 
-// The regression test for a WSS tunnel that would not come up behind
-// Cloudflare while working perfectly against the same server's IP.
-//
-// The client wore a Chrome fingerprint, and a browser offers h2 before
-// http/1.1. Our own server pins http/1.1 and so never took the h2 on offer; a
-// CDN has no such instruction, took it, and answered the websocket upgrade with
-// an HTTP/2 SETTINGS frame — which the HTTP/1.1 response parser reported as
-//
-//	malformed HTTP response "\x00\x00\x12\x04\x00\x00\x00\x00\x00..."
-//
-// A websocket cannot be carried over h2 at all, so offering it was the fault.
-func TestTheClientNeverNegotiatesHTTP2(t *testing.T) {
-	ln := alpnEchoServer(t, []string{"h2", "http/1.1"})
+// negotiate runs one handshake against ln and reports what the two ends agreed
+// on, which is the whole contract this file is about.
+func negotiate(t *testing.T, ln net.Listener, http11Only bool) (client, server string) {
+	t.Helper()
 
-	negotiated := make(chan string, 1)
+	got := make(chan string, 1)
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
-			negotiated <- "accept failed: " + err.Error()
+			got <- "accept failed: " + err.Error()
 			return
 		}
 		defer conn.Close()
 		tc := conn.(*tls.Conn)
 		if err := tc.HandshakeContext(context.Background()); err != nil {
-			negotiated <- "handshake failed: " + err.Error()
+			got <- "handshake failed: " + err.Error()
 			return
 		}
-		negotiated <- tc.ConnectionState().NegotiatedProtocol
+		got <- tc.ConnectionState().NegotiatedProtocol
 	}()
 
 	raw, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	uconn, err := uTLSClientConn(context.Background(), raw, "cdn.example", 10*time.Second)
+	uconn, err := uTLSClientConn(context.Background(), raw, "cdn.example", 10*time.Second, http11Only)
 	if err != nil {
-		t.Fatalf("the handshake failed: %v", err)
+		t.Fatalf("the handshake failed (http11Only=%v): %v", http11Only, err)
 	}
 	defer uconn.Close()
 
 	select {
-	case got := <-negotiated:
-		if got == "h2" {
-			t.Fatal("the peer selected h2: the websocket upgrade that follows would be " +
-				"answered with an HTTP/2 SETTINGS frame, which is the \"malformed HTTP " +
-				"response\" the field reported behind Cloudflare")
-		}
-		if got != "http/1.1" {
-			t.Fatalf("negotiated %q, want http/1.1", got)
-		}
+	case server = <-got:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the server never completed a handshake")
 	}
+	return uconn.ConnectionState().NegotiatedProtocol, server
+}
 
-	if got := uconn.ConnectionState().NegotiatedProtocol; got != "http/1.1" {
-		t.Errorf("the client believes it negotiated %q, want http/1.1", got)
+// The disguise has to be intact by default.
+//
+// Narrowing the ALPN on every dial was shipped for one release and it is not a
+// free change: every other field of the hello is Chrome's byte for byte, so a
+// hello offering only http/1.1 is a combination no browser produces and every
+// tunnel sending it shares. JA3 cannot see it — it hashes extension type ids,
+// not their contents — but JA4 encodes the ALPN directly, so the deviation is
+// stable and collectable. Reverse tunnels began dying two or three days in and
+// recovering on a fresh server, which is what address-level blocking looks like
+// from the far end.
+//
+// So the first hello offers exactly what Chrome offers. Anything else is a
+// fingerprint deviation paid by every direct connection to solve a problem only
+// CDN users have.
+func TestTheFirstHelloOffersChromesOwnALPN(t *testing.T) {
+	ln := alpnEchoServer(t, []string{"h2", "http/1.1"})
+
+	_, server := negotiate(t, ln, false)
+	if server != "h2" {
+		t.Fatalf("a peer that prefers h2 negotiated %q — the client is no longer "+
+			"offering what Chrome offers, and the hello stands out for it", server)
 	}
 }
 
-// A peer that only speaks HTTP/1.1 — our own server — must still work, and must
-// not be broken by narrowing the offer.
-func TestTheClientStillWorksAgainstAnHTTP11OnlyPeer(t *testing.T) {
+// Our own server pins http/1.1, so the ordinary direct connection — which is
+// most of them — never selects h2 and never needs narrowing at all.
+func TestAnHTTP11OnlyPeerNeedsNoNarrowing(t *testing.T) {
 	ln := alpnEchoServer(t, []string{"http/1.1"})
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_ = conn.(*tls.Conn).HandshakeContext(context.Background())
-	}()
+	client, server := negotiate(t, ln, false)
+	if server != "http/1.1" || client != "http/1.1" {
+		t.Fatalf("negotiated %q/%q against an http/1.1-only peer, want http/1.1", client, server)
+	}
+}
 
-	raw, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	uconn, err := uTLSClientConn(context.Background(), raw, "cdn.example", 10*time.Second)
-	if err != nil {
-		t.Fatalf("the handshake failed against an http/1.1-only peer: %v", err)
-	}
-	defer uconn.Close()
+// The fallback, and the reason the narrowing still exists.
+//
+// This is the second attempt the WSS dialer makes after a peer answers the
+// first one with h2. A CDN terminates the TLS itself, so the server's own ALPN
+// pinning never gets a say and Cloudflare takes the h2 on offer — then answers
+// the websocket upgrade with an HTTP/2 SETTINGS frame, which the HTTP/1.1
+// response parser reports as
+//
+//	malformed HTTP response "\x00\x00\x12\x04\x00\x00\x00\x00\x00..."
+//
+// A websocket cannot be carried over h2 at all, so against such a peer the
+// offer has to be narrowed to the one thing gorilla can speak.
+func TestNarrowingTheOfferKeepsAnH2PeerOffH2(t *testing.T) {
+	ln := alpnEchoServer(t, []string{"h2", "http/1.1"})
 
-	if got := uconn.ConnectionState().NegotiatedProtocol; got != "http/1.1" {
-		t.Errorf("negotiated %q, want http/1.1", got)
+	client, server := negotiate(t, ln, true)
+	if server == "h2" {
+		t.Fatal("the peer still selected h2 with the offer narrowed: the websocket " +
+			"upgrade that follows would be answered with an HTTP/2 SETTINGS frame")
 	}
-	<-done
+	if server != "http/1.1" || client != "http/1.1" {
+		t.Fatalf("negotiated %q/%q, want http/1.1", client, server)
+	}
+}
+
+// The two attempts together: what the WSS dialer does when it meets a CDN.
+// The first hello is Chrome's and gets h2, which is unusable; the second is
+// narrowed and gets a session a websocket can actually run over.
+func TestTheDialerRecoversFromAnH2PeerOnTheSecondAttempt(t *testing.T) {
+	ln := alpnEchoServer(t, []string{"h2", "http/1.1"})
+
+	if _, server := negotiate(t, ln, false); server != "h2" {
+		t.Fatalf("setup: the peer negotiated %q, wanted it to take h2", server)
+	}
+	client, server := negotiate(t, ln, true)
+	if client != "http/1.1" || server != "http/1.1" {
+		t.Fatalf("the retry negotiated %q/%q, want http/1.1 — the tunnel cannot come "+
+			"up behind a CDN", client, server)
+	}
 }

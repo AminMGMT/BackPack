@@ -11,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/gorilla/websocket"
+	utls "github.com/refraction-networking/utls"
 )
 
 func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, retry int, SO_RCVBUF int, SO_SNDBUF int, mss int) (*websocket.Conn, error) {
@@ -147,13 +148,36 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 		// its keying material can be bound into the credential. gorilla is then
 		// handed the finished connection and only writes the HTTP upgrade over
 		// it — it does no TLS of its own, and TLSClientConfig is not consulted.
-		rawConn, err := TcpDialerVia(ctx, out, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, mss)
+		tlsAttempt := func(http11Only bool) (*utls.UConn, error) {
+			rawConn, err := TcpDialerVia(ctx, out, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, mss)
+			if err != nil {
+				return nil, err
+			}
+			return uTLSClientConn(ctx, rawConn, sni, timeout, http11Only)
+		}
+
+		// Offer exactly what Chrome offers, and only give that up if the peer
+		// takes the offer we cannot honour.
+		//
+		// Narrowing the ALPN up front fixes CDNs and breaks the disguise for
+		// everyone else: a hello that is Chrome in every field but announces
+		// only http/1.1 is a combination no browser produces, and it is the
+		// same combination on every tunnel that sends it. Our own server pins
+		// http/1.1 on its side, so a direct connection never selects h2 and
+		// never needs the narrowing — which is most connections. A CDN in front
+		// does select it, and pays for the fix with one extra dial, once, at
+		// startup. See pinClientALPNToHTTP11.
+		uconn, err := tlsAttempt(false)
 		if err != nil {
 			return nil, err
 		}
-		uconn, err := uTLSClientConn(ctx, rawConn, sni, timeout)
-		if err != nil {
-			return nil, err
+		if uconn.ConnectionState().NegotiatedProtocol == "h2" {
+			// gorilla speaks RFC 6455 over HTTP/1.1 and nothing else, so this
+			// session is unusable whatever we do with it.
+			uconn.Close()
+			if uconn, err = tlsAttempt(true); err != nil {
+				return nil, err
+			}
 		}
 		// With a trusted TLS-terminating proxy in front of the server (NGINX,
 		// typically), the proxy's TLS session is not the client's, so a bound

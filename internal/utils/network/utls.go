@@ -32,7 +32,11 @@ import (
 // It returns the concrete *utls.UConn (which is a net.Conn) rather than the
 // interface, so the caller can also export keying material from the finished
 // session to bind the tunnel credential to it — see wssbind.go.
-func uTLSClientConn(ctx context.Context, raw net.Conn, serverName string, timeout time.Duration) (*utls.UConn, error) {
+// http11Only narrows the ALPN offer to what a websocket can actually use. It
+// is for the second attempt against a peer that answered the first one with h2
+// — see the WSS case in ws_dialer.go — and costs a fingerprint deviation, so it
+// is never the first thing tried.
+func uTLSClientConn(ctx context.Context, raw net.Conn, serverName string, timeout time.Duration, http11Only bool) (*utls.UConn, error) {
 	// Held by reference: uTLS does not copy the config, so it can be adjusted
 	// after the handshake to re-enable the session exporter (see below).
 	cfg := &utls.Config{
@@ -46,9 +50,11 @@ func uTLSClientConn(ctx context.Context, raw net.Conn, serverName string, timeou
 	}
 	uconn := utls.UClient(raw, cfg, utls.HelloChrome_Auto)
 
-	if err := pinClientALPNToHTTP11(uconn); err != nil {
-		raw.Close()
-		return nil, err
+	if http11Only {
+		if err := pinClientALPNToHTTP11(uconn); err != nil {
+			raw.Close()
+			return nil, err
+		}
 	}
 
 	if timeout > 0 {
@@ -101,16 +107,29 @@ func sniFromAddr(addr string) string {
 // stream id. Behind Cloudflare the tunnel could not come up at all, while a
 // direct connection to the same server worked perfectly.
 //
-// Offering a protocol we cannot speak is the bug. An RFC 6455 websocket needs
-// the HTTP/1.1 Upgrade mechanism, which HTTP/2 does not have — carrying one
-// over h2 is a different protocol (RFC 8441 extended CONNECT) that gorilla does
-// not implement. So the offer is narrowed to what the client can actually use,
-// and every peer, CDN or not, is left with one choice.
+// An RFC 6455 websocket needs the HTTP/1.1 Upgrade mechanism, which HTTP/2 does
+// not have — carrying one over h2 is a different protocol (RFC 8441 extended
+// CONNECT) that gorilla does not implement. So against a peer that selects h2
+// the offer has to be narrowed to what the client can actually use.
 //
-// The cost is a fingerprint that no longer matches Chrome's byte for byte:
-// JA3 and JA4 both cover the ALPN list. It is a small deviation — an
-// HTTP/1.1-only client is an ordinary thing to be — and the alternative is a
-// transport that cannot work behind any CDN worth putting in front of it.
+// What this costs, and why it is not done to everybody:
+//
+// The hello it produces is a contradiction. Every other field is Chrome's, byte
+// for byte, and then the ALPN offers only http/1.1 — which Chrome never does.
+// JA3 does not see it, because JA3 hashes extension type ids and not their
+// contents; the hello is three bytes shorter and JA3 is unchanged. JA4 does see
+// it: its ALPN field goes from "h2" to "h1". So the result is a rare but
+// perfectly stable JA4 shared by every tunnel that sends it, always towards the
+// same handful of foreign addresses. That is a cheap thing to collect and a
+// cheap thing to act on, and this transport exists to be uninteresting.
+//
+// It was applied to every wss dial for one release. Reverse tunnels started
+// dying two or three days in and coming back on a fresh server, which is what
+// address-level blocking looks like from the far end. Whether that was the
+// cause is not provable from here, but paying a fingerprint deviation on every
+// direct connection to solve a problem only CDN users have is the wrong trade
+// however it turned out — so it is now the second attempt rather than the
+// first, and only a peer that actually answers with h2 gets it.
 func pinClientALPNToHTTP11(uconn *utls.UConn) error {
 	// The preset's extensions do not exist until the hello is built, and the
 	// ALPN list inside it is hardcoded by the fingerprint rather than read from

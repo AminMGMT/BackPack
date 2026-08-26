@@ -59,7 +59,7 @@ func TestWSSHandshakeWearsABrowserFingerprint(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_, _ = uTLSClientConn(context.Background(), raw, "example.com", time.Second)
+		_, _ = uTLSClientConn(context.Background(), raw, "example.com", time.Second, false)
 	})
 
 	if hello[0] != 0x16 {
