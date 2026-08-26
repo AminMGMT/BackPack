@@ -647,6 +647,46 @@ func applySpec(s TunnelSpec) error {
 		}
 		return fmt.Errorf("the tunnel did not come up with the new settings — reverted to the previous config")
 	}
+	// Filed only now. A change that was reverted above replaced nothing, and
+	// recording it would put the configuration that is still running into the
+	// list of ones to go back to. See confhist.go.
+	recordConfigChange(s.Name, prev, "")
+	return nil
+}
+
+// applyRawConfig writes a configuration verbatim and restarts the tunnel on it,
+// with the same revert-if-it-will-not-start guarantee applySpec gives.
+//
+// Verbatim is the point: restoring by re-rendering a spec would silently drop
+// any key the current spec cannot hold, which is the trap directSpec's own
+// comment warns about. What was kept is what goes back.
+func applyRawConfig(name string, cfg []byte, note string) error {
+	path := app.ConfigPath(name)
+	service := app.ServiceName(name)
+
+	prev, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("could not read the current config: %w", err)
+	}
+	wasActive := IsActive(service)
+
+	if err := os.WriteFile(path, cfg, 0644); err != nil {
+		_ = os.WriteFile(path, prev, 0644)
+		return err
+	}
+	if err := RestartService(service); err != nil {
+		revertSpec(path, prev, service, wasActive)
+		return fmt.Errorf("the tunnel failed to restart on that configuration — reverted: %w", err)
+	}
+	if !WaitServiceActive(service, 10*time.Second) {
+		detail := lastLogLine(service)
+		revertSpec(path, prev, service, wasActive)
+		if detail != "" {
+			return fmt.Errorf("the tunnel did not come up on that configuration — reverted. Reason: %s", detail)
+		}
+		return fmt.Errorf("the tunnel did not come up on that configuration — reverted")
+	}
+	recordConfigChange(name, prev, note)
 	return nil
 }
 

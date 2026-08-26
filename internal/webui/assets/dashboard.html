@@ -432,6 +432,14 @@
   .accb{display:flex;flex-direction:column;gap:12px;padding:12px 14px;border-top:1px solid var(--stroke);
     overflow:hidden;transition:height .32s var(--ease-spring)}
   .accb[hidden]{display:none}
+  /* The key for the dashed rules on the day chart. */
+  .undorow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--stroke)}
+  .undorow:last-child{border-bottom:none}
+  .undorow b{font-size:13px;font-weight:600;display:block}
+  .undorow i{font-style:normal;font-size:11.5px;color:var(--muted2);display:block;margin-top:2px}
+  .undorow button{margin-left:auto;flex:none}
+  .changekey{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted2);margin-top:6px}
+  .changekey i{width:14px;height:0;border-top:1px dashed var(--muted2);display:inline-block}
   /* Speed test gauge. A dial rather than a number alone, because the number on
      its own gives no sense of whether it is good — the sweep does. */
   .spgauge{margin:16px 0 4px;position:relative}
@@ -2009,6 +2017,7 @@
     <p data-i18n>Traffic, configuration and link quality.</p>
     <div id="detbody"></div>
     <div id="histwrap"></div>
+    <div id="confhist"></div>
     <div id="ltwrap"></div>
     <div class="actions" style="margin-top:14px">
       <button class="btn-ghost" onclick="closeDetails()" data-i18n>Close</button>
@@ -2480,6 +2489,15 @@ const FA={
   "Lower it if large packets stall. Leave automatic on unless you have measured the path yourself.":"اگر بسته‌های بزرگ گیر می‌کنند پایین‌ترش بیاورید. تا وقتی خودتان مسیر را اندازه نگرفته‌اید، حالت خودکار را روشن بگذارید.",
 
   "Performance preset":"پروفایل کارایی",
+  "Undo a change":"برگرداندن یک تغییر",
+  "Each entry is the configuration as it was before the change made then. Restoring restarts the tunnel — and if it will not come up, it is reverted.":"هر مورد، پیکربندی است همان‌طور که پیش از تغییرِ آن لحظه بود. بازگرداندن تانل را ری‌استارت می‌کند — و اگر بالا نیاید، برگردانده می‌شود.",
+  "Before":"پیش از",
+  "Restore":"بازگرداندن",
+  "Restoring…":"در حال بازگرداندن…",
+  "Restore this configuration? The tunnel restarts, so connections through it drop for a moment.":"این پیکربندی بازگردانده شود؟ تانل ری‌استارت می‌شود، پس اتصال‌های روی آن لحظه‌ای قطع می‌شوند.",
+  "Restored, and the tunnel came up on it.":"بازگردانده شد و تانل روی آن بالا آمد.",
+  "The restore failed.":"بازگرداندن شکست خورد.",
+  "config changed":"تغییر پیکربندی",
   "Speed test":"تست سرعت",
   "Measures what this tunnel actually carries — encapsulation, encryption, carrier and path together.":"اندازه می‌گیرد این تانل واقعاً چقدر حمل می‌کند — کپسوله‌سازی، رمزنگاری، حامل و مسیر، همه با هم.",
   "Mbit/s":"مگابیت بر ثانیه",
@@ -3243,12 +3261,29 @@ function sparkUpdate(sp,rates,h){
 // show a history rather than a live rate: the Details sheet and the 24-hour
 // view. They are opened, read and closed, so there is nothing for them to
 // travel from and no reason to keep an element around to animate.
-function sparkSVG(rates,h){
+// marks, when given, are unix seconds to draw a vertical rule at — the moments
+// the tunnel's configuration changed. They are positioned by time against the
+// same span the series covers, so a mark lands where the change actually
+// happened rather than at a point index.
+function sparkMarks(rates,h,marks){
+  if(!marks||!marks.length||rates.length<2) return '';
+  const t0=rates[0].t, t1=rates[rates.length-1].t, span=t1-t0;
+  if(span<=0) return '';
+  return marks.map(function(at){
+    if(at<t0||at>t1) return '';
+    const x=(1+((at-t0)/span)*(SPARK_W-2)).toFixed(1);
+    return `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="var(--muted2)"
+      stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+}
+
+function sparkSVG(rates,h,marks){
   if(!rates||rates.length<2) return '';
   const series=sparkSeries(rates,h);
   const last=rates[rates.length-1];
   return `<svg viewBox="0 0 ${SPARK_W} ${h}" preserveAspectRatio="none" role="img"
        aria-label="Speed: down ${humanBytes(last.in)}/s, up ${humanBytes(last.out)}/s">
+     ${sparkMarks(rates,h,marks)}
      <path d="${series.out}" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5" stroke-linejoin="round"/>
      <path d="${series.in}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
    </svg>
@@ -4770,8 +4805,53 @@ function openDetails(name){
   $('dettitle').textContent=name+' · Details';
   $('detbody').innerHTML=renderDetails(t); relang();
   loadHistory(name);
+  loadConfHistory(name);
   renderLinkTestBox(t);
   $('details').classList.add('on');
+}
+
+// ---- what this tunnel used to be ----
+//
+// The moments its configuration changed, and the chance to put one back. The
+// panel is never sent the stored configurations themselves — they hold the
+// tunnel's token — only when each change happened. What changed is visible
+// after restoring, from the settings themselves.
+async function loadConfHistory(name){
+  const box=$('confhist');
+  box.innerHTML='';
+  let h;
+  try{ h=await (await fetch('/api/confhist?name='+encodeURIComponent(name))).json(); }
+  catch(e){ return; }
+  const list=(h&&h.changes)||[];
+  if(!list.length) return;
+
+  let out=dSec('Undo a change')+
+    '<div class="msg">'+T('Each entry is the configuration as it was before the change made then. Restoring restarts the tunnel — and if it will not come up, it is reverted.')+'</div>';
+  list.forEach(function(c){
+    out+='<div class="undorow"><div><b>'+T('Before')+' '+esc(c.when)+'</b>'+
+         (c.note?'<i>'+esc(c.note)+'</i>':'')+'</div>'+
+         '<button class="btn-sm" onclick="restoreConf(\''+esc(name)+'\',\''+c.at+'\',this)" data-i18n>Restore</button></div>';
+  });
+  box.innerHTML=out;
+  relang();
+}
+
+async function restoreConf(name,at,btn){
+  if(!confirm(T('Restore this configuration? The tunnel restarts, so connections through it drop for a moment.'))) return;
+  const was=btn.textContent;
+  btn.disabled=true; btn.textContent=T('Restoring…');
+  try{
+    const r=await fetch('/api/confhist/restore',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:name,at:Number(at)})});
+    const body=(await r.text()).trim();
+    if(!r.ok) throw new Error(body);
+    toast(T('Restored, and the tunnel came up on it.'));
+    loadTunnels(); loadConfHistory(name);
+  }catch(e){
+    toast((e&&e.message)?e.message:T('The restore failed.'),true);
+    btn.disabled=false; btn.textContent=was;
+  }
 }
 
 // ---- long-term history ----
@@ -4789,7 +4869,14 @@ async function loadHistory(name){
   }
   let out='';
   if(h.series&&h.series.length>1){
-    out+=dSec('Last 24 hours')+'<div class="spark sparkbig">'+sparkSVG(h.series,72)+'</div>';
+    // The moments the configuration changed are drawn over the speed, so a
+    // change and what followed it are read together rather than remembered
+    // separately.
+    out+=dSec('Last 24 hours')+'<div class="spark sparkbig">'+
+         sparkSVG(h.series,72,h.changes)+'</div>';
+    if(h.changes&&h.changes.length){
+      out+='<div class="changekey"><i></i>'+T('config changed')+'</div>';
+    }
   }
   if(h.days&&h.days.length){
     out+=dSec('Per day — ↓ down · ↑ up')+dayBars(h.days);

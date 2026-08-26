@@ -203,6 +203,13 @@ func editPortsMenu(name string) {
 				})
 				actions = append(actions, func() { editCertificate(name, spec) })
 			}
+			if len(ConfigHistory(name)) > 0 {
+				opts = append(opts, tui.Option{
+					Title: "Undo a change",
+					Desc:  "put back the configuration from before an earlier edit",
+				})
+				actions = append(actions, func() { editConfigHistory(name) })
+			}
 			idx := tui.ChooseOpt("Choose:", opts)
 			if idx < 0 || idx >= len(actions) {
 				return
@@ -260,6 +267,13 @@ func editPortsMenu(name string) {
 					Desc:  "the forged source, the packet profile and everything else the carrier does",
 				})
 				actions = append(actions, func() { editSpoof(name, spec) })
+			}
+			if len(ConfigHistory(name)) > 0 {
+				opts = append(opts, tui.Option{
+					Title: "Undo a change",
+					Desc:  "put back the configuration from before an earlier edit",
+				})
+				actions = append(actions, func() { editConfigHistory(name) })
 			}
 			idx := tui.ChooseOpt("Choose:", opts)
 			if idx < 0 || idx >= len(actions) {

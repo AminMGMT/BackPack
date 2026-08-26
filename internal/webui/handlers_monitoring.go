@@ -256,9 +256,26 @@ func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		up7 = float64(upN) / float64(n) * 100
 	}
 
+	// When the configuration changed, so the chart can mark it.
+	//
+	// A speed chart with no idea what was done to the tunnel makes "did that
+	// change help?" a matter of impression. With the moments marked it is a
+	// line on a graph, which is the difference between tuning and superstition.
+	// Only the ones inside the window the chart covers are sent.
+	var changes []int64
+	if len(series) > 0 {
+		from := series[0].T
+		for _, at := range manage.ConfigChangeTimes(name) {
+			if at >= from {
+				changes = append(changes, at)
+			}
+		}
+	}
+
 	writeJSON(w, map[string]any{
 		"series": series, "days": dayList,
 		"uptime24h": up24, "uptime7d": up7,
+		"changes": changes,
 	})
 }
 
