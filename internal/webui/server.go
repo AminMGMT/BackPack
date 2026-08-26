@@ -225,6 +225,8 @@ func Serve() error {
 	mux.HandleFunc("/api/health", srv.requireAuth(srv.handleHealth))
 	mux.HandleFunc("/api/alerts", srv.requireReadAuth(srv.handleAlerts))
 	mux.HandleFunc("/api/linktest", srv.requireAuth(srv.handleLinkTest))
+	mux.HandleFunc("/api/speedtest/plan", srv.requireAuth(srv.handleSpeedTestPlan))
+	mux.HandleFunc("/api/speedtest", srv.requireAuth(srv.handleSpeedTestRun))
 	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
 	mux.HandleFunc("/api/remotetoken", srv.requireAuth(srv.handleRemoteToken))
 	mux.HandleFunc("/api/security", srv.requireAuth(srv.handleSecurity))
