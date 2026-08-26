@@ -79,7 +79,6 @@ type spoofConn struct {
 	rst      *rstGuard // the tcp RST-suppression rule, set when recvProfile is tcp
 	icmpEcho bool      // holds the kernel Echo-Reply suppression, set when recvProfile is icmp
 	rot      atomic.Uint32
-	ipID     atomic.Uint32
 	tcpSeq   atomic.Uint32
 	icmpSeq  atomic.Uint32
 }
@@ -94,6 +93,10 @@ type spoofConn struct {
 func spoofOverhead(p SpoofProfile) int {
 	return ipv4.HeaderLen + profileL4Len(p)
 }
+
+// protoRawSend is IPPROTO_RAW: a send-only raw socket whose IP header is
+// entirely the caller's, and which is handed no inbound packets at all.
+const protoRawSend = 255
 
 // openRawIP opens a raw IPv4 socket for a protocol, optionally pinned to a
 // device, and wraps it so reads and writes carry the full IP header. sockBuf
@@ -169,7 +172,15 @@ func newSpoofConn(server bool, o spoofConnOpts) (net.PacketConn, error) {
 		sendProfile, recvProfile = o.downlink, o.uplink
 	}
 
-	sendPC, send, err := openRawIP(sendProfile.ipProtocol(), o.iface, sockBuf)
+	// IPPROTO_RAW, not the profile's protocol.
+	//
+	// A raw socket opened on a protocol receives every packet of that protocol
+	// the host sees, and this one is only ever written to — so opening it on,
+	// say, IPPROTO_UDP left the kernel queueing a copy of every UDP packet on
+	// the machine into a buffer nothing would ever read. IPPROTO_RAW is
+	// send-only by definition and carries IP_HDRINCL implicitly, which is what
+	// the reference opens and what this socket actually needs.
+	sendPC, send, err := openRawIP(protoRawSend, o.iface, sockBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +349,7 @@ func (c *spoofConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 		// real ping and its answer.
 		shim = buildICMPEcho(c.sendICMPType, c.port, uint16(c.icmpSeq.Add(1)), body)
 	case c.sendProfile == SpoofProfileTCP:
-		shim = buildTCPShimPorts(srcPort, c.port, c.tcpSeq.Add(uint32(len(body))+1), src, c.realPeer, body)
+		shim = buildTCPShimPorts(srcPort, c.port, nextTCPSeq(&c.tcpSeq, len(body)), src, c.realPeer, body)
 	case c.sendProfile == SpoofProfileIPIP:
 		shim = body // proto 4: the payload IS the IP body, no L4 header
 	case c.sendProfile == SpoofProfileGRE:
@@ -367,7 +378,7 @@ func (c *spoofConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 // black-holing (the "fragmentation needed" ICMP would go to the forged source
 // and be lost).
 func (c *spoofConn) sendIP(src net.IP, proto int, shim []byte) error {
-	id := int(c.ipID.Add(1) & 0xffff) // all fragments of one segment share this id
+	id := int(randomIPID()) // all fragments of one segment share this id
 	// TTL and DSCP are picked once per datagram (not per fragment) so every
 	// fragment of one packet agrees, as a genuine packet's do. Both are ignored
 	// by the receiver, so the jitter needs no coordination.

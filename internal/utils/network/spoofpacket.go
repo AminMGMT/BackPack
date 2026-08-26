@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"sync/atomic"
 
 	"golang.org/x/net/ipv4"
 )
@@ -326,6 +327,25 @@ func buildTCPShim(port uint16, seq uint32, src, dst net.IP, framed []byte) []byt
 	return buildTCPShimPorts(port, port, seq, src, dst, framed)
 }
 
+// tcpSpoofFlags is the flag byte every spoofed TCP segment carries: SYN alone.
+//
+// It used to be PSH|ACK, chosen to read as traffic on an established
+// connection. That is the wrong thing to look like. There is no established
+// connection — no handshake ever happened — so to anything on the path that
+// tracks state, every one of those segments is out of state, and dropping
+// out-of-state TCP is the first thing a stateful firewall does. The tunnel then
+// comes up, the sockets are healthy, and nothing crosses.
+//
+// A SYN is never out of state: it is the packet that starts a connection, so a
+// stateful device has nothing to reject it for. This is what the spoof-tunnel
+// reference sends — its sender is named for it — and it is the difference
+// between the two implementations that can stop traffic outright.
+//
+// The receiving end does not care either way: stripSpoofShim reads the ports
+// and the data offset and never looks at the flags, so a sender on SYN
+// interoperates with a peer of any version.
+const tcpSpoofFlags = 0x02
+
 // buildTCPShimPorts is buildTCPShim with independent source and destination
 // ports, for the source-port shuffle. The destination port stays the tunnel's,
 // so the receiver still matches it; only the source varies.
@@ -335,9 +355,9 @@ func buildTCPShimPorts(srcPort, dstPort uint16, seq uint32, src, dst net.IP, fra
 	binary.BigEndian.PutUint16(b[0:2], srcPort) // source port
 	binary.BigEndian.PutUint16(b[2:4], dstPort) // dest port
 	binary.BigEndian.PutUint32(b[4:8], seq)     // seq
-	binary.BigEndian.PutUint32(b[8:12], 0)      // ack
+	binary.BigEndian.PutUint32(b[8:12], 0)      // ack — zero, as a SYN's is
 	b[12] = 5 << 4                              // data offset = 5 words, no options
-	b[13] = 0x18                                // PSH | ACK, so it reads as established traffic
+	b[13] = tcpSpoofFlags
 	binary.BigEndian.PutUint16(b[14:16], 0xffff)
 	copy(b[20:], framed)
 	csum := l4Checksum(src, dst, 6, b)
@@ -363,6 +383,33 @@ func stripSpoofShim(profile SpoofProfile, port uint16, l4 []byte) ([]byte, bool)
 		return nil, false
 	}
 	return l4[8:], true
+}
+
+// nextTCPSeq advances a spoofed flow's sequence number by what is about to be
+// sent, and returns the value to stamp on this segment.
+//
+// The sequence space counts payload bytes. Advancing by the length plus one
+// counts a byte that was never on the wire and leaves a one-byte hole in the
+// space on every segment — visible to anything on the path that follows a flow,
+// and not what a real sender does. The reference starts at 1 and adds the
+// payload length; this does the same.
+func nextTCPSeq(counter *atomic.Uint32, n int) uint32 {
+	return counter.Add(uint32(n)) - uint32(n) + 1
+}
+
+// randomIPID returns an unpredictable IPv4 identification field.
+//
+// It was an incrementing counter. On an ordinary host that is unremarkable, but
+// this carrier claims a different source address on almost every packet — and a
+// counter that runs 1, 2, 3 across a dozen apparently unrelated sources ties
+// them back together into one flow, which is the one thing a forged source is
+// meant to prevent. The reference draws it at random for the same reason.
+//
+// math/rand is the right tool here: the id is a demultiplexing tag for
+// fragments, not a secret, and drawing it from the cryptographic pool for every
+// datagram would cost far more than it is worth.
+func randomIPID() uint16 {
+	return uint16(rand.Uint32())
 }
 
 // l4Checksum computes the 16-bit ones-complement checksum of an L4 segment over
