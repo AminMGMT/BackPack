@@ -147,7 +147,17 @@ func (p *legacyProbe) miss(logger *logrus.Logger, sent byte) {
 	if p.legacy.Swap(true) || p.warned.Swap(true) {
 		return
 	}
-	logger.Warn("the server did not answer the current handshake, so it is running an older version. Falling back to the previous one, in which the server has to identify this client's pool connections by their source address — which fails if this machine dials out from more than one address. Upgrade the server to remove that limitation.")
+	// What was seen, then what it most likely means, then what to check. The
+	// previous wording stated the conclusion as fact — "so it is running an older
+	// version" — and a user acted on it, upgrading a server that was fine while
+	// the real fault was the path. A message is allowed to draw a conclusion; it
+	// is not allowed to hide that it drew one.
+	logger.Warnf("the server closed %d handshake attempts without answering the current one. "+
+		"That is what an older server does, so this client is falling back to the previous "+
+		"handshake, in which the server identifies pool connections by their source address — "+
+		"which fails if this machine dials out from more than one address. If the server is "+
+		"in fact up to date, look at the path instead: a connection closed in transit looks "+
+		"the same from here.", legacyMissThreshold)
 }
 
 // reset re-arms the probe for a fresh run of the tunnel.

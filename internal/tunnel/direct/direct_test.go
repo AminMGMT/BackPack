@@ -103,42 +103,69 @@ func echoBackend(t *testing.T, label string) string {
 	return listener.Addr().String()
 }
 
-// freePort finds a loopback port that is free for both TCP and UDP.
+// Port allocation.
 //
-// Asking the kernel for a TCP port and handing the number to something that
-// also binds UDP is two assumptions, and both of them fail on a busy machine.
-// A port free for TCP says nothing about the same number on UDP, and the whole
-// thing is a race either way: the socket is closed before the caller binds, so
-// anything else on the host may take it in between. `go test ./...` runs
-// packages in parallel and CI runs the suite twice, once under -race, which is
-// when a window like that stops being theoretical.
+// Handing out a port by binding one, reading its number and closing it is racy
+// twice over, and both halves showed up as a CI failure that read "the udp
+// tunnel never came up" — twenty seconds of no reply, diagnosed as the tunnel
+// being slow when it had never bound at all.
 //
-// Both sockets are held until the last moment and both families are checked, so
-// the number that comes back was free for the thing it is about to be used for.
-// The race cannot be closed entirely without binding on the caller's behalf,
-// but a collision now fails loudly at the bind — see testLogger — instead of as
-// a silent twenty-second wait for a reply that was never coming.
+// The first half is the obvious one: the socket is closed before the caller
+// binds, so anything on the host may take the number in between. The second is
+// the one that actually bites, and internal/e2e worked it out first: the
+// kernel draws the SOURCE port of every outgoing connection from the ephemeral
+// range, and this suite opens a great many outgoing connections. A listen port
+// picked from inside that range can be handed to one of them before the tunnel
+// gets to bind it. Linux's default range starts at 32768 and macOS's at 49152,
+// which is why a window inside it fails on CI and not on a developer's machine.
+//
+// So ports come from a private range below the ephemeral one, are never issued
+// twice in a run, and are checked free on both TCP and UDP first — the UDP half
+// mattering because these tests forward both.
+const (
+	testPortLow  = 12000
+	testPortHigh = 30000
+)
+
+var (
+	portMu   sync.Mutex
+	nextPort = testPortLow + (int(time.Now().UnixNano()/1e6) % (testPortHigh - testPortLow))
+	issued   = map[int]bool{}
+)
+
 func freePort(t *testing.T) int {
 	t.Helper()
-	for attempt := 0; attempt < 20; attempt++ {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		port := listener.Addr().(*net.TCPAddr).Port
+	portMu.Lock()
+	defer portMu.Unlock()
 
-		packet, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			// Taken on UDP by something else. Try another.
-			listener.Close()
+	for attempts := 0; attempts < 4000; attempts++ {
+		port := nextPort
+		nextPort++
+		if nextPort > testPortHigh {
+			nextPort = testPortLow
+		}
+		if issued[port] || !portFree(port) {
 			continue
 		}
-		packet.Close()
-		listener.Close()
+		issued[port] = true
 		return port
 	}
-	t.Fatal("could not find a loopback port free on both TCP and UDP")
+	t.Fatal("no free port available for the test")
 	return 0
+}
+
+func portFree(port int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	pc, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	pc.Close()
+	return true
 }
 
 // tunnel is a running edge/origin pair on loopback.

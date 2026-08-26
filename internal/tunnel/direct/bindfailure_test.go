@@ -76,7 +76,7 @@ func TestAPortThatCannotBeBoundIsReported(t *testing.T) {
 }
 
 // The harness must not hand out a port that is free for TCP and taken for UDP.
-// It used to probe TCP only, and the UDP tests bind both.
+// It used to probe TCP only, and these tests bind both.
 func TestFreePortIsFreeForUDPToo(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		port := freePort(t)
@@ -86,5 +86,29 @@ func TestFreePortIsFreeForUDPToo(t *testing.T) {
 			t.Fatalf("freePort returned %d, which cannot be bound for UDP: %v", port, err)
 		}
 		packet.Close()
+	}
+}
+
+// A port must never be issued twice in a run, and must never come from the
+// range the kernel draws outgoing source ports from — that overlap is what let
+// one of this suite's own connections take a listen port before the tunnel
+// bound it, which is the failure CI reported and a developer's machine did not.
+func TestPortsAreUniqueAndBelowTheEphemeralRange(t *testing.T) {
+	// Linux's ephemeral range starts at 32768, macOS's at 49152. Staying under
+	// the lower of the two clears both.
+	const lowestEphemeral = 32768
+
+	seen := make(map[int]bool)
+	for i := 0; i < 200; i++ {
+		port := freePort(t)
+		if seen[port] {
+			t.Fatalf("port %d was issued twice", port)
+		}
+		seen[port] = true
+		if port >= lowestEphemeral {
+			t.Fatalf("port %d is inside the kernel's ephemeral range, where an "+
+				"outgoing connection of this suite's own can take it before the "+
+				"tunnel binds", port)
+		}
 	}
 }
