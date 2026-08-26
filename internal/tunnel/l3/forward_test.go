@@ -3,6 +3,7 @@ package l3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/backpack/backpack/internal/testport"
+	"github.com/sirupsen/logrus"
 )
 
 // echoTCP starts a TCP server that echoes what it is sent, prefixed with a
@@ -73,24 +77,30 @@ func echoUDP(t *testing.T, label string) string {
 }
 
 // freePort finds a port nothing is listening on, for a mapping's listen side.
+// freePort draws from the shared allocator. It used to bind a TCP port, read
+// its number and close it — which is how this package's UDP tests failed on CI
+// with "no reply ever came back through the udp forwarder", a listener that was
+// never bound rather than one that was slow. See internal/testport.
 func freePort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	return port
+	return testport.Free(t)
 }
 
 // startForwarder runs a forwarder for the given specs and waits for its
 // listeners to accept.
 func startForwarder(t *testing.T, specs []string, acceptUDP bool) {
 	t.Helper()
+	// The forwarder's own account of itself, printed only if the test fails.
+	//
+	// This used to be quietLogger and a discarded Run error, so a listener that
+	// could not bind said nothing at all — and the test that depended on it
+	// failed forty seconds later with "no reply ever came back", which is a
+	// description of the symptom and no help with the cause. It was read as
+	// flakiness twice.
+	log, captured := testLoggerCapturing(t)
 	forwarder, err := NewForwarder(Config{
 		Ports: specs, AcceptUDP: acceptUDP, PeerIP: "127.0.0.1",
-	}, quietLogger())
+	}, log)
 	if err != nil {
 		t.Fatalf("NewForwarder: %v", err)
 	}
@@ -100,8 +110,48 @@ func startForwarder(t *testing.T, specs []string, acceptUDP bool) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); _ = forwarder.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	var runErr error
+	go func() { defer close(done); runErr = forwarder.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		if t.Failed() {
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				t.Logf("the forwarder stopped with: %v", runErr)
+			}
+			if out := captured.String(); out != "" {
+				t.Logf("forwarder log:\n%s", out)
+			}
+		}
+	})
+}
+
+// capturedLog holds what the forwarder said, for a test to print if it fails.
+type capturedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *capturedLog) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *capturedLog) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// testLoggerCapturing keeps the log and prints it only when the test failed, so
+// a passing run stays quiet and a failing one says why.
+func testLoggerCapturing(t *testing.T) (*logrus.Logger, *capturedLog) {
+	t.Helper()
+	captured := &capturedLog{}
+	log := logrus.New()
+	log.SetOutput(captured)
+	return log, captured
 }
 
 // dialUntilReady retries briefly, because the forwarder's listeners come up in

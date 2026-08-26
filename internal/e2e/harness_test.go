@@ -21,6 +21,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/client"
 	"github.com/backpack/backpack/internal/server"
+	"github.com/backpack/backpack/internal/testport"
 )
 
 // tunnelReadyTimeout is how long a tunnel gets to come up before a test fails.
@@ -28,59 +29,13 @@ import (
 // loopback; being generous here costs nothing when things work.
 const tunnelReadyTimeout = 20 * time.Second
 
-// Port allocation.
-//
-// Asking the kernel for a free port and immediately releasing it is racy: two
-// parallel tests can be handed the same one, and the tunnel binds it seconds
-// later. A failure to bind is fatal in the engine, which takes the whole test
-// binary down with it — so ports are handed out from a private range instead,
-// never reused within a run, and checked free on both TCP and UDP first.
-//
-// The range must sit BELOW the kernel's ephemeral range, and that is the whole
-// reason these constants are what they are.
-//
-// Checking a port is free and then binding it seconds later leaves a window, and
-// the thing most likely to take the port in that window is this very suite: it
-// opens hundreds of outgoing connections (client dials, pool connections, backend
-// dials), and the kernel draws each one's SOURCE port from the ephemeral range.
-// Any overlap means a test's listen port can be handed to some other connection
-// as its source port before the tunnel gets to bind it — which surfaces as
-// "bind: address already in use" and kills the whole test binary.
-//
-// Linux's default ephemeral range is 32768-60999, so the old 34000-60000 window
-// sat entirely inside it. macOS starts at 49152, which is why this failed on CI
-// and not on a developer's machine. Staying under 32768 removes the overlap on
-// both.
-const (
-	testPortLow  = 12000
-	testPortHigh = 30000
-)
-
-var (
-	portMu   sync.Mutex
-	nextPort = testPortLow + (int(time.Now().UnixNano()/1e6) % (testPortHigh - testPortLow))
-	issued   = map[int]bool{}
-)
-
+// Ports come from the shared allocator. This package worked out what it has to
+// do — a private range below the ephemeral one, never reused, checked on both
+// TCP and UDP — and two other packages then wrote the naive version and failed
+// on CI for it. The reasoning now lives in one place: internal/testport.
 func freePort(t *testing.T) int {
 	t.Helper()
-	portMu.Lock()
-	defer portMu.Unlock()
-
-	for attempts := 0; attempts < 4000; attempts++ {
-		port := nextPort
-		nextPort++
-		if nextPort > testPortHigh {
-			nextPort = testPortLow
-		}
-		if issued[port] || !portFree(port) {
-			continue
-		}
-		issued[port] = true
-		return port
-	}
-	t.Fatal("no free port available for the test")
-	return 0
+	return testport.Free(t)
 }
 
 // waitPortFree blocks until nothing is bound to a port, so a test that
@@ -108,19 +63,7 @@ func waitPortFree(t *testing.T, port int, timeout time.Duration) {
 // portFree reports whether a port can be bound on both TCP and UDP. Both are
 // checked because a tunnel may want either, and a port taken on one protocol
 // often means something is about to take the other.
-func portFree(port int) bool {
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	l.Close()
-	pc, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	pc.Close()
-	return true
-}
+func portFree(port int) bool { return testport.IsFree(port) }
 
 // echoBackend is the service the tunnel forwards to: it echoes whatever it is
 // sent, which makes any corruption or truncation visible.
