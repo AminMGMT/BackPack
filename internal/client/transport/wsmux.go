@@ -153,6 +153,8 @@ func (c *WsMuxTransport) Restart() {
 	// behind, the panel would keep showing the size and throughput of a
 	// connection that is gone until the new run's first tick replaced them.
 	metrics.ClearPool()
+	// The peer belongs to the generation that just ended.
+	metrics.ClearPeer()
 	drain(c.controlFlow)
 
 	// set the log level again
@@ -186,6 +188,9 @@ func (c *WsMuxTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			// See metrics.Snapshot.Connected: the watchdog asks the engine, not the
+			// socket table.
+			metrics.ReportPeer(tunnelWSConn.RemoteAddr().String())
 			c.state.SetWSConn(tunnelWSConn)
 			c.logger.Info("control channel established successfully")
 

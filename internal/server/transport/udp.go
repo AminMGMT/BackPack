@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/web"
 	"github.com/sirupsen/logrus"
@@ -169,6 +170,7 @@ func (s *UdpTransport) Restart() {
 	// Re-initialize variables
 	s.status.set("")
 	s.controlChannel.Clear()
+	metrics.ClearPeer()
 	s.activeConnections = map[string]*TunnelUDPConn{}
 	s.activeMu = sync.Mutex{}
 
@@ -246,6 +248,10 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 		enableKeepAlive(conn, 30*time.Second)
 
 		s.controlChannel.Set(conn)
+		// The engine says whether it holds a control channel; the watchdog reads
+		// it rather than the socket table, which shows a socket long after the
+		// tunnel behind it has stopped working. See metrics.Snapshot.Connected.
+		metrics.ReportPeer(conn.RemoteAddr().String())
 		s.logger.Info("control channel successfully established.")
 		established = true
 

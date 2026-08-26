@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/alerthist"
+	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/metrics"
 )
 
 // Watchdog tuning.
@@ -73,6 +75,36 @@ func RunWatchdog(ctx context.Context) {
 
 // tunnelHealthy reports whether a running tunnel currently has its connection up,
 // based on the established TCP sockets in `pairs` ([local, peer] address pairs).
+// engineSaysConnected asks the tunnel's own engine whether it holds a control
+// channel.
+//
+// This is the answer the socket table cannot give. `ss` reports a socket, and a
+// socket outlives the tunnel behind it by a long way: one whose keepalive
+// probes go unanswered stays ESTABLISHED for eleven minutes on the shipped
+// defaults, and one stalled on a path that drops full-sized packets stays
+// ESTABLISHED while it retransmits. Every failure this watchdog missed looked
+// healthy in that table, which is what made "the tunnel is down and it had to
+// be restarted by hand" a recurring report.
+//
+// known is false when there is nothing to go on: no snapshot, a snapshot too
+// old to mean anything, or one written by a binary from before the engines
+// reported this — which is the ordinary case for the minutes after an update,
+// while the tunnels are still running the previous version. The caller falls
+// back to the socket table then, exactly as it always did.
+func engineSaysConnected(name string) (connected, known bool) {
+	snap, err := metrics.Read(app.ConfigDir, name)
+	if err != nil {
+		return false, false
+	}
+	if time.Since(snap.Taken) > datagramPeerWindow {
+		return false, false
+	}
+	if snap.Connected == nil {
+		return false, false
+	}
+	return *snap.Connected, true
+}
+
 func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
 	// The direct kinds are judged on their own terms: their roles are
 	// geographic, and a layer-3 tunnel has no TCP socket to observe at all.
@@ -82,6 +114,10 @@ func tunnelHealthy(t Tunnel, pairs [][2]string) bool {
 	if IsDirectKind(t) {
 		healthy, known := directHealthy(t, pairs)
 		return healthy || !known
+	}
+	// The engine's own answer outranks the socket table wherever there is one.
+	if connected, known := engineSaysConnected(t.Name); known {
+		return connected
 	}
 	// UDP-based transports (udp, kcp) hold no TCP sockets at all, so the TCP
 	// table says nothing about them.

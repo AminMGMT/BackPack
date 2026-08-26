@@ -211,6 +211,7 @@ func (s *WsMuxTransport) Restart() {
 
 	// Re-initialize variables
 	s.controlChannel.Clear()
+	metrics.ClearPeer()
 	s.status.set("")
 	// Stored atomically, like every other access: the goroutines of the run
 	// being replaced may still be counting while this resets them.
@@ -361,6 +362,9 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 				}
 
 				s.controlChannel.Set(conn)
+				// See metrics.Snapshot.Connected: the watchdog asks the engine, not
+				// the socket table.
+				metrics.ReportPeer(conn.RemoteAddr().String())
 
 				s.logger.Info("control channel established successfully")
 

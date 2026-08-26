@@ -15,6 +15,7 @@ import (
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
@@ -135,6 +136,8 @@ func (c *WsTransport) Restart() {
 	c.status.set("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	// The peer belongs to the generation that just ended.
+	metrics.ClearPeer()
 	drain(c.controlFlow)
 
 	// set the log level again
@@ -167,6 +170,9 @@ func (c *WsTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			// See metrics.Snapshot.Connected: the watchdog asks the engine, not the
+			// socket table.
+			metrics.ReportPeer(tunnelWSConn.RemoteAddr().String())
 			c.state.SetWSConn(tunnelWSConn)
 			c.logger.Info("control channel established successfully")
 

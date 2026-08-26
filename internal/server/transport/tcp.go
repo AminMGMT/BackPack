@@ -216,6 +216,7 @@ func (s *TcpTransport) Restart() {
 	// Re-initialize variables
 	s.status.set("")
 	s.controlChannel.Clear()
+	metrics.ClearPeer()
 	// The next run issues its own nonce, so connections still carrying this
 	// one must stop being accepted the moment the run ends.
 	s.poolNonce.Clear()
@@ -241,6 +242,10 @@ func (s *TcpTransport) channelHandshake(g *tcpGen) {
 		// would be checked against a nonce that is not there yet.
 		s.poolNonce.Set(candidate.nonce)
 		s.controlChannel.Set(candidate.conn)
+		// The engine says whether it holds a control channel; the watchdog reads
+		// it rather than the socket table, which shows a socket long after the
+		// tunnel behind it has stopped working. See metrics.Snapshot.Connected.
+		metrics.ReportPeer(candidate.conn.RemoteAddr().String())
 
 		if candidate.nonce == "" {
 			s.logger.Warn(legacyPoolWarning)

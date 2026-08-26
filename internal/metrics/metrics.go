@@ -30,15 +30,28 @@ type Snapshot struct {
 	BytesIn  uint64 `json:"bytes_in"`
 	BytesOut uint64 `json:"bytes_out"`
 
-	// Peer is the address of the connected far end, when the transport knows
-	// it and the operating system does not.
+	// Peer is the address of the connected far end, when the transport knows it.
 	//
-	// For the TCP-based transports the socket table already shows who is
-	// connected, so this stays empty. A datagram listener is different: it is
-	// one unconnected socket that keeps no record of its peers, so the kernel
-	// has nothing to report and the panel could show neither ping nor location
-	// for a working KCP tunnel. The transport does know, so it says so here.
+	// It used to be filled in only by the datagram transports, on the reasoning
+	// that for the TCP-based ones the socket table already shows who is
+	// connected. It does not. It shows a socket — and a socket outlives the
+	// tunnel it belongs to by a long way: one whose keepalive probes are going
+	// unanswered stays ESTABLISHED for eleven minutes on the shipped defaults,
+	// and one stalled on a path that drops full-sized packets stays ESTABLISHED
+	// while it retransmits. Every failure the watchdog missed looked healthy in
+	// that table. So every transport reports its peer now, and the watchdog asks
+	// the engine rather than the kernel.
 	Peer string `json:"peer,omitempty"`
+
+	// Connected is what the engine says about its own control channel: true
+	// while it holds one, false when it does not.
+	//
+	// It is a pointer because absent has to be distinguishable from false. A
+	// tunnel still running an older binary through an upgrade writes a snapshot
+	// with no opinion here at all, and reading that as "not connected" would
+	// have the watchdog restarting every tunnel on the host. Absent means ask
+	// the socket table, as before.
+	Connected *bool `json:"connected,omitempty"`
 
 	// KCP-only. Zero on every other transport.
 	KCP *KCPStats `json:"kcp,omitempty"`
@@ -68,16 +81,32 @@ type PoolStats struct {
 // runs per process, so a single value needs no key.
 var peerAddr atomic.Pointer[string]
 
-// ReportPeer records the address of the connected far end. Called by transports
-// whose peer the socket table cannot show.
+// Whether a control channel is held. Nil until the engine says either way, so a
+// snapshot from a binary that predates this carries no claim at all — see
+// Snapshot.Connected.
+var (
+	connected atomic.Pointer[bool]
+	yes       = true
+	no        = false
+)
+
+// SnapshotConnected is what the next snapshot would record, or nil if this
+// engine has not said. Exported for the same reason SnapshotPeer is.
+func SnapshotConnected() *bool { return connected.Load() }
+
+// ReportPeer records the address of the connected far end, and with it that
+// there is a far end at all. Called by every transport when its control channel
+// comes up.
 func ReportPeer(addr string) {
 	peerAddr.Store(&addr)
+	connected.Store(&yes)
 }
 
 // ClearPeer forgets the connected peer, on disconnect or restart, so a stale
 // address is not reported as current.
 func ClearPeer() {
 	peerAddr.Store(nil)
+	connected.Store(&no)
 }
 
 // SnapshotPeer is what the next snapshot would record as the peer, or "" if
@@ -187,6 +216,7 @@ func (c *Collector) Snapshot() Snapshot {
 		Taken:     time.Now(),
 		Uptime:    time.Since(c.started).Round(time.Second).String(),
 		Peer:      currentPeer(),
+		Connected: connected.Load(),
 	}
 	// The persisted baseline plus what this process has carried.
 	liveIn, liveOut := Traffic()

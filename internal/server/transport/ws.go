@@ -17,6 +17,7 @@ import (
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
@@ -188,6 +189,7 @@ func (s *WsTransport) Restart() {
 
 	// Re-initialize variables
 	s.controlChannel.Clear()
+	metrics.ClearPeer()
 	s.status.set("")
 
 	// set the log level again
@@ -333,6 +335,9 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 					return
 				}
 				s.controlChannel.Set(conn)
+				// See metrics.Snapshot.Connected: the watchdog asks the engine, not
+				// the socket table.
+				metrics.ReportPeer(conn.RemoteAddr().String())
 
 				s.logger.Info("control channel established successfully")
 

@@ -168,6 +168,8 @@ func (c *TcpMuxTransport) Restart() {
 	// behind, the panel would keep showing the size and throughput of a
 	// connection that is gone until the new run's first tick replaced them.
 	metrics.ClearPool()
+	// The peer belongs to the generation that just ended.
+	metrics.ClearPeer()
 	drain(c.controlFlow)
 
 	// set the log level again
@@ -249,6 +251,10 @@ func (c *TcpMuxTransport) channelDialer() {
 				// Settled before the pool starts, so no session is ever built
 				// on a version the server has not confirmed.
 				c.setMuxVersion(muxVersion)
+				// The engine knows it holds a control channel; the watchdog reads that
+				// rather than the socket table, which shows a socket long after the
+				// tunnel behind it has stopped working. See metrics.Snapshot.Connected.
+				metrics.ReportPeer(tunnelConn.RemoteAddr().String())
 				c.state.SetConn(tunnelConn)
 				c.logger.Infof("control channel established successfully (mux version %d)", c.muxVersion.Load())
 

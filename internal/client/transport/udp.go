@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
@@ -121,6 +122,8 @@ func (c *UdpTransport) Restart() {
 	c.status.set("")
 	atomic.StoreInt32(&c.poolConnections, 0)
 	atomic.StoreInt32(&c.loadConnections, 0)
+	// The peer belongs to the generation that just ended.
+	metrics.ClearPeer()
 	drain(c.controlFlow)
 
 	// set the log level again
@@ -188,6 +191,8 @@ func (c *UdpTransport) channelDialer() {
 			tunnelTCPConn.SetReadDeadline(time.Time{})
 
 			if message == c.config.Token {
+				// See metrics.Snapshot.Connected.
+				metrics.ReportPeer(tunnelTCPConn.RemoteAddr().String())
 				c.state.SetConn(tunnelTCPConn)
 				c.logger.Info("control channel established successfully")
 
