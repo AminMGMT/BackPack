@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/backpack/backpack/internal/tunnel/mssclamp"
 	"github.com/sirupsen/logrus"
@@ -51,6 +52,9 @@ type tunDevice struct {
 	// so it has to be taken back out by whoever put it in.
 	mssClamp int
 	log      *logrus.Logger
+
+	// Rate limiting for the too-many-segments report; see Read.
+	segReport reportEvery
 }
 
 func (t *tunDevice) Name() string { return t.name }
@@ -82,21 +86,35 @@ func run(cmd string, args ...string) error {
 	return nil
 }
 
-// Read returns one IP packet. A TUN device is packet-oriented: each read
-// yields exactly one packet, never a partial one and never two.
 // Read returns up to BatchSize packets from one syscall.
 //
-// The offsets are what make the kernel's segmentation offload usable. With
-// IFF_VNET_HDR the device prefixes a virtio header to what it hands over and
-// expects one on what it is given, and the library needs somewhere to put it —
-// so every buffer carries virtioOffset bytes of slack in front of the packet.
-// Without that slack the library copies, which is most of what the batching
-// was for.
+// With IFF_VNET_HDR the kernel hands over a whole segmentation-offload run and
+// the library splits it into segments for us. Each buffer must be tunReadBuf
+// long, because a segment is sized by the sender and not by this interface —
+// see the constant for what a short one costs.
+//
+// A run that splits into more segments than there are buffers is a short read,
+// not a failure. The library reports it as one, and taking it at its word is
+// what put a tunnel in the field into a restart loop: every read of a coalesced
+// run of small datagrams returned this, the pump treated it as the device
+// failing, and the tunnel tore down and rebuilt itself every few seconds. The
+// packets that did fit are perfectly good, so they are returned; the rest are
+// lost, which is what a full receive queue does to a packet in any case and is
+// nothing like as bad as dropping the tunnel.
 func (t *tunDevice) Read(bufs [][]byte, sizes []int) (int, error) {
-	return t.dev.Read(bufs, sizes, 0)
+	n, err := t.dev.Read(bufs, sizes, 0)
+	kept, overflow := segmentOverflow(n, err)
+	if !overflow {
+		return n, err
+	}
+	if seen, say := t.segReport.allow(time.Now()); say {
+		t.log.Warnf("l3: %s returned a run of more than %d segments and the rest were dropped "+
+			"(%d reads so far). That is the kernel coalescing many small packets into one; "+
+			"the tunnel keeps running.", t.name, len(bufs), seen)
+	}
+	return kept, nil
 }
 
-// Write injects one IP packet into the kernel's routing.
 // Write injects packets into the kernel's routing.
 //
 // Each packet is staged behind virtioOffset bytes of room, which is where the
@@ -194,13 +212,14 @@ func openTUNTuned(name, localIP, peerIP string, mtu, mssClamp, txQueueLen int, q
 	}
 
 	dev := &tunDevice{
-		dev:      wdev,
-		name:     actual,
-		mtu:      mtu,
-		mssClamp: mssClamp,
-		log:      log,
-		wbufs:    make([][]byte, 0, wdev.BatchSize()),
-		wbuf:     make([]byte, tunStageSize),
+		dev:       wdev,
+		name:      actual,
+		mtu:       mtu,
+		mssClamp:  mssClamp,
+		log:       log,
+		wbufs:     make([][]byte, 0, wdev.BatchSize()),
+		wbuf:      make([]byte, tunStageSize),
+		segReport: reportEvery{every: time.Minute},
 	}
 
 	if err := configureInterface(actual, localIP, peerIP, mtu, txQueueLen); err != nil {

@@ -7,7 +7,9 @@ All notable changes to Backpack are documented here.
 Every fix in this release came from somebody's tunnel, and almost all of them
 turned out to be the same shape: the tunnel was broken and the system said it
 was fine. A control channel that had been dead for eleven minutes and had not
-noticed. A watchdog reading health off a socket table that keeps saying
+noticed. A layer-3 tunnel writing segments past the end of the buffers it was
+given, because the buffers were sized for a packet the kernel had stopped
+sending. A watchdog reading health off a socket table that keeps saying
 ESTABLISHED after the far end is gone. A second tunnel that started cleanly and
 was refused on every handshake with no reason given, forever. A spoof carrier
 whose sockets were healthy while nothing it sent survived the path. So a good
@@ -182,6 +184,33 @@ about itself sooner. Every fix has a regression test that fails without it.
   edge dial, the accepted connection and the websocket path alike — so segments
   are sized to what the path takes. `mss` is exposed for the paths where the
   default is still too large.
+
+- **A layer-3 tunnel crashed the process, and then would not stay up.** From
+  the field, both on one server: `backpack` died with a memory fault inside the
+  TUN read and systemd restarted it, and the tunnel that came back logged
+  `reading from bp0: too many segments` and tore itself down every few seconds.
+  Two symptoms, one wrong assumption.
+
+  Turning on the kernel's segmentation offload — the batching added in v1.7.4 —
+  changed what a read returns. It is no longer packets the kernel built to fit
+  this interface. It is one run of up to 64 KB, split for us into the segments
+  the *sending* side chose, whose size came from the sender's path and has
+  nothing to do with the MTU here. The read buffers were still MTU-sized, and
+  the split does not copy into them: it slices each buffer to the length of its
+  segment and writes. A segment longer than the buffer is therefore not a short
+  read but a write past the end of a slice, which takes the process down. The
+  buffers are now sized to the largest run a read can return, which is the bound
+  that makes it impossible rather than unlikely. Only the first page of each is
+  ever touched, so what the process occupies barely moves.
+
+  The second is the same assumption at the other end of the scale. When the
+  kernel coalesces many small packets, one run can split into more segments than
+  there are buffers, and the library says so. That is a short read — the packets
+  that fit are perfectly good — but the pump took any error from the device as
+  the device having failed, so a condition that costs a few packets cost the
+  whole tunnel, over and over, for as long as the traffic causing it kept
+  flowing. It is now handled as what it is, reported once a minute rather than
+  once a read, and the tunnel stays up.
 
 - **A layer-3 forwarder that could not bind reported success.** `Run` waited for
   its goroutines and then discarded their error if the context had ended, so a

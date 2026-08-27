@@ -88,6 +88,29 @@ type Stats struct {
 	Handshakes            uint64
 }
 
+// tunReadBuf is how long every buffer handed to packetDevice.Read must be.
+//
+// It is 64 KB and not the MTU, which is the whole of a crash reported from the
+// field: a layer-3 tunnel died with a memory fault inside the device read, came
+// back, and died again.
+//
+// With segmentation offload on, a read does not return packets the kernel built
+// to fit this interface. It returns one large run — up to 64 KB — and the
+// library splits it into the segments the *sender* chose, whose size came from
+// the sender's path and has nothing to do with the MTU here. The split writes
+// each segment into the buffer at its index and does not check that it fits, so
+// one segment larger than the buffer is not a short read or an error: it is a
+// write past the end of a slice, which takes the process down with it.
+//
+// 64 KB is the bound that makes that impossible rather than unlikely — it is
+// the most a single read can return, so no segment of it can be longer. It is
+// also what wireguard-go's own device allocates, for this reason.
+//
+// The cost is smaller than it looks. A batch of these is a few megabytes of
+// address space, and only the first page or so of each is ever written, so what
+// the process actually occupies is close to what it was.
+const tunReadBuf = 65535
+
 // packetDevice is the interface the engine has to the kernel: a source and
 // sink of whole IP packets. The only implementation in the build is the TUN
 // device, which exists on Linux alone — so this exists to let the engine, its
@@ -99,8 +122,12 @@ type packetDevice interface {
 	//
 	// Batched, because a TUN read is a syscall and a busy tunnel does thousands
 	// a second. With the kernel's segmentation offload on, one read can return
-	// a whole 64 KB run of one TCP stream already split into MTU-sized packets
-	// — forty-odd packets for the cost of one syscall. See tun_linux.go.
+	// a whole 64 KB run of one flow, split for us into its segments — dozens of
+	// packets for the cost of one syscall. See tun_linux.go.
+	//
+	// Every buffer must be tunReadBuf long. Not the MTU: the segments come back
+	// the size the *sending* side chose, which is not this interface's MTU, and
+	// a buffer too short for one is a memory fault rather than a short read.
 	Read(bufs [][]byte, sizes []int) (int, error)
 
 	// Write injects packets into the kernel's routing.
@@ -539,7 +566,7 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 	}
 	bufs := make([][]byte, batch)
 	for i := range bufs {
-		bufs[i] = make([]byte, t.cfg.MTU)
+		bufs[i] = make([]byte, tunReadBuf)
 	}
 	sizes := make([]int, batch)
 
