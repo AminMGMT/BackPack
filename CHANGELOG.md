@@ -2,6 +2,196 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.7.5 — 2026-08-28
+
+Every fix in this release came from somebody's tunnel, and almost all of them
+turned out to be the same shape: the tunnel was broken and the system said it
+was fine. A control channel that had been dead for eleven minutes and had not
+noticed. A watchdog reading health off a socket table that keeps saying
+ESTABLISHED after the far end is gone. A second tunnel that started cleanly and
+was refused on every handshake with no reason given, forever. A spoof carrier
+whose sockets were healthy while nothing it sent survived the path. So a good
+deal of the work below is not new behaviour but the system telling the truth
+about itself sooner. Every fix has a regression test that fails without it.
+
+### Added
+
+- **Speed Test on the tunnel card.** The measurement existed, in the menu, over
+  SSH. Now it is a button next to Start/Stop/Restart/Delete: the panel works out
+  what this tunnel can be measured through — a layer-3 tunnel across its own
+  subnet, a port forwarder through one of the mappings it already carries —
+  shows what it will displace while it runs, and draws the result on a gauge.
+  Mappings that cannot carry a measurement are listed with the reason rather
+  than offered and then failing.
+
+  The one thing it cannot check is the thing that matters: whether the receiver
+  is running on the other server. There is no way to find that out from here, so
+  it is asked rather than assumed, and a measurement against a machine that is
+  not sinking fails in about a second.
+
+- **Live bandwidth on every tunnel card.** Each card carries its own sparkline
+  of what that tunnel is actually moving, animated between samples rather than
+  jumping, so a tunnel that has gone quiet is visible from the dashboard instead
+  of from a log.
+
+- **Every configuration change can be undone.** `applySpec` already covered the
+  loud failure: write, restart, wait, and put the old file back if the tunnel
+  does not come up. The quiet failure had no cover at all — a config that starts
+  perfectly well and is simply worse leaves nothing to go back to, and half an
+  hour and three edits later "what was it before I started?" has no answer
+  anywhere on the machine.
+
+  Each accepted change now files the configuration it replaced, ten deep per
+  tunnel, restorable from the panel and from the menu. Restoring writes the old
+  file back verbatim rather than re-rendering it, so keys the edit form does not
+  carry are not silently dropped. The timestamps are drawn on the traffic chart
+  as well, which turns "did that change help?" from an impression into a line on
+  a graph.
+
+- **`mss` for direct tunnels.** See the MTU fix below; the knob is there for the
+  paths where the automatic value is still wrong.
+
+### Fixed
+
+- **A dead control channel took eleven and a half minutes to notice.** The
+  client's read on the control channel had no deadline of its own, so a link
+  that went away without closing — the normal case for a middlebox dropping
+  state, or a route change — was left to TCP keepalive. Go's `KeepAliveConfig`
+  with a zero `Idle` uses a 15-second default and then nine probes at 75
+  seconds: 690 seconds before the read fails. For eleven and a half minutes the
+  tunnel is down, the process is healthy, the panel is green, and no new
+  connection can be made.
+
+  The read now carries a deadline derived from the tunnel's own keepalive —
+  half as long again, floored at 30 seconds — so a silent path is noticed within
+  a keepalive interval or two and the reconnect starts there. This was already
+  right in two engines and wrong in the rest, which is a recurring fault of its
+  own; there is now a test that reads the engine list out of the dispatch
+  itself, so an engine cannot quietly opt out of it.
+
+- **The client blamed the server's version for a broken path.** One closed
+  handshake made it announce that the server was running an older release and
+  fall back, which sent people to upgrade a server that was already current
+  while the real fault — a connection closed in transit — went unexamined. The
+  fallback now needs two unanswered attempts, and says both things it can be.
+
+- **A second tunnel could be created that had no chance of working.** From a
+  new user: one tunnel set up, working, in daily use; a second one made the same
+  way that would not come up, with `EOF` on every handshake, forever. One or two
+  others in the same chat had it too.
+
+  Both ends have a version of this and neither was refused. On the Iran side,
+  two tunnels binding the same port — the second cannot bind and dies, which at
+  least appears in its own log. On the kharej side, two tunnels dialling the
+  same server and port, which is worse: both start perfectly well, the server
+  hands its single control channel to whichever arrived first, and the second is
+  refused for as long as it runs. It is easy to do by accident — copy the tunnel
+  that works, change the name, forget that the port belongs to the other end as
+  much as to this one.
+
+  Creating either is now refused at the moment it is typed, with the port to
+  change named, on both the panel and the CLI wizard. `[::]` and `0.0.0.0` count
+  as the same bind; two clients reaching different servers on the same port
+  number do not.
+
+- **A refused handshake said nothing at all.** A server that rejects a client —
+  wrong token, or a control channel already held by somebody else — used to
+  close the connection, which is indistinguishable from a network failure. The
+  client retried forever and logged `EOF`, and the server logged the real reason
+  at debug, where nobody was looking.
+
+  The refusal now carries its reason to the client, which prints it and stops
+  guessing: `the token does not match the server's` or `the server already has a
+  control channel from somebody else`. The server logs it at warn rather than
+  debug. This is backwards-compatible in both directions — an old client sees
+  the same closed connection it always did.
+
+  The scope is the transports where the fault was reported and where the
+  handshake carries a reply the client is already reading: `tcp` and `tcpmux`
+  understand both reasons end to end, and `kcp` and `quic` send the token
+  refusal. The rest are unchanged for now.
+
+- **The watchdog decided whether a tunnel was up by looking at the socket
+  table.** `ss -Htn state established` is a poor witness: a socket stays
+  ESTABLISHED long after the peer has gone, which is the exact condition the
+  watchdog exists to catch. Engines now report whether they actually hold a
+  control channel, and the watchdog believes that in preference to the socket.
+  The report is a tri-state — connected, disconnected, or has not said — because
+  during an upgrade an engine that has not been taught to report must not be
+  read as reporting "down".
+
+- **A tunnel that restarted all day looked like twenty unrelated events.** A
+  watchdog restart is worth a line on its own, so "why did my tunnel reset
+  overnight" can be answered. It is the wrong output for a tunnel doing it every
+  three minutes: twenty separate lines are indistinguishable from twenty
+  unrelated incidents across a week, and nobody reads that list and concludes
+  the tunnel is flapping. Which matters, because flapping is how several real
+  faults present — a path that drops full-sized packets, a liveness deadline set
+  too tight — and all of them look from outside like a tunnel that mostly works,
+  which is worse than one that is plainly down because nobody investigates.
+  Repeated restarts inside an hour are now reported once, as one condition. The
+  restarting itself is unchanged.
+
+- **The fine-tune drawer would not open a second time.** Reported by two people
+  independently: edit a tunnel, close the dialog, open it on another tunnel, and
+  Fine Tune never opens again for the life of the page. Only a refresh brought
+  it back.
+
+  The drawer animates its height and cleans up when `transitionend` fires. Edit
+  collapses its drawers while the form is still `display:none` — and an element
+  with no boxes runs no transitions, so nothing ever started, nothing ever
+  ended, and the cleanup that clears the height never ran. The drawer was left
+  hidden *and* pinned to a height, which is the state that wedges it.
+
+  Each animation now carries a token so a second one supersedes the first
+  cleanly, a collapse on an element that is not being laid out lands on the
+  final state directly instead of waiting for an event that cannot come, and
+  every animation has a backstop timer behind the event.
+
+- **The spoof transport carried no traffic on paths that watch TCP.** Several
+  people tested it and none of them got bytes across. Three faults, and the
+  first alone is enough:
+
+  Every forged segment carried `PSH|ACK`, chosen to read as traffic on an
+  established connection. That is precisely the wrong thing to look like: no
+  handshake ever happened, so to anything on the path that tracks connection
+  state every segment is out of state, and dropping out-of-state TCP is the
+  first thing a stateful firewall does. The tunnel comes up, the sockets are
+  healthy, and nothing crosses. Segments now carry `SYN`, which is the packet
+  that starts a connection and which a stateful device has nothing to reject —
+  as the spoof-tunnel reference sends. Receivers ignore the flags entirely, so
+  this interoperates with a peer of any version.
+
+  The sending socket was opened on the profile's own protocol, which meant the
+  kernel queued a copy of every packet of that protocol on the machine into a
+  buffer that was never read. It is now `IPPROTO_RAW`: send-only by definition.
+
+  And the sequence number advanced by the payload length plus one, leaving a
+  one-byte hole in the sequence space on every segment — visible to anything
+  that follows a flow, and not what a real sender does. IP IDs were sequential
+  for the same reason and are now random.
+
+- **The direct tunnel stalled and had to be restarted by hand — on some servers
+  and not others.** That pattern is the signature of a path MTU problem rather
+  than a fault in the tunnel: the connection establishes, small packets pass,
+  and the first full-sized segment is dropped by a link that cannot carry it and
+  cannot say so. The socket stays ESTABLISHED throughout, which is why it looks
+  like a hang rather than a failure.
+
+  The TCP maximum segment size is now clamped on every direct connection — the
+  edge dial, the accepted connection and the websocket path alike — so segments
+  are sized to what the path takes. `mss` is exposed for the paths where the
+  default is still too large.
+
+- **A layer-3 forwarder that could not bind reported success.** `Run` waited for
+  its goroutines and then discarded their error if the context had ended, so a
+  port it could not take produced a forwarder that returned nil and forwarded
+  nothing. Bind failures are now returned and logged with the address that
+  failed. This surfaced as a test that looked flaky and was not — twice this
+  release, an intermittent failure turned out to be a real fault plus a test
+  port allocator that checked a port was free and then raced another test to
+  bind it. The allocator is now shared and issues each port once.
+
 ## v1.7.4 — 2026-08-23
 
 Almost all of this release came from the field: tunnels that dropped every so
