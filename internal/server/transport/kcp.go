@@ -516,8 +516,9 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 	session.SetReadDeadline(time.Time{})
 
 	if token != s.config.Token {
-		s.logger.Warnf("invalid security token received from %s", session.RemoteAddr())
-		session.Close()
+		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
+			"closing without a word, which reads to the client exactly like an old server", session.RemoteAddr())
+		refuseControl(session, utils.RefusedBadToken)
 		return
 	}
 

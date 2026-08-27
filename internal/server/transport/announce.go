@@ -2,6 +2,7 @@ package transport
 
 import (
 	"crypto/subtle"
+	"io"
 	"net"
 	"time"
 
@@ -64,6 +65,27 @@ func readAnnouncement(conn net.Conn) (announcement, error) {
 // the legacy or the nonce-carrying form.
 func isControlSignal(sig byte) bool {
 	return sig == utils.SG_Chan || sig == utils.SG_ChanV2
+}
+
+// refuseControl tells a client why its control handshake was not accepted, then
+// closes the connection.
+//
+// Closing without a word is what this replaces, and it cost real time: a wrong
+// token and a control channel already in use both reached the client as EOF,
+// which is also what an old server produces — so the client picked the wrong
+// one of the three and sent operators off to upgrade servers that were fine.
+//
+// Best effort. The refusal is a courtesy on a connection that is about to be
+// dropped either way, so a peer that has already gone, or one that will not
+// read it, changes nothing: the close below happens regardless.
+// The reason travels as the payload and SG_Refused as the signal, which is the
+// same shape every other answer on this path takes. A client too old to know
+// the signal compares the payload against its own token, fails to match, and
+// reports an invalid token — the wrong wording, but pointing at the right half
+// of the configuration, where EOF pointed at nothing.
+func refuseControl(conn io.ReadWriteCloser, reason string) {
+	_ = utils.SendBinaryTransportString(conn, reason, utils.SG_Refused)
+	conn.Close()
 }
 
 // tokenMatches compares an offered token to the configured one in constant

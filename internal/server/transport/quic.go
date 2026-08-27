@@ -302,8 +302,11 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 	stream.SetReadDeadline(time.Time{})
 
 	if token != s.config.Token {
-		s.logger.Warnf("invalid security token received from %s", conn.RemoteAddr())
-		stream.Close()
+		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
+			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
+		// wrapped, not the bare stream: it is what every other read and write
+		// on this path uses, and the refusal is just another write.
+		refuseControl(wrapped, utils.RefusedBadToken)
 		return
 	}
 

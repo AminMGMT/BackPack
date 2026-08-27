@@ -20,6 +20,38 @@ const (
 	// SG_Pool announces a pool connection, carrying the nonce the server handed
 	// out when the control channel was established.
 	SG_Pool
+
+	// SG_Refused answers a control handshake the server will not accept,
+	// carrying a short reason.
+	//
+	// It exists because the alternative was silence. The server used to close
+	// the connection on a token it did not recognise and on a claim for a
+	// control channel it had already given away, and both reach the client as
+	// "failed to read message length from net.Conn: EOF" — the same thing an
+	// old server produces by not understanding the signal at all. Three
+	// different faults, one symptom, and the client guessed the least likely of
+	// them: it reported the server as out of date and told the operator to
+	// upgrade a server whose only problem was a mistyped token.
+	//
+	// A client too old to know this signal is no worse off than before. It
+	// compares the answer against its own token, fails to match, and reports an
+	// invalid token — which is wrong in wording but points at the right half of
+	// the configuration, where EOF pointed at nothing.
+	SG_Refused
+)
+
+// Why a control handshake was refused. Short, because it crosses the wire on
+// every rejected attempt, and free of anything an unauthenticated peer should
+// not be told — a refusal says which side is wrong, never what the right answer
+// would have been.
+const (
+	// RefusedBadToken is a token that does not match the server's.
+	RefusedBadToken = "token"
+
+	// RefusedInUse is a control channel this server has already given to
+	// somebody else — two clients dialling one server with the same token, or
+	// an old service left running beside its replacement.
+	RefusedInUse = "in-use"
 )
 
 // WebSocketSignal reads one control-channel signal out of a WebSocket frame.

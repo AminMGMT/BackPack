@@ -909,6 +909,23 @@ func SetupClient() {
 // finishSetup persists the tunnel, applies system-level tuning, and reports
 // the result.
 func finishSetup(s TunnelSpec) {
+	// The same refusal the panel makes, at the same point: before anything is
+	// written. Two creation paths that disagree about what is allowed is how a
+	// check ends up covering half the product — see portClash for what this is
+	// for.
+	addr := s.BindAddr
+	if s.Role == "client" {
+		addr = s.RemoteAddr
+	}
+	if why := portClash(s.Role, addr, s.Name); why != "" {
+		fmt.Println()
+		tui.Error(why)
+		fmt.Println()
+		tui.Info("Nothing was written. Run setup again with a different port.")
+		tui.PressEnter()
+		return
+	}
+
 	tui.Info("Applying system network optimizations...")
 	optimize.ApplyQuiet()
 

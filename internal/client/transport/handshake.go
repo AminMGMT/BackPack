@@ -172,6 +172,30 @@ func (p *legacyProbe) reset() {
 	p.misses.Store(0)
 }
 
+// refusalReason reads a server's explanation for turning a handshake down, if
+// that is what the answer is.
+//
+// The server used to close the connection instead, which reaches the client as
+// EOF — indistinguishable from a server too old to know the signal at all. That
+// is how a mistyped token and a second client on one server both came back as
+// "the server is running an older version", and operators upgraded servers that
+// had nothing wrong with them.
+func refusalReason(ack string, signal byte) (string, bool) {
+	if signal != utils.SG_Refused {
+		return "", false
+	}
+	switch ack {
+	case utils.RefusedBadToken:
+		return "the server rejected the token — the two ends do not have the same one", true
+	case utils.RefusedInUse:
+		return "the server already has a control channel from somebody else. Two clients " +
+			"dialling one server with the same token do this, and so does an old service " +
+			"left running beside its replacement", true
+	default:
+		return "the server refused the handshake: " + ack, true
+	}
+}
+
 // decodeControlAck reads the server's answer, returning the token to check it
 // by, the nonce for pool connections, and the mux version to run this tunnel
 // at. A legacy server sends only the token, so the nonce is empty and the

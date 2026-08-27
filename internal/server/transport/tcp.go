@@ -496,14 +496,18 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 	// buffered on a channel nobody reads any more, holding its connection open
 	// until the next restart.
 	if s.controlChannel.IsSet() {
-		s.logger.Debugf("a control channel is already established, discarding the claim from %s", conn.RemoteAddr())
-		conn.Close()
+		// Warn, not Debug. Two clients dialling one server with the same
+		// token is an operational fault somebody has to fix, and at debug
+		// level nobody ever saw it — the second client just failed forever.
+		s.logger.Warnf("a control channel is already established; refusing the claim from %s", conn.RemoteAddr())
+		refuseControl(conn, utils.RefusedInUse)
 		return
 	}
 
 	if !tokenMatches(ann.payload, s.config.Token) {
-		s.logger.Warnf("invalid security token received from %s", conn.RemoteAddr())
-		conn.Close()
+		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
+			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
+		refuseControl(conn, utils.RefusedBadToken)
 		return
 	}
 

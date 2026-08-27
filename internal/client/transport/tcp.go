@@ -246,6 +246,16 @@ func (c *TcpTransport) channelDialer() {
 
 			// Plain TCP has no mux sessions, so the version the server sends
 			// is not applicable here.
+			// A refusal is an answer, and a far more useful one than the
+			// silence it replaces. It is not a reason to fall back: the server
+			// understood the handshake perfectly and declined it.
+			if why, refused := refusalReason(message, ackSignal); refused {
+				c.logger.Error("the tunnel was refused — " + why)
+				c.legacyServer.ack(ackSignal)
+				tunnelTCPConn.Close()
+				bo.Wait(c.state.Ctx())
+				continue
+			}
 			token, nonce, _ := decodeControlAck(message, ackSignal)
 
 			if token == c.config.Token {

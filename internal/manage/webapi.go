@@ -329,6 +329,16 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 		s.RemoteAddr = net.JoinHostPort(host, port)
 	}
 
+	// Refused here, where it is still a typo, rather than discovered later from
+	// a log that only says EOF. See portClash.
+	addr := s.BindAddr
+	if s.Role == "client" {
+		addr = s.RemoteAddr
+	}
+	if why := portClash(s.Role, addr, s.Name); why != "" {
+		return "", false, fmt.Errorf("%s", why)
+	}
+
 	// Caught here rather than silently applied, for the reason given in the edit
 	// path: on a kernel-stack transport this profile's knobs would be written and
 	// then ignored.
