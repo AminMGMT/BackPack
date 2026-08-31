@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"github.com/backpack/backpack/config"
 	"net"
 	"strings"
 
@@ -83,9 +84,6 @@ type SpoofTune struct {
 	Interface string `json:"interface"` // egress device for the raw socket
 	XDPIface  string `json:"xdpIface"`  // NIC for the XDP receive fast path, empty = off
 
-	Pipe     bool   `json:"pipe"`     // WireGuard-pipe mode instead of a KCP tunnel
-	PipeAddr string `json:"pipeAddr"` // this host's WireGuard UDP endpoint
-
 	SockBuf   int  `json:"sockBuf"`   // SO_SNDBUF/SO_RCVBUF for the carrier's sockets
 	MTU       int  `json:"mtu"`       // fragment sends larger than this
 	ICMPReply bool `json:"icmpReply"` // icmp: client asks, server replies
@@ -100,9 +98,9 @@ type SpoofTune struct {
 	FakeTLS     bool `json:"fakeTLS"`
 }
 
-// spoofOf reads a tunnel's current spoof settings off its spec, so the panel's
+// spoofOf reads a direct tunnel's current carrier settings, so the panel's
 // drawer opens on what the tunnel actually runs.
-func spoofOf(s TunnelSpec) SpoofTune {
+func spoofOf(s config.SpoofConfig) SpoofTune {
 	src := s.SpoofSrcIP
 	if len(s.SpoofSrcPool) > 0 {
 		src = strings.Join(s.SpoofSrcPool, ", ")
@@ -116,9 +114,7 @@ func spoofOf(s TunnelSpec) SpoofTune {
 		PeerSrcIP:   s.SpoofPeerSrcIP,
 		DstIP:       s.SpoofDstIP,
 		Interface:   s.SpoofInterface,
-		XDPIface:    s.SpoofXDPIface,
-		Pipe:        s.SpoofPipe,
-		PipeAddr:    s.SpoofPipeAddr,
+		XDPIface:    s.SpoofXDPInterface,
 		SockBuf:     s.SpoofSockBuf,
 		MTU:         s.SpoofMTU,
 		ICMPReply:   s.SpoofICMPReply,
@@ -137,11 +133,7 @@ func spoofOf(s TunnelSpec) SpoofTune {
 // is refused rather than skipped with a warning: the wizard can print a warning
 // and ask again, a form that silently dropped a field would leave the operator
 // looking at a tunnel configured differently from the page in front of them.
-func (f SpoofTune) apply(s *TunnelSpec) error {
-	if s.Transport != "spoof" {
-		return nil
-	}
-
+func (f SpoofTune) apply(s *config.SpoofConfig) error {
 	profile, err := spoofProfile("packet profile", f.Profile)
 	if err != nil {
 		return err
@@ -170,14 +162,12 @@ func (f SpoofTune) apply(s *TunnelSpec) error {
 		s.SpoofSrcIP, s.SpoofSrcPool = pool[0], pool
 	}
 
-	// The client forges its source, so the server cannot learn where to send
-	// replies from the packets themselves — it has to be told. The client
-	// already knows the server's real address: it is the one it dialled.
+	// Each side forges its source, so the listening side cannot learn where to
+	// send replies from the packets themselves — it has to be told. Whether
+	// this end is the listening one is the caller's to know; see the direct
+	// tunnel's own validation, which refuses a listener without it.
 	if s.SpoofPeerIP, err = optionalIPv4(f.PeerIP, "the peer's real IPv4"); err != nil {
 		return err
-	}
-	if s.Role == "server" && s.SpoofPeerIP == "" {
-		return fmt.Errorf("the client's real IPv4 address is required on the Iran side — the forged packets do not carry it")
 	}
 	if s.SpoofPeerSrcIP, err = optionalIPv4(f.PeerSrcIP, "the peer's forged source IPv4"); err != nil {
 		return err
@@ -189,21 +179,8 @@ func (f SpoofTune) apply(s *TunnelSpec) error {
 	if s.SpoofInterface, err = checkInterface(f.Interface); err != nil {
 		return err
 	}
-	if s.SpoofXDPIface, err = checkInterface(f.XDPIface); err != nil {
+	if s.SpoofXDPInterface, err = checkInterface(f.XDPIface); err != nil {
 		return err
-	}
-
-	s.SpoofPipe = f.Pipe
-	s.SpoofPipeAddr = ""
-	if f.Pipe {
-		addr := strings.TrimSpace(f.PipeAddr)
-		if addr == "" {
-			addr = "127.0.0.1:51820"
-		}
-		if _, _, err := net.SplitHostPort(addr); err != nil {
-			return fmt.Errorf("the relay's local UDP endpoint must be host:port, e.g. 127.0.0.1:51820")
-		}
-		s.SpoofPipeAddr = addr
 	}
 
 	if f.SockBuf < 0 || f.MTU < 0 || f.PaddingMax < 0 {
@@ -481,12 +458,7 @@ func (f TunnelLimits) apply(s *TunnelSpec) error {
 // applyAdvanced runs the four optional blocks over a spec in the order the
 // wizard asks them. A nil block was not submitted and leaves its settings
 // exactly as they are.
-func applyAdvanced(s *TunnelSpec, spoof *SpoofTune, pck *PckTune, conn *ConnTune, limits *TunnelLimits, defaultPort string) error {
-	if spoof != nil {
-		if err := spoof.apply(s); err != nil {
-			return err
-		}
-	}
+func applyAdvanced(s *TunnelSpec, pck *PckTune, conn *ConnTune, limits *TunnelLimits, defaultPort string) error {
 	if pck != nil {
 		if err := pck.apply(s); err != nil {
 			return err
@@ -506,21 +478,9 @@ func applyAdvanced(s *TunnelSpec, spoof *SpoofTune, pck *PckTune, conn *ConnTune
 }
 
 // clearForTransport drops the settings that belong to a transport the tunnel is
-// no longer on. Switching away from spoof and leaving a forged source in the
-// config would leave a setting nothing reads and the Edit form would keep
-// showing it as if it still mattered.
+// no longer on. Leaving them behind would put keys in the config that nothing
+// reads, and the Edit form would keep showing them as if they still mattered.
 func clearForTransport(s *TunnelSpec) {
-	if s.Transport != "spoof" {
-		s.SpoofProfile, s.SpoofUplink, s.SpoofDownlink = "", "", ""
-		s.SpoofSrcIP, s.SpoofSrcPool = "", nil
-		s.SpoofPeerIP, s.SpoofPeerSrcIP, s.SpoofDstIP = "", "", ""
-		s.SpoofInterface, s.SpoofXDPIface = "", ""
-		s.SpoofPipe, s.SpoofPipeAddr = false, ""
-		s.SpoofSockBuf, s.SpoofMTU, s.SpoofICMPReply = 0, 0, false
-		s.SpoofTTLJitter, s.SpoofRandomDSCP = false, false
-		s.SpoofShufflePort, s.SpoofPortMin, s.SpoofPortMax = false, 0, 0
-		s.SpoofPadding, s.SpoofPaddingMax, s.SpoofFakeTLS = false, 0, false
-	}
 	if s.Transport != "pck" {
 		s.PckInterface, s.PckGatewayMAC, s.PckFlags = "", "", nil
 	}

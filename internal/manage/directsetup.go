@@ -194,16 +194,21 @@ func setupL3(side directSide) {
 		}
 	}
 
-	// The forged-source carrier cannot learn where its peer really is, because
-	// every packet it receives carries a forged source. This sits where the
-	// reverse wizard asks its own transport-specific questions.
-	if carrier == "spoof" && side == sideKharej {
-		fmt.Println()
-		tui.Warn("The spoof carrier forges the source of every packet, so this side")
-		tui.Warn("cannot work out where to send replies. It has to be told.")
-		cfg.Spoof.SpoofPeerIP = strings.TrimSpace(tui.Prompt("The Iran server's real IP: "))
-		if net.ParseIP(cfg.Spoof.SpoofPeerIP) == nil {
-			tui.Error("A valid IP address is required for the spoof carrier.")
+	// The forged-source carrier has a screen of its own: what the packets
+	// should look like, where the replies go, and which address to forge. It
+	// used to hang off the reverse spoof transport, which is where all of that
+	// explanation was written; the carrier is a direct one now, so the screen
+	// came with it. See askSpoofCarrier.
+	if carrier == "spoof" {
+		askSpoofCarrier(&cfg.Spoof, side == sideIran)
+		// Whatever the operator chose above, the listening side cannot work out
+		// where to answer: every packet it receives carries a forged source. The
+		// wizard asks for it, and the engine refuses to start without it, so it
+		// is worth not letting the setup finish without it either.
+		if side == sideKharej && net.ParseIP(cfg.Spoof.SpoofPeerIP) == nil {
+			fmt.Println()
+			tui.Error("This side needs the Iran server's real IP — it cannot be learned")
+			tui.Error("from the forged packets, and the tunnel will not start without it.")
 			tui.PressEnter()
 			return
 		}

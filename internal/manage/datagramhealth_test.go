@@ -177,8 +177,12 @@ func TestWatchdogStillNeverRestartsADatagramServer(t *testing.T) {
 // the dialling side was still left to the socket table. That works for the
 // carriers that dial a connected UDP socket — plain kcp, udp, quic — and finds
 // nothing for xdi, pck and spoof, which is exactly the point of them.
+//
+// Spoof appears here as a direct carrier ("l3/spoof") rather than a reverse
+// transport, which is the only shape it has now: a reverse tunnel over a forged
+// source could never carry traffic and is refused at load.
 func TestObservabilityFreeCarriersCountAsDatagram(t *testing.T) {
-	for _, tr := range []string{"xdi", "pck", "spoof", "kcp", "udp", "quic"} {
+	for _, tr := range []string{"xdi", "pck", "l3/spoof", "kcp", "udp", "quic"} {
 		if !isDatagram(tr) {
 			t.Errorf("%s must be judged from the snapshot, not the socket table", tr)
 		}
@@ -214,7 +218,9 @@ func TestTheSnapshotAnswersForTheDiallingSideToo(t *testing.T) {
 func TestExtendingTheSnapshotCheckLeftTheWatchdogAlone(t *testing.T) {
 	stageSnapshot(t, "t", "", time.Now())
 
-	for _, tr := range []string{"xdi", "pck", "spoof"} {
+	// The reverse carriers only: a direct tunnel is judged by directHealthy,
+	// which has its own test.
+	for _, tr := range []string{"xdi", "pck"} {
 		tun := Tunnel{Name: "t", Role: "server", Transport: tr, Addr: "[::]:8989"}
 		if !tunnelHealthy(tun, nil) {
 			t.Errorf("%s server reported unhealthy to the watchdog; it would be restarted in a loop", tr)

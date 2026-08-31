@@ -71,10 +71,6 @@ type KCPSettings struct {
 	// thing this changes is which kind of socket the datagrams ride in. See
 	// icmpconn_linux.go.
 	UseICMP bool
-	// Spoof, when set, carries the KCP session inside raw IPv4 packets whose
-	// source is forged — the "IP Spoofing" transport. Like UseICMP it swaps only
-	// the packet layer; everything above is unchanged. See spoofconn_linux.go.
-	Spoof *SpoofCarrier
 	// Pck, when set, carries the KCP session inside TCP segments this process
 	// builds and reads through a packet socket — the "TCP + PCK" transport.
 	// Again only the packet layer differs. Unlike Spoof it forges no address:
@@ -143,18 +139,12 @@ func (s KCPSettings) logSettings(role string) {
 		role, fec)
 }
 
-// SpoofCarrier, its spoofOpts, and the spoof branches of KCPDial/KCPListen live
-// in spoofkcp.go so the shared KCP path here carries no spoof-specific logic.
-
 // effectiveMTU returns the MTU KCP should use, which is smaller on the carriers
-// whose framing eats into the packet: ICMP echo, or the spoof header. Left as
+// whose framing eats into the packet: ICMP echo, or the pck header. Left as
 // configured for plain UDP.
 func (s KCPSettings) effectiveMTU() int {
 	if s.UseICMP {
 		return s.MTU - icmpMTUOverhead
-	}
-	if s.Spoof != nil {
-		return s.MTU - spoofMaxOverhead(s)
 	}
 	if s.Pck != nil {
 		// The IP and TCP headers plus the timestamp option. The Ethernet header
@@ -246,11 +236,6 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 		return listener, conn, nil
 	}
 
-	// The spoof carrier's listener is built in spoofkcp.go; here we only dispatch.
-	if s.Spoof != nil {
-		return spoofKCPListen(token, block, s)
-	}
-
 	// The pck carrier is a PacketConn like the others, so KCP is handed it and
 	// serves ordinary sessions over it. The bind address supplies the port the
 	// tunnel's segments are addressed to; no socket is bound to it, because the
@@ -322,14 +307,6 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("xdi: failed to open the KCP session: %w", err)
-		}
-	} else if s.Spoof != nil {
-		// The spoof carrier's session is built in spoofkcp.go; here we only
-		// dispatch. Tuning is applied by the shared tail below, as for every
-		// carrier.
-		session, err = spoofKCPDial(remoteAddr, token, block, s)
-		if err != nil {
-			return nil, err
 		}
 	} else if s.Pck != nil {
 		// The client addresses its segments to the server's real address and

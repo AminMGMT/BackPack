@@ -253,10 +253,9 @@ type NewTunnel struct {
 	// it replaces the preset's answers.
 	Tune *FineTune `json:"tune"`
 
-	// The advanced drawers, each nil unless it was opened. Spoof and Pck only
-	// mean anything on their own transport; Conn carries the connectivity
-	// options the wizard asks the client for; Limits caps the tunnel as a whole.
-	Spoof  *SpoofTune    `json:"spoof"`
+	// The advanced drawers, each nil unless it was opened. Pck only means
+	// anything on its own transport; Conn carries the connectivity options the
+	// wizard asks the client for; Limits caps the tunnel as a whole.
 	Pck    *PckTune      `json:"pck"`
 	Conn   *ConnTune     `json:"conn"`
 	Limits *TunnelLimits `json:"limits"`
@@ -363,15 +362,9 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	}
 	// The advanced drawers, in the order the wizard asks them. A form that never
 	// opened one sends nothing for it, and the tunnel keeps the defaults.
-	if err := applyAdvanced(&s, n.Spoof, n.Pck, n.Conn, n.Limits, port); err != nil {
+	if err := applyAdvanced(&s, n.Pck, n.Conn, n.Limits, port); err != nil {
 		return "", false, err
 	}
-	// Spoof carries a profile both ends must agree on. The wizard asks; a form
-	// that left the drawer shut gets the same default the wizard recommends.
-	if s.Transport == "spoof" && s.SpoofProfile == "" {
-		s.SpoofProfile = "udp"
-	}
-
 	optimize.ApplyQuiet()
 
 	service, err = s.Save()
@@ -395,7 +388,6 @@ type TunnelEdit struct {
 	// blocks the setup form fills, so a setting can be changed afterwards
 	// wherever it could be chosen in the first place — which is what the CLI's
 	// Edit screen offers and what the panel used to be missing.
-	Spoof  *SpoofTune    `json:"spoof"`
 	Pck    *PckTune      `json:"pck"`
 	Conn   *ConnTune     `json:"conn"`
 	Limits *TunnelLimits `json:"limits"`
@@ -510,12 +502,12 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 	// The advanced drawers come last, after the port has settled: a backup
 	// address written without one inherits the port the tunnel is being left on,
 	// not the port it had when the form was opened.
-	if e.Spoof != nil || e.Pck != nil || e.Conn != nil || e.Limits != nil {
+	if e.Pck != nil || e.Conn != nil || e.Limits != nil {
 		port := addrPort(s.BindAddr)
 		if s.Role == "client" {
 			port = addrPort(s.RemoteAddr)
 		}
-		if err := applyAdvanced(&s, e.Spoof, e.Pck, e.Conn, e.Limits, port); err != nil {
+		if err := applyAdvanced(&s, e.Pck, e.Conn, e.Limits, port); err != nil {
 			return err
 		}
 		changed = true
@@ -556,7 +548,6 @@ type TunnelSettings struct {
 	// The advanced drawers open on what the tunnel actually runs, so a value
 	// that was set by hand in the config file — or by the CLI wizard — shows up
 	// here instead of the form pretending it was never set.
-	Spoof         SpoofTune    `json:"spoof"`
 	Pck           PckTune      `json:"pck"`
 	Conn          ConnTune     `json:"conn"`
 	Limits        TunnelLimits `json:"limits"`
@@ -576,7 +567,6 @@ func TunnelSettingsOf(name string) (TunnelSettings, error) {
 		Preset:        s.Preset,
 		PresetName:    presetLabel(s.Preset),
 		Tune:          tuneOf(s),
-		Spoof:         spoofOf(s),
 		Pck:           pckOf(s),
 		Conn:          connOf(s),
 		Limits:        limitsOf(s),

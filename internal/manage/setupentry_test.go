@@ -150,7 +150,9 @@ func TestWizardOrderMatchesReverse(t *testing.T) {
 				`uniqueName(tui.PromptDefault("Tunnel name"`,
 				"askL3Token(&cfg)",
 				`tui.Prompt("Ports to expose here`,
-				"SpoofPeerIP =",
+				// The forged-source carrier's own screen, which the reverse
+				// transport used to own and which came across with it.
+				"askSpoofCarrier(&cfg.Spoof",
 				`tui.Confirm("Fine-tune the advanced settings by hand"`,
 			},
 		},

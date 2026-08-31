@@ -29,8 +29,10 @@ func TestDirectTransportsAreNotDatagram(t *testing.T) {
 }
 
 // And the reverse transports must be classified exactly as they always were.
+// "spoof" is not among them any more: it is a direct-tunnel carrier, and a
+// reverse tunnel naming it is refused at load rather than classified.
 func TestReverseTransportClassificationIsUnchanged(t *testing.T) {
-	for _, transport := range []string{"udp", "kcp", "xdi", "quic", "spoof", "pck"} {
+	for _, transport := range []string{"udp", "kcp", "xdi", "quic", "pck"} {
 		if !IsDatagram(transport) {
 			t.Errorf("reverse transport %q stopped being a datagram transport", transport)
 		}

@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
 	"github.com/backpack/backpack/internal/tui"
@@ -49,7 +50,6 @@ var transportGroups = []struct {
 	}},
 	{"Experimental", "newer ideas, still being proven — not for production yet", []transportEntry{
 		{"xDi (ICMP)", "tunnels inside ping packets, for networks that filter UDP/TCP but not ICMP — Linux, needs root", "xdi"},
-		{"IP Spoofing", "forges the source of raw IP packets, for a path that filters on the real flow — Linux, needs root; prove it on your route", "spoof"},
 	}},
 }
 
@@ -373,17 +373,14 @@ func askPck(s *TunnelSpec) {
 	}
 }
 
-// askSpoof collects the IP-spoofing carrier's settings. It runs on both ends
-// for the spoof transport and is a no-op for every other transport.
+// askSpoofCarrier collects the forged-source carrier's settings. It runs on
+// both ends of a direct tunnel whose carrier is spoof.
 //
 // The forged source is what the far end and the network see; whether replies
 // find their way back is a property of the route, which is why the wizard says
 // out loud that it must be proven — with the spoof tester (Manage → IP Spoofing
 // tester).
-func askSpoof(s *TunnelSpec) {
-	if s.Transport != "spoof" {
-		return
-	}
+func askSpoofCarrier(sc *config.SpoofConfig, onIran bool) {
 	// The other side of this transport is a person who picked it off a menu
 	// because it sounded like the one that gets through, and who has never seen
 	// a forged packet. So the screen explains what the thing is, what it needs
@@ -391,7 +388,7 @@ func askSpoof(s *TunnelSpec) {
 	// questions that only a tuned setup needs are behind a confirm that defaults
 	// to no, rather than in the way.
 	here, there := "kharej", "Iran"
-	if s.Role == "server" {
+	if onIran {
 		here, there = "Iran", "kharej"
 	}
 
@@ -428,9 +425,9 @@ func askSpoof(s *TunnelSpec) {
 	tui.Warn("Whatever you pick here, the " + there + " end must pick the same one.")
 	fmt.Println()
 	if tui.Confirm("Use UDP — the recommended profile", true) {
-		s.SpoofProfile = "udp"
+		sc.SpoofProfile = "udp"
 	} else {
-		s.SpoofProfile = askSpoofProfile("Packet profile:")
+		sc.SpoofProfile = askSpoofProfile("Packet profile:")
 	}
 
 	fmt.Println()
@@ -438,15 +435,15 @@ func askSpoof(s *TunnelSpec) {
 	tui.Info("each direction can wear its own profile — uplink is kharej → Iran,")
 	tui.Info("downlink is Iran → kharej. Almost no path needs this.")
 	if tui.Confirm("Set the two directions separately", false) {
-		s.SpoofUplink = askSpoofProfile("Uplink profile (kharej → Iran):")
-		s.SpoofDownlink = askSpoofProfile("Downlink profile (Iran → kharej):")
+		sc.SpoofUplink = askSpoofProfile("Uplink profile (kharej → Iran):")
+		sc.SpoofDownlink = askSpoofProfile("Downlink profile (Iran → kharej):")
 	}
 
 	// ---- 2. where the replies go -------------------------------------------
 	// Server only, and not optional: the forged packets do not carry the
 	// client's address, so without this the server has nowhere to answer.
 	step("Where this end sends its replies")
-	if s.Role == "server" {
+	if onIran {
 		tui.Info("The " + there + " machine forges its source address, so its packets do not")
 		tui.Info("say where they came from. This server has to be told, or it has")
 		tui.Info("nowhere to send the answers.")
@@ -456,7 +453,7 @@ func askSpoof(s *TunnelSpec) {
 		for {
 			raw := strings.TrimSpace(tui.Prompt("Real IPv4 of the " + there + " server: "))
 			if net.ParseIP(raw).To4() != nil {
-				s.SpoofPeerIP = raw
+				sc.SpoofPeerIP = raw
 				break
 			}
 			tui.Error("That is not an IPv4 address. It looks like 203.0.113.10")
@@ -494,10 +491,10 @@ func askSpoof(s *TunnelSpec) {
 			pool = append(pool, ip)
 		}
 		if len(pool) == 1 {
-			s.SpoofSrcIP = pool[0]
+			sc.SpoofSrcIP = pool[0]
 		} else if len(pool) > 1 {
-			s.SpoofSrcIP = pool[0]
-			s.SpoofSrcPool = pool
+			sc.SpoofSrcIP = pool[0]
+			sc.SpoofSrcPool = pool
 		}
 	}
 
@@ -519,38 +516,72 @@ func askSpoof(s *TunnelSpec) {
 				tui.Error(fmt.Sprintf("no such interface: %v", err))
 				continue
 			}
-			s.SpoofInterface = iface
+			sc.SpoofInterface = iface
 			break
 		}
 	}
 
-	// ---- 4. Relay mode ------------------------------------------------------
-	step("Relay mode, instead of a KCP tunnel over forwarded ports")
-	tui.Info("Normally this tunnel wraps a reliable KCP tunnel over the forwarded")
-	tui.Info("ports. Relay mode does something else: it strips KCP and runs a bare")
-	tui.Info("datagram relay to a local UDP target, so you carry something that")
-	tui.Info("brings its own reliability — a whole WireGuard VPN, or another tunnel.")
-	tui.Info("The forwarded ports are ignored in this mode.")
-	tui.Warn("Say no unless you are already running WireGuard (or similar) and want it tunnelled.")
+	// ---- 4. Stealth --------------------------------------------------------
+	//
+	// One question, not seven. The evasion knobs are individually meaningless to
+	// anybody who has not read what a DPI box matches on, and individually
+	// harmless — but only two of them change the wire in a way the other end
+	// has to agree with, and getting *those* out of step is a tunnel that comes
+	// up and passes nothing. So they are set as a group, and the group is
+	// described by what it is for rather than by what it does.
+	//
+	// The encryption is not part of this and is not offered: a direct tunnel is
+	// always inside its Noise session. What this adds is what the packets look
+	// like around that.
+	step("Stealth")
+	tui.Info("The packets are already encrypted — that is not optional and not what")
+	tui.Info("this is. Stealth changes what they look like from the outside: their")
+	tui.Info("size, their spacing, the fields a fingerprint is built from.")
 	fmt.Println()
-	if tui.Confirm("Enable relay mode", false) {
-		s.SpoofPipe = true
-		def := "127.0.0.1:51820"
-		fmt.Println()
-		if s.Role == "server" {
-			tui.Info("Where the inner service listens on THIS server (e.g. the real")
-			tui.Info("WireGuard) — datagrams coming out of the tunnel are handed to it there.")
-		} else {
-			tui.Info("Where the tunnel should listen on THIS machine — point the inner")
-			tui.Info("app's endpoint (e.g. WireGuard's `endpoint`) at exactly this address.")
-		}
-		s.SpoofPipeAddr = strings.TrimSpace(tui.PromptDefault("Local UDP endpoint", def))
-		if s.SpoofPipeAddr == "" {
-			s.SpoofPipeAddr = def
-		}
+	tui.Info("On, this tunnel pads every packet by a random amount, varies the TTL")
+	tui.Info("and the DSCP byte, and moves its source port. On a tcp profile it also")
+	tui.Info("puts a TLS record header in front, so a middlebox reads it as HTTPS.")
+	fmt.Println()
+	tui.Warn("It costs a little throughput and a few bytes per packet.")
+	tui.Warn("The " + there + " end must answer this the same way — the padding and the")
+	tui.Warn("TLS header change the wire, and one end doing them alone passes nothing.")
+	fmt.Println()
+	if tui.Confirm("Turn Stealth on", false) {
+		applySpoofStealth(sc)
 	}
 
-	spoofSummary(s, here, there)
+	spoofSummary(*sc, here, there)
+}
+
+// applySpoofStealth turns on the obfuscation the Stealth question stands for.
+//
+// It is a named set rather than a line in the wizard for one reason: two of
+// these change what goes on the wire and so must match at the far end, and
+// three do not. An operator setting them one at a time will eventually set a
+// wire-changing one on a single end, and the result is a tunnel that connects
+// and carries nothing — the failure this whole carrier is worst at explaining.
+// Setting them together means "the same answer on both ends" is one answer.
+//
+// The values are the reference implementation's: a padding ceiling of 64 bytes,
+// and the ephemeral range for the source port.
+func applySpoofStealth(sc *config.SpoofConfig) {
+	sc.SpoofPadding, sc.SpoofPaddingMax = true, 64
+	sc.SpoofTTLJitter = true
+	sc.SpoofRandomDSCP = true
+	sc.SpoofShufflePort = true
+	sc.SpoofPortMin, sc.SpoofPortMax = 49152, 65535
+	// Only the tcp profile carries a TLS record header; on the others the flag
+	// is read and ignored, so setting it would be a setting that does nothing.
+	if up, down := network.ResolveSpoofDirections(sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink); up == "tcp" || down == "tcp" {
+		sc.SpoofFakeTLS = true
+	}
+}
+
+// spoofStealthOn reports whether the wire-changing half of Stealth is in force,
+// which is what a summary or an edit screen has to say out loud: those are the
+// settings the other end must match.
+func spoofStealthOn(sc config.SpoofConfig) bool {
+	return sc.SpoofPadding || sc.SpoofFakeTLS
 }
 
 // stepper returns a function that prints numbered section headings, so the
@@ -569,15 +600,15 @@ func stepper(total int) func(title string) {
 // spoofSummary repeats the answers back and says what has to be true on the
 // other server for them to work. Everything in a spoof setup is paired, and the
 // pairing is the part that goes wrong.
-func spoofSummary(s *TunnelSpec, here, there string) {
+func spoofSummary(sc config.SpoofConfig, here, there string) {
 	fmt.Println()
 	tui.Rule()
 	tui.Success("IP Spoofing — what this " + here + " end will do")
 	fmt.Println()
 
-	profile := s.SpoofProfile
-	if s.SpoofUplink != "" || s.SpoofDownlink != "" {
-		up, down := s.SpoofUplink, s.SpoofDownlink
+	profile := sc.SpoofProfile
+	if sc.SpoofUplink != "" || sc.SpoofDownlink != "" {
+		up, down := sc.SpoofUplink, sc.SpoofDownlink
 		if up == "" {
 			up = profile
 		}
@@ -589,27 +620,29 @@ func spoofSummary(s *TunnelSpec, here, there string) {
 	tui.Info("Packets look like : " + profile)
 
 	switch {
-	case len(s.SpoofSrcPool) > 1:
-		tui.Info("Forged source     : " + strings.Join(s.SpoofSrcPool, ", ") + " (one per session)")
-	case s.SpoofSrcIP != "":
-		tui.Info("Forged source     : " + s.SpoofSrcIP)
+	case len(sc.SpoofSrcPool) > 1:
+		tui.Info("Forged source     : " + strings.Join(sc.SpoofSrcPool, ", ") + " (one per session)")
+	case sc.SpoofSrcIP != "":
+		tui.Info("Forged source     : " + sc.SpoofSrcIP)
 	default:
 		tui.Info("Forged source     : none — this machine's real address")
 	}
-	if s.SpoofPeerIP != "" {
-		tui.Info("Replies go to     : " + s.SpoofPeerIP + " (the " + there + " server)")
+	if sc.SpoofPeerIP != "" {
+		tui.Info("Replies go to     : " + sc.SpoofPeerIP + " (the " + there + " server)")
 	}
-	if s.SpoofInterface != "" {
-		tui.Info("Leaves by         : " + s.SpoofInterface)
+	if sc.SpoofInterface != "" {
+		tui.Info("Leaves by         : " + sc.SpoofInterface)
 	}
-	if s.SpoofPipe {
-		tui.Info("Relay mode        : on, forwarding to " + s.SpoofPipeAddr + " (KCP off, forwarded ports ignored)")
+	if spoofStealthOn(sc) {
+		tui.Info("Stealth           : on — padding and header cosmetics (the " + there + " end must match)")
+	} else {
+		tui.Info("Stealth           : off")
 	}
 
 	fmt.Println()
 	tui.Warn("On the " + there + " server: the same packet profile, and if you forged a")
 	tui.Warn("source here, tell that end to expect it.")
-	if s.Role == "client" {
+	if here != "Iran" {
 		tui.Warn("That end also needs THIS machine's real public IPv4, or it has")
 		tui.Warn("nowhere to send its replies.")
 	}
@@ -753,8 +786,6 @@ func SetupServer() {
 	}
 	askSimpleAuth(&s, transport)
 
-	askSpoof(&s)
-
 	askPck(&s)
 
 	askProxyProtocol(&s)
@@ -808,8 +839,6 @@ func SetupClient() {
 		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
 	}
 	askSimpleAuth(&s, transport)
-
-	askSpoof(&s)
 
 	askPck(&s)
 
@@ -1223,4 +1252,17 @@ func askSimpleAuth(s *TunnelSpec, transport string) {
 	tui.Warn("Only enable it when a trusted proxy is terminating the TLS — it hands the")
 	tui.Warn("token to whatever does. Set the same answer on both ends.")
 	s.SimpleAuth = tui.Confirm("Use simple token auth (for a TLS-terminating proxy in front)", s.SimpleAuth)
+}
+
+// clearSpoofStealth is applySpoofStealth's opposite: it puts the carrier back to
+// plain packets, including the bounds the knobs carried, so a config that has
+// been switched off does not keep a port range and a padding ceiling that
+// nothing reads.
+func clearSpoofStealth(sc *config.SpoofConfig) {
+	sc.SpoofPadding, sc.SpoofPaddingMax = false, 0
+	sc.SpoofTTLJitter = false
+	sc.SpoofRandomDSCP = false
+	sc.SpoofShufflePort = false
+	sc.SpoofPortMin, sc.SpoofPortMax = 0, 0
+	sc.SpoofFakeTLS = false
 }

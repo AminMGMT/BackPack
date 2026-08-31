@@ -208,10 +208,11 @@ pck_flags      = ["PA", "A"]
 		t.Fatalf("pck_flags has %d entries, want 2", len(cfg.L3.PckFlags))
 	}
 
-	// The reverse halves must stay empty even though they carry keys of the
-	// same name: these were read from [l3], not from [server] or [client].
-	if cfg.Server.SpoofProfile != "" || cfg.Client.SpoofProfile != "" {
-		t.Fatal("[l3] spoof keys leaked into [server] or [client]")
+	// The reverse halves have no carrier of their own to read these with —
+	// spoof is a direct-tunnel carrier and nothing else — so what proves the
+	// separation now is that [server] and [client] were not filled at all.
+	if cfg.Server.BindAddr != "" || cfg.Client.RemoteAddr != "" {
+		t.Fatal("an [l3] table filled in the reverse tunnel's tables")
 	}
 }
 

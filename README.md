@@ -135,9 +135,12 @@ Thirteen to choose from, so you match the route instead of fighting it. Not sure
 | **WS / WS Mux** | only HTTP gets through, or you want a CDN in front | [→](tutorial/websocket.md) |
 | **WSS / WSS Mux** | it should look like an ordinary HTTPS website | [→](tutorial/websocket-tls.md) |
 | **xDi (ICMP)** | TCP and UDP are filtered but ping works | [→](tutorial/xdi-icmp.md) |
-| **IP Spoofing** | the path blocks or counts by source address | [→](tutorial/ip-spoofing.md) |
 
 **Every transport explained → [docs/transports.md](docs/transports.md)**
+
+> **The path blocks or counts by source address?** That is **IP Spoofing**, and
+> it is a carrier of the **direct tunnel** rather than one of the transports
+> above — see **[docs/ip-spoofing.md](docs/ip-spoofing.md)**.
 
 > **Filtered or dirty server?** **TCP + Stealth** or **WSS** get the tunnel
 > through DPI — proven in the field. An IP blocked at the network layer, or a

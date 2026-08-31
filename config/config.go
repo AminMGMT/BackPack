@@ -170,26 +170,6 @@ type SpoofConfig struct {
 	// disables it. Linux only; needs CAP_BPF/CAP_NET_ADMIN in addition to the
 	// carrier's CAP_NET_RAW.
 	SpoofXDPInterface string `toml:"spoof_xdp_interface"`
-	// SpoofPipe is the legacy alias for spoof_mode = "relay": true selects relay
-	// mode. Kept so configs written by older versions keep working; new configs
-	// use SpoofMode. Resolved through RelayMode, never read directly.
-	SpoofPipe bool `toml:"spoof_pipe"`
-	// SpoofPipeAddr is the legacy alias for spoof_forward: the relay mode's local
-	// UDP target. Kept for old configs; resolved through RelayForward.
-	SpoofPipeAddr string `toml:"spoof_pipe_addr"`
-	// SpoofMode selects the carrier's shape: "kcp" (the default) wraps a reliable,
-	// encrypted KCP tunnel over the forged-source channel; "relay" strips KCP and
-	// runs a bare bidirectional datagram relay between a local UDP socket and the
-	// channel — the spoof-tunnel model, for carrying something that brings its own
-	// reliability (WireGuard, or another tunnel). Empty means "kcp", unless the
-	// legacy SpoofPipe is set, which is treated as "relay". See RelayMode.
-	SpoofMode string `toml:"spoof_mode"`
-	// SpoofForward is the relay mode's local UDP target: on the client the socket
-	// the tunnel listens on (point the inner app's endpoint here); on the server
-	// the socket datagrams out of the tunnel are forwarded to (where the inner
-	// service listens). Empty falls back to SpoofPipeAddr, then 127.0.0.1:51820.
-	// Ignored in kcp mode. See RelayForward.
-	SpoofForward string `toml:"spoof_forward"`
 	// SpoofSockBuf sizes the send and receive socket buffers (SO_SNDBUF /
 	// SO_RCVBUF) of the raw and UDP sockets the carrier owns, in bytes. A large
 	// buffer is what lets the forged-source flow reach real bandwidth: under a
@@ -345,9 +325,6 @@ type ServerConfig struct {
 	// Embedded so the kcp_* keys sit at the top level of the [server] table
 	// alongside every other tuning key.
 	KCPConfig
-	// Embedded so the spoof_* keys sit at the top level too. Only used when
-	// transport = "spoof".
-	SpoofConfig
 	// Embedded so the pck_* keys sit at the top level too. Only used when
 	// transport = "pck".
 	PckConfig
@@ -469,9 +446,6 @@ type ClientConfig struct {
 	// Embedded so the kcp_* keys sit at the top level of the [client] table
 	// alongside every other tuning key.
 	KCPConfig
-	// Embedded so the spoof_* keys sit at the top level too. Only used when
-	// transport = "spoof".
-	SpoofConfig
 	// Embedded so the pck_* keys sit at the top level too. Only used when
 	// transport = "pck".
 	PckConfig

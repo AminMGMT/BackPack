@@ -179,6 +179,16 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		{Title: "TCP segment cap", Desc: "currently " + mssClampLabel(l.MSSClamp, l.MTU)},
 		{Title: "Show the token", Desc: "reveal it, to copy to the other machine"},
 	}
+	// The carrier's own screen, for the one carrier that has settings worth
+	// changing after the fact. It goes last on both sides, which is what keeps
+	// l3EditAction's index shift correct without touching it: the entry sits at
+	// the end of the list whether or not the two Iran-only entries are above it.
+	if strings.EqualFold(strings.TrimSpace(l.Carrier), "spoof") {
+		options = append(options, tui.Option{
+			Title: "IP Spoofing",
+			Desc:  "the forged source, the packet profile, Stealth — currently " + spoofCarrierSummary(l.SpoofConfig),
+		})
+	}
 	if iran {
 		options = append([]tui.Option{
 			{Title: "Forwarded ports", Desc: "optional ports carried over the tunnel"},
@@ -227,6 +237,10 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		tui.Info("Token (must match the other machine exactly):")
 		fmt.Println("  " + tui.Color(tui.Bold+tui.White, l.Token))
 		tui.PressEnter()
+	case 5:
+		if editL3Spoof(t, l) {
+			return true
+		}
 	default:
 		return false
 	}
@@ -352,4 +366,76 @@ func applyEdit(t Tunnel, body string) {
 	}
 	tui.Success("Saved and restarted.")
 	tui.PressEnter()
+}
+
+// spoofCarrierSummary is the one line the edit menu shows for the carrier: what
+// the packets look like, and whether the paired half of Stealth is on. Those
+// are the two settings that have to agree with the other machine, so they are
+// the two worth reading off a menu.
+func spoofCarrierSummary(sc config.SpoofConfig) string {
+	profile := orDefault(sc.SpoofProfile, "udp")
+	if sc.SpoofUplink != "" || sc.SpoofDownlink != "" {
+		profile = orDefault(sc.SpoofUplink, profile) + "/" + orDefault(sc.SpoofDownlink, profile)
+	}
+	source := "unforged"
+	switch {
+	case len(sc.SpoofSrcPool) > 1:
+		source = fmt.Sprintf("%d forged sources", len(sc.SpoofSrcPool))
+	case sc.SpoofSrcIP != "":
+		source = sc.SpoofSrcIP
+	}
+	stealth := "Stealth off"
+	if spoofStealthOn(sc) {
+		stealth = "Stealth on"
+	}
+	return profile + ", " + source + ", " + stealth
+}
+
+// editL3Spoof changes the forged-source carrier of a running tunnel.
+//
+// Stealth is offered on its own because it is the setting most likely to be
+// changed twice: it is the one an operator turns on to see whether a path stops
+// dropping the tunnel, and off again when it costs more than it bought. Making
+// that a trip through the whole setup would be four screens to flip one flag.
+//
+// Everything else is the setup screen again rather than a field-by-field
+// editor, and deliberately: these settings are paired with the other machine,
+// and a screen that walks both ends through the same questions in the same
+// order is what keeps a pair in step. It ends in the same summary the setup
+// does, which is where a mismatch is caught.
+func editL3Spoof(t Tunnel, l config.L3Config) bool {
+	onIran := !strings.EqualFold(strings.TrimSpace(l.Mode), "listen")
+	there := "kharej"
+	if !onIran {
+		there = "Iran"
+	}
+
+	stealth := "Turn Stealth on"
+	if spoofStealthOn(l.SpoofConfig) {
+		stealth = "Turn Stealth off"
+	}
+
+	switch tui.ChooseOpt("IP Spoofing — change what?", []tui.Option{
+		{Title: stealth, Desc: "padding and header cosmetics — the " + there + " end must be set the same way"},
+		{Title: "Run the setup again", Desc: "the profile, the forged source, the interface — every question, from the top"},
+	}) {
+	case 0:
+		if spoofStealthOn(l.SpoofConfig) {
+			clearSpoofStealth(&l.SpoofConfig)
+		} else {
+			applySpoofStealth(&l.SpoofConfig)
+		}
+		fmt.Println()
+		tui.Warn("Set the " + there + " end the same way, or the tunnel will come up and")
+		tui.Warn("carry nothing: padding and the TLS header change what goes on the wire.")
+		tui.PressEnter()
+		saveL3(t, l)
+		return true
+	case 1:
+		askSpoofCarrier(&l.SpoofConfig, onIran)
+		tui.PressEnter()
+		saveL3(t, l)
+		return true
+	}
+	return false
 }

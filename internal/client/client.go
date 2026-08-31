@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"net"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
@@ -151,42 +150,9 @@ func (c *Client) Start() {
 		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
 
-	case config.KCP, config.XDI, config.SPOOF, config.PCK:
-		// The spoof transport in relay mode is a bare datagram relay, not a KCP
-		// tunnel — handle it separately and stop here.
-		if c.config.Transport == config.SPOOF && c.config.RelayMode() {
-			up, down := network.ResolveSpoofDirections(c.config.SpoofProfile, c.config.SpoofUplink, c.config.SpoofDownlink)
-			pipeAddr := c.config.RelayForward()
-			serverHost := c.config.RemoteAddr
-			if h, _, err := net.SplitHostPort(c.config.RemoteAddr); err == nil {
-				serverHost = h
-			}
-			serverIP := c.config.SpoofPeerIP
-			if serverIP == "" {
-				serverIP = serverHost
-			}
-			pipeCfg := &transport.SpoofPipeConfig{
-				Token: c.config.Token,
-				Carrier: network.SpoofCarrier{
-					Uplink: up, Downlink: down,
-					SrcIP: c.config.SpoofSrcIP, SrcPool: c.config.SpoofSrcPool,
-					PeerIP: c.config.SpoofPeerIP, Interface: c.config.SpoofInterface,
-					XDPIface: c.config.SpoofXDPInterface,
-					SockBuf:  c.config.SpoofSockBuf, PeerSrcIP: c.config.SpoofPeerSrcIP,
-					ReplySplit: c.config.SpoofICMPReply, MTU: c.config.SpoofMTU,
-					DPI: network.SpoofDPIFromConfig(c.config.SpoofConfig),
-				},
-				ServerIP: serverIP,
-				PipeAddr: pipeAddr,
-				Retry:    time.Duration(c.config.RetryInterval) * time.Second,
-			}
-			go transport.NewSpoofPipeClient(c.ctx, pipeCfg, c.logger).Start()
-			break
-		}
-
+	case config.KCP, config.XDI, config.PCK:
 		kcp := c.config.KCPConfig.WithDefaults()
 		useICMP := c.config.Transport == config.XDI
-		useSpoof := c.config.Transport == config.SPOOF
 		kcpConfig := &transport.KcpConfig{
 			RemoteAddr:       c.config.RemoteAddr,
 			Endpoints:        endpoints,
@@ -216,20 +182,6 @@ func (c *Client) Start() {
 			DataShards:       kcp.DataShards,
 			ParityShards:     kcp.ParityShards,
 			UseICMP:          useICMP,
-			UseSpoof:         useSpoof,
-			SpoofProfile:     c.config.SpoofProfile,
-			SpoofUplink:      c.config.SpoofUplink,
-			SpoofDownlink:    c.config.SpoofDownlink,
-			SpoofSrcIP:       c.config.SpoofSrcIP,
-			SpoofSrcPool:     c.config.SpoofSrcPool,
-			SpoofPeerIP:      c.config.SpoofPeerIP,
-			SpoofInterface:   c.config.SpoofInterface,
-			SpoofXDPIface:    c.config.SpoofXDPInterface,
-			SpoofSockBuf:     c.config.SpoofSockBuf,
-			SpoofPeerSrcIP:   c.config.SpoofPeerSrcIP,
-			SpoofICMPReply:   c.config.SpoofICMPReply,
-			SpoofMTU:         c.config.SpoofMTU,
-			SpoofDPI:         network.SpoofDPIFromConfig(c.config.SpoofConfig),
 			UsePck:           c.config.Transport == config.PCK,
 			PckInterface:     c.config.PckInterface,
 			PckGatewayMAC:    c.config.PckGatewayMAC,

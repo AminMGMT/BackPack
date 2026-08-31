@@ -3,10 +3,12 @@ package manage
 import (
 	"strings"
 	"testing"
+
+	"github.com/backpack/backpack/config"
 )
 
-// The panel's spoof drawer and the CLI's askSpoof have to be able to describe
-// the same tunnel. These tests pin the parts of that where being merely close
+// The panel's spoof drawer and the CLI's askSpoofCarrier have to be able to
+// describe the same direct tunnel. These tests pin the parts of that where being merely close
 // would produce a tunnel that comes up and carries nothing.
 
 // One forged address is a single source; several are a pool the carrier rotates
@@ -14,7 +16,7 @@ import (
 // rotation that never rotates, and a pool collapsed to one address looks like a
 // block being evaded when it is not.
 func TestForgedSourcesBecomeAnAddressOrAPool(t *testing.T) {
-	single := TunnelSpec{Role: "client", Transport: "spoof"}
+	single := config.SpoofConfig{}
 	if err := (SpoofTune{Profile: "udp", SrcIPs: " 203.0.113.10 "}).apply(&single); err != nil {
 		t.Fatalf("one address was refused: %v", err)
 	}
@@ -22,7 +24,7 @@ func TestForgedSourcesBecomeAnAddressOrAPool(t *testing.T) {
 		t.Errorf("one address should not make a pool: %q %v", single.SpoofSrcIP, single.SpoofSrcPool)
 	}
 
-	pool := TunnelSpec{Role: "client", Transport: "spoof"}
+	pool := config.SpoofConfig{}
 	if err := (SpoofTune{Profile: "udp", SrcIPs: "203.0.113.10, 198.51.100.7"}).apply(&pool); err != nil {
 		t.Fatalf("a pool was refused: %v", err)
 	}
@@ -36,7 +38,7 @@ func TestForgedSourcesBecomeAnAddressOrAPool(t *testing.T) {
 // the field would leave the operator looking at a tunnel configured differently
 // from the page in front of them.
 func TestBadForgedSourceIsRefused(t *testing.T) {
-	s := TunnelSpec{Role: "client", Transport: "spoof"}
+	s := config.SpoofConfig{}
 	err := (SpoofTune{Profile: "udp", SrcIPs: "203.0.113.10, not-an-ip"}).apply(&s)
 	if err == nil {
 		t.Fatal("a junk address was accepted")
@@ -46,35 +48,35 @@ func TestBadForgedSourceIsRefused(t *testing.T) {
 	}
 }
 
-// The Iran side cannot learn where to answer from packets whose source is
-// forged, so the wizard refuses to finish without that address and the panel
-// has to refuse too.
-func TestServerSpoofNeedsThePeersRealAddress(t *testing.T) {
-	s := TunnelSpec{Role: "server", Transport: "spoof"}
-	if err := (SpoofTune{Profile: "udp"}).apply(&s); err == nil {
-		t.Fatal("a spoof server was accepted with nowhere to send its replies")
+// Where the peer's real address is required is the direct tunnel's own
+// validation now (l3.Config.validate refuses a listening side without it) and
+// not this drawer's, because the drawer no longer knows which side it is on.
+// What it still owes is to accept a valid one and refuse a junk one.
+func TestThePeersRealAddressIsCheckedButNotRequiredHere(t *testing.T) {
+	var sc config.SpoofConfig
+	if err := (SpoofTune{Profile: "udp"}).apply(&sc); err != nil {
+		t.Fatalf("an unset peer address was refused: %v", err)
 	}
-	if err := (SpoofTune{Profile: "udp", PeerIP: "203.0.113.10"}).apply(&s); err != nil {
+	if err := (SpoofTune{Profile: "udp", PeerIP: "203.0.113.10"}).apply(&sc); err != nil {
 		t.Fatalf("a valid peer address was refused: %v", err)
 	}
-
-	// The kharej side dialled the server, so it already knows the address and
-	// is not asked for one.
-	c := TunnelSpec{Role: "client", Transport: "spoof"}
-	if err := (SpoofTune{Profile: "udp"}).apply(&c); err != nil {
-		t.Fatalf("the client side was asked for an address it does not need: %v", err)
+	if sc.SpoofPeerIP != "203.0.113.10" {
+		t.Errorf("peer address = %q, want 203.0.113.10", sc.SpoofPeerIP)
+	}
+	if err := (SpoofTune{Profile: "udp", PeerIP: "nonsense"}).apply(&sc); err == nil {
+		t.Error("a junk peer address was accepted")
 	}
 }
 
 // A profile the engine does not know would be written into the config and read
 // back as nothing at all, so it is caught here.
 func TestSpoofProfileIsOneOfTheThree(t *testing.T) {
-	s := TunnelSpec{Role: "client", Transport: "spoof"}
+	s := config.SpoofConfig{}
 	if err := (SpoofTune{Profile: "quic"}).apply(&s); err == nil {
 		t.Error("an unknown packet profile was accepted")
 	}
 	// Empty means the wizard's recommendation, not "no profile".
-	s = TunnelSpec{Role: "client", Transport: "spoof"}
+	s = config.SpoofConfig{}
 	if err := (SpoofTune{}).apply(&s); err != nil || s.SpoofProfile != "udp" {
 		t.Errorf("an unanswered profile should default to udp, got %q (%v)", s.SpoofProfile, err)
 	}
@@ -84,14 +86,14 @@ func TestSpoofProfileIsOneOfTheThree(t *testing.T) {
 // there is no record to fake, and writing the setting out anyway would leave a
 // knob in the config that nothing reads.
 func TestFakeTLSOnlySurvivesOnTheTCPProfile(t *testing.T) {
-	udp := TunnelSpec{Role: "client", Transport: "spoof"}
+	udp := config.SpoofConfig{}
 	if err := (SpoofTune{Profile: "udp", FakeTLS: true}).apply(&udp); err != nil {
 		t.Fatal(err)
 	}
 	if udp.SpoofFakeTLS {
 		t.Error("fake TLS was kept on a UDP-profile tunnel")
 	}
-	tcp := TunnelSpec{Role: "client", Transport: "spoof"}
+	tcp := config.SpoofConfig{}
 	if err := (SpoofTune{Profile: "tcp", FakeTLS: true}).apply(&tcp); err != nil {
 		t.Fatal(err)
 	}
@@ -106,13 +108,13 @@ func TestSpoofDrawerRoundTripsThroughTheSpec(t *testing.T) {
 	in := SpoofTune{
 		Profile: "icmp", Uplink: "udp", Downlink: "tcp",
 		SrcIPs: "203.0.113.10, 198.51.100.7", PeerIP: "192.0.2.5",
-		PeerSrcIP: "198.51.100.9", DstIP: "192.0.2.9", Pipe: true,
-		PipeAddr: "127.0.0.1:51821", SockBuf: 4194304, MTU: 1200,
+		PeerSrcIP: "198.51.100.9", DstIP: "192.0.2.9",
+		SockBuf: 4194304, MTU: 1200,
 		ICMPReply: true, TTLJitter: true, RandomDSCP: true,
 		ShufflePort: true, PortMin: 20000, PortMax: 40000,
 		Padding: true, PaddingMax: 128,
 	}
-	s := TunnelSpec{Role: "server", Transport: "spoof"}
+	s := config.SpoofConfig{}
 	if err := in.apply(&s); err != nil {
 		t.Fatalf("the drawer was refused: %v", err)
 	}
@@ -123,8 +125,8 @@ func TestSpoofDrawerRoundTripsThroughTheSpec(t *testing.T) {
 	if out.SrcIPs != "203.0.113.10, 198.51.100.7" || out.PeerIP != in.PeerIP || out.PeerSrcIP != in.PeerSrcIP {
 		t.Errorf("addresses did not survive: %+v", out)
 	}
-	if out.PipeAddr != in.PipeAddr || !out.Pipe || out.MTU != in.MTU || out.SockBuf != in.SockBuf {
-		t.Errorf("pipe/sizing did not survive: %+v", out)
+	if out.MTU != in.MTU || out.SockBuf != in.SockBuf {
+		t.Errorf("sizing did not survive: %+v", out)
 	}
 	if !out.TTLJitter || !out.RandomDSCP || !out.ShufflePort || out.PortMin != 20000 ||
 		out.PortMax != 40000 || !out.Padding || out.PaddingMax != 128 || !out.ICMPReply {
@@ -135,7 +137,7 @@ func TestSpoofDrawerRoundTripsThroughTheSpec(t *testing.T) {
 // A source-port range that starts above where it ends would be written out and
 // then produce ports from nowhere, so it is caught at the form.
 func TestBackwardsPortRangeIsRefused(t *testing.T) {
-	s := TunnelSpec{Role: "client", Transport: "spoof"}
+	s := config.SpoofConfig{}
 	err := (SpoofTune{Profile: "udp", ShufflePort: true, PortMin: 40000, PortMax: 20000}).apply(&s)
 	if err == nil {
 		t.Fatal("a backwards port range was accepted")
@@ -195,19 +197,15 @@ func TestConnectionOptionsAreRefusedWhereTheyCannotWork(t *testing.T) {
 	}
 }
 
-// Switching a tunnel off spoof or pck has to take that carrier's settings with
-// it, or the Edit form keeps showing values nothing reads.
+// Switching a tunnel off pck has to take that carrier's settings with it, or
+// the Edit form keeps showing values nothing reads.
 func TestSwitchingCarrierDropsTheOldOnesSettings(t *testing.T) {
 	s := TunnelSpec{
 		Role: "client", Transport: "tcp",
-		SpoofSrcIP: "203.0.113.10", SpoofProfile: "udp", SpoofTTLJitter: true,
 		PckInterface: "eth0", PckFlags: []string{"PA"},
 		EdgeIP: "104.16.0.1", SimpleAuth: true,
 	}
 	clearForTransport(&s)
-	if s.SpoofSrcIP != "" || s.SpoofProfile != "" || s.SpoofTTLJitter {
-		t.Errorf("spoof settings survived a move to tcp: %+v", s)
-	}
 	if s.PckInterface != "" || s.PckFlags != nil {
 		t.Errorf("packet-carrier settings survived a move to tcp: %+v", s)
 	}

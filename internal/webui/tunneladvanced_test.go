@@ -68,11 +68,10 @@ func TestFineTuneFieldsReachTheServer(t *testing.T) {
 	decodesInto(t, fieldKeys(t, "FT_FIELDS"), &manage.FineTune{})
 }
 
-// The spoof drawer is the CLI's askSpoof plus the obfuscation knobs that used
-// to need the config file edited by hand.
-func TestSpoofDrawerFieldsReachTheServer(t *testing.T) {
-	decodesInto(t, fieldKeys(t, "SPOOF_FIELDS"), &manage.SpoofTune{})
-}
+// There is no spoof drawer on the reverse forms any more: IP spoofing is a
+// direct-tunnel carrier, and the direct form asks for it in its own fields.
+// The drawer's contract with manage.SpoofTune is held by the manage package's
+// own round-trip test.
 
 func TestPacketCarrierFieldsReachTheServer(t *testing.T) {
 	decodesInto(t, fieldKeys(t, "PCK_FIELDS"), &manage.PckTune{})
@@ -139,13 +138,14 @@ func TestTokenButtonPastesOnTheKharejSide(t *testing.T) {
 	}
 }
 
-// Both forms have to carry all three drawers, or a setting can be chosen when a
+// Both forms have to carry every drawer, or a setting can be chosen when a
 // tunnel is built and never changed again — which is what sent people back to
-// the CLI.
+// the CLI. There were three; the spoof drawer left with the reverse spoof
+// transport, and its settings live on the direct form now.
 func TestBothFormsCarryEveryDrawer(t *testing.T) {
 	body := string(dashboardHTML)
 	for _, p := range []string{"a", "e"} {
-		for _, d := range []string{"sp", "pk", "cn"} {
+		for _, d := range []string{"pk", "cn"} {
 			for _, tmpl := range []string{`id="acc-%s%s"`, `id="accb-%s%s"`, `id="acch-%s%s"`, `id="accnote-%s%s"`} {
 				want := strings.Replace(strings.Replace(tmpl, "%s", p, 1), "%s", d, 1)
 				if !strings.Contains(body, want) {
@@ -154,8 +154,8 @@ func TestBothFormsCarryEveryDrawer(t *testing.T) {
 			}
 		}
 	}
-	for _, box := range []string{`id="af-spoof"`, `id="af-pck"`, `id="af-conn"`,
-		`id="ef-spoof"`, `id="ef-pck"`, `id="ef-conn"`} {
+	for _, box := range []string{`id="af-pck"`, `id="af-conn"`,
+		`id="ef-pck"`, `id="ef-conn"`} {
 		if !strings.Contains(body, box) {
 			t.Errorf("missing drawer body %s", box)
 		}

@@ -205,31 +205,52 @@ func checkPck(cfg *config.Config) {
 	}
 }
 
-// checkSpoof refuses a spoof tunnel that cannot possibly work, before it tries,
-// and validates the profile so an unknown one is named here rather than silently
-// defaulting deep in the transport.
+// checkSpoof settles what a configuration naming the spoof carrier is allowed
+// to do, and then says everything an operator needs to hear about the route.
 //
-// Like xdi it needs a raw socket (root or CAP_NET_RAW) and is Linux only. The
-// warning is deliberately blunt: source spoofing only carries traffic where the
-// upstream network does not drop forged-source packets, and the tcp profile
-// additionally needs a firewall rule so the host kernel does not RST the flow.
+// IP spoofing is a direct-tunnel carrier now and nothing else. It used to be a
+// reverse transport as well, and that arrangement could not work: a reverse
+// tunnel is a control channel plus a pool of connections, each its own session,
+// and the forged-source carrier reports every one of them at the same address
+// because there is no port in the packets it reads. kcp-go keys its sessions on
+// that address, so they collapsed onto one and each new session closed the one
+// before it. The tunnel reported itself connected and carried nothing. The
+// direct tunnel has one session by construction, which is the shape this
+// carrier can actually serve.
+//
+// So a reverse configuration naming it is refused here, by name, with what to
+// build instead — rather than started and left to fail in a way that reads like
+// a network fault.
 func checkSpoof(cfg *config.Config) {
-	usesSpoof := cfg.Server.Transport == config.SPOOF || cfg.Client.Transport == config.SPOOF
-	if !usesSpoof {
+	if cfg.Server.Transport == config.SPOOF || cfg.Client.Transport == config.SPOOF {
+		logger.Fatalf("transport = \"spoof\" is no longer a reverse tunnel: IP spoofing is a " +
+			"direct-tunnel carrier, and a reverse tunnel over it could never carry traffic " +
+			"(every one of its pooled sessions arrives at the same address, so each closed the " +
+			"one before it). Build it again as a direct tunnel — `sudo backpack` → Setup Iran / " +
+			"Setup Kharej → Direct, and choose Spoof as the carrier — which forwards the same " +
+			"ports over the same forged-source packets. See docs/ip-spoofing.md.")
+	}
+
+	// Everything below is the direct tunnel's carrier.
+	if !cfg.L3.Enabled() || !strings.EqualFold(strings.TrimSpace(cfg.L3.Carrier), "spoof") {
 		return
 	}
+	checkSpoofCarrier(cfg.L3.SpoofConfig, strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen"))
+}
+
+// checkSpoofCarrier validates the forged-source carrier and reports what the
+// host has to be set up for. It is the same advice the reverse transport used
+// to print, which was the only place any of it existed — a direct tunnel over
+// the same carrier needs every word of it.
+func checkSpoofCarrier(sc config.SpoofConfig, listening bool) {
 	if runtime.GOOS != "linux" {
-		logger.Fatalf("the spoof transport is only available on Linux (it needs a raw IP socket)")
+		logger.Fatalf("the spoof carrier is only available on Linux (it needs a raw IP socket)")
 	}
 	if os.Geteuid() != 0 {
-		logger.Fatalf("the spoof transport needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+		logger.Fatalf("the spoof carrier needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
-	// Validate both directions' profiles of whichever side is on spoof here. A
-	// direction defaults to spoof_profile, then to udp.
-	sc := cfg.Server.SpoofConfig
-	if cfg.Client.Transport == config.SPOOF {
-		sc = cfg.Client.SpoofConfig
-	}
+	// Validate both directions' profiles. A direction defaults to
+	// spoof_profile, then to udp.
 	for _, p := range []string{sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink} {
 		if _, err := network.ParseSpoofProfile(p); err != nil {
 			logger.Fatalf("invalid spoof profile: %v", err)
@@ -249,20 +270,16 @@ func checkSpoof(cfg *config.Config) {
 		}
 	}
 
-	// The server cannot learn the client's real address from the forged packets,
-	// so it must be told it. The client derives the server's real address from
-	// remote_addr, so spoof_peer_ip is optional there.
-	if cfg.Server.Transport == config.SPOOF && net.ParseIP(cfg.Server.SpoofPeerIP).To4() == nil {
-		logger.Fatalf("the spoof transport needs spoof_peer_ip set to the client's real IPv4 address on the server (it cannot be learned from the forged packets)")
+	// The listening side cannot learn its peer's real address from the forged
+	// packets, so it must be told it. The dialling side derives it from the
+	// address it was given, so spoof_peer_ip is optional there.
+	if listening && net.ParseIP(sc.SpoofPeerIP).To4() == nil {
+		logger.Fatalf("the spoof carrier needs spoof_peer_ip set to the peer's real IPv4 address on the listening side (it cannot be learned from the forged packets)")
 	}
 
 	// A typo in any forged source is caught here rather than silently sending
 	// nothing.
-	pool := cfg.Server.SpoofSrcPool
-	if cfg.Client.Transport == config.SPOOF {
-		pool = cfg.Client.SpoofSrcPool
-	}
-	for _, ip := range pool {
+	for _, ip := range sc.SpoofSrcPool {
 		if net.ParseIP(ip).To4() == nil {
 			logger.Fatalf("invalid IPv4 %q in spoof_src_pool", ip)
 		}
@@ -298,17 +315,6 @@ func checkSpoof(cfg *config.Config) {
 	// flow in the kernel and leans on the source-IP pin. Recommend it.
 	if (up == "ipip" || down == "ipip" || up == "gre" || down == "gre") && net.ParseIP(sc.SpoofPeerSrcIP).To4() == nil {
 		logger.Info("spoof_profile ipip/gre has no port to demultiplex on: set spoof_peer_src_ip to the peer's forged source so foreign packets of the same protocol are dropped before the encryption; without it every proto-4/47 packet reaches the cipher.")
-	}
-
-	// Relay mode runs a bare datagram relay (no KCP) to a local UDP target that
-	// brings its own reliability, such as WireGuard; sanity-check the forward
-	// endpoint and remind the operator to leave MTU headroom for the framing.
-	if sc.RelayMode() {
-		addr := sc.RelayForward()
-		if _, _, err := net.SplitHostPort(addr); err != nil {
-			logger.Fatalf("spoof_forward %q must be host:port (the local UDP endpoint the relay forwards to on this host)", addr)
-		}
-		logger.Infof("spoof relay mode: local UDP endpoint %s (no KCP; the inner transport supplies reliability). Point the inner app's endpoint at the client's %s. For WireGuard, set its MTU to ~1380 to leave room for the spoof framing.", addr, addr)
 	}
 
 	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this with the spoof tester on your real route before relying on it.")

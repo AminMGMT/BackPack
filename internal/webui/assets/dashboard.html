@@ -1755,15 +1755,6 @@
            questions askSpoof, askPck and the client wizard's optional-settings
            branch ask, drawn from one field table each. The first two only exist
            for their own transport, so onTransport shows and hides them. -->
-      <div class="acc hide" id="acc-asp">
-        <button class="acch" id="acch-asp" aria-expanded="false" aria-controls="accb-asp" onclick="toggleAcc('asp')">
-          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
-          <span data-i18n>IP Spoofing</span><span class="accnote" id="accnote-asp" data-i18n data-i18n-ph-only>carrier settings</span>
-          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <div class="accb" id="accb-asp" hidden><div class="ftgrid" id="af-spoof"></div></div>
-      </div>
-
       <div class="acc hide" id="acc-apk">
         <button class="acch" id="acch-apk" aria-expanded="false" aria-controls="accb-apk" onclick="toggleAcc('apk')">
           <svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
@@ -1914,15 +1905,6 @@
            actually runs. Everything the CLI's Edit screen can change lives in
            one of them, so a setting can be changed later wherever it could be
            chosen in the first place. -->
-      <div class="acc hide" id="acc-esp">
-        <button class="acch" id="acch-esp" aria-expanded="false" aria-controls="accb-esp" onclick="toggleAcc('esp')">
-          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg>
-          <span data-i18n>IP Spoofing</span><span class="accnote" id="accnote-esp" data-i18n data-i18n-ph-only>current values</span>
-          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <div class="accb" id="accb-esp" hidden><div class="ftgrid" id="ef-spoof"></div></div>
-      </div>
-
       <div class="acc hide" id="acc-epk">
         <button class="acch" id="acch-epk" aria-expanded="false" aria-controls="accb-epk" onclick="toggleAcc('epk')">
           <svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
@@ -3629,49 +3611,6 @@ function flagOpts(){
   return out;
 }
 
-const SPOOF_FIELDS=[
-  {t:'note',label:'IP Spoofing is experimental. It forges the source address of raw IP packets, so it only carries traffic where the upstream network does not drop forged-source packets. Prove that with the spoof tester before you rely on it.'},
-  {k:'profile',t:'opt',full:true,label:'Packet profile — what the tunnel looks like on the wire',opts:()=>profileOpts(''),
-   hint:'Both ends must be on the same profile.'},
-  {k:'uplink',t:'opt',full:true,label:'Uplink profile (kharej → Iran)',opts:()=>profileOpts('Same as the packet profile'),
-   hint:'Only set the two directions apart if this path filters them differently. Test each one with the spoof tester.'},
-  {k:'downlink',t:'opt',full:true,label:'Downlink profile (Iran → kharej)',opts:()=>profileOpts('Same as the packet profile')},
-  {k:'peerIP',t:'text',full:true,label:'The other end’s REAL IPv4 address',ph:'203.0.113.10',when:c=>c.role==='server',
-   hint:'Required on this side. The kharej machine forges its source, so this server cannot see where to send the replies — it has to be told. The kharej side needs no such field: it already knows this server’s address, because it dialled it.'},
-  {k:'srcIPs',t:'text',full:true,label:'Forged source IP(s)',ph:'203.0.113.10, 198.51.100.7',
-   hint:'Stamped on outgoing packets. Give one, or several separated by commas to rotate through a pool — that is what gets past a per-IP limit or block. Empty forges nothing. Use the spoof tester to find which ones actually pass.'},
-  {k:'interface',t:'opt',full:true,label:'Egress interface for the raw packets',opts:ifaceOpts,
-   hint:'Leave on automatic unless this machine has more than one uplink and the packets must leave by a particular one.'},
-  {k:'xdpIface',t:'opt',full:true,label:'XDP receive fast path — NIC to attach it to',opts:ifaceOpts,
-   hint:'Experimental. Receives the tunnel’s packets in the kernel (XDP/eBPF) before the socket layer, for higher throughput under load. Pure Go, opt-in, and falls back to the ordinary receive if the kernel is too old or the attach fails. Leave empty to keep the standard receive.'},
-  {k:'pipe',t:'bool',label:'Relay mode — bare datagram relay (no KCP) to a local UDP target, instead of forwarding ports',
-   hint:'The inner transport (e.g. WireGuard) brings its own reliability and encryption, so there is no KCP underneath and the forwarded ports are ignored in this mode.'},
-  {k:'pipeAddr',t:'text',full:true,label:'Local UDP endpoint',ph:'127.0.0.1:51820',
-   hint:'Only used in relay mode. On the Iran side: where the inner service (e.g. the real WireGuard) listens on this machine. On the kharej side: where the tunnel listens — point the inner app’s `endpoint` at it.'},
-
-  {t:'head',label:'Fingerprint & evasion'},
-  {t:'note',label:'All off by default, and none of them is needed to make a working tunnel. They change what the packets look like to whatever inspects them. Two of them describe the other end and must match what it sends; the rest are local.'},
-  {k:'peerSrcIP',t:'text',full:true,label:'Expected forged source from the other end',ph:'198.51.100.7',
-   hint:'Must match a source the other end actually forges. Inbound packets from anything else are ignored.'},
-  {k:'dstIP',t:'text',full:true,label:'Forged destination address',ph:'198.51.100.20',
-   hint:'Written into the cosmetic header of the ICMP and TCP profiles. The UDP profile has no use for it.'},
-  {k:'mtu',t:'int',label:'Fragment above (bytes, 0 = never)',
-   hint:'Sends larger than this are split, for a path that drops big packets.'},
-  {k:'sockBuf',t:'int',label:'Socket buffer (bytes, 0 = system default)',
-   hint:'Send and receive buffer for the carrier’s raw sockets.'},
-  {k:'icmpReply',t:'bool',label:'ICMP profile: the kharej side asks, the Iran side replies',
-   hint:'Makes the exchange read as ordinary ping and its answer rather than two streams of echo requests. Set the same answer on both ends.'},
-  {k:'ttlJitter',t:'bool',label:'Vary the TTL from packet to packet'},
-  {k:'randomDSCP',t:'bool',label:'Vary the DSCP field from packet to packet'},
-  {k:'shufflePort',t:'bool',label:'Randomise the source port of every packet'},
-  {k:'portMin',t:'int',label:'Source-port range, low',hint:'Used only when the shuffle above is on. Leave both at 0 for the whole ephemeral range.'},
-  {k:'portMax',t:'int',label:'Source-port range, high'},
-  {k:'padding',t:'bool',label:'Append random padding to each frame',
-   hint:'Hides the real length of what is being carried. Costs that much bandwidth.'},
-  {k:'paddingMax',t:'int',label:'Most padding bytes per frame',hint:'Used only when padding is on.'},
-  {k:'fakeTLS',t:'bool',label:'Prepend a fake TLS record header',
-   hint:'TCP profile only — on the other two there is no record to fake, and the setting is dropped.'},
-];
 
 const PCK_FIELDS=[
   {t:'note',label:'The packet carrier builds its own TCP segments instead of opening a socket. All three settings below are optional: it finds its own way out from the route to the other end, and reads the next hop from the neighbour table.'},
@@ -3723,7 +3662,6 @@ function isWST(t){ return ['ws','wss','wsmux','wssmux'].indexOf(t)>=0; }
 
 // The advanced drawers, addressed by the same 'a'/'e' prefix the two forms use.
 const DRAWERS=[
-  {id:'sp',box:'f-spoof',fields:SPOOF_FIELDS,when:c=>c.transport==='spoof'},
   {id:'pk',box:'f-pck',  fields:PCK_FIELDS,  when:c=>c.transport==='pck'},
   {id:'cn',box:'f-conn', fields:CONN_FIELDS, when:()=>true},
 ];

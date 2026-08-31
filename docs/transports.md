@@ -140,19 +140,16 @@ Slower than everything else and heavy on ICMP rate limits. A last resort, not a
 default.
 
 ### IP Spoofing
-Writes its own IP packets and stamps a **forged source address** on them, for a
-path that blocks, throttles or counts by address. Routing still uses the real
-peer, so the packet arrives; only the on-wire header says otherwise. KCP above
-the packet layer, like `xdi` and `pck`.
 
-It only carries anything where the network above the machine forwards packets
-with a forged source — plenty of providers drop them, and the built-in
-**IP Spoofing Tester** is how you find out. It also has a **relay mode** that
-carries a whole WireGuard VPN (or another tunnel) instead of forwarded ports,
-with no KCP underneath. Every setting is documented in
-[IP Spoofing](ip-spoofing.md).
+Moved. The forged-source carrier is part of the **direct tunnel** now, not a
+reverse transport: `transport = "spoof"` is refused at startup and the wizard
+offers it under **Direct** instead. Everything it does is unchanged — the same
+profiles, the same forged sources, the same evasion knobs — and it is documented
+in **[IP Spoofing](ip-spoofing.md)** and **[the direct tunnel](l3-direct-tunnel.md)**.
 
----
+A reverse tunnel could not use it: its pooled sessions all arrive at one address,
+because a forged packet carries nothing to tell them apart by, so they collapsed
+onto a single session and closed one another. A direct tunnel has one session.
 
 ## WebSocket family
 

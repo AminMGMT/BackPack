@@ -1,5 +1,19 @@
 # Setting up an IP Spoofing tunnel
 
+> **IP Spoofing is a direct-tunnel carrier now, not a reverse transport.**
+> `transport = "spoof"` is refused at startup, and the wizard no longer offers
+> it under Setup → Experimental. Build it as a **direct tunnel** instead —
+> `sudo backpack` → Setup Iran / Setup Kharej → **Direct**, then choose **Spoof**
+> as the carrier — and the same forged packets carry the same forwarded ports.
+>
+> The reason is not tidiness. A reverse tunnel is a control channel plus a pool
+> of connections, each one its own session, and a forged-source packet carries
+> nothing a receiver can tell those sessions apart by: every one of them arrives
+> at the same address. The session layer keys on that address, so they collapsed
+> onto one and each new session closed the one before it — the tunnel reported
+> itself connected and carried nothing. A direct tunnel has one session, which
+> is the shape this carrier can serve.
+
 This carrier writes its own IP packets and stamps a **fake source address** on
 them, so what leaves the machine does not look like it came from there. It is for
 a path that blocks, throttles or counts by address.

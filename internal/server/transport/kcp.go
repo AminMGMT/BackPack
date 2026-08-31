@@ -104,22 +104,6 @@ type KcpConfig struct {
 	// UseICMP carries the session inside ICMP echo (the xdi transport) rather
 	// than UDP. Only the packet layer differs; everything here is unchanged.
 	UseICMP bool
-	// UseSpoof carries the session inside raw IPv4 packets with a forged source
-	// (the spoof transport). Only the packet layer differs. See spoofSettings.
-	UseSpoof       bool
-	SpoofProfile   string
-	SpoofUplink    string
-	SpoofDownlink  string
-	SpoofSrcIP     string
-	SpoofSrcPool   []string
-	SpoofPeerIP    string
-	SpoofInterface string
-	SpoofXDPIface  string
-	SpoofSockBuf   int
-	SpoofPeerSrcIP string
-	SpoofICMPReply bool
-	SpoofMTU       int
-	SpoofDPI       network.SpoofDPI
 	// UsePck carries the session inside TCP segments built and read through a
 	// packet socket (the pck transport). Only the packet layer differs; nothing
 	// is forged. See settings().
@@ -135,9 +119,6 @@ type KcpConfig struct {
 func (s *KcpTransport) transportLabel() string {
 	if s.config.UseICMP {
 		return "XDI"
-	}
-	if s.config.UseSpoof {
-		return "SPOOF"
 	}
 	if s.config.UsePck {
 		return "PCK"
@@ -172,24 +153,6 @@ func (c *KcpConfig) settings() network.KCPSettings {
 			Interface:  c.PckInterface,
 			GatewayMAC: c.PckGatewayMAC,
 			Flags:      flags,
-		}
-	}
-	if c.UseSpoof {
-		// Profile is validated at load time (checkSpoof); default to udp here.
-		up, down := network.ResolveSpoofDirections(c.SpoofProfile, c.SpoofUplink, c.SpoofDownlink)
-		s.Spoof = &network.SpoofCarrier{
-			Uplink:     up,
-			Downlink:   down,
-			SrcIP:      c.SpoofSrcIP,
-			SrcPool:    c.SpoofSrcPool,
-			PeerIP:     c.SpoofPeerIP,
-			Interface:  c.SpoofInterface,
-			XDPIface:   c.SpoofXDPIface,
-			SockBuf:    c.SpoofSockBuf,
-			PeerSrcIP:  c.SpoofPeerSrcIP,
-			ReplySplit: c.SpoofICMPReply,
-			MTU:        c.SpoofMTU,
-			DPI:        c.SpoofDPI,
 		}
 	}
 	return s
