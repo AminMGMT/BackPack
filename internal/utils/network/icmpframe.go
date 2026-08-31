@@ -1,6 +1,7 @@
 package network
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"sync"
@@ -19,9 +20,24 @@ import (
 //   - A 4-byte session tag prefixes every packet's payload. A packet whose tag
 //     is not this tunnel's is not this tunnel's packet, full stop — a different
 //     tunnel's, a bare ping's, anyone's. It is dropped without a further look.
-//   - The 16-bit ICMP identifier is derived from the same token, so the field
-//     the protocol already has for telling echo streams apart is used for
-//     exactly that, and most tunnels differ in it before the tag is even read.
+//   - The 16-bit ICMP identifier names one SESSION within the tunnel. A tunnel
+//     is a control channel plus a pool of data connections, and each of those
+//     is its own KCP session over its own socket — so the carrier has to be
+//     able to tell them apart, and ICMP has no ports to do it with.
+//
+//     This is what the identifier is for in the protocol, and getting it wrong
+//     stopped xdi working at all. It used to be derived from the token, which
+//     made every session of a tunnel identical on the wire; kcp-go's listener
+//     keys its sessions on the address the carrier reports, so all of them
+//     collapsed onto one entry, and each new session closed the one before it
+//     (see sess.go, "conversation id mismatched"). The control channel came up,
+//     the first pool connection killed it, the reconnect killed that, and the
+//     tunnel flapped forever while reporting itself connected.
+//
+//     So the client draws a random identifier per socket and accepts only its
+//     own back; the server accepts every identifier — the tag and the direction
+//     are what say the packet is this tunnel's — and reports the peer as
+//     ip:identifier, which gives the listener the distinct addresses it needs.
 //   - A single direction byte says which way the packet is going. This is what
 //     defeats the kernel: when a client's echo request reaches the server, the
 //     server's kernel answers it automatically, echoing the request's payload —
@@ -48,15 +64,70 @@ const (
 	xdiDirClient byte = 'C' // client -> server
 )
 
-// xdiIdentity derives the ICMP identifier and session tag a tunnel uses, from
-// its token. It is deterministic, so the two ends agree without exchanging
-// anything, and distinct tokens almost never collide in both at once.
-func xdiIdentity(token string) (id int, tag [xdiTagLen]byte) {
+// xdiTag derives the session tag a tunnel uses, from its token. It is
+// deterministic, so the two ends agree without exchanging anything, and two
+// tunnels on one host practically never collide.
+func xdiTag(token string) (tag [xdiTagLen]byte) {
 	sum := sha256.Sum256([]byte("backpack-xdi-v1:" + token))
 	copy(tag[:], sum[:xdiTagLen])
-	// The identifier is masked to 16 bits, which is all the ICMP field holds.
-	id = int(binary.BigEndian.Uint16(sum[xdiTagLen : xdiTagLen+2]))
-	return id, tag
+	return tag
+}
+
+// The ICMP echo identifiers in use by this process, and the allocator that
+// hands them out.
+//
+// Random alone would be enough against another host — those are separated by
+// address before the identifier is looked at — but not against this one: the
+// sessions that must never share an identifier are the several this client
+// opens to the same server, and they are all in here. So they are drawn from a
+// set rather than independently, and a collision is impossible instead of
+// merely unlikely.
+var xdiSessions = struct {
+	mu   sync.Mutex
+	used map[uint16]struct{}
+}{used: map[uint16]struct{}{}}
+
+// acquireXdiSessionID returns an identifier no other session in this process is
+// using. It is released by the carrier's Close.
+//
+// Zero is skipped: it is what an identifier field reads as when it was never
+// set, and a session that answered to it would answer to a malformed packet as
+// readily as to its own.
+func acquireXdiSessionID() uint16 {
+	xdiSessions.mu.Lock()
+	defer xdiSessions.mu.Unlock()
+	var b [2]byte
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			// A failed read from the system source is not a reason to refuse to
+			// open a tunnel. Walk the space instead: the set below still
+			// guarantees what actually matters, which is that no two sessions
+			// here share an identifier.
+			for id := uint16(1); id != 0; id++ {
+				if _, taken := xdiSessions.used[id]; !taken {
+					xdiSessions.used[id] = struct{}{}
+					return id
+				}
+			}
+			return 1 // 65535 sessions in one process; there is nothing left to give
+		}
+		id := binary.BigEndian.Uint16(b[:])
+		if id == 0 {
+			continue
+		}
+		if _, taken := xdiSessions.used[id]; taken {
+			continue
+		}
+		xdiSessions.used[id] = struct{}{}
+		return id
+	}
+}
+
+// releaseXdiSessionID returns an identifier to the pool.
+func releaseXdiSessionID(id uint16) {
+	xdiSessions.mu.Lock()
+	defer xdiSessions.mu.Unlock()
+	delete(xdiSessions.used, id)
 }
 
 // outboundDir is the direction marker a given side stamps on what it sends.

@@ -53,6 +53,13 @@ dropped without a second look. So several xDi tunnels on one machine stay out of
 each other's way, and out of the way of ordinary ping traffic, with nothing to
 configure.
 
+Inside one tunnel there is a second thing to tell apart: a tunnel is a control
+channel plus a pool of data connections, and each of those is its own session.
+ICMP has no ports to separate them with, so each session takes an **echo
+identifier** of its own — the field ICMP has for exactly this — and answers only
+to packets carrying it. Nothing to configure here either; it is worth knowing
+only because a version that got it wrong could not carry traffic at all.
+
 ---
 
 ## What to expect

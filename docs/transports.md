@@ -132,7 +132,9 @@ is how such a network proves itself reachable. ICMP has no ports, so a raw ICMP
 socket receives every ping the host sees; each tunnel derives a **session tag**
 from its token, and a packet without this tunnel's tag is dropped without a
 second look — which is how several xDi tunnels share one host, and stay clear of
-stray pings and the kernel's own replies.
+stray pings and the kernel's own replies. Within a tunnel, each session — the
+control channel and every pooled connection — takes an **echo identifier** of
+its own, which is what stands in for the port ICMP does not have.
 
 Slower than everything else and heavy on ICMP rate limits. A last resort, not a
 default.

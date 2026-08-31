@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,15 +30,39 @@ import (
 // drop because ping is how it proves itself reachable. It is experimental and
 // costs a raw socket (root, or CAP_NET_RAW), so it is never a default.
 
-// icmpConn is the packet connection. One is opened per tunnel; several on one
-// host coexist because each reads only packets carrying its own session tag.
+// icmpSocket is the part of *icmp.PacketConn this carrier uses.
+//
+// It is an interface for one reason: a raw ICMP socket needs privilege, so
+// nothing that opened one could be tested, and the fault that stopped xdi
+// working — every session of a tunnel looking identical on the wire — lived
+// for releases behind that. With the socket injectable the whole carrier runs
+// against an in-memory wire, kcp-go and all. See icmpconn_linux_test.go.
+type icmpSocket interface {
+	ReadFrom(b []byte) (int, net.Addr, error)
+	WriteTo(b []byte, dst net.Addr) (int, error)
+	Close() error
+	LocalAddr() net.Addr
+	SetDeadline(t time.Time) error
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
+}
+
+// icmpConn is the packet connection. One is opened per KCP session — the
+// control channel and each pool connection get their own — and several on one
+// host coexist because each reads only packets carrying its own tunnel's
+// session tag, and, on the client, its own echo identifier.
 type icmpConn struct {
-	pc     *icmp.PacketConn
+	pc     icmpSocket
 	proto  int  // ProtocolICMP, for parsing
 	server bool // server sends replies and reads requests; client the reverse
-	id     int
-	tag    [xdiTagLen]byte
-	seq    atomic.Uint32
+	// id is the echo identifier this carrier answers to. On the client it names
+	// this one session and is drawn per socket; on the server it is unused,
+	// because one socket serves every session and each packet carries the
+	// identifier of the session it belongs to.
+	id        uint16
+	tag       [xdiTagLen]byte
+	seq       atomic.Uint32
+	closeOnce sync.Once
 }
 
 // icmpMTUOverhead is what the ICMP framing costs on top of the IP header, so
@@ -65,8 +90,13 @@ func newICMPServerConn(token string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, tag := xdiIdentity(token)
-	return &icmpConn{pc: pc, proto: ipv4ICMPProtocol, server: true, id: id, tag: tag}, nil
+	return newICMPServerConnWith(pc, token), nil
+}
+
+// newICMPServerConnWith is the constructor the tests use, with the socket
+// supplied rather than opened.
+func newICMPServerConnWith(pc icmpSocket, token string) net.PacketConn {
+	return &icmpConn{pc: pc, proto: ipv4ICMPProtocol, server: true, tag: xdiTag(token)}
 }
 
 // newICMPClientConn opens the client side: it will send echo requests and read
@@ -76,8 +106,19 @@ func newICMPClientConn(token string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, tag := xdiIdentity(token)
-	return &icmpConn{pc: pc, proto: ipv4ICMPProtocol, server: false, id: id, tag: tag}, nil
+	return newICMPClientConnWith(pc, token), nil
+}
+
+// newICMPClientConnWith is the constructor the tests use, with the socket
+// supplied rather than opened. Each call takes an identifier of its own — that
+// is what makes this session distinguishable from the tunnel's others.
+func newICMPClientConnWith(pc icmpSocket, token string) net.PacketConn {
+	return &icmpConn{
+		pc:    pc,
+		proto: ipv4ICMPProtocol,
+		id:    acquireXdiSessionID(),
+		tag:   xdiTag(token),
+	}
 }
 
 // ipv4ICMPProtocol is the IANA protocol number for ICMP, which icmp.ParseMessage
@@ -107,7 +148,7 @@ func (c *icmpConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 	framed := appendXdiPayload(*fp, c.tag, outboundDir(c.server), p)
 
 	body := &icmp.Echo{
-		ID:   c.id,
+		ID:   c.echoIDFor(dst),
 		Seq:  int(c.seq.Add(1) & 0xffff),
 		Data: framed,
 	}
@@ -150,18 +191,88 @@ func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			continue
 		}
 		echo, ok := msg.Body.(*icmp.Echo)
-		if !ok || echo.ID != c.id {
+		if !ok {
+			continue
+		}
+		// The client answers to one identifier, its own, which is how it
+		// ignores the packets of the tunnel's other sessions — every raw ICMP
+		// socket on the host sees all of them. The server answers to every
+		// identifier, because each is one of its clients' sessions; what says a
+		// packet is this tunnel's at all is the tag and the direction below.
+		if !c.server && echo.ID != int(c.id) {
 			continue
 		}
 		payload, ok := decodeXdiPayload(c.tag, wantDir, echo.Data)
 		if !ok {
 			continue
 		}
-		return copy(p, payload), peer, nil
+		return copy(p, payload), c.peerAddr(peer, echo.ID), nil
 	}
 }
 
-func (c *icmpConn) Close() error                       { return c.pc.Close() }
+// Close releases the socket and, on the client, the identifier this session
+// held, so a long-running process that opens and drops sessions does not
+// exhaust the space.
+func (c *icmpConn) Close() error {
+	c.closeOnce.Do(func() {
+		if !c.server {
+			releaseXdiSessionID(c.id)
+		}
+	})
+	return c.pc.Close()
+}
+
+// echoIDFor is the identifier to stamp on an outgoing packet.
+//
+// The client has one session and one identifier. The server has one socket and
+// many sessions, so it reads the identifier back out of the address KCP is
+// replying to — which is the address peerAddr put it into when the request
+// arrived.
+func (c *icmpConn) echoIDFor(dst net.Addr) int {
+	if !c.server {
+		return int(c.id)
+	}
+	if udp, ok := dst.(*net.UDPAddr); ok {
+		return udp.Port
+	}
+	// An address with no identifier in it is one this carrier did not report,
+	// so there is no session to answer. Zero is the identifier no session is
+	// ever given, which makes such a packet ignorable rather than ambiguous.
+	return 0
+}
+
+// peerAddr is the address a received packet is reported to KCP as.
+//
+// On the server it carries the sender's echo identifier in the port field. That
+// is not cosmetic: kcp-go's listener keys its sessions on this string, and
+// without the identifier every session of a client collapses onto one entry and
+// closes the one before it. See the note at the top of icmpframe.go.
+//
+// On the client it is passed through untouched, because the session was dialled
+// against a bare IP and kcp-go drops anything whose address does not match the
+// one it was given.
+func (c *icmpConn) peerAddr(peer net.Addr, echoID int) net.Addr {
+	if !c.server {
+		return peer
+	}
+	return &net.UDPAddr{IP: addrIP(peer), Port: echoID}
+}
+
+// addrIP pulls the IP out of whatever the socket reported, through the same
+// coercion the send path uses. Nil for an address that holds none, which the
+// caller renders as an address with no host — visibly wrong rather than
+// silently pointed somewhere else.
+func addrIP(addr net.Addr) net.IP {
+	if addr == nil {
+		return nil
+	}
+	ip, err := toIPAddr(addr)
+	if err != nil {
+		return nil
+	}
+	return ip.IP
+}
+
 func (c *icmpConn) LocalAddr() net.Addr                { return c.pc.LocalAddr() }
 func (c *icmpConn) SetDeadline(t time.Time) error      { return c.pc.SetDeadline(t) }
 func (c *icmpConn) SetReadDeadline(t time.Time) error  { return c.pc.SetReadDeadline(t) }

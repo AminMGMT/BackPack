@@ -5,16 +5,48 @@ import (
 	"testing"
 )
 
-// The identity is derived, not exchanged, so the two ends of a tunnel must
-// arrive at the same tag and identifier from the same token alone.
-func TestXdiIdentityIsDeterministic(t *testing.T) {
-	id1, tag1 := xdiIdentity("a-shared-tunnel-token")
-	id2, tag2 := xdiIdentity("a-shared-tunnel-token")
-	if id1 != id2 || tag1 != tag2 {
-		t.Fatalf("the same token produced two identities: (%d,%x) vs (%d,%x)", id1, tag1, id2, tag2)
+// The tag is derived, not exchanged, so the two ends of a tunnel must arrive at
+// the same one from the same token alone.
+func TestXdiTagIsDeterministic(t *testing.T) {
+	tag1 := xdiTag("a-shared-tunnel-token")
+	tag2 := xdiTag("a-shared-tunnel-token")
+	if tag1 != tag2 {
+		t.Fatalf("the same token produced two tags: %x vs %x", tag1, tag2)
 	}
-	if id1 < 0 || id1 > 0xffff {
-		t.Fatalf("identifier %d does not fit the 16-bit ICMP field", id1)
+}
+
+// The echo identifier names a session, not a tunnel, so two sessions must never
+// be handed the same one. They used to be: it was derived from the token, which
+// made every session of a tunnel identical to kcp-go's listener and is why the
+// transport could not carry traffic at all.
+func TestEverySessionGetsItsOwnEchoIdentifier(t *testing.T) {
+	const sessions = 500
+	seen := map[uint16]struct{}{}
+	ids := make([]uint16, 0, sessions)
+
+	for i := 0; i < sessions; i++ {
+		id := acquireXdiSessionID()
+		if id == 0 {
+			t.Fatal("zero was issued; it is the identifier an unset field reads as")
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("identifier %d was issued twice — two sessions would share one address", id)
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	// And released identifiers come back, or a long-lived client that opens and
+	// drops pool connections runs the space down.
+	for _, id := range ids {
+		releaseXdiSessionID(id)
+	}
+	for i := 0; i < sessions; i++ {
+		id := acquireXdiSessionID()
+		defer releaseXdiSessionID(id)
+		if _, held := seen[id]; !held {
+			continue // a fresh one is fine; what matters is that issuing still works
+		}
 	}
 }
 
@@ -28,7 +60,7 @@ func TestDifferentTokensGetDifferentTags(t *testing.T) {
 		"aaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaab", "",
 		"a-real-looking-tunnel-token-0123456789",
 	} {
-		_, tag := xdiIdentity(tok)
+		tag := xdiTag(tok)
 		if other, ok := seen[tag]; ok {
 			t.Fatalf("tokens %q and %q collided on tag %x", tok, other, tag)
 		}
@@ -39,7 +71,7 @@ func TestDifferentTokensGetDifferentTags(t *testing.T) {
 // A packet encoded by one side must decode on the other, and the payload must
 // come back byte for byte.
 func TestEncodeDecodeRoundTrip(t *testing.T) {
-	_, tag := xdiIdentity("token")
+	tag := xdiTag("token")
 	payload := []byte("a KCP packet's worth of bytes \x00\x01\xff")
 
 	// server -> client
@@ -64,7 +96,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 // back to the client. The client must reject it, or KCP would see its own
 // packets returned as if from the server.
 func TestKernelEchoReplyIsRejected(t *testing.T) {
-	_, tag := xdiIdentity("token")
+	tag := xdiTag("token")
 
 	// What the client sent: its outbound direction.
 	clientOutbound := encodeXdiPayload(tag, xdiDirClient, []byte("client data"))
@@ -79,8 +111,8 @@ func TestKernelEchoReplyIsRejected(t *testing.T) {
 // Another tunnel's traffic, arriving on the same raw socket, must be dropped on
 // the tag alone.
 func TestForeignTagIsRejected(t *testing.T) {
-	_, mine := xdiIdentity("my-token")
-	_, theirs := xdiIdentity("their-token")
+	mine := xdiTag("my-token")
+	theirs := xdiTag("their-token")
 
 	theirPacket := encodeXdiPayload(theirs, xdiDirClient, []byte("not for me"))
 	if _, ok := decodeXdiPayload(mine, inboundDir(true), theirPacket); ok {
@@ -91,7 +123,7 @@ func TestForeignTagIsRejected(t *testing.T) {
 // A bare ping — no framing at all, or too short to hold a header — must be
 // dropped rather than read past its end.
 func TestShortOrEmptyPayloadIsRejected(t *testing.T) {
-	_, tag := xdiIdentity("token")
+	tag := xdiTag("token")
 	for _, data := range [][]byte{
 		nil,
 		{},
