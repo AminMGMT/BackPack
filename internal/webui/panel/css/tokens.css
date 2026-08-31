@@ -1,0 +1,31 @@
+/* Palette, themes and motion tokens.
+ * Ported verbatim from the approved preview — the design that was signed
+ * off, not a re-drawing of it. Class names are kept so the markup matches.
+ */
+
+
+  /* Baseline. Two things quietly fall back to browser defaults and then read as
+     black: form controls take `buttontext` instead of inheriting the page colour,
+     and an <svg> with no rule of its own paints solid black with no stroke.
+     Anything that genuinely wants a fill declares it on the element, which wins. */
+  button,input,select,textarea{font:inherit;color:inherit}
+  svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  /* [hidden] is a UA rule at attribute specificity, so any class rule that sets
+     display beats it and the element stays on screen. This settles it once. */
+  [hidden]{display:none!important}
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{min-height:100dvh;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased;transition:background .35s ease,color .35s ease}
+  body[data-t="dark"]{background:#070707;color:#fafafa;
+    --bg:#070707;--s1:#111111;--s2:#181818;--s3:#1f1f1f;
+    --ln:rgba(255,255,255,.08);--ln2:rgba(255,255,255,.15);--ln3:rgba(255,255,255,.3);
+    --tx:#fafafa;--tx2:#dcdcdc;--mu:#8e8e8e;--dim:#606060;--faint:#3d3d3d;
+    --sunk:rgba(255,255,255,.05);--lift:0 22px 50px -24px rgba(0,0,0,.95);--spark:#e8e8e8}
+  body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
+    --bg:#f2f2f2;--s1:#ffffff;--s2:#fafafa;--s3:#f4f4f4;
+    --ln:rgba(0,0,0,.09);--ln2:rgba(0,0,0,.16);--ln3:rgba(0,0,0,.34);
+    --tx:#0a0a0a;--tx2:#2e2e2e;--mu:#6b6b6b;--dim:#949494;--faint:#c4c4c4;
+    --sunk:rgba(0,0,0,.045);--lift:0 22px 46px -26px rgba(0,0,0,.32);--spark:#1a1a1a}
+  :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.32,.72,0,1)}

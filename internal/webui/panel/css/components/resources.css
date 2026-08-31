@@ -1,0 +1,71 @@
+/* CPU, memory, disk and swap.
+ * Ported verbatim from the approved preview — the design that was signed
+ * off, not a re-drawing of it. Class names are kept so the markup matches.
+ */
+
+
+/* ============================================================
+   R4, worked on. The history stops being a decoration under the
+   number and becomes the tile itself — the same move the tunnel
+   card makes with its rate chart, so the two read as one family.
+   ============================================================ */
+.RX{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln)}
+.RX .t4{position:relative;background:var(--s1);padding:14px 15px 13px;overflow:hidden;min-height:120px;
+  display:flex;flex-direction:column;cursor:crosshair}
+.RX .t4 .fieldbg{position:absolute;left:0;right:0;bottom:0;height:64px;pointer-events:none}
+.RX .t4 .fieldbg svg{display:block;width:100%;height:100%}
+.RX .t4 .row{position:relative;z-index:2;display:flex;align-items:baseline;gap:8px}
+.RX .t4 .k{font-size:11px;color:var(--dim);font-weight:560}
+.RX .t4 .trend{margin-left:auto;font-size:10.5px;font-weight:620;padding:2px 7px;border-radius:6px;
+  background:var(--sunk);color:var(--mu);white-space:nowrap}
+.RX .t4 .trend.up{color:var(--wr);background:color-mix(in srgb,var(--wr) 13%,transparent)}
+.RX .t4 .trend.flat{color:var(--dim)}
+.RX .t4 .v{position:relative;z-index:2;font-size:27px;font-weight:660;letter-spacing:-.038em;margin:6px 0 2px;
+  font-variant-numeric:tabular-nums;line-height:1}
+.RX .t4 .v em{font-style:normal;font-size:13px;color:var(--mu);font-weight:560;margin-left:2px;letter-spacing:0}
+.RX .t4 .s{position:relative;z-index:2;font-size:11px;color:var(--dim);margin-top:auto}
+.RX .t4 .scrub{position:absolute;z-index:3;top:0;bottom:0;width:1px;background:var(--ln3);display:none;pointer-events:none}
+.RX .t4:hover .scrub{display:block}
+.RX .t4 .read{position:absolute;z-index:4;top:9px;right:11px;font-size:10.5px;font-weight:620;
+  padding:3px 8px;border-radius:7px;background:var(--tx);color:var(--bg);display:none;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.RX .t4:hover .read{display:block}
+.RX .t4.hot .v{color:var(--wr)}
+
+/* V2 — envelope */
+.RY{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln)}
+.RY .t4{position:relative;background:var(--s1);padding:14px 15px 0;overflow:hidden;min-height:126px;
+  display:flex;flex-direction:column}
+.RY .head5{display:flex;align-items:baseline;gap:8px}
+.RY .k{font-size:11px;color:var(--dim);font-weight:560}
+.RY .v{margin-left:auto;font-size:19px;font-weight:660;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.RY .v em{font-style:normal;font-size:11px;color:var(--mu);font-weight:560}
+.RY .v.hot{color:var(--wr)}
+.RY .env{flex:1;min-height:52px;margin:9px -15px 0}
+.RY .env svg{display:block;width:100%;height:100%}
+.RY .legend5{display:flex;gap:11px;padding:8px 0 11px;font-size:10.5px;color:var(--dim)}
+.RY .legend5 b{color:var(--tx2);font-weight:620;font-variant-numeric:tabular-nums}
+
+/* V3 — heartbeat columns */
+.RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln)}
+.RZ .t4{background:var(--s1);padding:14px 15px 13px;display:flex;flex-direction:column;gap:9px}
+.RZ .head6{display:flex;align-items:baseline;gap:9px}
+.RZ .k{font-size:11px;color:var(--dim);font-weight:560}
+.RZ .v{font-size:24px;font-weight:660;letter-spacing:-.036em;font-variant-numeric:tabular-nums;line-height:1}
+.RZ .v em{font-style:normal;font-size:12px;color:var(--mu);font-weight:560;margin-left:2px}
+.RZ .v.hot{color:var(--wr)}
+.RZ .trend{margin-left:auto;font-size:10.5px;font-weight:620;padding:2px 7px;border-radius:6px;
+  background:var(--sunk);color:var(--mu)}
+.RZ .trend.up{color:var(--wr);background:color-mix(in srgb,var(--wr) 13%,transparent)}
+.RZ .cols{display:flex;align-items:flex-end;gap:2px;height:40px;position:relative}
+.RZ .cols::before{content:"";position:absolute;left:0;right:0;bottom:32px;height:1px;
+  background:repeating-linear-gradient(90deg,var(--ln2) 0 3px,transparent 3px 7px)}
+.RZ .cols i{flex:1;background:var(--tx2);opacity:.34;border-radius:1.5px;display:block;min-height:2px;
+  transition:height .45s var(--spring)}
+.RZ .cols i.now{opacity:1}
+.RZ .cols i.over{background:var(--wr);opacity:.55}
+.RZ .cols i.now.over{opacity:1}
+.RZ .s{font-size:11px;color:var(--dim)}
+
+@container pg (max-width:900px){ .RX,.RY,.RZ{grid-template-columns:repeat(2,1fr)} }
+@container pg (max-width:520px){ .RX,.RY,.RZ{grid-template-columns:1fr} }

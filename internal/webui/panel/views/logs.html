@@ -1,0 +1,40 @@
+<!-- logs — markup lifted from logs.html, the approved preview.
+     Bound to data by js/views/logs.js; ids and classes are the originals. -->
+<div class="dlg logs" id="dlg" role="dialog" aria-modal="true">
+    <div class="dh"><div class="fl">🇫🇮</div>
+      <div class="ttl"><div style="font-size:16px;font-weight:640;letter-spacing:-.024em">l3-kharej-8443</div>
+        <small>Helsinki · Hetzner · Layer-3 · PCK</small></div>
+      <button class="x" onclick="closeLogs()" title="Close"><svg class="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+
+    <div class="bar2">
+      <div class="segs" style="width:auto;flex:none">
+        <button class="on" onclick="lvl(this,'all')" style="padding:7px 14px">All</button>
+        <button onclick="lvl(this,'warn')" style="padding:7px 14px">Warnings</button>
+        <button onclick="lvl(this,'error')" style="padding:7px 14px">Errors</button>
+      </div>
+      <span class="sp"></span>
+      <span class="live" id="liveTag"><i></i>Live</span>
+      <button class="tool" id="pauseBtn" onclick="togglePause()"><svg class="x" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg> Pause</button>
+      <button class="tool" onclick="copyReport()"><svg class="x" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg> Copy for report</button>
+    </div>
+
+    <div class="diag" id="diag">
+      <div class="ic">!</div>
+      <div class="tx"><b>The layer-3 read is failing</b>
+        <div class="detail"><code>too many segments</code> means the kernel handed the tunnel a coalesced run of small
+          packets that split into more pieces than there were buffers for it. On 1.7.4 and earlier the tunnel treated
+          that as the device failing and tore itself down — which is the restart three seconds later in this log.</div>
+        <div class="fix"><b>What to do:</b> update to 1.7.5 or later, where a run that overflows keeps the packets that
+          fit and the tunnel stays up. Nothing needs changing on the kharej side.</div></div>
+      <button class="x2" onclick="this.parentElement.remove()" title="Dismiss"><svg class="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+
+    <div class="logwrap">
+      <div class="log" id="log"><div class="ln info" data-lv="info"><span class="t">22:58:33</span><span class="lv info">info</span><span class="msg">control channel established with 78.46.11.4:52218</span></div><div class="ln info" data-lv="info"><span class="t">22:58:33</span><span class="lv info">info</span><span class="msg">wss listener up on 0.0.0.0:8443, alpn http/1.1</span></div><div class="ln info" data-lv="info"><span class="t">22:58:34</span><span class="lv info">info</span><span class="msg">bp0 is queueing with fq_codel</span></div><div class="ln info" data-lv="info"><span class="t">22:58:34</span><span class="lv info">info</span><span class="msg">IPv4 segments crossing bp0 are clamped to 1360 bytes</span></div><div class="ln info" data-lv="info"><span class="t">23:04:12</span><span class="lv info">info</span><span class="msg">certificate renewed, valid until 2026-11-26</span></div><div class="ln info" data-lv="info"><span class="t">23:19:50</span><span class="lv info">info</span><span class="msg">612 connections, 96.4 Mb/s down, 88.1 Mb/s up</span></div><div class="ln warn" data-lv="warn"><span class="t">23:41:07</span><span class="lv warn">warn</span><span class="msg">peer ping 91ms — highest in 24h</span></div><div class="ln error" data-lv="error"><span class="t">23:52:44</span><span class="lv error">error</span><span class="msg">l3: reading from bp0: too many segments</span></div><div class="ln error" data-lv="error"><span class="t">23:52:45</span><span class="lv error">error</span><span class="msg">layer-3 tunnel stopped: the tunnel stopped unexpectedly — restarting in 5s</span></div><div class="ln info" data-lv="info"><span class="t">23:52:50</span><span class="lv info">info</span><span class="msg">bp0 is queueing with fq_codel</span></div><div class="ln info" data-lv="info"><span class="t">23:52:50</span><span class="lv info">info</span><span class="msg">listen up on bp0, gre over pck, mtu 1400 (a 1500-byte path fits 1415)</span></div><div class="ln info" data-lv="info"><span class="t">23:53:27</span><span class="lv info">info</span><span class="msg">session 646f9692 confirmed</span></div><div class="ln info" data-lv="info"><span class="t">23:58:01</span><span class="lv info">info</span><span class="msg">612 connections, 96.1 Mb/s down, 87.4 Mb/s up</span></div></div>
+      <button class="jump" id="jump" onclick="toTail()"><svg class="x" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg> <span id="jumpN">3 new</span></button>
+    </div>
+
+    <div class="df"><span class="note" id="count">13 lines · following</span>
+      <button class="tool" onclick="toast('Saved backpack-l3-kharej-8443.log')"><svg class="x" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg> Download</button>
+      <button class="bt" onclick="closeLogs()">Close</button></div>
+  </div>

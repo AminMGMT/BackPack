@@ -1,0 +1,72 @@
+[
+  {
+    "Group": "System",
+    "Name": "Kernel congestion control",
+    "Level": "ok",
+    "Detail": "bbr is active",
+    "Fix": ""
+  },
+  {
+    "Group": "System",
+    "Name": "File descriptor limit",
+    "Level": "ok",
+    "Detail": "1048576",
+    "Fix": ""
+  },
+  {
+    "Group": "System",
+    "Name": "Disk space",
+    "Level": "ok",
+    "Detail": "16% of 38 GB used",
+    "Fix": ""
+  },
+  {
+    "Group": "Monitor",
+    "Name": "Monitor service",
+    "Level": "ok",
+    "Detail": "active since 18d ago",
+    "Fix": ""
+  },
+  {
+    "Group": "Web Panel",
+    "Name": "Certificate",
+    "Level": "warn",
+    "Detail": "the panel is on plain HTTP",
+    "Fix": "Web Panel → Certificate, then reopen the panel over https"
+  },
+  {
+    "Group": "Web Panel",
+    "Name": "Built-in proxy",
+    "Level": "error",
+    "Detail": "socks5 is enabled on :1080 but the service is not running",
+    "Fix": "Manage → Built-in Proxy → Enable / reconfigure"
+  },
+  {
+    "Group": "Tunnel: fr-relay",
+    "Name": "Service",
+    "Level": "ok",
+    "Detail": "active (running) 6d 11h",
+    "Fix": ""
+  },
+  {
+    "Group": "Tunnel: fr-relay",
+    "Name": "Peer reachability",
+    "Level": "ok",
+    "Detail": "44ms, 0% loss",
+    "Fix": ""
+  },
+  {
+    "Group": "Tunnel: uk-mux",
+    "Name": "Service",
+    "Level": "error",
+    "Detail": "inactive (dead)",
+    "Fix": "start it from the tunnel card, or Manage → Manage Tunnels → Start"
+  },
+  {
+    "Group": "Tunnel: tr-kcp",
+    "Name": "Packet loss",
+    "Level": "warn",
+    "Detail": "4.2% measured over the last hour",
+    "Fix": "Link Test suggests a heavier FEC ratio for this path"
+  }
+]

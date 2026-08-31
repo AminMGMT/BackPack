@@ -1,0 +1,66 @@
+/* Toast and the in-theme confirm.
+ * Ported verbatim from the approved preview.
+ */
+
+/* ================= toast ================= */
+.toastZ{position:fixed;left:50%;bottom:26px;transform:translate(-50%,18px);z-index:140;
+  display:flex;align-items:center;gap:10px;max-width:min(440px,calc(100vw - 32px));
+  padding:11px 14px;border-radius:14px;background:var(--s1);border:1px solid var(--ln2);
+  box-shadow:var(--lift);opacity:0;pointer-events:none;
+  transition:opacity .26s ease,transform .32s var(--spring)}
+.toastZ.on{opacity:1;transform:translate(-50%,0)}
+.toastZ .ic{width:16px;height:16px;flex:none;color:var(--tx2)}
+.toastZ .tx{font-size:12.5px;line-height:1.5;color:var(--tx)}
+.toastZ.err{border-color:color-mix(in srgb,var(--er) 48%,transparent)}
+.toastZ.err .ic{color:var(--er)}
+.toastZ.err .tx{color:var(--er)}
+/* it leaves on its own, so the time it has left is visible */
+.toastZ .life{position:absolute;left:12px;right:12px;bottom:5px;height:1.5px;border-radius:1px;
+  background:var(--sunk);overflow:hidden}
+.toastZ .life i{display:block;height:100%;width:100%;background:var(--ln3);transform-origin:left}
+.toastZ.err .life i{background:color-mix(in srgb,var(--er) 60%,transparent)}
+.toastZ.run .life i{animation:drain 3.6s linear forwards}
+@keyframes drain{to{transform:scaleX(0)}}
+
+/* ================= in-theme confirm ================= */
+.cfZ{position:fixed;inset:0;z-index:150;display:none;align-items:center;justify-content:center;padding:24px}
+.cfZ.on{display:flex}
+.cfZ .veilZ{position:absolute;inset:0;background:color-mix(in srgb,var(--bg) 58%,transparent);
+  -webkit-backdrop-filter:blur(18px) saturate(115%);backdrop-filter:blur(18px) saturate(115%);
+  opacity:0;transition:opacity .3s ease}
+.cfZ.on .veilZ{opacity:1}
+.boxZ{position:relative;width:min(392px,100%);background:var(--s1);border:1px solid var(--ln2);
+  border-radius:19px;box-shadow:var(--lift);padding:20px 20px 16px;text-align:center;
+  transform:scale(.95);opacity:0;transition:transform .32s var(--spring),opacity .24s ease}
+.cfZ.on .boxZ{transform:none;opacity:1}
+.boxZ .icZ{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;margin:0 auto 14px;
+  border:1px solid var(--ln2);color:var(--tx2)}
+.boxZ .icZ svg{width:21px;height:21px}
+.boxZ.danger .icZ{border-color:color-mix(in srgb,var(--er) 45%,transparent);color:var(--er);
+  background:color-mix(in srgb,var(--er) 8%,transparent)}
+.boxZ h2{font-size:15.5px;font-weight:650;letter-spacing:-.024em;line-height:1.4}
+.boxZ h2 q{quotes:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px}
+.boxZ p{font-size:12px;color:var(--mu);line-height:1.65;margin:9px auto 0;max-width:38ch}
+.boxZ .listZ{margin:14px 0 0;text-align:left;border:1px solid var(--ln);border-radius:12px;
+  background:var(--s2);overflow:hidden}
+.boxZ .listZ div{display:flex;align-items:center;gap:9px;padding:9px 12px;font-size:11.5px;color:var(--tx2);
+  border-bottom:1px solid var(--ln)}
+.boxZ .listZ div:last-child{border-bottom:0}
+.boxZ .listZ svg{width:13px;height:13px;color:var(--dim);flex:none}
+.boxZ .listZ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+.boxZ .actZ{display:flex;gap:8px;margin-top:17px}
+.boxZ .actZ button{flex:1;font:inherit;font-size:12.5px;font-weight:640;padding:11px 0;border-radius:12px;
+  cursor:pointer;border:1px solid var(--ln2);background:transparent;color:var(--tx);
+  transition:background .2s ease,opacity .2s ease}
+.boxZ .actZ button:hover{background:var(--sunk)}
+.boxZ .actZ button.go{background:var(--tx);color:var(--bg);border-color:transparent}
+.boxZ .actZ button.go:hover{background:var(--tx);opacity:.9}
+.boxZ.danger .actZ button.go{background:var(--er);color:#ffffff}
+.boxZ .escZ{margin-top:12px;font-size:10.5px;color:var(--faint)}
+.boxZ .escZ kbd{font:inherit;font-size:9.5px;padding:1px 5px;border-radius:4px;background:var(--sunk);
+  border:1px solid var(--ln2);color:var(--mu)}
+
+  border:1px solid var(--ln);background:var(--s1);color:var(--tx);cursor:pointer;
+  transition:border-color .2s ease,background .2s ease}
+  margin:26px 0 11px}
+@media (prefers-reduced-motion:reduce){.toastZ.run .life i{animation-duration:.01s}}

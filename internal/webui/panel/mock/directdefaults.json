@@ -1,0 +1,7 @@
+{
+  "tunnelPort": 9000,
+  "preset": "turbo",
+  "greKey": 0,
+  "localIP": "10.0.0.1",
+  "peerIP": "10.0.0.2"
+}

@@ -1457,6 +1457,25 @@
     </div>
 
     <div class="acc">
+      <button class="acch" id="acch-interface" aria-expanded="false" aria-controls="accb-interface" onclick="toggleAcc('interface')">
+        <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18"/><path d="M9 20h6"/></svg>
+        <span data-i18n>Interface</span><span class="accnote" id="accnote-interface" data-i18n data-i18n-ph-only>This panel, or the new one</span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="accb" id="accb-interface" hidden>
+        <label class="tg" style="margin-bottom:8px"><input type="checkbox" id="expui" onchange="savePanelUI()">
+          <span data-i18n>Open the new panel instead — experimental, and still being built</span></label>
+        <div class="msg" id="expuimsg"></div>
+        <p style="margin-bottom:10px">This panel is not changed by the switch and does not go anywhere:
+        the new one is served at <code style="margin:0">/panel/</code>, and the setting only decides which
+        of the two the panel's own address opens. Not everything in it works yet.</p>
+        <p style="margin-bottom:10px">If it will not load at all, open
+        <code style="margin:0">/?panel=classic</code> — that comes straight back here and needs nothing
+        on the page to be working.</p>
+      </div>
+    </div>
+
+    <div class="acc">
       <button class="acch" id="acch-security" aria-expanded="false" aria-controls="accb-security" onclick="toggleAcc('security')">
         <svg class="ic" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         <span data-i18n>Security</span><span class="accnote" data-i18n>Two-factor, devices, read-only token</span>
@@ -2152,6 +2171,10 @@ const FA={
     "همه بخش‌ها بسته‌اند تا بازشان کنی — هر بار یکی.",
   "Update":"به‌روزرسانی","Panel access":"دسترسی پنل","Port & password":"پورت و رمز عبور",
   "Security":"امنیت","Two-factor, devices, read-only token":"ورود دو مرحله‌ای، دستگاه‌ها، توکن فقط‌خواندنی",
+  "Interface":"رابط کاربری","This panel, or the new one":"همین پنل، یا پنل جدید",
+  "Open the new panel instead — experimental, and still being built":
+    "به جای این، پنل جدید باز شود — آزمایشی و هنوز در حال ساخت",
+  "Staying on this panel.":"روی همین پنل می‌مانید.","Could not save.":"ذخیره نشد.",
   "Telegram bot":"ربات تلگرام","Backup":"پشتیبان‌گیری",
   "Port":"پورت","Password":"رمز عبور","Restore points":"نقاط بازیابی",
   "Signed-in devices":"دستگاه‌های واردشده","Remote access":"دسترسی از راه دور",
@@ -5037,6 +5060,31 @@ async function saveSecurity(){
     m.textContent='Saved.';
   }catch(e){ m.textContent='Could not save.'; }
 }
+// ---- settings: which panel this server opens ----
+// The new panel is a second UI being built alongside this one; see
+// internal/webui/panel.go. Turning it on only changes where "/" goes.
+async function loadPanelUI(){
+  try{
+    const r=await fetch('/api/panelui');
+    if(!r.ok) return;
+    $('expui').checked=!!(await r.json()).experimental;
+  }catch(e){}
+}
+async function savePanelUI(){
+  const on=$('expui').checked, m=$('expuimsg');
+  m.className='msg'; m.textContent='';
+  try{
+    const r=await fetch('/api/panelui',{method:'POST',body:new URLSearchParams({experimental:on?'1':'0'})});
+    if(!r.ok) throw new Error(await r.text());
+    // Switching on is worth going there for: leaving the operator on this page
+    // after asking for the other one is how a saved setting reads as a no-op.
+    if(on){ location.href='/panel/'; return; }
+    m.className='msg ok'; m.textContent=T('Staying on this panel.');
+  }catch(e){
+    $('expui').checked=!on;
+    m.className='msg err'; m.textContent=T('Could not save.');
+  }
+}
 function renderSessions(list){
   $('seslist').innerHTML=(list||[]).map(s=>
     '<div class="al-ev" style="display:flex;align-items:center;gap:10px">'+
@@ -5395,7 +5443,7 @@ async function testTelegram(){
 
 // ---- settings / change password ----
 // ---- settings accordion ----
-const ACC_SECTIONS=['update','access','security','telegram','backup'];
+const ACC_SECTIONS=['update','access','interface','security','telegram','backup'];
 
 // Only one section is open at a time. Each one is tall enough that two open
 // together brings back the scrolling this replaced.
@@ -5523,7 +5571,7 @@ function openSettings(){
   // are drawn from it, so deferring the loads would leave them blank until a
   // section was opened — which is the moment they stop being useful.
   loadTelegram(); loadSecurity(); loadRemoteToken(); loadRestorePoints(); loadChannel(); loadAutoBackup();
-  loadPanelCert();
+  loadPanelCert(); loadPanelUI();
   ACC_SECTIONS.forEach(closeAcc);
   // A newer release is the one thing worth opening straight to.
   if(lastStats&&lastStats.updateTag) toggleAcc('update');

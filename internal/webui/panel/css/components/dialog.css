@@ -1,0 +1,109 @@
+/* Pop-out dialogs over a blurred page.
+ * Ported verbatim from the approved preview.
+ */
+
+/* ================= pop-out dialog ================= */
+.scrim{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;padding:26px}
+.scrim.on{display:flex}
+.scrim .veil{position:absolute;inset:0;
+  background:color-mix(in srgb,var(--bg) 62%,transparent);
+  -webkit-backdrop-filter:blur(22px) saturate(115%);backdrop-filter:blur(22px) saturate(115%)}
+body[data-t="light"] .scrim .veil{background:rgba(120,120,120,.34)}
+/* the page behind is pushed back a touch, not just dimmed */
+#grid{transition:transform .42s var(--spring),filter .42s var(--spring)}
+body.modal #grid{transform:scale(.988)}
+
+.dlg{position:relative;width:min(580px,100%);max-height:86vh;display:flex;flex-direction:column;
+  background:var(--s1);border:1px solid var(--ln2);border-radius:20px;box-shadow:var(--lift);overflow:hidden}
+.dlg .dh{display:flex;align-items:center;gap:11px;padding:16px 18px;border-bottom:1px solid var(--ln)}
+.dlg .dh .fl{width:34px;height:34px;border-radius:10px;font-size:16px}
+.dlg .dh .ttl{flex:1;min-width:0}
+.dlg .dh .ttl input{width:100%;background:transparent;border:0;padding:2px 0;font:inherit;font-size:16px;
+  font-weight:640;letter-spacing:-.024em;color:var(--tx);border-bottom:1px dashed transparent;outline:0}
+.dlg .dh .ttl input:hover{border-bottom-color:var(--ln2)}
+.dlg .dh .ttl input:focus{border-bottom-color:var(--ln3)}
+.dlg .dh .ttl small{display:block;font-size:11px;color:var(--dim);margin-top:1px}
+.dlg .dh .x{width:32px;height:32px;border-radius:9px;border:1px solid var(--ln);background:transparent;color:var(--mu);
+  cursor:pointer;display:grid;place-items:center;flex:none;transition:background .25s ease,color .25s ease}
+.dlg .dh .x:hover{background:var(--sunk);color:var(--tx)}
+.dlg .dh .x svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round}
+.dlg .lede{padding:12px 18px 0;font-size:12px;color:var(--dim);line-height:1.5}
+
+.dlg .tabs{display:flex;gap:2px;padding:11px 18px 0;border-bottom:1px solid var(--ln)}
+.dlg .tabs button{font:inherit;font-size:12.5px;font-weight:570;color:var(--mu);background:transparent;border:0;
+  padding:8px 12px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .22s ease}
+.dlg .tabs button:hover{color:var(--tx2)}
+.dlg .tabs button.on{color:var(--tx);border-bottom-color:var(--tx)}
+.dlg .tabs button .n{margin-left:6px;font-size:10.5px;font-weight:640;padding:1px 6px;border-radius:7px;background:var(--sunk);color:var(--dim)}
+.dlg .tabs .sp{flex:1}
+.dlg .tabs .hist{align-self:center;margin-bottom:9px;font-size:11px;color:var(--dim);border:1px solid var(--ln);
+  border-radius:8px;padding:5px 9px;background:transparent;cursor:pointer}
+.dlg .tabs .hist:hover{background:var(--sunk);color:var(--tx)}
+
+.dlg .panes{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:var(--ln2) transparent}
+.dlg .panes::-webkit-scrollbar{width:9px}
+.dlg .panes::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:5px;border:2px solid transparent;background-clip:content-box}
+.dlg .pane{padding:16px 18px 18px}
+.dlg .pane[hidden]{display:none}
+
+.dlg .f{margin-bottom:14px}
+.dlg .f:last-child{margin-bottom:0}
+.dlg .f label{display:block;font-size:12px;color:var(--mu);margin-bottom:6px;font-weight:550}
+.dlg .f .hint{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
+.dlg .f .tdesc{font-size:11px;color:var(--tx2);margin-top:6px;line-height:1.5;
+  padding:8px 10px;background:var(--sunk);border-radius:8px}
+.dlg input[type=text],.dlg .sel{width:100%;background:var(--field);border:1px solid var(--ln);border-radius:10px;
+  padding:10px 12px;font:inherit;font-size:12.5px;color:var(--tx);outline:0;transition:border-color .22s ease}
+.dlg input[type=text]:hover,.dlg .sel:hover{border-color:var(--ln2)}
+.dlg input[type=text]:focus{border-color:var(--ln3)}
+.dlg .sel{display:flex;align-items:center;gap:8px;cursor:pointer}
+.dlg .sel .sp{flex:1}
+.dlg .sel svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;color:var(--dim)}
+.dlg .withbtn{display:flex;gap:8px}
+.dlg .withbtn input{flex:1}
+.dlg .withbtn button{flex:none;font:inherit;font-size:11.5px;font-weight:580;padding:0 13px;border-radius:10px;
+  border:1px solid var(--ln);background:var(--sunk);color:var(--tx2);cursor:pointer;display:flex;align-items:center;gap:6px}
+.dlg .withbtn button:hover{background:var(--ln);color:var(--tx)}
+.dlg .withbtn button svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round}
+.dlg .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dlg .segs{display:flex;gap:2px;background:var(--sunk);border-radius:11px;padding:3px}
+.dlg .segs button{flex:1;font:inherit;font-size:12px;font-weight:570;padding:8px 0;border-radius:8px;border:0;
+  background:transparent;color:var(--mu);cursor:pointer;transition:background .22s ease,color .22s ease}
+.dlg .segs button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.dlg .tg{display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-top:1px solid var(--ln)}
+.dlg .tg .tx{flex:1;min-width:0}
+.dlg .tg .tx b{display:block;font-size:12.5px;font-weight:580}
+.dlg .tg .tx span{display:block;font-size:11px;color:var(--dim);margin-top:3px;line-height:1.5}
+.dlg .sww{width:38px;height:22px;border-radius:12px;background:var(--sunk);border:1px solid var(--ln);position:relative;
+  cursor:pointer;flex:none;margin-top:1px;transition:background .25s ease,border-color .25s ease}
+.dlg .sww i{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--mu);display:block;
+  transition:transform .25s var(--spring),background .25s ease}
+.dlg .sww.on{background:var(--tx);border-color:var(--tx)}
+.dlg .sww.on i{transform:translateX(16px);background:var(--bg)}
+.dlg .drawer{border:1px solid var(--ln);border-radius:12px;margin-bottom:10px;overflow:hidden;background:var(--field)}
+.dlg .drawer:last-child{margin-bottom:0}
+.dlg .drawer > .dhh{display:flex;align-items:center;gap:10px;width:100%;padding:12px 13px;background:transparent;border:0;
+  font:inherit;font-size:12.5px;font-weight:580;color:var(--tx);cursor:pointer;text-align:left;transition:background .22s ease}
+.dlg .drawer > .dhh:hover{background:var(--sunk)}
+.dlg .drawer > .dhh .note{margin-left:auto;font-size:10.5px;font-weight:500;color:var(--dim)}
+.dlg .drawer > .dhh .cv{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;
+  color:var(--dim);transition:transform .28s var(--spring);flex:none}
+.dlg .drawer.open > .dhh .cv{transform:rotate(180deg)}
+.dlg .drawer > .db{padding:0 13px 13px;display:none}
+.dlg .drawer.open > .db{display:block}
+.dlg .drawer .lead{font-size:11px;color:var(--dim);line-height:1.5;margin-bottom:11px}
+.dlg .ftgrid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.dlg .ftgrid .f{margin-bottom:0}
+.dlg .ftgrid .f.wide{grid-column:span 2}
+.dlg .ftgrid label{font-size:11px}
+.dlg .ftgrid input[type=text],.dlg .ftgrid .sel{padding:8px 10px;font-size:12px}
+
+.dlg .df{border-top:1px solid var(--ln);padding:14px 18px;display:flex;align-items:center;gap:10px}
+.dlg .df .note{flex:1;font-size:11px;color:var(--dim);line-height:1.45}
+.dlg .bt{font:inherit;font-size:12.5px;font-weight:600;padding:10px 17px;border-radius:11px;cursor:pointer;
+  background:transparent;border:1px solid var(--ln2);color:var(--tx);transition:background .22s ease,transform .12s ease-out}
+.dlg .bt:hover{background:var(--sunk)} .dlg .bt:active{transform:scale(.97)}
+.dlg .bt.primary{background:var(--tx);color:var(--bg);border-color:var(--tx)}
+.dlg .bt:disabled{opacity:.4;cursor:default}
+@media (prefers-reduced-transparency:reduce){.scrim .veil{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--bg)}}

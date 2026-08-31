@@ -1,0 +1,12 @@
+[
+  {
+    "name": "fr-relay",
+    "port": 9909,
+    "ok": true
+  },
+  {
+    "name": "de-edge",
+    "port": 0,
+    "ok": false
+  }
+]

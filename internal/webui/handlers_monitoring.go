@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -203,18 +204,31 @@ func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
 			Out: float64(b.Out-a.Out) / secs})
 	}
 
-	// Daily totals for the last 7 days, from the hourly buckets.
+	// Daily totals from the hourly buckets.
+	//
+	// A week by default, because that is what every existing caller draws. The
+	// store keeps a month (tunhist.keepHourly is 720 hours), so a caller that
+	// wants more can ask with ?days=; anything outside 1..30 is clamped rather
+	// than refused, since a bad number here is worth a shorter chart, not an
+	// error page.
 	type day struct {
 		Label string `json:"label"` // "Mon 21"
 		In    uint64 `json:"in"`
 		Out   uint64 `json:"out"`
 	}
+	span := 7
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 {
+		span = min(v, 30)
+	}
 	days := map[string]*day{}
 	var order []string
+	// The uptime figures below keep their own week-long window whatever the
+	// chart asks for: uptime7d has to keep meaning seven days.
 	weekAgo := time.Now().AddDate(0, 0, -7).Unix()
+	from := time.Now().AddDate(0, 0, -span).Unix()
 	for i := 1; i < len(h.Hourly); i++ {
 		a, b := h.Hourly[i-1], h.Hourly[i]
-		if b.T < weekAgo || b.In < a.In || b.Out < a.Out {
+		if b.T < from || b.In < a.In || b.Out < a.Out {
 			continue
 		}
 		label := time.Unix(b.T, 0).Format("Mon 2")

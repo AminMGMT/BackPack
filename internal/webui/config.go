@@ -32,6 +32,15 @@ type Config struct {
 	// the cheap way to notice a password in the wrong hands.
 	LoginNotify bool `json:"login_notify,omitempty"`
 
+	// ExperimentalPanel makes "/" open the rebuilt panel at /panel/ instead of
+	// the dashboard this file has always served.
+	//
+	// Off by default and on upgrade: the new panel is still being built, so a
+	// server that has not asked for it must keep the finished one. See
+	// panel.go, which also documents the way back for a browser that cannot
+	// reach a control inside the new panel.
+	ExperimentalPanel bool `json:"experimental_panel,omitempty"`
+
 	// HTTPS, when set, serves the panel over TLS instead of plain HTTP.
 	//
 	// It is off by default and stays that way on upgrade: a panel reached at

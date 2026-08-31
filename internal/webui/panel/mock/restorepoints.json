@@ -1,0 +1,62 @@
+[
+  {
+    "stamp": "20260828-2214",
+    "version": "v1.7.5",
+    "created": "2026-08-28T22:14:03Z",
+    "reason": "pre-update",
+    "tunnels": [
+      "fr-relay",
+      "de-edge",
+      "nl-ws",
+      "tr-kcp",
+      "uk-mux",
+      "ir-direct"
+    ]
+  },
+  {
+    "stamp": "20260814-0932",
+    "version": "v1.7.4",
+    "created": "2026-08-14T09:32:11Z",
+    "reason": "pre-update",
+    "tunnels": [
+      "fr-relay",
+      "de-edge",
+      "nl-ws",
+      "tr-kcp",
+      "uk-mux"
+    ]
+  },
+  {
+    "stamp": "20260731-1807",
+    "version": "v1.7.3",
+    "created": "2026-07-31T18:07:44Z",
+    "reason": "pre-update",
+    "tunnels": [
+      "fr-relay",
+      "de-edge",
+      "nl-ws",
+      "tr-kcp"
+    ]
+  },
+  {
+    "stamp": "20260709-2255",
+    "version": "v1.7.2",
+    "created": "2026-07-09T22:55:02Z",
+    "reason": "pre-update",
+    "tunnels": [
+      "fr-relay",
+      "de-edge",
+      "nl-ws"
+    ]
+  },
+  {
+    "stamp": "20260621-1140",
+    "version": "v1.7.1",
+    "created": "2026-06-21T11:40:19Z",
+    "reason": "pre-update",
+    "tunnels": [
+      "fr-relay",
+      "de-edge"
+    ]
+  }
+]

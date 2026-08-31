@@ -1,0 +1,79 @@
+/* The header, and the container queries it reacts to.
+ * Ported verbatim from the approved preview — the design that was signed
+ * off, not a re-drawing of it. Class names are kept so the markup matches.
+ */
+
+
+.hz{container-type:inline-size;container-name:hdr}
+.HH{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--s1);border-bottom:1px solid var(--ln)}
+.HH .mk{width:32px;height:32px;border-radius:10px;background:var(--tx);color:var(--bg);display:grid;place-items:center;flex:none}
+.HH .mk svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.1;stroke-linecap:round}
+.HH .who{min-width:0;flex:none}
+.HH .who b{display:block;font-size:14.5px;font-weight:650;letter-spacing:-.026em;line-height:1.2}
+.HH .who small{display:block;font-size:11px;color:var(--dim);margin-top:1px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.HH .sp{flex:1}
+.HH .ic2{width:34px;height:34px;border-radius:10px;border:1px solid var(--ln);background:var(--s1);color:var(--mu);
+  cursor:pointer;display:grid;place-items:center;flex:none;position:relative;transition:background .22s ease,color .22s ease}
+.HH .ic2:hover{background:var(--sunk);color:var(--tx)}
+.HH .ic2 svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.HH .ic2 .bdg{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+  background:var(--er);color:#fff;font-size:9.5px;font-weight:700;display:grid;place-items:center;
+  border:2px solid var(--s1)}
+.HH .ic2 .bdg.w{background:var(--wr);color:#111111}
+.HH .pal2{display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-radius:10px;
+  border:1px solid var(--ln);background:var(--s2);color:var(--dim);font-size:12px;cursor:pointer;flex:none}
+.HH .pal2 svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round}
+.HH .pal2 kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;border:1px solid var(--ln2);
+  border-radius:5px;padding:1px 5px}
+
+/* the one live group */
+.HH .gauge{display:inline-flex;align-items:center;gap:14px;padding:6px 13px;border-radius:11px;
+  background:var(--s2);border:1px solid var(--ln);flex:none}
+.HH .gauge .g2{display:flex;align-items:baseline;gap:5px;font-size:13px;font-variant-numeric:tabular-nums}
+.HH .gauge .g2 i{font-style:normal;color:var(--dim);font-size:11.5px}
+.HH .gauge .g2 b{font-weight:650;letter-spacing:-.022em}
+.HH .gauge .g2 em{font-style:normal;font-size:10.5px;color:var(--mu);font-weight:560}
+.HH .gauge .div{width:1px;height:15px;background:var(--ln2)}
+.HH .gauge .up2{display:flex;align-items:center;gap:6px;font-size:12.5px}
+.HH .gauge .up2 .d3{width:6px;height:6px;border-radius:50%;background:var(--ok);display:block;
+  animation:bp 2.6s ease-out infinite}
+.HH .gauge .up2 .d3.w{background:var(--wr);animation:none}
+.HH .gauge .up2 b{font-weight:650;font-variant-numeric:tabular-nums}
+.HH .gauge .up2 span{color:var(--mu);font-size:11.5px}
+
+/* C2 — the second tier */
+.HH2{background:var(--s2);border-bottom:1px solid var(--ln);display:flex;align-items:center;gap:0;
+  padding:0 16px;overflow-x:auto;scrollbar-width:none}
+.HH2::-webkit-scrollbar{display:none}
+.HH2 .cell2{padding:8px 15px;border-right:1px solid var(--ln);display:flex;align-items:baseline;gap:7px;
+  font-size:12px;white-space:nowrap;flex:none}
+.HH2 .cell2:first-child{padding-left:0}
+.HH2 .cell2:last-of-type{border-right:0}
+.HH2 .cell2 .k{color:var(--dim)}
+.HH2 .cell2 b{font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em;font-size:13px}
+.HH2 .cell2 em{font-style:normal;font-size:10.5px;color:var(--mu)}
+.HH2 .cell2 .wn{color:var(--wr)}
+.HH2 .sp{flex:1}
+.HH2 .thin{width:110px;height:20px;opacity:.7;flex:none;margin-left:8px}
+
+/* responsive — one row survives everywhere */
+@container hdr (max-width:820px){ .HH .pal2 kbd,.HH .pal2 .t2{display:none} .HH .pal2{padding:0 10px} }
+@container hdr (max-width:700px){ .HH .who small{display:none} }
+@container hdr (max-width:600px){ .HH .gauge .rate2{display:none} }
+@container hdr (max-width:470px){ .HH .who{display:none} .HH .gauge{margin-left:2px} }
+@container hdr (max-width:380px){ .HH .gauge .up2 span{display:none} }
+
+.devs2{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:8px}
+.dev2{border:1px solid var(--ln);border-radius:15px;overflow:hidden;background:var(--s1);flex:none}
+.dev2 .cap4{padding:7px 12px;border-bottom:1px solid var(--ln);background:var(--s2);font-size:10.5px;
+  font-weight:620;color:var(--dim);display:flex;gap:8px}
+.dev2 .cap4 span{margin-left:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:500}
+.dev2 .fill2{padding:12px;font-size:11px;color:var(--faint);border-top:1px solid var(--ln);background:var(--s2)}
+.d1000{width:1000px} .d760{width:760px} .d560{width:560px} .d390{width:390px}
+@media (max-width:1080px){.d1000,.d760{width:100%}}
+
+.HH .gauge .g2 b{display:inline-block;text-align:right;font-variant-numeric:tabular-nums}
+.HH .gauge .g2 b.rate{min-width:5.2ch}   /* fits 999.9 and 1.02k */
+.HH .gauge .up2 b{display:inline-block;min-width:1.2ch;text-align:right}
+.HH .gauge{min-height:34px}

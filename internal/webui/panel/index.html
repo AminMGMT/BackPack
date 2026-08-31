@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backpack</title>
+<meta name="color-scheme" content="dark light">
+<!-- The browser paints its own chrome from this; it has to follow the theme,
+     so js/main.js rewrites it whenever the ground changes. -->
+<meta name="theme-color" content="#070707">
+
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/components/header.css">
+<link rel="stylesheet" href="css/components/resources.css">
+<link rel="stylesheet" href="css/components/card.css">
+<link rel="stylesheet" href="css/wide.css">
+<link rel="stylesheet" href="css/accent.css">
+<link rel="stylesheet" href="css/components/menu.css">
+<link rel="stylesheet" href="css/components/dialog.css">
+<link rel="stylesheet" href="css/components/toast.css">
+
+<script>
+  /* The theme is read before first paint so a dark panel never flashes white. */
+  try {
+    var t = localStorage.getItem('bp_theme') || 'dark';
+    var a = localStorage.getItem('bp_accent') || 'none';
+    document.addEventListener('DOMContentLoaded', function () {
+      document.body.dataset.t = t;
+      if (a && a !== 'none') document.body.dataset.accent = a;
+    });
+  } catch (e) {}
+</script>
+</head>
+
+<body data-t="dark" class="wide">
+
+<div id="boot">
+  <div class="boot-stage">
+    <div class="boot-mark">
+      <svg class="ring" viewBox="0 0 66 66" aria-hidden="true">
+        <circle class="trk" cx="33" cy="33" r="31"></circle>
+        <circle class="arc" id="boot-arc" cx="33" cy="33" r="31"></circle>
+      </svg>
+      <span class="boot-in" data-icon="pack"></span>
+    </div>
+    <div class="boot-title">Backpack</div>
+    <div class="boot-sub" id="boot-sub">Loading…</div>
+    <div class="boot-reads">
+      <div class="boot-read" id="read-stats"><span>/api/stats</span><span class="ln"><i></i></span></div>
+      <div class="boot-read" id="read-tunnels"><span>/api/tunnels</span><span class="ln"><i></i></span></div>
+    </div>
+  </div>
+</div>
+
+<!-- .panel is the container the whole layout queries against, so it stays. -->
+<div class="panel" id="panel" hidden>
+  <div class="inner2">
+
+    <div class="stickH">
+      <div class="hz">
+        <header class="HH">
+          <div class="mk" data-icon="pack"></div>
+          <div class="who"><b>Backpack</b><small id="hdr-sub">—</small></div>
+
+          <span class="sp"></span>
+
+          <button class="pal2" id="appearance-btn" title="Appearance"
+                  aria-haspopup="true" aria-expanded="false">
+            <span class="sw0"></span><span class="t2">Appearance</span>
+          </button>
+          <button class="ic2" id="alerts-btn" title="Alerts" aria-label="Alerts">
+            <svg class="x" viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
+            <span class="bdg w" id="alerts-bdg" hidden></span>
+          </button>
+          <button class="ic2" id="menu-btn" title="Menu" aria-label="Menu"
+                  aria-haspopup="true" aria-expanded="false">
+            <svg class="x" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+          </button>
+        </header>
+      </div>
+    </div>
+
+    <div class="warnbar" id="warnbar" hidden>
+      <div class="ic">!</div>
+      <div class="tx">
+        <b>The monitor service is not running</b>
+        <span>The watchdog, the bot and the alerts live in it. Tunnels keep carrying traffic, but a
+              tunnel that drops will not be restarted and no alert will reach you.</span>
+      </div>
+      <button class="act">Start it</button>
+    </div>
+
+    <div id="view"></div>
+  </div>
+</div>
+
+<div class="menu-scrim" id="menu-scrim" hidden></div>
+<nav class="menuM" id="main-menu" hidden role="menu" aria-label="Main menu"></nav>
+
+<div class="appear" id="appearance" hidden role="dialog" aria-modal="false"
+     aria-label="Appearance">
+  <h4>Theme</h4>
+  <div class="seg" id="ap-theme">
+    <button data-theme="dark">Dark</button>
+    <button data-theme="light">Light</button>
+  </div>
+  <h4>Accent</h4>
+  <div class="dots" id="ap-accent">
+    <button data-a="none" title="None" aria-label="None accent"></button>
+    <button data-a="crimson" style="--c:#4f000b" title="Crimson" aria-label="Crimson accent"></button>
+    <button data-a="ember"   style="--c:#f6511d" title="Ember" aria-label="Ember accent"></button>
+    <button data-a="lime"    style="--c:#7fb800" title="Lime" aria-label="Lime accent"></button>
+    <button data-a="azure"   style="--c:#41bbd9" title="Azure" aria-label="Azure accent"></button>
+  </div>
+</div>
+
+<div class="toastZ" id="toast">
+  <span class="ic" id="toast-ic"></span>
+  <span class="tx" id="toast-tx"></span>
+  <span class="life"><i></i></span>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

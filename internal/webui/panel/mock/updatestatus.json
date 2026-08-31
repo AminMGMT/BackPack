@@ -1,0 +1,16 @@
+{
+  "running": false,
+  "log": [
+    "Downloading backpack-linux-amd64.tar.gz via direct...",
+    "Checksum verified.",
+    "Taking a safety snapshot...",
+    "Snapshot saved: pre-update-20260828-2214",
+    "Installing v1.7.6...",
+    "Restarting services...",
+    "Restarted 6 tunnels (0 failed).",
+    "Checking health...",
+    "Health check passed.",
+    "Update complete — now running v1.7.6."
+  ],
+  "error": ""
+}

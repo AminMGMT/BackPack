@@ -1,0 +1,103 @@
+/* Accent.
+ *
+ * The panel is monochrome on purpose and colour means status — green up, amber
+ * warning, red down. An accent has to live alongside that without competing, so
+ * it is spent only on things that are never status: the mark, the rate line on
+ * a card, the primary button, the active tab, the focus ring.
+ *
+ * Each accent carries two values rather than one. #4f000b on #070707 is almost
+ * invisible and #7fb800 on #f2f2f2 glares; a single hex cannot serve both
+ * grounds, so the dark and the light value are chosen separately and kept in
+ * the same hue.
+ */
+
+body {
+  --ac: var(--tx);          /* "none" — the panel as it was drawn */
+  --ac-on: var(--bg);       /* text laid on a solid accent */
+  --ac-soft: var(--sunk);   /* a wash of it */
+}
+
+body[data-t="dark"][data-accent="crimson"] { --ac: #b3001b; --ac-on: #ffffff; }
+body[data-t="light"][data-accent="crimson"] { --ac: #4f000b; --ac-on: #ffffff; }
+
+body[data-t="dark"][data-accent="ember"] { --ac: #f6511d; --ac-on: #ffffff; }
+body[data-t="light"][data-accent="ember"] { --ac: #d9410f; --ac-on: #ffffff; }
+
+body[data-t="dark"][data-accent="lime"] { --ac: #7fb800; --ac-on: #101010; }
+body[data-t="light"][data-accent="lime"] { --ac: #5f8a00; --ac-on: #ffffff; }
+
+body[data-t="dark"][data-accent="azure"] { --ac: #41bbd9; --ac-on: #08222a; }
+body[data-t="light"][data-accent="azure"] { --ac: #1d87a5; --ac-on: #ffffff; }
+
+body[data-accent] { --ac-soft: color-mix(in srgb, var(--ac) 14%, transparent); }
+
+/* ---- where it lands ------------------------------------------------------ */
+
+/* the mark, in the header and in the menu */
+body[data-accent] .HH .mk,
+body[data-accent] .menuM .mpa,
+body[data-accent] .boot-in { background: var(--ac); color: var(--ac-on); }
+
+/* the rate line under a tunnel card, and every other spark drawn from it */
+body[data-accent] { --spark: var(--ac); }
+
+/* the one button on a screen that commits something */
+body[data-accent] .sech2 .sb.primary,
+body[data-accent] .btn-solid,
+body[data-accent] .dlg .btn6.solid,
+body[data-accent] .unlock,
+body[data-accent] .nb.solid2 {
+  background: var(--ac); color: var(--ac-on); border-color: transparent;
+}
+
+/* what is selected, and what has focus */
+body[data-accent] .dlg .tabs button.on { color: var(--ac); border-bottom-color: var(--ac); }
+body[data-accent] .steps .st2.on .n3 { background: var(--ac); color: var(--ac-on); }
+body[data-accent] .tr.on, body[data-accent] .rp.on,
+body[data-accent] .ch4.on, body[data-accent] .dc.on { border-color: var(--ac); }
+body[data-accent] :focus-visible { outline-color: var(--ac); }
+
+/* the ring that fills while the panel loads */
+body[data-accent] .boot-mark .arc { stroke: var(--ac); }
+
+/* the meter bars on the server strip — load, not status */
+body[data-accent] .RZ .cols i.now { background: var(--ac); opacity: 1; }
+body[data-accent] .meter-bar i { background: var(--ac); }
+
+/* the rule under a section title */
+body[data-accent] .sectitle .ln {
+  background: linear-gradient(90deg, var(--ac-soft), var(--ln) 38%);
+}
+
+/* ---- the control in the header ------------------------------------------- */
+.HH .pal2 .sw0 { width: 13px; height: 13px; border-radius: 50%; flex: none;
+                 background: var(--ac); border: 1px solid var(--ln2); }
+body:not([data-accent]) .HH .pal2 .sw0,
+body[data-accent="none"] .HH .pal2 .sw0 {
+  background: linear-gradient(135deg, var(--tx) 50%, var(--s3) 50%);
+}
+
+.appear { position: fixed; z-index: 60; width: 232px; padding: 12px;
+          background: var(--s1); border: 1px solid var(--ln2); border-radius: 15px;
+          box-shadow: var(--lift); transform-origin: top right;
+          transform: scale(.94) translateY(-6px); opacity: 0; pointer-events: none;
+          transition: transform .28s var(--spring), opacity .2s ease; }
+.appear.on { transform: none; opacity: 1; pointer-events: auto; }
+.appear h4 { font-size: 10px; font-weight: 660; letter-spacing: .09em;
+             text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+.appear h4 + * { margin-bottom: 14px; }
+.appear .seg { display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: var(--sunk); }
+.appear .seg button { flex: 1; font: inherit; font-size: 11.5px; font-weight: 600;
+                      padding: 7px 0; border-radius: 8px; border: 0;
+                      background: transparent; color: var(--mu); cursor: pointer; }
+.appear .seg button.on { background: var(--s1); color: var(--tx); }
+.appear .dots { display: flex; gap: 8px; }
+.appear .dots button { width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+                       border: 1px solid var(--ln2); background: var(--c);
+                       position: relative; transition: transform .16s var(--spring); }
+.appear .dots button:hover { transform: scale(1.08); }
+.appear .dots button.on::after { content: ''; position: absolute; inset: -4px;
+                                 border-radius: 50%; border: 1.5px solid var(--tx); }
+.appear .dots button[data-a="none"] {
+  background: linear-gradient(135deg, var(--tx) 50%, var(--s3) 50%);
+}

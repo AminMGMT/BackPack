@@ -1,0 +1,18 @@
+{
+  "name": "fr-relay",
+  "transport": "wss",
+  "tunnelPort": 8443,
+  "ports": "443=127.0.0.1:8080, 2053=127.0.0.1:3000",
+  "preset": "turbo",
+  "maxConnections": 512,
+  "bandwidthMbps": 200,
+  "acceptUDP": false,
+  "mssClamp": 1360,
+  "proxyProtocol": false,
+  "keepAlive": 75,
+  "heartbeat": 40,
+  "poolSize": 8,
+  "certDomain": "relay.example.com",
+  "certType": "letsencrypt",
+  "serverAddress": "185.4.28.11"
+}

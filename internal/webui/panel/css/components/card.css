@@ -1,0 +1,94 @@
+/* The tunnel card.
+ * Ported verbatim from the approved preview — the design that was signed
+ * off, not a re-drawing of it. Class names are kept so the markup matches.
+ */
+
+/* ===================== the card, final ===================== */
+.c7{background:var(--s1);border:1px solid var(--ln);border-radius:18px;position:relative;overflow:hidden;
+    display:flex;flex-direction:column;min-height:314px;
+    transition:border-color .3s var(--spring),transform .12s ease-out}
+.c7:hover{border-color:var(--ln2)}
+.c7.warn{border-color:color-mix(in srgb,var(--wr) 34%,transparent)}
+.c7.off{opacity:.78}
+.c7 .field{position:absolute;left:0;right:0;bottom:0;height:126px;pointer-events:none;opacity:.5}
+.c7 .inner{position:relative;display:flex;flex-direction:column;flex:1;padding:15px}
+.c7 .hd{display:flex;align-items:center;gap:10px}
+.c7 .fl{width:30px;height:30px;border-radius:9px;background:var(--s3);border:1px solid var(--ln);
+        display:grid;place-items:center;font-size:15px;flex:none}
+.c7 .id{flex:1;min-width:0}
+.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap}
+.c7 .id small{display:block;font-size:11px;color:var(--dim);margin-top:1px;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap}
+.c7 .stt{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--mu);flex:none}
+.c7 .dot{width:7px;height:7px;border-radius:50%;flex:none;display:block;background:var(--ok);
+         animation:bp 2.6s ease-out infinite}
+.c7 .dot.wr{background:var(--wr);animation:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--wr) 20%,transparent)}
+.c7 .dot.off{background:var(--faint);animation:none}
+@keyframes bp{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}
+  70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.c7 .kind{display:flex;gap:6px;margin-top:11px;flex-wrap:wrap}
+.c7 .kind span{font-size:10.5px;font-weight:620;letter-spacing:.04em;text-transform:uppercase;
+  padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
+.c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;
+  letter-spacing:0;font-weight:560;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c7 .ping{display:flex;align-items:flex-end;gap:9px;margin-top:13px}
+.c7 .ping .n{font-size:44px;font-weight:640;letter-spacing:-.05em;line-height:1}
+.c7 .ping .n.na{color:var(--dim)}
+.c7 .ping .u{font-size:14px;color:var(--mu);font-weight:560;padding-bottom:4px}
+.c7 .ping .tail{margin-left:auto;padding-bottom:3px}
+.c7 .relay{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:620;
+  padding:5px 9px 5px 7px;border-radius:8px;background:var(--sunk);border:1px solid var(--ln);color:var(--tx2)}
+.c7 .relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.c7 .totals{display:flex;align-items:baseline;gap:16px;margin-top:12px;font-size:13px}
+.c7 .totals .t{display:flex;align-items:baseline;gap:6px}
+.c7 .totals .t i{font-style:normal;font-size:12px;color:var(--dim)}
+.c7 .totals .t b{font-weight:640;letter-spacing:-.022em;font-variant-numeric:tabular-nums}
+.c7 .totals .t em{font-style:normal;font-size:11px;color:var(--mu);font-weight:560}
+.c7 .addr{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:11.5px;color:var(--dim)}
+.c7 .addr .ip,.c7 .addr .pt{font-variant-numeric:tabular-nums;color:var(--mu)}
+.c7 .addr .sep{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
+.c7 .spacer{flex:1;min-height:16px}
+.c7 .foot{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--mu)}
+.c7 .foot .upt b{color:var(--tx2);font-weight:600;font-variant-numeric:tabular-nums}
+.c7 .foot .sp2{flex:1}
+.btn{width:30px;height:30px;border-radius:9px;border:1px solid var(--ln);background:var(--s1);color:var(--mu);
+  cursor:pointer;display:grid;place-items:center;transition:background .25s ease,color .25s ease,transform .12s ease-out}
+.btn:hover{background:var(--sunk);color:var(--tx)} .btn:active{transform:scale(.9)}
+.btn .iA{width:14px;height:14px}
+
+/* the source-mapping table */
+.map{border:1px solid var(--ln);border-radius:14px;overflow:hidden;background:var(--s1)}
+.map .mr{display:grid;grid-template-columns:190px 1fr 1fr;gap:14px;padding:11px 15px;border-bottom:1px solid var(--ln);
+  font-size:12.5px;align-items:baseline}
+.map .mr:last-child{border-bottom:0}
+.map .mr.h{background:var(--s2);font-size:10.5px;font-weight:660;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.map .mr .a{color:var(--tx2);font-weight:560}
+.map .mr .b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--tx)}
+.map .mr .c{color:var(--mu);font-size:11.5px;line-height:1.5}
+.map .mr .c em{font-style:normal;color:var(--wr)}
+
+/* The four service actions, in a sheet off the card's "more" button. */
+.c7 .card-more{position:absolute;right:12px;bottom:50px;z-index:6;min-width:150px;padding:4px;
+  background:var(--s1);border:1px solid var(--ln2);border-radius:13px;box-shadow:var(--lift);
+  transform-origin:bottom right;transform:scale(.94) translateY(4px);opacity:0;pointer-events:none;
+  transition:transform .3s var(--spring),opacity .18s ease}
+.c7 .card-more.on{transform:none;opacity:1;pointer-events:auto}
+.c7 .card-more button{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;
+  border:0;background:transparent;border-radius:9px;font:inherit;font-size:12px;color:var(--tx);
+  text-align:left;cursor:pointer}
+.c7 .card-more button:hover{background:var(--sunk)}
+.c7 .card-more button span{width:14px;text-align:center;color:var(--dim);font-size:10px}
+.c7 .card-more .sep2{height:1px;background:var(--ln);margin:4px 0}
+.c7 .card-more button.danger{color:var(--er)}
+.c7 .card-more button.danger span{color:var(--er)}
+
+/* the columns the server tiles draw */
+.RZ .cols i{height:var(--h,20%)}
+
+.emptybox{grid-column:1/-1;border:1px dashed var(--ln2);border-radius:18px;background:var(--s1);
+  padding:44px 24px;text-align:center}
+.emptybox b{display:block;font-size:15px;font-weight:650;letter-spacing:-.026em}
+.emptybox span{display:block;font-size:12.5px;color:var(--mu);margin-top:8px;line-height:1.6}
+.emptybox code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  background:var(--sunk);border-radius:5px;padding:1px 6px}

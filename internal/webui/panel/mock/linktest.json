@@ -1,0 +1,16 @@
+{
+  "running": false,
+  "name": "de-edge",
+  "result": {
+    "name": "de-edge",
+    "target": "51.89.14.203:8443",
+    "sent": 12,
+    "received": 12,
+    "minMs": 58,
+    "avgMs": 61,
+    "maxMs": 65,
+    "jitterMs": 2,
+    "lossPct": 0,
+    "usable": true
+  }
+}

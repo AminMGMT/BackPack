@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backpack — Sign in</title>
+<meta name="color-scheme" content="dark light">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/screens/login.css">
+<script>
+  /* The panel's theme choice carries over, so signing in does not flash a
+     different colour scheme than the panel behind it. */
+  try {
+    var t = localStorage.getItem('bp_theme') || 'dark';
+    document.addEventListener('DOMContentLoaded', function () { document.body.dataset.t = t; });
+  } catch (e) {}
+</script>
+</head>
+<body data-t="dark">
+
+<div class="loginpage">
+  <canvas id="tun5"></canvas>
+
+  <form class="lcard" id="lcard" method="post" action="/login">
+    <div class="lstep" data-l="pw">
+      <div class="mark5"><svg class="x" viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg></div>
+      <h1>Backpack</h1>
+      <div class="host5" id="host5"></div>
+      <div class="sub5">Enter your access password</div>
+
+      <div class="field5" id="fld5">
+        <span class="caps5"><svg class="x" viewBox="0 0 24 24"><path d="M12 4l7 8h-4v5H9v-5H5z"/><rect x="9" y="19" width="6" height="2" rx="1"/></svg>CAPS</span>
+        <input id="pw5" name="password" type="password" placeholder="Password" maxlength="128"
+               autocomplete="current-password" autofocus>
+        <button class="eye5" id="eye5" type="button" aria-label="Show code">
+          <svg class="x" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+
+      <button class="unlock" id="unlock5" type="submit">
+        <span class="fill5" id="fillP"></span><span class="lbl5" id="lblP">Unlock</span>
+      </button>
+      <div class="msg5 mu5" id="msg5"></div>
+      <div class="pips5" id="pips5"><i></i><i></i><i></i><i></i><i></i></div>
+    </div>
+
+    <div class="foot5">Telegram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
+  </form>
+</div>
+
+<script type="module">
+  import { corridor } from './js/login.js';
+  corridor();
+</script>
+</body>
+</html>

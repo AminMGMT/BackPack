@@ -1,0 +1,5 @@
+{
+  "twoFA": false,
+  "loginNotify": true,
+  "telegramReady": true
+}

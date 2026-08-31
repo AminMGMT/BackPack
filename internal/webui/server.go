@@ -193,6 +193,9 @@ func Serve() error {
 	mux.HandleFunc("/login2fa", srv.handleLogin2FA)
 	mux.HandleFunc("/logout", srv.handleLogout)
 	mux.HandleFunc("/", srv.requireAuth(srv.handleDashboard))
+	// The rebuilt panel, opt-in and served from its own subtree so the
+	// dashboard above is untouched by it. See panel.go.
+	mux.HandleFunc(panelPrefix, srv.requireAuth(srv.handleExperimentalPanel))
 	// Read-only endpoints also accept the remote access token, so a peer panel
 	// or a Prometheus scraper can watch without holding a browser session.
 	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
@@ -216,6 +219,7 @@ func Serve() error {
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
 	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
 	mux.HandleFunc("/api/panelport", srv.requireAuth(srv.handlePanelPort))
+	mux.HandleFunc("/api/panelui", srv.requireAuth(srv.handlePanelUI))
 	mux.HandleFunc("/api/panelcert", srv.requireAuth(srv.handlePanelCert))
 	mux.HandleFunc("/api/backup/export", srv.requireAuth(srv.handleBackupExport))
 	mux.HandleFunc("/api/backup/import", srv.requireAuth(srv.handleBackupImport))
@@ -382,6 +386,17 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
+		return
+	}
+	// ?panel=classic is the way out of a new panel that has stopped
+	// responding, and ?panel=next the way in without going through Settings.
+	// Both record the choice; see choosePanel in panel.go.
+	if choice := r.URL.Query().Get("panel"); choice != "" {
+		s.choosePanel(w, r, choice)
+		return
+	}
+	if Load().ExperimentalPanel {
+		http.Redirect(w, r, panelPrefix, http.StatusSeeOther)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

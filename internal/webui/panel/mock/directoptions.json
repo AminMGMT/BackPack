@@ -1,0 +1,31 @@
+{
+  "carriers": [
+    {
+      "label": "PCK",
+      "value": "pck"
+    },
+    {
+      "label": "UDP",
+      "value": "udp"
+    },
+    {
+      "label": "Spoof",
+      "value": "spoof"
+    }
+  ],
+  "presets": [
+    {
+      "label": "Turbo",
+      "value": "turbo",
+      "recommended": true
+    },
+    {
+      "label": "Balance",
+      "value": "balance"
+    },
+    {
+      "label": "Aggressive",
+      "value": "aggressive"
+    }
+  ]
+}

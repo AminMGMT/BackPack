@@ -1,0 +1,131 @@
+{
+  "families": [
+    {
+      "label": "TCP",
+      "desc": "",
+      "entries": [
+        {
+          "label": "TCP",
+          "desc": "one connection per stream",
+          "value": "tcp"
+        },
+        {
+          "label": "TCP Mux",
+          "desc": "many streams over a few connections",
+          "value": "tcpmux"
+        },
+        {
+          "label": "Stealth",
+          "desc": "looks like ordinary traffic",
+          "value": "stealth"
+        },
+        {
+          "label": "PCK",
+          "desc": "KCP inside TCP-shaped packets",
+          "value": "pck"
+        }
+      ]
+    },
+    {
+      "label": "UDP",
+      "desc": "",
+      "entries": [
+        {
+          "label": "UDP",
+          "desc": "plain datagrams",
+          "value": "udp"
+        },
+        {
+          "label": "KCP",
+          "desc": "error correction over UDP",
+          "value": "kcp"
+        },
+        {
+          "label": "QUIC",
+          "desc": "recovers losses on its own",
+          "value": "quic"
+        }
+      ]
+    },
+    {
+      "label": "WebSocket",
+      "desc": "",
+      "entries": [
+        {
+          "label": "WS",
+          "desc": "plain websocket",
+          "value": "ws"
+        },
+        {
+          "label": "WS Mux",
+          "desc": "multiplexed websocket",
+          "value": "wsmux"
+        },
+        {
+          "label": "WSS",
+          "desc": "looks like ordinary HTTPS",
+          "value": "wss"
+        },
+        {
+          "label": "WSS Mux",
+          "desc": "multiplexed, over TLS",
+          "value": "wssmux"
+        }
+      ]
+    },
+    {
+      "label": "Experimental",
+      "desc": "",
+      "entries": [
+        {
+          "label": "XDI",
+          "desc": "",
+          "value": "xdi"
+        },
+        {
+          "label": "Spoof",
+          "desc": "forged source addresses",
+          "value": "spoof"
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "label": "Balance",
+      "desc": "even on both ends",
+      "value": "balance"
+    },
+    {
+      "label": "Turbo",
+      "desc": "the default — recommended",
+      "value": "turbo",
+      "recommended": true
+    },
+    {
+      "label": "Aggressive",
+      "desc": "for lossy links",
+      "value": "aggressive"
+    },
+    {
+      "label": "Throughput",
+      "desc": "KCP only",
+      "value": "throughput",
+      "kcpOnly": true
+    }
+  ],
+  "spoofProfiles": [
+    "default",
+    "gaming",
+    "browsing"
+  ],
+  "pckFlags": [
+    "syn",
+    "psh-ack",
+    "mixed"
+  ],
+  "interfaces": [
+    "eth0",
+    "ens3"
+  ]
+}

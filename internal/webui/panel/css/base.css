@@ -1,0 +1,45 @@
+/* Shared utilities: the section label, the mono figure, the icon size.
+ * Ported verbatim from the approved preview — the design that was signed
+ * off, not a re-drawing of it. Class names are kept so the markup matches.
+ */
+
+  .wrapg{max-width:1300px;margin:0 auto;padding:20px clamp(14px,3vw,26px) 70px}
+  .lbl2{font-size:11px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+        margin:26px 0 12px;display:flex;align-items:center;gap:10px}
+  .lbl2 .ln{flex:1;height:1px;background:var(--ln)}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(336px,1fr));gap:16px}
+  .mono{font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .k{display:block;width:100%}
+  .iA{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}
+  .sparkpath{stroke-dasharray:700;stroke-dashoffset:700;animation:draw 1.6s var(--spring) forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+
+/* One focus ring, everywhere, and only for keyboards.
+ *
+ * Half the screens set outline:0 on their inputs — the previews did, because a
+ * mock is never tabbed through. A visible ring has to come back somewhere, and
+ * one rule here covers every control instead of thirty. */
+:focus-visible {
+  outline: 2px solid var(--tx2);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline-offset: 1px;
+}
+
+/* A tap should not wait 300ms to find out it was not a double-tap. */
+button, a, input, select, textarea, [role="button"], [role="menuitem"] {
+  touch-action: manipulation;
+}
+
+/* Someone who has asked their system to stop moving things means it here too.
+   This is the blanket guard; a screen that needs to say more says it itself. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

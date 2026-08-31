@@ -1,0 +1,257 @@
+/* Page, sections, server strip, warn bar, empty state.
+ * Ported verbatim from the approved preview — the design that was signed
+ * off, not a re-drawing of it. Class names are kept so the markup matches.
+ */
+
+
+/* ===================== dashboard shell ===================== */
+.page{max-width:1300px;margin:0 auto;padding:0 clamp(14px,3vw,26px) 70px}
+
+/* header */
+.hdr{display:flex;align-items:center;gap:12px;padding:18px 0 16px;position:sticky;top:0;z-index:40;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.hdr .mk{width:34px;height:34px;border-radius:10px;background:var(--tx);color:var(--bg);display:grid;place-items:center;flex:none}
+.hdr .mk svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.1;stroke-linecap:round}
+.hdr .who b{display:block;font-size:15px;font-weight:650;letter-spacing:-.026em;line-height:1.2}
+.hdr .who small{display:block;font-size:11.5px;color:var(--dim);margin-top:1px}
+.hdr .sp{flex:1}
+.hdr .upd{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;padding:8px 13px;
+  border-radius:11px;cursor:pointer;background:color-mix(in srgb,var(--wr) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--wr) 32%,transparent);color:var(--wr)}
+.hdr .upd svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.hdr .hb{height:36px;padding:0 13px;border-radius:11px;border:1px solid var(--ln);background:var(--s1);color:var(--mu);
+  cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:12.5px;font-weight:580;
+  position:relative;transition:background .25s ease,color .25s ease}
+.hdr .hb:hover{background:var(--sunk);color:var(--tx)}
+.hdr .hb svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.hdr .hb .bdg{min-width:17px;height:17px;padding:0 5px;border-radius:9px;background:var(--er);color:#fff;
+  font-size:10px;font-weight:700;display:grid;place-items:center}
+
+/* banner for the states that look fine but are not */
+.warnbar{display:flex;align-items:flex-start;gap:12px;padding:13px 15px;border-radius:14px;margin-bottom:12px;
+  border:1px solid color-mix(in srgb,var(--wr) 32%,transparent);
+  background:color-mix(in srgb,var(--wr) 8%,transparent)}
+.warnbar.bad{border-color:color-mix(in srgb,var(--er) 32%,transparent);
+  background:color-mix(in srgb,var(--er) 8%,transparent)}
+.warnbar .ic{width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:13px;
+  font-weight:700;background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr)}
+.warnbar.bad .ic{background:color-mix(in srgb,var(--er) 18%,transparent);color:var(--er)}
+.warnbar .tx{flex:1;min-width:0}
+.warnbar .tx b{display:block;font-size:12.5px;font-weight:640;margin-bottom:3px}
+.warnbar .tx span{display:block;font-size:11.5px;color:var(--tx2);line-height:1.55}
+.warnbar .act{flex:none;font:inherit;font-size:11.5px;font-weight:600;padding:7px 12px;border-radius:10px;
+  cursor:pointer;background:var(--sunk);border:1px solid var(--ln2);color:var(--tx)}
+.warnbar .act:hover{background:var(--ln)}
+
+/* the server strip */
+.srv{border:1px solid var(--ln);border-radius:18px;background:var(--s1);overflow:hidden;margin-bottom:22px}
+.srv .row1{display:grid;grid-template-columns:repeat(4,1fr) 1.25fr;gap:1px;background:var(--ln)}
+.srv .m{background:var(--s1);padding:15px 16px}
+.srv .m .k{font-size:11px;color:var(--dim);font-weight:560}
+.srv .m .v{font-size:23px;font-weight:650;letter-spacing:-.034em;margin:5px 0 9px;font-variant-numeric:tabular-nums}
+.srv .m .v em{font-style:normal;font-size:12px;color:var(--mu);font-weight:560;margin-left:2px;letter-spacing:0}
+.srv .m .tr{height:5px;border-radius:3px;background:var(--sunk);overflow:hidden}
+.srv .m .tr i{display:block;height:100%;border-radius:3px;background:var(--tx2)}
+.srv .m .tr i.hot{background:var(--wr)}
+.srv .m .s{font-size:11px;color:var(--dim);margin-top:7px}
+.srv .traf{background:var(--s1);padding:15px 16px;display:flex;flex-direction:column;justify-content:center;gap:9px}
+.srv .traf .l{display:flex;align-items:baseline;gap:9px;font-size:12.5px}
+.srv .traf .l .k{color:var(--dim);min-width:74px}
+.srv .traf .l b{font-weight:640;letter-spacing:-.022em;font-variant-numeric:tabular-nums}
+.srv .traf .l em{font-style:normal;color:var(--mu);font-size:11px;margin-left:auto}
+.srv .facts{display:flex;align-items:center;gap:0;padding:0;border-top:1px solid var(--ln);background:var(--s2)}
+.srv .facts .f2{padding:10px 16px;border-right:1px solid var(--ln);font-size:11.5px;color:var(--mu);white-space:nowrap}
+.srv .facts .f2:last-of-type{border-right:0}
+.srv .facts .f2 b{color:var(--tx2);font-weight:580;margin-left:6px}
+.srv .facts .sp{flex:1}
+.srv .facts .more2{padding:10px 16px;font:inherit;font-size:11.5px;font-weight:580;background:transparent;border:0;
+  border-left:1px solid var(--ln);color:var(--mu);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.srv .facts .more2:hover{background:var(--sunk);color:var(--tx)}
+.srv .facts .more2 svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;
+  transition:transform .28s var(--spring)}
+.srv.open .facts .more2 svg{transform:rotate(180deg)}
+.srv .extra{display:none;border-top:1px solid var(--ln);background:var(--s2);padding:14px 16px;
+  grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px 26px}
+.srv.open .extra{display:grid}
+.srv .extra .e{display:flex;align-items:baseline;gap:9px;font-size:12px;padding:5px 0;border-bottom:1px solid var(--ln)}
+.srv .extra .e .k{color:var(--dim);flex:none;min-width:88px}
+.srv .extra .e .v{margin-left:auto;font-weight:570;font-variant-numeric:tabular-nums;text-align:right}
+.srv .extra .e .v.wn{color:var(--wr)}
+
+/* section heading over the grid */
+.sech{display:flex;align-items:center;gap:11px;margin-bottom:13px}
+.sech h2{font-size:17px;font-weight:650;letter-spacing:-.028em}
+.sech .cnt{font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:9px;background:var(--sunk);color:var(--mu)}
+.sech .sp{flex:1}
+.sech .sb{font:inherit;font-size:12.5px;font-weight:590;padding:9px 15px;border-radius:11px;cursor:pointer;
+  background:var(--s1);border:1px solid var(--ln);color:var(--tx);
+  transition:background .22s ease,transform .12s ease-out}
+.sech .sb:hover{background:var(--sunk)} .sech .sb:active{transform:scale(.97)}
+.sech .sb.primary{background:var(--tx);color:var(--bg);border-color:var(--tx)}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(336px,1fr));gap:16px}
+
+/* empty state */
+.empty{grid-column:1/-1;border:1px dashed var(--ln2);border-radius:18px;padding:44px 20px;text-align:center}
+.empty b{display:block;font-size:14.5px;font-weight:620;letter-spacing:-.02em;margin-bottom:6px}
+.empty span{display:block;font-size:12.5px;color:var(--dim);line-height:1.6;max-width:52ch;margin:0 auto 16px}
+
+
+/* ---------- the whole page reacts, not just the header ---------- */
+.page2{container-type:inline-size;container-name:pg;max-width:1300px;margin:0 auto;
+  padding:0 clamp(12px,3vw,26px) 70px}
+.stick{position:sticky;top:0;z-index:40;margin:0 calc(-1 * clamp(12px,3vw,26px));
+  padding:0 clamp(12px,3vw,26px);
+  background:color-mix(in srgb,var(--bg) 88%,transparent);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.stick .HC2{background:transparent;border-bottom:1px solid var(--ln)}
+
+/* server strip */
+.srv .row1{display:grid;grid-template-columns:repeat(4,1fr) 1.25fr;gap:1px;background:var(--ln)}
+@container pg (max-width:1080px){ .srv .row1{grid-template-columns:repeat(2,1fr)} .srv .traf{grid-column:span 2} }
+@container pg (max-width:560px){ .srv .row1{grid-template-columns:1fr} .srv .traf{grid-column:span 1} }
+.srv .facts{overflow-x:auto;scrollbar-width:none}
+.srv .facts::-webkit-scrollbar{display:none}
+@container pg (max-width:720px){
+  .srv .facts .more2{position:sticky;right:0;background:var(--s2);box-shadow:-10px 0 12px -8px rgba(0,0,0,.5)}
+}
+@container pg (max-width:560px){ .srv .extra{grid-template-columns:1fr} }
+
+/* section heading */
+@container pg (max-width:560px){
+  .sech{flex-wrap:wrap}
+  .sech .cnt{order:3}
+  .sech .sb{flex:1;justify-content:center}
+  .sech .sp{display:none}
+  .sech h2{flex:1}
+}
+/* the grid already reflows; on a phone one column reads better than a squeezed two */
+@container pg (max-width:560px){ #grid{grid-template-columns:1fr} }
+
+/* warnings */
+@container pg (max-width:560px){
+  .warnbar{flex-wrap:wrap}
+  .warnbar .act{width:100%;margin-top:4px}
+}
+.warnbar .tx code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  background:var(--sunk);padding:1px 5px;border-radius:4px}
+
+/* the state switcher for review */
+.states{display:flex;gap:2px;padding:3px;border-radius:11px;background:var(--sunk);flex-wrap:wrap;margin:14px 0 18px}
+.states button{font:inherit;font-size:11.5px;font-weight:600;padding:7px 13px;border-radius:8px;border:0;
+  background:transparent;color:inherit;opacity:.5;cursor:pointer}
+.states button.on{opacity:1;background:var(--s1)}
+[data-state="normal"] .onlyWarn{display:none}
+[data-state="normal"] .onlyEmpty{display:none}
+[data-state="warn"] .onlyEmpty{display:none}
+[data-state="empty"] .onlyWarn{display:none}
+[data-state="empty"] #grid{display:none}
+[data-state="normal"] .emptybox{display:none}
+[data-state="warn"] .emptybox{display:none}
+
+
+/* ---- the page shell the preview wrapped everything in ---- */
+
+/* ============ the assembled panel ============ */
+.panel{container-type:inline-size;container-name:pg;background:var(--bg);color:var(--tx)}
+.panel .inner2{padding:0 clamp(12px,3vw,24px) 26px}
+.panel .stickH{position:sticky;top:0;z-index:40;margin:0 calc(-1*clamp(12px,3vw,24px));
+  padding:0 clamp(12px,3vw,24px);background:color-mix(in srgb,var(--bg) 90%,transparent);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.panel .stickH .HH{background:transparent}
+
+.panel .band2{margin-top:16px}
+.panel .sectitle{display:flex;align-items:center;gap:9px;margin:22px 0 11px}
+.panel .sectitle h3{font-size:11px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+.panel .sectitle .ln{flex:1;height:1px;background:var(--ln)}
+
+/* resources — V3 */
+.panel .RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
+  border:1px solid var(--ln);border-radius:15px;overflow:hidden}
+@container pg (max-width:1000px){ .panel .RZ{grid-template-columns:repeat(2,1fr)} }
+/* The component's own ladder drops to one column at 520; this wrapper is more
+   specific and stopped at two, so on a phone the strip kept a ~500px floor and
+   pushed the whole page — header buttons included — off the side. */
+@container pg (max-width:520px){ .panel .RZ{grid-template-columns:1fr} }
+@container pg (max-width:430px){ .panel .RZ .trend{display:none} .panel .RZ .t4{padding:12px 12px 11px} }
+/* A grid item's min-width is auto, so a long figure can widen its own track. */
+.panel .RZ .t4{min-width:0}
+.panel .RZ .t4 .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* tunnels */
+.panel .sech2{display:flex;align-items:center;gap:11px;margin:22px 0 12px}
+.panel .sech2 h2{font-size:17px;font-weight:650;letter-spacing:-.028em}
+.panel .sech2 .cnt{font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:9px;background:var(--sunk);color:var(--mu)}
+.panel .sech2 .sp{flex:1}
+.panel .sech2 .sb{font:inherit;font-size:12.5px;font-weight:590;padding:9px 15px;border-radius:11px;cursor:pointer;
+  background:var(--s1);border:1px solid var(--ln);color:var(--tx)}
+.panel .sech2 .sb.primary{background:var(--tx);color:var(--bg);border-color:var(--tx)}
+.panel .grid3{display:grid;grid-template-columns:repeat(auto-fill,minmax(322px,1fr));gap:14px}
+@container pg (max-width:700px){ .panel .grid3{grid-template-columns:1fr} }
+@container pg (max-width:520px){
+  .panel .sech2{flex-wrap:wrap}
+  .panel .sech2 .sp{display:none}
+  .panel .sech2 h2{flex:1}
+  .panel .sech2 .sb{flex:1;text-align:center}
+}
+/* the card is already fluid; only its action row needs help when very narrow */
+@container pg (max-width:360px){ .panel .c7 .foot .upt{display:none} }
+
+/* warning */
+.panel .warnbar{margin-top:14px}
+@container pg (max-width:520px){
+  .panel .warnbar{flex-wrap:wrap}
+  .panel .warnbar .act{width:100%;margin-top:4px}
+}
+
+/* ---- boot ----------------------------------------------------------------
+   Held until the first read of the host and the tunnels resolves. */
+#boot{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+  background:var(--bg);transition:opacity .55s ease,visibility .55s ease}
+#boot.gone{opacity:0;visibility:hidden;pointer-events:none}
+.boot-stage{display:flex;flex-direction:column;align-items:center;width:min(260px,78vw)}
+.boot-mark{position:relative;width:66px;height:66px;display:grid;place-items:center;margin-bottom:16px}
+.boot-mark .ring{position:absolute;inset:0;transform:rotate(-90deg)}
+.boot-mark .trk{stroke:var(--ln2);stroke-width:2;fill:none}
+.boot-mark .arc{stroke:var(--tx2);stroke-width:2;stroke-linecap:round;fill:none;
+  stroke-dasharray:194;stroke-dashoffset:194;transition:stroke-dashoffset .4s var(--spring)}
+.boot-in{width:46px;height:46px;border-radius:15px;background:var(--tx);color:var(--bg);
+  display:grid;place-items:center}
+.boot-in svg{width:23px;height:23px}
+.boot-title{font-size:20px;font-weight:660;letter-spacing:-.03em}
+.boot-sub{font-size:12.5px;color:var(--dim);margin-top:3px;min-height:18px}
+.boot-reads{width:100%;margin-top:20px;display:flex;flex-direction:column;gap:7px}
+.boot-read{display:flex;align-items:center;gap:9px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;color:var(--faint)}
+.boot-read .ln{flex:1;height:2px;border-radius:1px;background:var(--sunk);overflow:hidden}
+.boot-read .ln i{display:block;height:100%;width:0;background:var(--ln3);transition:width .3s var(--spring)}
+.boot-read.done{color:var(--mu)}
+.boot-read.done .ln i{width:100%;background:var(--tx2)}
+
+/* the theme button borrows the palette chip's shape */
+.HH .pal2{border:1px solid var(--ln);background:var(--s1);color:var(--mu);cursor:pointer}
+.HH .pal2:hover{background:var(--sunk);color:var(--tx)}
+
+/* says out loud that nothing here came from a server */
+.mock-flag{position:fixed;left:14px;bottom:14px;z-index:120;font-size:10px;font-weight:660;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--dim);background:var(--s1);
+  border:1px dashed var(--ln2);border-radius:9px;padding:5px 9px;pointer-events:none}
+
+/* The two rates get the strip treatment, side by side. */
+.panel .RZ.rates { margin-top: 9px; grid-template-columns: repeat(2, 1fr); }
+@container pg (max-width:520px){ .panel .RZ.rates{grid-template-columns:1fr} }
+
+/* Everything under them that is only text. */
+.panel .factline {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin-top: 10px; padding: 0 2px;
+  font-size: 11.5px; color: var(--dim);
+}
+.panel .factline b { font-weight: 620; color: var(--tx2); font-variant-numeric: tabular-nums; }
+.panel .factline .tt { display: inline-flex; align-items: center; gap: 9px; }
+.panel .factline .dstrip { display: block; overflow: visible; }
+.panel .factline .dstrip rect { fill: var(--ln3); transition: fill .25s ease; }
+.panel .factline .tt:hover .dstrip rect { fill: var(--tx2); }
+body[data-accent] .panel .factline .tt:hover .dstrip rect { fill: var(--ac); }
+.panel .factline .cap { color: var(--faint); }
+.panel .factline .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--faint); }
