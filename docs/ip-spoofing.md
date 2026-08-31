@@ -33,9 +33,9 @@ on-wire header with one you choose. Routing still uses the **real** peer — the
 server's bind address, the client's remote address — so the packet actually
 arrives; only the header says something else.
 
-Above the packet layer it is [KCP](performance-presets.md), the same reliable,
-encrypted, error-correcting transport `kcp`, `xdi` and `pck` use. (The exception
-is [relay mode](#relay-mode--spoof_mode-spoof_forward), which has no KCP under it.)
+Above the packet layer it is the [direct tunnel](l3-direct-tunnel.md): a TUN
+device on each host, whole IP packets between them, sealed in a Noise session
+with replay protection. The forged packets are what carries that.
 
 It is for a path that **blocks, throttles or counts by source address**.
 
@@ -80,6 +80,15 @@ What the forged packets are dressed as.
 | **`udp`** | plain datagrams | **the default and the recommendation** — passes nearly everywhere |
 | `icmp` | ping traffic | for a path that filters UDP specifically |
 | `tcp` | a TCP flow | the receiving side auto-manages an iptables rule to drop the kernel's RSTs |
+| `icmpv6` | an ICMPv6 echo inside an **IPv4** packet (protocol 58) | not real IPv6 — the outer packet is IPv4 with a forged IPv4 source. Many filters clamp down on ICMP and UDP and leave protocol 58 alone |
+| `proto58` | the same protocol number, **bare** | `icmpv6` with the echo header taken off. Take this where the path passes protocol 58 whatever is inside it; take `icmpv6` where it expects to see an ICMPv6 message |
+| `ipip` | IP-in-IP (protocol 4) | the router-to-router encapsulation, which some filters wave through |
+| `gre` | GRE (protocol 47), four bytes of header | the same idea, a different number |
+
+The last four carry **no port**, so a receiver on one of them cannot filter the
+flow in the kernel and leans on the encryption above. Set
+[`spoof_peer_src_ip`](#describing-the-other-end) on one of these, or every packet
+of that protocol reaching the host is handed to the cipher.
 
 **Both ends must be set the same**, or the tunnel stops carrying.
 
@@ -150,49 +159,38 @@ raw/UDP receive.
 
 > XDP runs before IP reassembly, so it sees fragments rather than reassembled
 > datagrams. The carrier sizes its packets under the tunnel MTU, so this only
-> matters for a rare oversize packet, which is dropped and recovered by KCP (or
-> the inner transport in relay mode). Lower `spoof_mtu` if you see it.
+> matters for a rare oversize packet, which is dropped and re-sent by whatever
+> inside the tunnel owns it. Lower `spoof_mtu` if you see it.
 
-### Relay mode — `spoof_mode`, `spoof_forward`
+### Relay mode — withdrawn
 
-`spoof_mode` selects the carrier's shape:
+`spoof_mode` and `spoof_forward` were a shape of the reverse spoof transport: a
+bare datagram relay to a local UDP socket, so that something bringing its own
+reliability — WireGuard, usually — could ride over the forged-source channel
+without KCP underneath.
 
-| Value | Shape |
-|---|---|
-| **`kcp`** (default) | a reliable, encrypted KCP tunnel over the forged-source channel — carries the forwarded ports, the standard behaviour |
-| `relay` | a **bare bidirectional datagram relay** (no KCP) between a local UDP socket and the forged-source channel — the spoof-tunnel shape, for carrying something that brings its own reliability |
-
-In **relay mode** the transport strips KCP and relays datagrams to and from a
-local UDP target, so a whole-device VPN (**WireGuard**) or another tunnel rides
-over it.
-
-- The inner transport (WireGuard, …) supplies its own encryption and loss
-  handling, so **no KCP sits underneath**.
-- **The forwarded ports and the mux settings are ignored** in this mode.
-- **Both ends must be in the same mode.**
-
-`spoof_forward` (default `127.0.0.1:51820`) is the local UDP target, and means
-different things per role:
-
-| Role | Meaning |
-|---|---|
-| **Client** (kharej) | where the tunnel *listens* — point the inner app's `endpoint` (e.g. WireGuard's) at exactly this address |
-| **Server** (Iran) | where the inner service (e.g. the real WireGuard) listens on this machine — datagrams out of the tunnel are handed to it there |
-
-> **Legacy keys.** `spoof_pipe = true` and `spoof_pipe_addr` from earlier
-> versions are still accepted: `spoof_pipe = true` means `spoof_mode = "relay"`,
-> and `spoof_pipe_addr` fills in `spoof_forward`. New configs are written with
-> the `spoof_mode`/`spoof_forward` keys.
-
----
+They went with it, and nothing was lost. A direct tunnel is a private network
+between the two machines: WireGuard, or anything else, is **routed over it**
+rather than piped through it, which is the same traffic with one fewer moving
+part and none of the "both ends must be in the same mode" that the relay needed.
 
 ## Fingerprint & evasion
 
-One screen of questions rather than a menu, because these are set together while
-working out what a path lets past, and none means much on its own.
+**The short answer is Stealth.** The wizard asks one question — *Turn Stealth
+on* — and the panel has one switch, and both set the whole group below at once:
+padding, TTL and DSCP variation, a moving source port, and the fake TLS record
+header where the profile carries one.
 
-**All are off by default and none is needed for a working tunnel.** Each costs
-something — bandwidth, CPU, or a shape a different filter notices instead.
+That is one answer rather than seven on purpose. Two of these settings change
+what goes on the wire and so **must match at the other end**, and five do not.
+Set individually, sooner or later a wire-changing one is set on a single end,
+and the result is a tunnel that connects and carries nothing — the failure this
+carrier is worst at explaining. As a group, "the same answer on both ends" is
+one answer.
+
+The individual keys are below, for a setup being tuned against a particular
+path. **All are off by default and none is needed for a working tunnel.** Each
+costs something — bandwidth, CPU, or a shape a different filter notices instead.
 **Change one at a time and test.**
 
 ### Describing the other end
@@ -302,12 +300,15 @@ jitter، DSCP، shuffle پورت، رابط شبکه، بافر سوکت و MTU.
 انتخاب می‌شود — همان چیزی که از محدودیت‌های مبتنی بر آدرس عبور می‌کند. فقط
 آدرسی را بگذار که **تستر** گفته می‌رسد.
 
-**حالت relay (`spoof_mode = "relay"`):** به‌جای تونل KCP روی پورت‌های forward،
-یک رله‌ی خام دیتاگرام (بدون KCP) به یک مقصد UDP محلی (`spoof_forward`) اجرا
-می‌کند تا چیزی که reliability خودش را دارد — مثل یک وایرگارد کامل یا یک تونل
-دیگر — را حمل کند. پورت‌های forward نادیده گرفته می‌شوند و دو طرف باید در یک
-حالت باشند. کلیدهای قدیمی `spoof_pipe`/`spoof_pipe_addr` هنوز به‌عنوان همین حالت
-پذیرفته می‌شوند.
+**Stealth:** ویزارد یک سؤال می‌پرسد — *Turn Stealth on* — و همان یک جواب کل
+گروهِ ضدِ DPI را روشن می‌کند: padding، تغییر TTL و DSCP، جابه‌جایی پورت مبدأ، و
+هدر جعلی TLS آنجا که پروفایل TCP باشد. یک سؤال است نه هفت‌تا، چون دوتای این‌ها
+سیم را عوض می‌کنند و **باید در دو طرف یکی باشند**؛ اگر تک‌تک تنظیم شوند، دیر یا
+زود یکی‌شان فقط روی یک سمت روشن می‌ماند و تونل وصل می‌شود ولی چیزی رد نمی‌کند.
+
+**حالت relay حذف شد.** آن یک شکل از ترنسپورت spoofِ reverse بود و با خودش رفت.
+چیزی از دست نرفت: تونل direct یک شبکه‌ی خصوصی بین دو ماشین است، پس وایرگارد
+**روی آن route می‌شود** نه اینکه از داخلش pipe شود.
 
 **بخش Fingerprint & evasion** همه‌اش پیش‌فرض خاموش است و هیچ‌کدام برای کارکردن
 تونل لازم نیست. مهم‌ترین‌هایشان: `spoof_sockbuf` (اگر سرعت خیلی کمتر از لینک

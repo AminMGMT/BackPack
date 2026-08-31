@@ -47,8 +47,8 @@ nothing — which looks exactly like every other fault there is.
 
 ## Part 1 — build it unforged
 
-On both machines: `sudo backpack` → Setup Iran / Setup Kharej → Reverse →
-**`Experimental` → `IP Spoofing`**.
+On both machines: `sudo backpack` → Setup Iran / Setup Kharej → **Direct**, and
+choose **Spoof** when it asks how the packets should travel.
 
 After the usual questions the wizard runs a **4-step** spoof screen.
 
@@ -103,17 +103,24 @@ If the machine has **more than one** network interface you are also asked which
 one the raw packets leave by. Empty lets the kernel route, which is right unless
 you know it picks wrong.
 
-### Step 4 — Relay mode, instead of a KCP tunnel over forwarded ports
+### Step 4 — Stealth
 
 ```
-Enable relay mode [y/N]
+Turn Stealth on [y/N]
 ```
 
-`N` unless you are already running WireGuard (or another tunnel) and want it
-carried whole. Relay mode strips KCP and runs a bare datagram relay to a local
-UDP target instead of the forwarded ports — the inner transport brings its own
-reliability and encryption, so there is no KCP underneath, and **the forwarded
-ports are ignored**. Both ends have to be in the same mode.
+`N` for a first run. Get the tunnel carrying traffic before you change what its
+packets look like, or you will not know which of the two you are debugging.
+
+Stealth is one answer standing for the whole anti-fingerprinting group: random
+padding on every packet, a varying TTL and DSCP byte, a moving source port, and
+— on a `tcp` profile — a TLS record header in front, so a middlebox reads the
+flow as HTTPS. It is one question rather than seven because two of those change
+what goes on the wire and **must match at the other end**; as a group, that is
+one answer to keep in step instead of several.
+
+Come back to it in Part 3 if the unforged tunnel works and the forged one does
+not. **Answer it the same way on both servers.**
 
 The wizard then prints a summary of what this end will do, and what must be true
 on the other server. Read it — everything in a spoof setup is paired, and the
@@ -205,9 +212,10 @@ but carries nothing, the forged source is being dropped — go back to the teste
 ## The rest of the settings
 
 Everything else — per-direction profiles, the egress interface, TTL jitter, DSCP
-randomisation, port shuffling, padding, fake TLS, fragmenting, socket buffers,
-relay mode — lives under **Edit → IP Spoofing** and is documented field
-by field in **[docs/ip-spoofing.md](../docs/ip-spoofing.md)**.
+randomisation, port shuffling, padding, fake TLS, fragmenting, socket buffers —
+lives under **Manage → the tunnel → Edit → IP Spoofing**, which also carries a
+one-line **Stealth** switch for the group, and is documented field by field in
+**[docs/ip-spoofing.md](../docs/ip-spoofing.md)**.
 
 All of them are **off by default and none is needed for a working tunnel**. Each
 costs something: bandwidth, CPU, or a shape that a different filter notices
@@ -254,10 +262,11 @@ instead. Change one at a time and test.
 همان بگذار.
 
 **نکات ویزارد:** پروفایل پکت را روی **UDP** بگذار و دو طرف باید یکی باشد. روی
-سرور **ایران** حتماً باید «آی‌پی واقعی سرور خارج» را وارد کنی، وگرنه سرور جایی
-برای فرستادن جواب ندارد و هیچ تنظیمی ذخیره نمی‌شود. حالت **relay** را
-`N` بگذار مگر بخواهی کل وایرگارد (یا تونلی دیگر) را حمل کنی (در آن حالت KCP و
-پورت‌های forward نادیده گرفته می‌شوند).
+سمتی که **گوش می‌دهد** حتماً باید «آی‌پی واقعی طرف مقابل» را وارد کنی، وگرنه آن
+سمت جایی برای فرستادن جواب ندارد و هیچ تنظیمی ذخیره نمی‌شود. سؤال **Stealth** را
+در اجرای اول `N` بگذار — اول تونل را به کار بینداز، بعد ظاهر بسته‌ها را عوض کن؛
+وگرنه نمی‌فهمی کدامشان را داری دیباگ می‌کنی. اگر روشنش کردی، **در هر دو سرور
+یکسان** جواب بده.
 
 بقیهٔ تنظیمات (TTL jitter، DSCP، shuffle پورت، padding، fake TLS، تکه‌تکه کردن و…)
 همه پیش‌فرض خاموش‌اند و برای کار کردن تونل لازم نیستند — توضیح تک‌تکشان در

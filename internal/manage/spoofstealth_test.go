@@ -2,6 +2,7 @@ package manage
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/backpack/backpack/config"
@@ -118,29 +119,15 @@ func TestTheCarrierSummarySaysTheProfileAndStealth(t *testing.T) {
 
 	got := spoofCarrierSummary(sc)
 	for _, want := range []string{"icmp", "2 forged sources", "Stealth on"} {
-		if !contains(got, want) {
+		if !strings.Contains(got, want) {
 			t.Errorf("summary %q does not say %q", got, want)
 		}
 	}
 
 	plain := spoofCarrierSummary(config.SpoofConfig{})
 	for _, want := range []string{"udp", "unforged", "Stealth off"} {
-		if !contains(plain, want) {
+		if !strings.Contains(plain, want) {
 			t.Errorf("an unset carrier summarised as %q, which does not say %q", plain, want)
 		}
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(needle) == 0 || len(haystack) >= len(needle) &&
-		(haystack == needle || indexOf(haystack, needle) >= 0)
-}
-
-func indexOf(h, n string) int {
-	for i := 0; i+len(n) <= len(h); i++ {
-		if h[i:i+len(n)] == n {
-			return i
-		}
-	}
-	return -1
 }

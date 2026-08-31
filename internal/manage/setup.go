@@ -653,18 +653,18 @@ func spoofSummary(sc config.SpoofConfig, here, there string) {
 
 // askSpoofProfile prompts for one packet profile and returns its config value.
 func askSpoofProfile(title string) string {
-	switch tui.ChooseOpt(title, []tui.Option{
-		{Title: "UDP", Desc: "most compatible — plain datagrams (recommended)"},
-		{Title: "ICMP", Desc: "looks like ping traffic — good where UDP is filtered"},
-		{Title: "TCP", Desc: "looks like a TCP flow — auto-manages an iptables RST rule"},
-	}) {
-	case 1:
-		return "icmp"
-	case 2:
-		return "tcp"
-	default:
-		return "udp"
+	// Built from the same list the panel offers, in the same order, so the two
+	// screens cannot drift apart — and so a profile added to the carrier shows
+	// up in both without either being edited.
+	opts := make([]tui.Option, 0, len(SpoofProfiles()))
+	for _, p := range SpoofProfiles() {
+		opts = append(opts, tui.Option{Title: p.Label, Desc: p.Desc})
 	}
+	chosen := tui.ChooseOpt(title, opts)
+	if chosen < 0 || chosen >= len(spoofProfiles) {
+		return "udp" // the recommendation, and what going back should not change
+	}
+	return spoofProfiles[chosen]
 }
 
 // askProxyProtocol offers to forward the real client IP to the service behind

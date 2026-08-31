@@ -59,6 +59,19 @@ type NewDirectTunnel struct {
 	// Preset is "balance", "turbo" or "aggressive". Empty takes turbo.
 	Preset string `json:"preset"`
 
+	// Spoof is the forged-source carrier's drawer, nil unless it was opened.
+	// It is the same shape the CLI's IP Spoofing screen fills, and it is only
+	// read when the carrier is spoof — a drawer sent for a udp tunnel would put
+	// keys in the config that nothing reads.
+	Spoof *SpoofTune `json:"spoof"`
+
+	// Stealth turns on the obfuscation group in one answer, exactly as the
+	// wizard's Stealth question does: padding, header cosmetics, and the fake
+	// TLS record header where the profile carries one. It is applied after the
+	// drawer, so a form can send both and the group wins — which is the answer
+	// the operator gave last.
+	Stealth bool `json:"stealth"`
+
 	// SpoofPeerIP is required on the kharej side of the spoof carrier, which
 	// cannot learn where its peer is: every packet it receives carries a forged
 	// source.
@@ -244,14 +257,29 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 	// The forged-source carrier cannot learn where its peer really is, because
 	// every packet it receives carries a forged source. Catching it here beats
 	// a tunnel that comes up and sends its replies nowhere.
-	if carrier == "spoof" && side == sideKharej {
-		ip := strings.TrimSpace(n.SpoofPeerIP)
-		if net.ParseIP(ip) == nil {
+	if carrier == "spoof" {
+		if n.Spoof != nil {
+			if err := n.Spoof.apply(&spec.Spoof); err != nil {
+				return l3Spec{}, err
+			}
+		}
+		// The dedicated field wins over the drawer's copy of it, because it is
+		// the one the form asks for on its own and the one an operator filling
+		// only the basics will have typed into.
+		if ip := strings.TrimSpace(n.SpoofPeerIP); ip != "" {
+			if net.ParseIP(ip) == nil {
+				return l3Spec{}, fmt.Errorf("%q is not an IP address", ip)
+			}
+			spec.Spoof.SpoofPeerIP = ip
+		}
+		if n.Stealth {
+			applySpoofStealth(&spec.Spoof)
+		}
+		if side == sideKharej && net.ParseIP(spec.Spoof.SpoofPeerIP) == nil {
 			return l3Spec{}, fmt.Errorf(
 				"the spoof carrier needs the Iran server's real IP on this side, " +
 					"because the peer forges the source of every packet it sends")
 		}
-		spec.Spoof = config.SpoofConfig{SpoofPeerIP: ip}
 	}
 	return spec, nil
 }
@@ -296,6 +324,13 @@ type DirectSettings struct {
 	// HoldsPorts says whether this side has a port list at all. The kharej side
 	// does not: every target arrives on the stream that asks for it.
 	HoldsPorts bool `json:"holdsPorts"`
+
+	// Spoof opens the carrier's drawer on what this tunnel actually runs, and
+	// Stealth is the one-answer group over it. Both are only meaningful when
+	// the carrier is spoof; on any other carrier they are zero and the panel
+	// does not draw the drawer.
+	Spoof   SpoofTune `json:"spoof"`
+	Stealth bool      `json:"stealth"`
 }
 
 // DirectEdit is what the panel may change.
@@ -307,6 +342,12 @@ type DirectEdit struct {
 	AutoMTU        *bool   `json:"autoMtu"`
 	MaxConnections *int    `json:"maxConnections"`
 	BandwidthMbps  *int    `json:"bandwidthMbps"`
+
+	// Spoof replaces the carrier's settings wholesale, and Stealth turns the
+	// obfuscation group on or off. Both are nil unless the form sent them, on
+	// the same terms as everything else here.
+	Spoof   *SpoofTune `json:"spoof"`
+	Stealth *bool      `json:"stealth"`
 }
 
 // DirectSettingsOf reads one direct tunnel's editable settings.
@@ -350,6 +391,9 @@ func directSettingsFrom(name string, l config.L3Config) DirectSettings {
 		// The kharej side has no port list at all: every target arrives on the
 		// stream that asks for it, so what is forwarded is set on Iran.
 		HoldsPorts: !strings.EqualFold(strings.TrimSpace(l.Mode), "listen"),
+
+		Spoof:   spoofOf(l.SpoofConfig),
+		Stealth: spoofStealthOn(l.SpoofConfig),
 	}
 }
 
@@ -420,6 +464,32 @@ func applyDirectEdit(l config.L3Config, e DirectEdit) (config.L3Config, error) {
 	}
 	if e.BandwidthMbps != nil {
 		l.BandwidthMbps = *e.BandwidthMbps
+	}
+	// The carrier's drawer, then the group over it — in that order, so a form
+	// that sends both gets the group's answer rather than whichever field the
+	// drawer happened to carry. It is the answer the operator gave last, and
+	// the one the screen was showing them.
+	//
+	// Both are refused on a carrier that has no forged source to configure,
+	// rather than written and ignored: a config holding spoof keys for a udp
+	// tunnel reads as a tunnel doing something it is not.
+	if e.Spoof != nil || e.Stealth != nil {
+		if !strings.EqualFold(strings.TrimSpace(l.Carrier), "spoof") {
+			return l, fmt.Errorf("this tunnel's carrier is %s, which has no forged source to configure",
+				orDefault(l.Carrier, "udp"))
+		}
+	}
+	if e.Spoof != nil {
+		if err := e.Spoof.apply(&l.SpoofConfig); err != nil {
+			return l, err
+		}
+	}
+	if e.Stealth != nil {
+		if *e.Stealth {
+			applySpoofStealth(&l.SpoofConfig)
+		} else {
+			clearSpoofStealth(&l.SpoofConfig)
+		}
 	}
 	return l, nil
 }

@@ -350,8 +350,8 @@ func (c *spoofConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 		shim = buildICMPEcho(c.sendICMPType, c.port, uint16(c.icmpSeq.Add(1)), body)
 	case c.sendProfile == SpoofProfileTCP:
 		shim = buildTCPShimPorts(srcPort, c.port, nextTCPSeq(&c.tcpSeq, len(body)), src, c.realPeer, body)
-	case c.sendProfile == SpoofProfileIPIP:
-		shim = body // proto 4: the payload IS the IP body, no L4 header
+	case c.sendProfile == SpoofProfileIPIP, c.sendProfile == SpoofProfileProto58:
+		shim = body // proto 4 / 58: the payload IS the IP body, no L4 header
 	case c.sendProfile == SpoofProfileGRE:
 		shim = buildGREShim(body)
 	default: // udp
@@ -430,7 +430,7 @@ func (c *spoofConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			switch {
 			case c.recvProfile.isICMPFamily():
 				inner, ok = parseICMPEcho(c.recvICMPType, c.port, l4)
-			case c.recvProfile == SpoofProfileIPIP:
+			case c.recvProfile == SpoofProfileIPIP, c.recvProfile == SpoofProfileProto58:
 				inner, ok = l4, true
 			case c.recvProfile == SpoofProfileGRE:
 				inner, ok = stripGREShim(l4)
@@ -494,8 +494,8 @@ func (c *spoofConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		switch {
 		case c.recvProfile.isICMPFamily():
 			inner, ok = parseICMPEcho(c.recvICMPType, c.port, payload)
-		case c.recvProfile == SpoofProfileIPIP:
-			inner, ok = payload, true // proto 4: the whole IP body is ours
+		case c.recvProfile == SpoofProfileIPIP, c.recvProfile == SpoofProfileProto58:
+			inner, ok = payload, true // proto 4 / 58: the whole IP body is ours
 		case c.recvProfile == SpoofProfileGRE:
 			inner, ok = stripGREShim(payload)
 		default: // tcp

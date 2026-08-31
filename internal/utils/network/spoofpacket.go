@@ -253,7 +253,7 @@ func profileL4Len(p SpoofProfile) int {
 	switch p {
 	case SpoofProfileTCP:
 		return 20
-	case SpoofProfileIPIP:
+	case SpoofProfileIPIP, SpoofProfileProto58:
 		return 0 // no L4 header: the payload is the IP body
 	case SpoofProfileGRE:
 		return greHeaderLen

@@ -175,7 +175,7 @@ func manageMenu() {
 			{Title: "Speed Test", Desc: "measure what a tunnel actually carries, end to end"},
 			{Title: "Game Latency Test", Desc: "estimate in-game ping to popular game servers through this exit"},
 			{Title: "Exit Health", Desc: "score & rank every server address, pin the healthiest (multi-exit failover)"},
-			{Title: "IP Spoofing Tester", Desc: "find which forged source IPs cross the firewall (for the spoof transport)"},
+			{Title: "IP Spoofing Tester", Desc: "find which forged source IPs cross the firewall (for a direct tunnel on the spoof carrier)"},
 			{Title: "Tunnel Metrics", Desc: "traffic, packet loss and error correction per tunnel"},
 			{Title: "Restart ALL", Desc: "restart every tunnel at once"},
 			{Title: "Auto Refresh", Desc: "restart all tunnels every N hours — " + refreshLabel()},

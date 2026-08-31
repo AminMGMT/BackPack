@@ -20,10 +20,16 @@ import (
 // wizard fills, so a tunnel built in the browser and a tunnel built over SSH
 // are the same tunnel.
 
-// spoofProfiles are the three packet profiles the carrier can wear. Both ends
-// must be on the same one; see askSpoofProfile for the descriptions the CLI
-// prints beside them.
-var spoofProfiles = []string{"udp", "icmp", "tcp"}
+// spoofProfiles are the packet profiles the carrier can wear, in the order they
+// are worth trying. Both ends must be on the same one; see askSpoofProfile for
+// the descriptions the CLI prints beside them.
+//
+// The first three are what nearly everybody wants: the shapes a filter is used
+// to seeing. The last four are protocol-level — the packet is not UDP, TCP or
+// ping at all — and exist for a path that clamps down on those three and leaves
+// an unusual protocol number alone. They carry no port, so a receiver on one of
+// them wants spoof_peer_src_ip set.
+var spoofProfiles = []string{"udp", "icmp", "tcp", "icmpv6", "proto58", "ipip", "gre"}
 
 // SpoofProfileOption is one packet profile for the panel's spoof menus.
 type SpoofProfileOption struct {
@@ -39,6 +45,10 @@ func SpoofProfiles() []SpoofProfileOption {
 		{Label: "UDP", Desc: "most compatible — plain datagrams (recommended)", Value: "udp"},
 		{Label: "ICMP", Desc: "looks like ping traffic — good where UDP is filtered", Value: "icmp"},
 		{Label: "TCP", Desc: "looks like a TCP flow — auto-manages an iptables RST rule", Value: "tcp"},
+		{Label: "ICMPv6", Desc: "an ICMPv6 echo inside an IPv4 packet (protocol 58), which many filters leave open", Value: "icmpv6"},
+		{Label: "Protocol 58", Desc: "the same protocol number, carried bare — no echo header at all", Value: "proto58"},
+		{Label: "IP-in-IP", Desc: "protocol 4, the router-to-router encapsulation — no port, so pin the peer's forged source", Value: "ipip"},
+		{Label: "GRE", Desc: "protocol 47, four bytes of header — no port, so pin the peer's forged source", Value: "gre"},
 	}
 }
 
@@ -229,7 +239,7 @@ func spoofProfile(what, v string) (string, error) {
 			return v, nil
 		}
 	}
-	return "", fmt.Errorf("the %s must be udp, icmp or tcp", what)
+	return "", fmt.Errorf("the %s must be one of %s", what, strings.Join(spoofProfiles, ", "))
 }
 
 // parseIPv4List splits a comma-separated list of IPv4 addresses. The carrier

@@ -60,6 +60,19 @@ const (
 	// receiver leans on spoof_peer_src_ip and the encryption above; pin the
 	// former for a clean feed.
 	SpoofProfileIPIP SpoofProfile = "ipip"
+	// SpoofProfileProto58 carries the payload directly as the body of an IPv4
+	// packet whose protocol byte is 58, with no L4 header at all. It is the
+	// reference spoof-tunnel's "proto58", and it is the icmpv6 profile with the
+	// echo header taken off: the same protocol number that filters tend to leave
+	// open, without the eight bytes that make it look like a ping.
+	//
+	// Which to reach for is a question about the filter, not about efficiency.
+	// A path that passes protocol 58 whatever is inside it takes this; one that
+	// looks at the payload and expects an ICMPv6 message takes icmpv6. Like ipip
+	// and gre it carries no port, so a receiver leans on spoof_peer_src_ip and
+	// the encryption above — and two tunnels sharing this host on protocol 58,
+	// including an icmpv6 one, are told apart by exactly that.
+	SpoofProfileProto58 SpoofProfile = "proto58"
 	// SpoofProfileGRE carries the payload after a minimal 4-byte GRE header
 	// (protocol 47), the generic routing encapsulation firewalls see between
 	// routers. Like ipip it has no port to demultiplex on; pin spoof_peer_src_ip.
@@ -79,6 +92,8 @@ func ParseSpoofProfile(s string) (SpoofProfile, error) {
 		return SpoofProfileICMPv6, nil
 	case SpoofProfileIPIP:
 		return SpoofProfileIPIP, nil
+	case SpoofProfileProto58:
+		return SpoofProfileProto58, nil
 	case SpoofProfileGRE:
 		return SpoofProfileGRE, nil
 	default:
@@ -113,7 +128,7 @@ func (p SpoofProfile) ipProtocol() int {
 		return 6 // IPPROTO_TCP
 	case SpoofProfileICMP:
 		return 1 // IPPROTO_ICMP
-	case SpoofProfileICMPv6:
+	case SpoofProfileICMPv6, SpoofProfileProto58:
 		return 58 // IPPROTO_ICMPV6, carried inside an IPv4 packet
 	case SpoofProfileIPIP:
 		return 4 // IPPROTO_IPIP
@@ -129,7 +144,7 @@ func (p SpoofProfile) ipProtocol() int {
 // header — so their receiver accepts every packet of the protocol and leans on
 // the source-IP pin and the encryption above.
 func (p SpoofProfile) hasPortDemux() bool {
-	return p != SpoofProfileIPIP && p != SpoofProfileGRE
+	return p != SpoofProfileIPIP && p != SpoofProfileGRE && p != SpoofProfileProto58
 }
 
 // isICMPFamily reports whether a profile carries its payload in an echo message
