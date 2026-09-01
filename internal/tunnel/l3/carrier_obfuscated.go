@@ -34,10 +34,24 @@ type obfuscatedCarrier struct {
 	net.PacketConn
 	overhead int
 	name     string
+	// note is what the carrier wants said about itself at startup — currently
+	// only whether the XDP receive fast path attached or fell back. It is
+	// carried here because the carrier's own type is hidden behind
+	// net.PacketConn once it is wrapped, so the method would not be promoted.
+	note string
 }
 
 func (c *obfuscatedCarrier) Overhead() int       { return c.overhead }
 func (c *obfuscatedCarrier) CarrierName() string { return c.name }
+
+// Diag returns the startup note, or "" when there is nothing to say.
+//
+// It exists because the XDP fast path declines silently by design: a kernel too
+// old, a driver without XDP, or a verifier rejection falls back to the ordinary
+// receive rather than failing, and an operator who turned it on has no other
+// way to learn which happened. Computing that and dropping it — which is what
+// happened while nothing called this — is the same as not computing it.
+func (c *obfuscatedCarrier) Diag() string { return c.note }
 
 // openPck builds the packet-level TCP carrier.
 func openPck(cfg Config) (DatagramCarrier, net.Addr, error) {
@@ -126,6 +140,7 @@ func openSpoof(cfg Config) (DatagramCarrier, net.Addr, error) {
 		PacketConn: conn,
 		overhead:   overhead,
 		name:       "spoof",
+		note:       network.SpoofDiag(conn),
 	}, &net.IPAddr{IP: realPeer}, nil
 }
 

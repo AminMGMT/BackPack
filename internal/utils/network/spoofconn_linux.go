@@ -76,8 +76,8 @@ type spoofConn struct {
 	expectSrc    net.IP   // required forged source of inbound packets, nil = accept any
 	dpi          SpoofDPI // optional obfuscation applied on send and undone on receive
 
-	rst      *rstGuard // the tcp RST-suppression rule, set when recvProfile is tcp
-	icmpEcho bool      // holds the kernel Echo-Reply suppression, set when recvProfile is icmp
+	rst      *rstGuard      // the tcp RST-suppression rule, set when recvProfile is tcp
+	icmpEcho *icmpEchoGuard // the icmp Echo-Reply-suppression rule, set when recvProfile is icmp
 	rot      atomic.Uint32
 	tcpSeq   atomic.Uint32
 	icmpSeq  atomic.Uint32
@@ -274,12 +274,15 @@ func newSpoofConn(server bool, o spoofConnOpts) (net.PacketConn, error) {
 	}
 	if recvProfile == SpoofProfileICMP {
 		// Silence the kernel's automatic Echo Reply to the data-carrying Echo
-		// Requests this carrier receives, as the reference spoof-tunnel does. Only
-		// real IPv4 ICMP (proto 1) triggers a kernel reply; the icmpv6 profile
-		// rides proto 58 in IPv4, which the kernel does not answer, so it needs no
-		// suppression.
-		acquireICMPEchoSuppression()
-		c.icmpEcho = true
+		// Requests this carrier receives. Only real IPv4 ICMP (proto 1) triggers a
+		// kernel reply; the icmpv6 profile rides proto 58 in IPv4, which the kernel
+		// does not answer, so it needs no suppression.
+		//
+		// A targeted iptables rule rather than net.ipv4.icmp_echo_ignore_all: the
+		// global switch also silences ICMP arriving on the tunnel itself, and a
+		// layer-3 tunnel is a private network people ping across. See
+		// icmpguard_linux.go.
+		c.icmpEcho = installICMPEchoGuard(port)
 	}
 	return c, nil
 }
@@ -536,9 +539,8 @@ func (c *spoofConn) Close() error {
 	if c.rst != nil {
 		c.rst.remove()
 	}
-	if c.icmpEcho {
-		releaseICMPEchoSuppression()
-		c.icmpEcho = false
+	if c.icmpEcho != nil {
+		c.icmpEcho.remove()
 	}
 	c.send.Close()
 	if c.xdp != nil {

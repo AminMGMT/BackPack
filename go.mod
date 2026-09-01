@@ -7,6 +7,7 @@ require (
 	github.com/cilium/ebpf v0.22.0
 	github.com/flynn/noise v1.1.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/klauspost/reedsolomon v1.12.0
 	github.com/quic-go/quic-go v0.61.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/shirou/gopsutil/v4 v4.24.8
@@ -25,7 +26,6 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.6 // indirect
-	github.com/klauspost/reedsolomon v1.12.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect

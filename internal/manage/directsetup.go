@@ -212,7 +212,21 @@ func setupL3(side directSide) {
 			tui.PressEnter()
 			return
 		}
+		// The one piece of host setup the tunnel cannot do for itself: a strict
+		// reverse-path filter drops every forged-source packet before the tunnel
+		// sees it. The peer's real address tells us which interface receives, so
+		// the offer names the right one.
+		peerReal := cfg.Spoof.SpoofPeerIP
+		if side == sideIran {
+			if host, _, err := net.SplitHostPort(cfg.Addr); err == nil {
+				peerReal = host
+			}
+		}
+		OfferRelaxRPFilter(cfg.Spoof.SpoofInterface, peerReal)
 	}
+
+	askL3FEC(&cfg, side)
+	askL3Paths(&cfg, carrier, side)
 
 	cfg.MTU, cfg.Iface = defaultL3MTU, freeL3Iface()
 	chooseL3Preset().apply(&cfg)
@@ -338,6 +352,8 @@ func askL3Advanced(cfg *l3Spec, side directSide) {
 	tui.Info("message that would otherwise have told both ends to send less.")
 	tui.Info("Leave this at 0 unless a path measurement gave you a number.")
 	cfg.MSSClamp = tui.PromptInt("TCP segment cap (0 = from the MTU, -1 = off)", cfg.MSSClamp)
+
+	askL3FECPair(cfg)
 
 	// Only the forwarded ports can be capped: routed traffic goes through the
 	// interface and never passes the forwarder, so there is nothing to count.
@@ -554,4 +570,114 @@ func writeAndStart(name, body string, side directSide, token string) {
 	}
 
 	tui.PressEnter()
+}
+
+// defaultL3FEC is the scheme the one-question answer picks.
+//
+// It comes from RecommendFEC rather than being written again here: that
+// function already decides how much parity a given loss deserves, it is tested,
+// and the Link Test uses it to retune a tunnel later. An unmeasured path is its
+// "not measurable" tier, which is the case the wizard is in — nothing has been
+// probed yet. Two places choosing this independently is how they come to
+// disagree.
+//
+// Measured, on a link dropping 20%: an application saw 3.5% loss with this on
+// and 39% with it off, for about a third more traffic.
+func defaultL3FEC() FECPlan { return RecommendFEC(PathQuality{}) }
+
+// askL3FEC offers forward error correction as one question about the path,
+// rather than two numbers about Reed-Solomon.
+//
+// It is in the main flow rather than behind Fine Tune because it is the answer
+// to a symptom people arrive with — a route that drops packets, a game that
+// stutters — and because it is paired: the two ends must be set the same, and a
+// setting buried in an optional screen is one that gets set on one machine.
+func askL3FEC(cfg *l3Spec, side directSide) {
+	there := "kharej"
+	if side == sideKharej {
+		there = "Iran"
+	}
+
+	fmt.Println()
+	tui.Info("Does this route drop packets? A congested international path or a")
+	tui.Info("lossy last mile shows up as a game that stutters, calls that break")
+	tui.Info("up, or transfers that crawl while the link looks idle.")
+	fmt.Println()
+	tui.Info("Error correction sends a few spare packets with every group, so the")
+	tui.Info("far end rebuilds what the path lost instead of waiting for it again.")
+	tui.Warn("It costs about a third more traffic. On a clean route that is pure")
+	tui.Warn("waste — say no unless you have a reason.")
+	tui.Warn("The " + there + " end must answer this the same way.")
+	fmt.Println()
+	if !tui.Confirm("Turn on error correction", false) {
+		return
+	}
+	plan := defaultL3FEC()
+	cfg.FECData, cfg.FECParity = plan.Data, plan.Parity
+	tui.Success(fmt.Sprintf("Error correction on: %d spare packets per %d.", cfg.FECParity, cfg.FECData))
+}
+
+// askL3FECPair is the exact-numbers version for the advanced screen, for a path
+// somebody has measured. Zero for either turns it off.
+func askL3FECPair(cfg *l3Spec) {
+	fmt.Println()
+	tui.Info("Error correction, as an exact pair: for every DATA packets, PARITY")
+	tui.Info("spare ones, and any PARITY of the group may be lost without loss.")
+	tui.Info("0 for either turns it off. Both ends must use the same pair.")
+	cfg.FECData = tui.PromptInt("Data packets per group", cfg.FECData)
+	cfg.FECParity = tui.PromptInt("Spare packets per group", cfg.FECParity)
+	if cfg.FECData <= 0 || cfg.FECParity <= 0 {
+		cfg.FECData, cfg.FECParity = 0, 0
+		tui.Info("Error correction off.")
+		return
+	}
+	if cfg.FECParity >= cfg.FECData {
+		tui.Error("More spare packets than payload costs more than the loss it repairs.")
+		tui.Warn("Falling back to the recommended pair.")
+		plan := defaultL3FEC()
+		cfg.FECData, cfg.FECParity = plan.Data, plan.Parity
+	}
+}
+
+// askL3Paths offers to spread the tunnel over several sockets, which is only
+// worth anything on the plain UDP carrier — the obfuscated ones already vary
+// their source per packet, so a shaper counting flows sees many either way.
+//
+// Like the other paired settings this is one question in the main flow rather
+// than a number behind Fine Tune: both ends must use the same count, and the
+// extra ports have to be open on the machine that listens.
+func askL3Paths(cfg *l3Spec, carrier string, side directSide) {
+	if carrier != "udp" {
+		return
+	}
+	there := "kharej"
+	if side == sideKharej {
+		there = "Iran"
+	}
+
+	fmt.Println()
+	tui.Info("Some providers give each connection its own speed limit. A tunnel on")
+	tui.Info("one socket is one connection to them, so it gets one limit however")
+	tui.Info("fast the link really is — the usual sign is a tunnel that sits at the")
+	tui.Info("same speed no matter what you tune.")
+	fmt.Println()
+	tui.Info("Spreading it over several sockets makes it several connections, and")
+	tui.Info("several limits. Measured against a link capped at 8 Mbit per")
+	tui.Info("connection: one socket carried 5.8 Mbit/s, four carried 23.6.")
+	tui.Warn("It uses one port per socket, counting up from the tunnel port, and")
+	tui.Warn("they must be open. The " + there + " end must use the same number.")
+	fmt.Println()
+	if !tui.Confirm("Spread this tunnel over several sockets", false) {
+		return
+	}
+	for {
+		n := tui.PromptInt("How many sockets", 4)
+		if n >= 2 && n <= 8 {
+			cfg.Paths = n
+			base := addrPort(cfg.Addr)
+			tui.Success(fmt.Sprintf("Using %d sockets. Open the ports from %s upward on the listening side.", n, base))
+			return
+		}
+		tui.Error("Choose between 2 and 8.")
+	}
 }

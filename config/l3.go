@@ -87,6 +87,31 @@ type L3Config struct {
 	// carrier default of 4 MiB.
 	SockBuf int `toml:"sockbuf"`
 
+	// FECData and FECParity add forward error correction to the carrier: for
+	// every FECData datagrams, FECParity extra ones are sent, and any FECParity
+	// of the group may be lost without losing anything. Both zero — the default
+	// — is no error correction.
+	//
+	// It is redundancy, not reliability: nothing is retransmitted and nothing
+	// waits for a timer, which is what makes it safe here where a reliable
+	// carrier is not (see the l3 package doc). It costs the parity's share of
+	// the bandwidth, so it earns its keep on a path that drops packets steadily
+	// and wastes it on one that does not.
+	//
+	// Both ends must set the same pair: the scheme is not negotiated, and a
+	// receiver expecting a different one cannot rebuild anything.
+	FECData   int `toml:"fec_data"`
+	FECParity int `toml:"fec_parity"`
+
+	// Paths spreads the udp carrier over this many sockets, on consecutive
+	// ports starting at the one in Addr. One (or zero) is a single socket.
+	//
+	// It is for a path that rate-limits per flow: one socket is one flow and
+	// gets one allowance however much headroom the link has. Both ends must set
+	// the same number, and the extra ports must be open. The obfuscated
+	// carriers do not take it — they already vary their source per packet.
+	Paths int `toml:"paths"`
+
 	// Preset is the name of the tuning profile the two keys below came from.
 	// It is a label: the engine reads the values, not this.
 	Preset string `toml:"preset"`

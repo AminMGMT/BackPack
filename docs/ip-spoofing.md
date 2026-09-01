@@ -63,6 +63,13 @@ table is the whole compatibility contract:
 | Forged source ↔ the peer's "expected forged source" | **yes**, if you pin it |
 | The other end's real IPv4 | required on the **server** |
 | TTL jitter, DSCP, port shuffle, interface, XDP interface, socket buffer, MTU | no — local only |
+| Error correction (`fec_data` / `fec_parity`) | **yes** — a receiver expecting a different scheme rebuilds nothing |
+
+The last row is a **carrier** setting, not a spoof one: it lives on the tunnel
+and works over every carrier. IP spoofing does not add a way to spread over
+several sockets (`paths`) — that carrier already varies its source per packet,
+so spreading it would add nothing. Both are documented in
+[the direct tunnel reference](l3-direct-tunnel.md#error-correction).
 
 ---
 
@@ -156,6 +163,10 @@ raw/UDP receive.
   falls back for those profiles.
 - Local only — it changes nothing on the wire, so the two ends need not agree,
   and each can use it or not.
+- **Whether it attached is now in the log.** On start the tunnel says either
+  `XDP receive fast path attached to eth0` or `XDP receive unavailable … <reason>`
+  — so `spoof_xdp_interface` is no longer a switch with no feedback. Check the
+  log to know which of the two you got before relying on it.
 
 > XDP runs before IP reassembly, so it sees fragments rather than reassembled
 > datagrams. The carrier sizes its packets under the tunnel MTU, so this only

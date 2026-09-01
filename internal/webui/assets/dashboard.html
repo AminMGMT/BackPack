@@ -1832,6 +1832,33 @@
         <input id="df-spoofpeer" autocomplete="off" spellcheck="false" data-i18n-ph placeholder="e.g. 1.2.3.4">
         <div class="hint" data-i18n>The spoof carrier forges the source of every packet, so this side has to be told where its replies go.</div>
       </div>
+      <!-- The forged-source carrier's own settings. Both ends answer these and
+           both must answer them the same way, which is why they sit in the main
+           form rather than behind an advanced drawer. -->
+      <div class="frow d-spoofboth hide">
+        <label for="df-spoofprofile" data-i18n>What the packets look like</label>
+        <select id="df-spoofprofile" class="sel"></select>
+        <div class="hint" data-i18n>Both ends must be on the same profile. UDP passes nearly everywhere; the others are for a path that filters it.</div>
+      </div>
+      <div class="frow d-spoofboth hide">
+        <label for="df-spoofsrc" data-i18n>Forged source IP(s)</label>
+        <input id="df-spoofsrc" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="203.0.113.10, 198.51.100.7">
+        <div class="hint" data-i18n>Stamped on outgoing packets. Several, comma separated, rotate one per session. Empty forges nothing — start there, then use the IP Spoofing Tester to find sources that actually pass.</div>
+      </div>
+      <div class="frow d-spoofboth hide">
+        <label class="chk"><input type="checkbox" id="df-stealth"><span data-i18n>Stealth — padding and header cosmetics</span></label>
+        <div class="hint" data-i18n>Changes what the packets look like from the outside, not whether they are encrypted. Costs some throughput, and the other end must be set the same way.</div>
+      </div>
+      <div class="frow d-udponly hide">
+        <label for="df-paths" data-i18n>Sockets to spread over</label>
+        <input id="df-paths" type="number" min="1" max="8" step="1" value="1">
+        <div class="hint" data-i18n>Where a provider limits each connection separately, one socket gets one limit. More sockets means more limits. Uses one port per socket counting up from the tunnel port, and the other end must use the same number.</div>
+      </div>
+      <div class="frow">
+        <label class="chk"><input type="checkbox" id="df-fec"><span data-i18n>Error correction for a lossy route</span></label>
+        <div class="hint" data-i18n>Sends spare packets so the far end rebuilds what the path lost. Costs about a third more traffic — leave it off on a clean route. The other end must be set the same way.</div>
+      </div>
       <div class="frow">
         <label for="df-preset" data-i18n>Performance</label>
         <select id="df-preset" class="sel"></select>
@@ -1966,6 +1993,32 @@
         <label for="edf-mtu" data-i18n>MTU</label>
         <input id="edf-mtu" inputmode="numeric" autocomplete="off">
         <div class="hint" data-i18n>Lower it if large packets stall. Leave automatic on unless you have measured the path yourself.</div>
+      </div>
+      <!-- The carrier's own settings, changeable after the fact. They are paired
+           with the other machine, so the hints say so where it matters. -->
+      <div class="frow edf-spoof hide">
+        <label for="edf-spoofprofile" data-i18n>What the packets look like</label>
+        <select id="edf-spoofprofile" class="sel"></select>
+        <div class="hint" data-i18n>Both ends must be on the same profile. UDP passes nearly everywhere; the others are for a path that filters it.</div>
+      </div>
+      <div class="frow edf-spoof hide">
+        <label for="edf-spoofsrc" data-i18n>Forged source IP(s)</label>
+        <input id="edf-spoofsrc" autocomplete="off" spellcheck="false" data-i18n-ph
+               placeholder="203.0.113.10, 198.51.100.7">
+        <div class="hint" data-i18n>Stamped on outgoing packets. Several, comma separated, rotate one per session. Use the IP Spoofing Tester to find sources that actually pass.</div>
+      </div>
+      <div class="frow edf-spoof hide">
+        <label class="chk"><input type="checkbox" id="edf-stealth"><span data-i18n>Stealth — padding and header cosmetics</span></label>
+        <div class="hint" data-i18n>Changes what the packets look like from the outside, not whether they are encrypted. Costs some throughput, and the other end must be set the same way.</div>
+      </div>
+      <div class="frow edf-udponly hide">
+        <label for="edf-paths" data-i18n>Sockets to spread over</label>
+        <input id="edf-paths" type="number" min="1" max="8" step="1" value="1">
+        <div class="hint" data-i18n>Where a provider limits each connection separately, one socket gets one limit. Changing this changes which ports must be open, and the other end must use the same number.</div>
+      </div>
+      <div class="frow">
+        <label class="chk"><input type="checkbox" id="edf-fec"><span data-i18n>Error correction for a lossy route</span></label>
+        <div class="hint" data-i18n>Sends spare packets so the far end rebuilds what the path lost. Costs about a third more traffic — leave it off on a clean route. The other end must be set the same way.</div>
       </div>
       <div class="frow">
         <label for="edf-maxconn" data-i18n>Maximum connections</label>
@@ -2154,6 +2207,26 @@ const FA={
   "Update":"به‌روزرسانی","Panel access":"دسترسی پنل","Port & password":"پورت و رمز عبور",
   "Security":"امنیت","Two-factor, devices, read-only token":"ورود دو مرحله‌ای، دستگاه‌ها، توکن فقط‌خواندنی",
   "Interface":"رابط کاربری","This panel, or the new one":"همین پنل، یا پنل جدید",
+  // the direct tunnel's forged-source carrier
+  "What the packets look like":"بسته‌ها چه شکلی دیده می‌شوند",
+  "Both ends must be on the same profile. UDP passes nearly everywhere; the others are for a path that filters it.":
+    "دو طرف باید روی یک پروفایل باشند. UDP تقریباً همه‌جا رد می‌شود؛ بقیه برای مسیری‌اند که UDP را فیلتر می‌کند.",
+  "Forged source IP(s)":"آی‌پی(های) مبدأ جعلی",
+  "Stamped on outgoing packets. Several, comma separated, rotate one per session. Empty forges nothing — start there, then use the IP Spoofing Tester to find sources that actually pass.":
+    "روی بسته‌های خروجی زده می‌شود. چندتا با کاما یعنی هر نشست یکی. خالی یعنی هیچ جعلی انجام نمی‌شود — از همان‌جا شروع کن، بعد با تستر آی‌پی‌هایی را پیدا کن که واقعاً رد می‌شوند.",
+  "Stealth — padding and header cosmetics":"استلث — بالشتک و آرایش هدر",
+  "Changes what the packets look like from the outside, not whether they are encrypted. Costs some throughput, and the other end must be set the same way.":
+    "ظاهر بسته‌ها از بیرون را عوض می‌کند، نه رمزنگاری‌شان را. کمی از سرعت کم می‌کند و طرف مقابل باید همین‌طور تنظیم شود.",
+  "Sockets to spread over":"چند سوکت پخش شود",
+  "Where a provider limits each connection separately, one socket gets one limit. More sockets means more limits. Uses one port per socket counting up from the tunnel port, and the other end must use the same number.":
+    "جایی که سرویس‌دهنده هر اتصال را جدا محدود می‌کند، یک سوکت یک سهم می‌گیرد. سوکت بیشتر یعنی سهم بیشتر. برای هر سوکت یک پورت از پورت تونل به بالا استفاده می‌شود و طرف مقابل باید همان عدد را بگذارد.",
+  "Error correction for a lossy route":"تصحیح خطا برای مسیر پُرافت",
+  "Stamped on outgoing packets. Several, comma separated, rotate one per session. Use the IP Spoofing Tester to find sources that actually pass.":
+    "روی بسته‌های خروجی زده می‌شود. چندتا با کاما یعنی هر نشست یکی. با تستر آی‌پی‌هایی را پیدا کن که واقعاً رد می‌شوند.",
+  "Where a provider limits each connection separately, one socket gets one limit. Changing this changes which ports must be open, and the other end must use the same number.":
+    "جایی که سرویس‌دهنده هر اتصال را جدا محدود می‌کند، یک سوکت یک سهم می‌گیرد. عوض کردن این، پورت‌هایی را که باید باز باشند عوض می‌کند و طرف مقابل باید همان عدد را بگذارد.",
+  "Sends spare packets so the far end rebuilds what the path lost. Costs about a third more traffic — leave it off on a clean route. The other end must be set the same way.":
+    "بسته‌های یدکی می‌فرستد تا طرف مقابل چیزی را که مسیر انداخته بازسازی کند. حدود یک‌سوم ترافیک بیشتر — روی مسیر تمیز خاموش بگذار. طرف مقابل باید همین‌طور تنظیم شود.",
   "Open the new panel instead — experimental, and still being built":
     "به جای این، پنل جدید باز شود — آزمایشی و هنوز در حال ساخت",
   "Staying on this panel.":"روی همین پنل می‌مانید.","Could not save.":"ذخیره نشد.",
@@ -3887,12 +3960,16 @@ async function pickDirectSide(side){
   document.querySelectorAll('#dform .d-iran').forEach(el=>el.classList.toggle('hide',side!=='iran'));
   document.querySelectorAll('#dform .d-kharej').forEach(el=>el.classList.toggle('hide',side!=='kharej'));
 
-  ['df-addr','df-name','df-port','df-ports','df-token','df-spoofpeer'].forEach(id=>{ $(id).value=''; });
+  ['df-addr','df-name','df-port','df-ports','df-token','df-spoofpeer','df-spoofsrc'].forEach(id=>{ $(id).value=''; });
+  $('df-paths').value='1';
+  $('df-fec').checked=false;
+  $('df-stealth').checked=false;
   $('df-udp').checked=false;
 
   try{
     const o=await getJSON('/api/direct/options');
     fillSel($('df-carrier'),o.carriers);
+    fillSel($('df-spoofprofile'),o.spoofProfiles||[]);
     fillSel($('df-preset'),o.presets);
     onDirectCarrier();
 
@@ -3932,6 +4009,15 @@ function onDirectCarrier(){
   const onKharej = document.querySelector('#dform .d-kharej:not(.hide)')!==null;
   const need = sel.value==='spoof' && onKharej;
   document.querySelectorAll('#dform .d-spoof').forEach(el=>el.classList.toggle('hide',!need));
+  // The carrier's own settings are answered on both ends — they are paired, and
+  // a pair set on one machine only is a tunnel that comes up and carries
+  // nothing.
+  const spoof = sel.value==='spoof';
+  document.querySelectorAll('#dform .d-spoofboth').forEach(el=>el.classList.toggle('hide',!spoof));
+  // Spreading over sockets is a plain-UDP arrangement: the obfuscated carriers
+  // already vary their source per packet, and the server refuses the setting on
+  // them rather than writing one that does nothing.
+  document.querySelectorAll('#dform .d-udponly').forEach(el=>el.classList.toggle('hide',sel.value!=='udp'));
 }
 
 // submitDirect posts the direct form.
@@ -3948,8 +4034,20 @@ async function submitDirect(){
     ports: $('df-ports').value.trim(),
     acceptUdp: $('df-udp').checked,
     preset: $('df-preset').value,
-    spoofPeerIp: $('df-spoofpeer').value.trim()
+    spoofPeerIp: $('df-spoofpeer').value.trim(),
+    paths: parseInt($('df-paths').value,10)||1,
+    fec: $('df-fec').checked,
+    stealth: $('df-stealth').checked
   };
+  // The carrier drawer only means anything on the carrier it belongs to; the
+  // server refuses spoof settings on a tunnel that has no forged source.
+  if($('df-carrier').value==='spoof'){
+    body.spoof={
+      profile: $('df-spoofprofile').value,
+      srcIPs:  $('df-spoofsrc').value.trim(),
+      peerIP:  $('df-spoofpeer').value.trim()
+    };
+  }
   const btn=$('addsave'); btn.disabled=true;
   try{
     const r=await fetch('/api/direct/create',
@@ -4207,12 +4305,24 @@ async function openDirectEdit(d){
   $('edf-bw').value = d.bandwidthMbps||'';
   onDirectAutoMTU();
 
+  // The carrier's own settings, shown only for the carrier that has them.
+  const isSpoof = (d.carrier||'')==='spoof';
+  document.querySelectorAll('#editdform .edf-spoof').forEach(el=>el.classList.toggle('hide',!isSpoof));
+  document.querySelectorAll('#editdform .edf-udponly').forEach(el=>el.classList.toggle('hide',(d.carrier||'')!=='udp'));
+  const sp = d.spoof||{};
+  $('edf-spoofsrc').value = sp.srcIPs||'';
+  $('edf-stealth').checked = !!d.stealth;
+  $('edf-paths').value = d.paths>1 ? d.paths : 1;
+  $('edf-fec').checked = !!d.fec;
+
   // The preset list comes from the same endpoint the create form uses, so the
   // two can never offer different presets.
   try{
     const o=await getJSON('/api/direct/options');
     fillSel($('edf-preset'),o.presets);
     if(d.preset) $('edf-preset').value=d.preset;
+    fillSel($('edf-spoofprofile'),o.spoofProfiles||[]);
+    if((d.spoof||{}).profile) $('edf-spoofprofile').value=d.spoof.profile;
   }catch(e){ /* leave whatever is in the picker; the rest of the form works */ }
 }
 
@@ -4299,6 +4409,24 @@ async function submitDirectEdit(){
   };
   const mc=num('edf-maxconn',d.maxConnections); if(mc!==undefined) direct.maxConnections=mc;
   const bw=num('edf-bw',d.bandwidthMbps);       if(bw!==undefined) direct.bandwidthMbps=bw;
+
+  // The carrier's own settings. The spoof drawer replaces the carrier
+  // wholesale, so it is only sent when something in it actually moved —
+  // otherwise opening the dialog and saving would rewrite settings nobody
+  // touched.
+  const sp=d.spoof||{};
+  if((d.carrier||'')==='spoof'){
+    const prof=$('edf-spoofprofile').value, src=$('edf-spoofsrc').value.trim();
+    if(prof!==(sp.profile||'') || src!==(sp.srcIPs||'')){
+      direct.spoof=Object.assign({},sp,{profile:prof,srcIPs:src});
+    }
+    if($('edf-stealth').checked!==!!d.stealth) direct.stealth=$('edf-stealth').checked;
+  }
+  if((d.carrier||'')==='udp'){
+    const p=parseInt($('edf-paths').value,10)||1;
+    if(p!==(d.paths||1)) direct.paths=p;
+  }
+  if($('edf-fec').checked!==!!d.fec) direct.fec=$('edf-fec').checked;
 
   if(Object.keys(direct).length===0){
     msg.className='msg'; msg.textContent=T('Nothing has been changed yet.');

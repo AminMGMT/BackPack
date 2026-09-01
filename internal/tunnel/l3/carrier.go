@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 )
 
 // Carriers.
@@ -136,13 +137,27 @@ func knownCarrier(name string) bool {
 // the peer to send to, or nil on the listening side of a carrier that learns
 // its peer from the packets that arrive.
 func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
+	carrier, peer, err := openBareCarrier(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Error correction wraps whichever carrier was opened, so the scheme is the
+	// same over udp, spoof, pck and xdi and the MTU calculation picks up its
+	// cost through Overhead(). Disabled, this hands the carrier straight back.
+	wrapped, err := newFECCarrier(carrier, cfg.FEC)
+	if err != nil {
+		carrier.Close()
+		return nil, nil, err
+	}
+	return wrapped, peer, nil
+}
+
+// openBareCarrier builds the carrier the config names, without the layers that
+// wrap it.
+func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Carrier)) {
 	case "", CarrierUDP:
-		if cfg.Mode == ModeDial {
-			return dialUDP(cfg.Addr, cfg.SockBuf)
-		}
-		carrier, err := listenUDP(cfg.Addr, cfg.SockBuf)
-		return carrier, nil, err
+		return openUDPPaths(cfg)
 	case CarrierPck:
 		return openPck(cfg)
 	case CarrierXdi:
@@ -155,5 +170,100 @@ func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 		return nil, nil, fmt.Errorf(
 			"l3: carrier %q is not available (have %q, %q, %q, %q)",
 			cfg.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof)
+	}
+}
+
+// openUDPPaths opens the plain UDP carrier — one socket, or several spread over
+// consecutive ports when the configuration asks for them. See multipath.go for
+// why several, and why only this carrier gets the option.
+func openUDPPaths(cfg Config) (DatagramCarrier, net.Addr, error) {
+	n := cfg.Multipath.Paths
+	if n < 1 {
+		n = 1
+	}
+	if cfg.Mode == ModeDial {
+		paths := make([]DatagramCarrier, 0, n)
+		var first net.Addr
+		for i := 0; i < n; i++ {
+			addr, err := pathAddr(cfg.Addr, i)
+			if err != nil {
+				closeAll(paths)
+				return nil, nil, err
+			}
+			c, peer, err := dialUDP(addr, cfg.SockBuf)
+			if err != nil {
+				closeAll(paths)
+				return nil, nil, err
+			}
+			// Each path sends to its own port; a connected sub-carrier keeps
+			// that itself, so nothing above has to route between them.
+			paths = append(paths, &pinnedCarrier{DatagramCarrier: c, peer: peer})
+			if i == 0 {
+				first = peer
+			}
+		}
+		return newMultipathCarrier(paths, first), first, nil
+	}
+
+	paths := make([]DatagramCarrier, 0, n)
+	for i := 0; i < n; i++ {
+		addr, err := pathAddr(cfg.Addr, i)
+		if err != nil {
+			closeAll(paths)
+			return nil, nil, err
+		}
+		c, err := listenUDP(addr, cfg.SockBuf)
+		if err != nil {
+			closeAll(paths)
+			return nil, nil, err
+		}
+		// The listening side learns each path's peer from what arrives on it.
+		paths = append(paths, &pinnedCarrier{DatagramCarrier: c})
+	}
+	return newMultipathCarrier(paths, nil), nil, nil
+}
+
+// pinnedCarrier remembers the address one path talks to, so the multipath layer
+// above can hand it a datagram without saying where it goes.
+//
+// The dialling side is given its peer up front. The listening side learns it
+// from the first datagram that arrives on that path and answers there, which is
+// also how it follows a peer whose address changes — per path, without the
+// tunnel above seeing an address move.
+type pinnedCarrier struct {
+	DatagramCarrier
+	mu   sync.Mutex
+	peer net.Addr
+}
+
+func (c *pinnedCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
+	c.mu.Lock()
+	dst := c.peer
+	c.mu.Unlock()
+	if dst == nil {
+		dst = addr
+	}
+	if dst == nil {
+		// Nothing has arrived on this path yet and nobody said where to send:
+		// dropping is right, and the other paths carry the tunnel meanwhile.
+		return len(p), nil
+	}
+	return c.DatagramCarrier.WriteTo(p, dst)
+}
+
+func (c *pinnedCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.DatagramCarrier.ReadFrom(p)
+	if err == nil && addr != nil {
+		c.mu.Lock()
+		c.peer = addr
+		c.mu.Unlock()
+	}
+	return n, addr, err
+}
+
+// closeAll shuts the paths opened so far, for the error paths above.
+func closeAll(paths []DatagramCarrier) {
+	for _, p := range paths {
+		p.Close()
 	}
 }

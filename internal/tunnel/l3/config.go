@@ -91,6 +91,17 @@ type Config struct {
 	// default.
 	SockBuf int
 
+	// FEC adds forward error correction over whichever carrier is in use: for
+	// every FEC.Data datagrams, FEC.Parity extra ones, and any FEC.Parity of a
+	// group may be lost without loss. Zero values mean none. See fec.go.
+	FEC FECConfig
+
+	// Multipath spreads the plain UDP carrier over several sockets on
+	// consecutive ports, so a path that shapes per flow gives the tunnel
+	// several allowances instead of one. Zero or one is a single socket. See
+	// multipath.go, including why the other carriers do not take it.
+	Multipath MultipathConfig
+
 	// TxQueueLen is how many packets the kernel may hold for the interface
 	// while this process drains it. Zero takes the default.
 	//
@@ -201,6 +212,22 @@ func (c *Config) Validate() error {
 	if c.Carrier == CarrierSpoof && c.Mode == ModeListen && c.Spoof.SpoofPeerIP == "" {
 		return fmt.Errorf("l3: carrier %q needs spoof_peer_ip when listening, "+
 			"because the peer forges the source of every packet it sends", CarrierSpoof)
+	}
+	// The scheme is not negotiated, so an unusable one is refused where it is
+	// written rather than at the first packet the peer cannot rebuild.
+	if err := c.FEC.Validate(); err != nil {
+		return err
+	}
+	if err := c.Multipath.Validate(); err != nil {
+		return err
+	}
+	// Several sockets is a plain-UDP arrangement. The obfuscated carriers vary
+	// their source per packet already, so it would add machinery without
+	// adding the effect; refusing here beats a setting that is written, read,
+	// and quietly does nothing.
+	if c.Multipath.Enabled() && c.Carrier != CarrierUDP {
+		return fmt.Errorf("l3: paths is for the udp carrier; %q already varies its source per "+
+			"packet, so spreading it over sockets adds nothing", c.Carrier)
 	}
 	if c.Iface == "" {
 		c.Iface = defaultIfaceName

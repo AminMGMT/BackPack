@@ -188,6 +188,9 @@ Two things worth knowing:
 | `iface` | `bp0` | Interface name to create |
 | `mtu` | `1400` | Interface MTU |
 | `sockbuf` | 4 MiB | Carrier socket buffers |
+| `fec_data` | `0` | Error correction: data packets per group. Both keys or neither — see [Error correction](#error-correction) |
+| `fec_parity` | `0` | Error correction: spare packets per group |
+| `paths` | `1` | Spread the `udp` carrier over this many sockets — see [Several sockets](#several-sockets) |
 | `ports` | none | Forwarded port mappings — see above |
 | `accept_udp` | `false` | Forward UDP as well as TCP on those ports |
 
@@ -209,6 +212,60 @@ All three obfuscated carriers are **Linux only**. They are the same carriers
 the `pck`, `xdi` and `spoof` transports already use — the layer-3 tunnel simply
 hands them its own packets instead of KCP's, so a fix to a carrier reaches both
 at once.
+
+### Error correction
+
+A layer-3 tunnel may not ride on anything that retransmits — see [why](#limits)
+— but it can carry **redundancy**. For every `fec_data` packets the tunnel
+sends, it sends `fec_parity` spare ones, and any `fec_parity` of the group may
+be lost without losing anything: the far end rebuilds them, with nothing waiting
+for a timer.
+
+It is for a path that drops packets **steadily** — a congested international
+route, a lossy last mile. Measured against a link dropping 20%, an application
+saw **3.5% loss with it on and 39% with it off**, for about a third more
+traffic. On a clean route that third is pure waste, so it is off by default.
+
+```toml
+[l3]
+carrier    = "spoof"
+fec_data   = 10
+fec_parity = 3
+```
+
+- **Both ends must set the same pair.** It is not negotiated; a receiver
+  expecting a different scheme rebuilds nothing.
+- It works over **every** carrier — `udp`, `spoof`, `pck`, `xdi` — because loss
+  is a property of the path, not of the disguise.
+- Half a scheme is refused at startup: set both keys, or neither.
+- The recommended pair (10/3) is what the wizard's *Turn on error correction*
+  and the panel's checkbox write. The exact numbers are a manual tuning; the
+  Link Test can also size them to a measured loss.
+
+### Several sockets
+
+A tunnel on one UDP socket is one flow, and some providers give **each flow its
+own speed limit** — so the tunnel sits at one flow's allowance however fast the
+link really is. The usual sign is a tunnel that will not go faster no matter
+what you tune. `paths` spreads the same traffic over several sockets, which is
+several flows, which is several allowances.
+
+```toml
+[l3]
+carrier = "udp"
+paths   = 4
+```
+
+- Measured against a link capped at 8 Mbit/s per flow: one socket carried
+  **5.8 Mbit/s, four carried 23.6**.
+- The sockets use **consecutive ports** counting up from the tunnel port — `paths = 4`
+  on port 9000 uses 9000–9003, and those must be open on the listening side.
+- **Both ends must set the same number.**
+- It is for the **`udp` carrier only**. The obfuscated carriers already vary
+  their source per packet, so a shaper counting flows sees many either way;
+  Backpack refuses `paths` on them rather than writing a setting that does
+  nothing.
+- Nothing is added to the wire — the MTU is unchanged.
 
 Tuning uses the keys you already know. They sit at the top level of `[l3]`,
 exactly as they do in `[server]` and `[client]`:

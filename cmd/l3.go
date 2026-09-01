@@ -56,7 +56,9 @@ func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
 		MaxConnections: cfg.L3.MaxConnections,
 		BandwidthMbps:  cfg.L3.BandwidthMbps,
 		// Read only by the carrier they belong to; both are ignored otherwise.
-		Spoof: cfg.L3.SpoofConfig,
+		FEC:       l3.FECConfig{Data: cfg.L3.FECData, Parity: cfg.L3.FECParity},
+		Multipath: l3.MultipathConfig{Paths: cfg.L3.Paths},
+		Spoof:     cfg.L3.SpoofConfig,
 		Pck: network.PcapCarrier{
 			Interface:  cfg.L3.PckInterface,
 			GatewayMAC: cfg.L3.PckGatewayMAC,

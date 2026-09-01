@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
 // Creating a direct tunnel from the web panel.
@@ -71,6 +72,15 @@ type NewDirectTunnel struct {
 	// drawer, so a form can send both and the group wins — which is the answer
 	// the operator gave last.
 	Stealth bool `json:"stealth"`
+
+	// Paths spreads the udp carrier over several sockets. One or zero is the
+	// ordinary single socket. Refused on the other carriers, which vary their
+	// source per packet already.
+	Paths int `json:"paths"`
+
+	// FEC turns on error correction with the recommended scheme, the same one
+	// answer the wizard asks. The exact pair is a CLI-only tuning.
+	FEC bool `json:"fec"`
 
 	// SpoofPeerIP is required on the kharej side of the spoof carrier, which
 	// cannot learn where its peer is: every packet it receives carries a forged
@@ -257,6 +267,13 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 	// The forged-source carrier cannot learn where its peer really is, because
 	// every packet it receives carries a forged source. Catching it here beats
 	// a tunnel that comes up and sends its replies nowhere.
+	if n.Paths > 1 {
+		spec.Paths = n.Paths
+	}
+	if n.FEC {
+		plan := defaultL3FEC()
+		spec.FECData, spec.FECParity = plan.Data, plan.Parity
+	}
 	if carrier == "spoof" {
 		if n.Spoof != nil {
 			if err := n.Spoof.apply(&spec.Spoof); err != nil {
@@ -331,6 +348,11 @@ type DirectSettings struct {
 	// does not draw the drawer.
 	Spoof   SpoofTune `json:"spoof"`
 	Stealth bool      `json:"stealth"`
+
+	// Paths and FEC as the panel shows them: how many sockets, and whether
+	// error correction is on at all. The exact scheme stays a CLI tuning.
+	Paths int  `json:"paths"`
+	FEC   bool `json:"fec"`
 }
 
 // DirectEdit is what the panel may change.
@@ -348,6 +370,12 @@ type DirectEdit struct {
 	// the same terms as everything else here.
 	Spoof   *SpoofTune `json:"spoof"`
 	Stealth *bool      `json:"stealth"`
+
+	// Paths changes how many sockets the udp carrier spreads over, and FEC
+	// turns error correction on or off with the recommended scheme. Both are
+	// nil unless the form sent them, on the same terms as everything else here.
+	Paths *int  `json:"paths"`
+	FEC   *bool `json:"fec"`
 }
 
 // DirectSettingsOf reads one direct tunnel's editable settings.
@@ -394,6 +422,8 @@ func directSettingsFrom(name string, l config.L3Config) DirectSettings {
 
 		Spoof:   spoofOf(l.SpoofConfig),
 		Stealth: spoofStealthOn(l.SpoofConfig),
+		Paths:   l.Paths,
+		FEC:     l.FECData > 0 && l.FECParity > 0,
 	}
 }
 
@@ -491,8 +521,34 @@ func applyDirectEdit(l config.L3Config, e DirectEdit) (config.L3Config, error) {
 			clearSpoofStealth(&l.SpoofConfig)
 		}
 	}
+	// Spreading over sockets belongs to the plain UDP carrier; the engine
+	// refuses it elsewhere, so the edit is refused here rather than written and
+	// then rejected at the next start.
+	if e.Paths != nil {
+		if *e.Paths > 1 && !strings.EqualFold(strings.TrimSpace(orDefault(l.Carrier, "udp")), "udp") {
+			return l, fmt.Errorf("spreading over sockets is for the udp carrier; %s varies its source per packet already",
+				orDefault(l.Carrier, "udp"))
+		}
+		if err := (MultipathFor(*e.Paths)).Validate(); err != nil {
+			return l, err
+		}
+		l.Paths = *e.Paths
+	}
+	if e.FEC != nil {
+		if *e.FEC {
+			plan := defaultL3FEC()
+			l.FECData, l.FECParity = plan.Data, plan.Parity
+		} else {
+			l.FECData, l.FECParity = 0, 0
+		}
+	}
 	return l, nil
 }
+
+// MultipathFor is the engine's own validation of a socket count, so the panel
+// refuses exactly what the tunnel would refuse rather than keeping a second
+// copy of the rule.
+func MultipathFor(paths int) l3.MultipathConfig { return l3.MultipathConfig{Paths: paths} }
 
 // directSpecFrom turns a config back into what the renderer takes, carrying
 // every key the form does not touch — including the carrier tables, so an edit
@@ -516,6 +572,8 @@ func directSpecFrom(name string, l config.L3Config) l3Spec {
 		MTU:     l.MTU,
 		AutoMTU: l.AutoMTU,
 		SockBuf: l.SockBuf, MSSClamp: l.MSSClamp,
+		FECData: l.FECData, FECParity: l.FECParity,
+		Paths:  l.Paths,
 		Preset: l.Preset, TxQueueLen: l.TxQueueLen, Qdisc: l.Qdisc,
 		Ports:          l.Ports,
 		AcceptUDP:      l.AcceptUDP,

@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // CheckLevel is how a diagnostic turned out.
@@ -543,6 +545,15 @@ func directChecks(g string, t Tunnel) []Check {
 				Fix:    "a layer-3 tunnel needs root and the tun module — check its log"})
 		}
 
+		// The forged-source carrier is the one health check that catches a
+		// silent tunnel: reverse-path filtering drops every forged packet before
+		// the tunnel sees it, so the interface is up and the process is happy
+		// while nothing crosses. It is the most common cause, and the one with
+		// no other symptom. See network.EffectiveRPFilter.
+		if strings.EqualFold(strings.TrimSpace(l.Carrier), "spoof") {
+			out = append(out, rpFilterCheck(g, l))
+		}
+
 		if len(l.Ports) > 0 {
 			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
 				Detail: strings.Join(l.Ports, ", ")})
@@ -598,4 +609,40 @@ func directChecks(g string, t Tunnel) []Check {
 func ifaceExists(name string) bool {
 	_, err := net.InterfaceByName(name)
 	return err == nil
+}
+
+// rpFilterCheck reports whether reverse-path filtering will drop this spoof
+// tunnel's forged packets. It reads the effective value — the max of conf.all
+// and the receiving interface — because that is what the kernel applies, and
+// names the exact sysctl to change when it is strict.
+func rpFilterCheck(g string, l config.L3Config) Check {
+	peer := l.SpoofPeerIP
+	if peer == "" && !strings.EqualFold(strings.TrimSpace(l.Mode), "listen") {
+		if host, _, err := net.SplitHostPort(l.Addr); err == nil {
+			peer = host
+		}
+	}
+	iface := l.SpoofInterface
+	if iface == "" {
+		iface = network.InterfaceTowardPeer(peer)
+	}
+	v, key := network.EffectiveRPFilter(iface)
+	switch v {
+	case 1:
+		fix := "sysctl -w net.ipv4.conf.all.rp_filter=2"
+		if iface != "" {
+			fix += " ; sysctl -w net.ipv4.conf." + iface + ".rp_filter=2"
+		}
+		return Check{Group: g, Name: "Reverse-path filter", Level: CheckFail,
+			Detail: key + "=1 — the kernel drops forged-source packets before the tunnel sees them",
+			Fix:    fix}
+	case 0, 2:
+		return Check{Group: g, Name: "Reverse-path filter", Level: CheckOK,
+			Detail: "relaxed (forged sources pass)"}
+	default:
+		// Unreadable — not Linux, or the file is absent. Say so rather than
+		// implying either answer.
+		return Check{Group: g, Name: "Reverse-path filter", Level: CheckInfo,
+			Detail: "could not read rp_filter; ensure it is 0 or 2 on the receiving host"}
+	}
 }

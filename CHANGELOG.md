@@ -2,6 +2,98 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.7.6 — 2026-09-01
+
+IP spoofing was a reverse transport that could not work, and this release makes
+it a direct-tunnel carrier that does. A reverse tunnel is a control channel plus
+a pool of connections, each its own session, and a forged-source packet carries
+nothing a receiver can tell those sessions apart by — every one of them arrives
+at the same address, the session layer keys on that address, and each new
+session closed the one before it. The tunnel reported itself connected and
+carried nothing. The direct tunnel has one session, which is the shape the
+carrier can actually serve. The same fault, from the same cause, is fixed in
+xDi. And the carrier picked up the two things it was missing against the tool it
+was modelled on: error correction, and several sockets. Everything below was
+proven end to end — a real tunnel over real sockets moving real traffic — not
+just unit tested.
+
+### Changed
+
+- **IP spoofing is a direct-tunnel carrier now, not a reverse transport.**
+  `transport = "spoof"` is refused at startup, by name, with what to build
+  instead: a direct tunnel on the spoof carrier, which forwards the same ports
+  over the same forged packets. The wizard offers it under **Direct**, and the
+  panel builds and edits it in full. **This is a breaking change** for anyone
+  running a reverse spoof tunnel — which could not have been carrying traffic,
+  for the reason above — so rebuild it as a direct one. Relay mode
+  (`spoof_mode`, `spoof_pipe`) went with the reverse transport: a direct tunnel
+  is a private network, so WireGuard and the like are routed over it rather than
+  piped through it.
+
+- **xDi tells its sessions apart by the ICMP identifier.** It had the same
+  collapse as reverse spoof — every session of a tunnel identical on the wire,
+  so the listener folded them onto one entry and closed each as the next
+  arrived. The identifier the protocol has for exactly this was being derived
+  from the token, so it was the same for every session; it is drawn per session
+  now. **A breaking wire change for xDi** — both ends must run this version — but
+  since the transport could not carry traffic before, there is nothing to lose.
+
+### Added
+
+- **Error correction on the direct tunnel.** For every `fec_data` datagrams the
+  tunnel sends `fec_parity` spare ones, and any `fec_parity` of a group may be
+  lost without loss — redundancy, never retransmission, which is the only thing
+  a layer-3 tunnel may safely stack. Measured against a link dropping 20%, an
+  application saw **3.5% loss with it on and 39% with it off**. It works over
+  every carrier, both ends must set the same pair, and it is one question in the
+  wizard and a checkbox in the panel.
+
+- **Several sockets for the UDP carrier (`paths`).** A tunnel on one socket is
+  one flow, and a provider that limits each flow separately gives it one flow's
+  allowance however fast the link is. Spreading over several sockets — on
+  consecutive ports from the tunnel port — makes it several flows. Measured
+  against a link capped at 8 Mbit/s per flow, one socket carried **5.8 Mbit/s
+  and four carried 23.6**. It is the UDP carrier only; the obfuscated carriers
+  vary their source per packet already.
+
+- **Two more spoof packet profiles, `proto58` and the rest, in the menus.**
+  `icmpv6`, `ipip` and `gre` existed in the engine but only a hand-edited config
+  could reach them; `proto58` — an ICMPv6 echo's protocol number carried bare,
+  which some filters leave open when they clamp ICMP and UDP — is new. All seven
+  are now offered by the CLI wizard and the panel, from one shared list.
+
+- **The panel configures the spoof carrier in full.** It could create a spoof
+  tunnel and set one thing about it — the peer address — while the CLI asked
+  six questions. The direct form and the edit screen now carry the packet
+  profile, the forged sources, Stealth, error correction and the socket count,
+  each shown only for the carrier that has it.
+
+- **Reverse-path filtering is checked and offered.** A strict `rp_filter` drops
+  every forged-source packet before the tunnel sees it — the most common reason
+  a spoof tunnel is up, connected, and silent. Health Check now reports it per
+  tunnel with the exact `sysctl` to fix it, the startup check reads the
+  *effective* value (the max of `conf.all` and the receiving interface, which is
+  what the kernel applies — reading only `conf.all` missed a strict interface),
+  and the wizard offers to relax it after a spoof setup.
+
+### Fixed
+
+- **The icmp spoof profile silenced ICMP on the tunnel itself.** To stop the
+  kernel answering the forged echo requests — a wasted reply per data packet, on
+  the download path — the carrier set `net.ipv4.icmp_echo_ignore_all`, which is
+  per-namespace and also silenced ICMP arriving on the tunnel. A layer-3 tunnel
+  is a private network people ping across, so this broke a first-class use: ping
+  across an icmp-profile tunnel was 100% loss while TCP was fine. It is a
+  targeted iptables rule now, matched on the carrier's ICMP identifier, so the
+  kernel's replies are dropped and the tunnel's own ICMP is untouched.
+
+- **The XDP fast path declined without a word.** `spoof_xdp_interface` computed
+  whether the kernel program attached or fell back and then threw the answer
+  away — a loose end from the carrier's own refactor — so an operator who turned
+  it on had no way to learn which happened. The tunnel now logs
+  `XDP receive fast path attached to …` or `XDP receive unavailable … <reason>`
+  on start.
+
 ## v1.7.5 — 2026-08-28
 
 Every fix in this release came from somebody's tunnel, and almost all of them

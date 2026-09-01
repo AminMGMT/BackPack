@@ -235,14 +235,24 @@ func checkSpoof(cfg *config.Config) {
 	if !cfg.L3.Enabled() || !strings.EqualFold(strings.TrimSpace(cfg.L3.Carrier), "spoof") {
 		return
 	}
-	checkSpoofCarrier(cfg.L3.SpoofConfig, strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen"))
+	listening := strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen")
+	// The peer's real address is where forged packets actually arrive from, and
+	// so which interface receives them: the listening side is told it, the
+	// dialling side derives it from the address it reaches out to.
+	peerReal := cfg.L3.SpoofConfig.SpoofPeerIP
+	if !listening {
+		if host, _, err := net.SplitHostPort(cfg.L3.Addr); err == nil {
+			peerReal = host
+		}
+	}
+	checkSpoofCarrier(cfg.L3.SpoofConfig, listening, peerReal)
 }
 
 // checkSpoofCarrier validates the forged-source carrier and reports what the
 // host has to be set up for. It is the same advice the reverse transport used
 // to print, which was the only place any of it existed — a direct tunnel over
 // the same carrier needs every word of it.
-func checkSpoofCarrier(sc config.SpoofConfig, listening bool) {
+func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) {
 	if runtime.GOOS != "linux" {
 		logger.Fatalf("the spoof carrier is only available on Linux (it needs a raw IP socket)")
 	}
@@ -288,21 +298,40 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool) {
 	// Reverse-path filtering is the most common reason a spoof tunnel comes up
 	// but carries nothing: this side receives on ordinary AF_INET sockets, which
 	// sit above the kernel's IP input, so a strict rp_filter drops the forged-
-	// source packets before they ever reach the tunnel. Relax it on the receiving
-	// host. Warn always, because both ends receive.
-	if v := readRPFilter(); v == 1 {
-		logger.Warn("reverse-path filtering is strict (net.ipv4.conf.all.rp_filter=1): the kernel will DROP incoming forged-source packets before the tunnel sees them. Relax it on this host: sysctl -w net.ipv4.conf.all.rp_filter=2 (and the same for the receiving interface, e.g. net.ipv4.conf.eth0.rp_filter=2).")
+	// source packets before they ever reach the tunnel.
+	//
+	// The value that decides this is not conf.all alone: the kernel uses the
+	// MAXIMUM of conf.all and the receiving interface's own setting, so a host
+	// with all=0 and eth0=1 filters exactly as if it were strict everywhere.
+	// Checking only all — which this used to do — passed that host and left the
+	// operator with a silent tunnel and a clean bill of health. So the interface
+	// the forged packets arrive on is resolved and folded in.
+	rxIface := sc.SpoofInterface
+	if rxIface == "" {
+		rxIface = network.InterfaceTowardPeer(peerReal)
+	}
+	if v, where := network.EffectiveRPFilter(rxIface); v == 1 {
+		fix := "sysctl -w net.ipv4.conf.all.rp_filter=2"
+		if rxIface != "" {
+			fix += " ; sysctl -w net.ipv4.conf." + rxIface + ".rp_filter=2"
+		}
+		logger.Warnf("reverse-path filtering is strict (%s=1): the kernel will DROP incoming forged-source packets before the tunnel sees them. Relax it on this host: %s", where, fix)
 	} else {
 		logger.Info("spoof needs reverse-path filtering relaxed on the receiving host (rp_filter=2 or 0 on net.ipv4.conf.all and the receiving interface) or the kernel drops the forged-source packets.")
 	}
 
 	// For icmp, the host kernel would auto-answer each incoming echo request with
-	// a reply to the forged source. The carrier now silences this automatically
-	// (net.ipv4.icmp_echo_ignore_all, refcounted and restored on stop) while an
-	// icmp receiver is open, so no operator action is needed — noted only so the
-	// change in the host's ping behaviour is not a surprise.
+	// a reply to the forged source — one full-sized packet out for every one in,
+	// on the download path. The carrier drops exactly those with a targeted
+	// iptables rule (matched on the tunnel's ICMP identifier), so no operator
+	// action is needed and — unlike the old global switch — ICMP arriving on the
+	// tunnel itself is untouched. Noted only so the behaviour is not a surprise.
 	if up == "icmp" || down == "icmp" {
-		logger.Info("spoof_profile icmp: while the tunnel runs, the kernel's automatic ping replies are suppressed (net.ipv4.icmp_echo_ignore_all=1) so it does not answer the forged sources; the previous value is restored on stop.")
+		if _, err := exec.LookPath("iptables"); err != nil {
+			logger.Warn("spoof_profile icmp: iptables was not found, so the kernel's automatic replies to the forged echo requests cannot be dropped. The tunnel still works; it just wastes some uplink answering pings it never sent. Install iptables to silence them.")
+		} else {
+			logger.Info("spoof_profile icmp: the kernel's automatic replies to the carrier's echo requests are dropped by a targeted iptables rule while the tunnel runs; ICMP on the tunnel itself is unaffected.")
+		}
 	}
 	// The icmpv6 profile carries ICMPv6 echo messages (type 128) inside IPv4
 	// packets with protocol 58 — useful where a firewall clamps down on ICMP and
@@ -318,24 +347,6 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool) {
 	}
 
 	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this with the spoof tester on your real route before relying on it.")
-}
-
-// readRPFilter reports net.ipv4.conf.all.rp_filter, or -1 if it cannot be read
-// (non-Linux, or the file is absent). 0 = off, 1 = strict, 2 = loose.
-func readRPFilter() int {
-	b, err := os.ReadFile("/proc/sys/net/ipv4/conf/all/rp_filter")
-	if err != nil {
-		return -1
-	}
-	switch strings.TrimSpace(string(b)) {
-	case "0":
-		return 0
-	case "1":
-		return 1
-	case "2":
-		return 2
-	}
-	return -1
 }
 
 // checkXdi refuses an xdi tunnel that cannot possibly work, before it tries.

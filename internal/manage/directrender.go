@@ -160,6 +160,9 @@ type l3Spec struct {
 	MTU            int
 	AutoMTU        *bool
 	SockBuf        int
+	FECData        int
+	FECParity      int
+	Paths          int
 	MSSClamp       int
 	Preset         string
 	TxQueueLen     int
@@ -236,6 +239,17 @@ func (s l3Spec) render() string {
 	}
 	if s.SockBuf > 0 {
 		writeKV(&b, "sockbuf", fmt.Sprint(s.SockBuf))
+	}
+	// Error correction is a pair or nothing: half of it configures a scheme the
+	// engine refuses, so both are written together or neither is.
+	if s.FECData > 0 && s.FECParity > 0 {
+		writeKV(&b, "fec_data", fmt.Sprint(s.FECData))
+		writeKV(&b, "fec_parity", fmt.Sprint(s.FECParity))
+	}
+	// One socket is the default and needs no key; more than one is written so
+	// both ends read the same number out of their own file.
+	if s.Paths > 1 {
+		writeKV(&b, "paths", fmt.Sprint(s.Paths))
 	}
 	// Only when it is not the automatic default, so an ordinary file stays
 	// short and the key appears exactly when somebody chose it.

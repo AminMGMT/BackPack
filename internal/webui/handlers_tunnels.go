@@ -240,6 +240,9 @@ func (s *server) handleDirectOptions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"carriers": manage.DirectCarriers(),
 		"presets":  manage.DirectPresets(),
+		// The forged-source carrier's packet profiles, so the form offers the
+		// same list the CLI does rather than a copy that drifts.
+		"spoofProfiles": manage.SpoofProfiles(),
 	})
 }
 

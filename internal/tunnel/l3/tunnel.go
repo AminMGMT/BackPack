@@ -289,6 +289,14 @@ func (t *Tunnel) Run(ctx context.Context) error {
 		carrier = t.wrapCarrier(carrier)
 	}
 	t.carrier = carrier
+	// Whatever the carrier wants said about itself — currently only whether the
+	// XDP receive fast path took. It declines silently by design, so this is
+	// the only place an operator learns which of the two they got.
+	if d, ok := carrier.(interface{ Diag() string }); ok {
+		if note := d.Diag(); note != "" {
+			t.log.Infof("%s", note)
+		}
+	}
 	t.setPeer(peer)
 	t.localAddrMu.Lock()
 	t.localAddr = carrier.LocalAddr()
