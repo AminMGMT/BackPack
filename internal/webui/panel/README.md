@@ -79,9 +79,42 @@ and it is also the checklist.
 | 5 Web Panel | `#/settings` → Panel access | `/api/panelport`, `/api/password`, `/api/panelcert`, `/api/security`, `/api/sessions` |
 | 7 Telegram Bot | `#/settings` → Telegram | `/api/telegram`, `/api/telegram/test`, `/api/relays` |
 | 8 Update | `#/maintenance` → Update | `/api/update`, `/api/update/status`, `/api/restorepoints`, `/api/channel` |
+| *(no CLI equivalent yet)* | `#/add` → Setup link | `/api/tunnel/sharelink` |
 
 `api.js` covers **every** `/api/` route the server serves — verified against
 `mux.HandleFunc` in `server.go`.
+
+## The setup link
+
+Everything in a tunnel is paired — the token, the transport, the port, the
+packet profile, Stealth, the error-correction scheme, the socket count — and a
+pair that does not match produces the failure this system is worst at: the
+tunnel comes up, calls itself connected, and carries nothing.
+
+The handoff step used to answer that with four values and a Copy button each.
+That works for four and stops working the moment a carrier has six more, which
+is exactly when getting one wrong costs the most.
+
+So the side set up first offers a **setup link**: one `backpack://…` string
+carrying every paired setting. The other side pastes it at the top of the Add
+screen and the form fills in. Nothing is executed — it is a form filler.
+
+Three things about it are deliberate:
+
+- **The mirroring is the server's.** Which side becomes which, which addresses
+  swap, and the fact that the sender's forged source becomes the receiver's
+  *expected* source, all live in `manage.MirrorForPeer`. A second copy of that
+  in JavaScript would drift, and the drift would only show as a silent tunnel.
+- **The server says which fields are paired.** `PeerForm.Paired` names them, so
+  the panel warns when one is edited without holding its own idea of what
+  matters.
+- **A filled field stays editable.** Changing one is sometimes right — both ends
+  at once — so it warns rather than locks. A form that refuses is a form people
+  work around.
+
+It is not encrypted, and the panel does not say it is: like the vmess links it
+is modelled on it is compressed and encoded, and it carries the token. The
+warning next to the Copy button says so.
 
 Four CLI entries have no HTTP endpoint at all, so the panel cannot do them and
 does not pretend to: **Game Latency Test**, **Exit Health**, **IP Spoofing
@@ -96,7 +129,7 @@ Every screen is built, routed and bound to the endpoint behind it.
 | screen | route | reads | writes |
 |---|---|---|---|
 | Dashboard | `#/` | `/api/stats`, `/api/tunnels` | `/api/tunnel/action` |
-| Add tunnel | `#/add` | `/api/tunnel/options` | `/api/tunnel/create`, `/api/direct/create` |
+| Add tunnel | `#/add` | `/api/tunnel/options`, `/api/tunnel/sharelink` | `/api/tunnel/create`, `/api/direct/create`, `/api/tunnel/sharelink` |
 | Edit | `#/t/:name/edit` | `/api/tunnel/settings` | `/api/tunnel/edit` |
 | Logs | `#/t/:name/logs` | `/api/logs` | — |
 | Metrics | `#/t/:name/metrics` | `/api/tunnels` snapshot | — |

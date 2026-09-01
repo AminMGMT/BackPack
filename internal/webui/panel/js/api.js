@@ -64,6 +64,18 @@ export const tunnelSettings = name =>
   get('/api/tunnel/settings?name=' + encodeURIComponent(name), 'settings.json');
 export const tunnelEdit  = payload => post('/api/tunnel/edit', payload);
 export const tunnelOptions = () => get('/api/tunnel/options', 'options.json');
+
+/* ---- Handing a tunnel's paired settings to the other server --------------- */
+/* One string carrying everything the two ends must agree on. The mirroring —
+   which side becomes which, which addresses swap — is the server's, so the
+   panel never holds a second idea of what "the other side" means. */
+export const shareLink = name =>
+  get('/api/tunnel/sharelink?name=' + encodeURIComponent(name), 'sharelink.json');
+export const shareLinkDecode = link =>
+  post('/api/tunnel/sharelink', { link }, () => ({
+    kind: 'reverse', side: 'kharej', transport: 'tcp', token: 'a-mock-token',
+    tunnelPort: '8443', serverAddr: '185.4.28.11', paired: ['token', 'tunnelPort', 'transport'],
+  }));
 export const tunnelDefaults = () => get('/api/tunnel/defaults', 'defaults.json');
 /* The mock has to roll a fresh port each time or "Random" looks broken; the
    real endpoint picks a free one on the machine. */

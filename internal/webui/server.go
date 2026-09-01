@@ -213,6 +213,9 @@ func Serve() error {
 	mux.HandleFunc("/api/direct/defaults", srv.requireAuth(srv.handleDirectDefaults))
 	mux.HandleFunc("/api/direct/create", srv.requireAuth(srv.handleDirectCreate))
 	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
+	// Handing a tunnel's paired settings to the other server, and taking them
+	// from it. See handleShareLink.
+	mux.HandleFunc("/api/tunnel/sharelink", srv.requireAuth(srv.handleShareLink))
 	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
 	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))

@@ -142,7 +142,8 @@ export function addView(ctx) {
         const conn = step.querySelector('.connpane');
         if (hand) hand.hidden = finishing;
         if (conn) conn.hidden = !finishing;
-        if (!finishing || !conn) return;
+        if (!finishing) { paintHandoff(hand); return; }
+        if (!conn) return;
 
         const name = root.querySelector('[name="name"]')?.value?.trim();
         const addr = root.querySelector('[name="peerAddr"], [name="serverAddr"]')?.value?.trim();
@@ -271,6 +272,120 @@ export function addView(ctx) {
           try { await navigator.clipboard.writeText(line); toast('Command copied.'); }
           catch (e) { toast(line); }
         }));
+
+      /* The setup link: everything the two ends must agree on, in one string.
+         It is asked for by name, because the server builds it from the tunnel
+         that was just written rather than from what is on screen — the file is
+         the truth, and a link built from the form would describe a tunnel that
+         might not be the one running. */
+      async function paintHandoff(hand) {
+        if (!hand) return;
+        const pane = hand.querySelector('#linkPane');
+        const val = hand.querySelector('#linkVal');
+        const name = root.querySelector('[name="name"]')?.value?.trim();
+        if (!pane || !val || !name) return;
+        try {
+          const r = await api.shareLink(name);
+          val.textContent = r.link;
+          pane.hidden = false;
+        } catch (e) {
+          /* No link is not a failure of the tunnel: the four values below still
+             set the other side up by hand. So the pane simply stays away. */
+          pane.hidden = true;
+        }
+      }
+
+      root.querySelector('#linkCopy')?.addEventListener('click', async () => {
+        const link = root.querySelector('#linkVal')?.textContent?.trim();
+        if (!link) return;
+        try { await navigator.clipboard.writeText(link); toast('Setup link copied.'); }
+        catch (e) { toast(link); }
+      });
+
+      /* Pasting a link from the other server. The mirroring is the server's, so
+         this only paints what comes back — and remembers which fields came from
+         the link, because changing one of those is what silently breaks a pair. */
+      const fromLink = new Map();
+
+      function fillFromPeerForm(f) {
+        fromLink.clear();
+        const put = (sel, v) => {
+          if (v === undefined || v === null || v === '') return;
+          const el = root.querySelector(sel);
+          if (!el) return;
+          if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+        };
+        /* Named fields first: the form is read by name on submit, so filling by
+           name is filling exactly what will be sent. */
+        for (const [k, v] of Object.entries(f)) {
+          if (k === 'paired' || k === 'spoof' || typeof v === 'object') continue;
+          put(`[name="${k}"]`, v);
+        }
+        if (f.spoof) {
+          for (const [k, v] of Object.entries(f.spoof)) put(`[name="spoof.${k}"]`, v);
+        }
+        /* Which side and which kind the link is for are choices, not fields. */
+        if (f.side) { chosen.side = f.side === 'iran' ? 'server' : 'client'; markGroup('setSide', chosen.side); }
+        if (f.kind) {
+          chosen.direction = f.kind;
+          markGroup('mode3', f.kind === 'direct' ? 'dir' : 'rev');
+        }
+        if (f.transport) { chosen.transport = f.transport; }
+        if (f.carrier) { chosen.carrier = f.carrier; }
+        applyShape();
+
+        /* Remember the value each paired field arrived with, so an edit can be
+           recognised as a divergence rather than merely as typing. */
+        (f.paired || []).forEach(name => {
+          const el = root.querySelector(`[name="${name}"]`);
+          if (el) fromLink.set(name, el.type === 'checkbox' ? el.checked : el.value);
+        });
+      }
+
+      /* The warning the operator asked for: it appears at the moment a paired
+         field is edited, names what was changed, and offers the way back. It is
+         a warning and not a lock — the field stays editable, because there are
+         real reasons to change one (both ends at once), and a form that refuses
+         is a form people work around. */
+      const pasteMsg = root.querySelector('#pasteMsg');
+      function warnIfDiverged() {
+        if (!pasteMsg || !fromLink.size) return;
+        const changed = [];
+        for (const [name, was] of fromLink) {
+          const el = root.querySelector(`[name="${name}"]`);
+          if (!el) continue;
+          const now = el.type === 'checkbox' ? el.checked : el.value;
+          if (now !== was) changed.push(name.replace(/^spoof\./, ''));
+        }
+        if (!changed.length) { pasteMsg.hidden = true; return; }
+        pasteMsg.querySelector('span:last-child').textContent =
+          'You have changed ' + changed.join(', ') + ', which came from the other server. '
+          + 'Both ends must agree on these — change the other side to match, or the tunnel '
+          + 'will connect and carry nothing.';
+        pasteMsg.hidden = false;
+      }
+      root.addEventListener('input', warnIfDiverged);
+      root.addEventListener('change', warnIfDiverged);
+
+      async function applyPastedLink() {
+        const box = root.querySelector('#apaste');
+        if (!box || !pasteMsg) return;
+        const link = box.value.trim();
+        if (!link) return;
+        try {
+          const f = await api.shareLinkDecode(link);
+          fillFromPeerForm(f);
+          pasteMsg.hidden = true;
+          toast(f.note ? 'Filled in. ' + f.note : 'Filled in from the other server.');
+        } catch (e) {
+          /* The server's wording, not ours: it knows whether the link was cut
+             short, or made by a version this one does not understand. */
+          pasteMsg.querySelector('span:last-child').textContent = String(e.message || e);
+          pasteMsg.hidden = false;
+        }
+      }
+      root.querySelector('#apasteb')?.addEventListener('click', applyPastedLink);
+      root.querySelector('#apaste')?.addEventListener('paste', () => setTimeout(applyPastedLink, 0));
 
       const create = root.querySelector('[data-create], .create');
       create?.addEventListener('click', async () => {
