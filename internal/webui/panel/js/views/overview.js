@@ -166,54 +166,40 @@ function tunnelRows(tuns) {
                + `${t.carrier || t.transport || ''}`.trim();
     const inn = t.bytesIn || 0, outt = t.bytesOut || 0;
     const io = inn + outt || 1;
-    return `<button class="tk-row" data-to="/t/${encodeURIComponent(t.name)}/metrics" style="--i:${i}">
+    /* The name and what it has carried, and nothing else. This sits beside the
+       all-time figure now, in half the width it used to have, and the ping and
+       the uptime it also showed are on the tunnel's own card. A row that
+       repeats them here only makes both harder to read. */
+    return `<button class="tk-row" data-to="/t/${encodeURIComponent(t.name)}/metrics" style="--i:${i}"
+        title="${esc(kind)} · ${esc(bytes(inn))} in · ${esc(bytes(outt))} out">
       <span class="tk-dot ${isUp(t) ? 'up' : 'dn'}"></span>
-      <span class="tk-nm">
-        <b>${esc(t.name)}</b>
-        <em>${esc(kind)}${t.peerLocation ? ' · ' + esc(t.peerLocation) : ''}</em>
-      </span>
-      <span class="tk-bar" title="${esc(bytes(inn))} in · ${esc(bytes(outt))} out">
+      <span class="tk-nm"><b>${esc(t.name)}</b></span>
+      <span class="tk-bar">
         <i class="in" style="--w:${((inn / io) * share).toFixed(1)}%"></i>
         <i class="out" style="--w:${((outt / io) * share).toFixed(1)}%"></i>
       </span>
       <span class="tk-fig">${esc(bytes(t.bytesTotal || 0))}</span>
-      <span class="tk-png">${hasPing(t) ? esc(t.ping) + ' ms' : '—'}</span>
-      <span class="tk-upt">${t.uptime ? esc(t.uptime) : '—'}</span>
     </button>`;
   }).join('')}</div>`;
 }
 
-/* What has happened on this server.
+/* Who wrote it, and where to find them.
  *
- * The monitor files an event every time something changes state — a tunnel goes
- * down, comes back, is restarted; a backup is written; a release appears. The
- * panel has always had the list and never shown it anywhere, so the question
- * "what happened while I was not looking" had no answer short of the journal.
- *
- * It is the last block before the facts because it is the one people read when
- * something is already wrong, not when they are checking in.
+ * At the very bottom, small: it is the last thing on the page rather than
+ * something competing with the figures above it.
  */
-function activity(state) {
-  const ev = state.alerts?.events || [];
-  if (!ev.length) return '';
-  const rows = ev.slice(0, 7).map((e, i) => `
-    <div class="ac-row" style="--i:${i}">
-      <span class="ac-when">${esc(since(e.time))}</span>
-      <span class="ac-msg">${esc(e.message || '')}</span>
-    </div>`).join('');
-  return `<div class="sectitle"><h3>Recently</h3><div class="ln"></div>
-      <span class="sec-n">${ev.length}</span></div>
-    <div class="ac">${rows}</div>`;
-}
-
-/* Unix seconds to something readable at a glance. */
-function since(ts) {
-  if (!ts) return '';
-  const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
-  if (s < 90) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 172800) return `${Math.floor(s / 3600)} h ago`;
-  return `${Math.floor(s / 86400)} d ago`;
+function footer() {
+  return `<div class="ov-foot">
+    <div class="ov-links">
+      <a href="https://github.com/AminMGMT" target="_blank" rel="noopener" title="GitHub" aria-label="GitHub">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 00-1-2.6c3-.3 6.5-1.5 6.5-7A5.4 5.4 0 0020 4.8 5 5 0 0019.9 1S18.7.6 16 2.5a13.4 13.4 0 00-7 0C6.3.6 5.1 1 5.1 1A5 5 0 005 4.8 5.4 5.4 0 003.5 8.5c0 5.5 3.5 6.7 6.5 7a3.4 3.4 0 00-1 2.6V22"/></svg>
+      </a>
+      <a href="https://t.me/BlackProtocols" target="_blank" rel="noopener" title="Telegram" aria-label="Telegram">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3L2 11l6 2 2 6 3-4 5 4z"/><path d="M8 13l8-6"/></svg>
+      </a>
+    </div>
+    <a class="ov-by" href="https://blackprotocols.space" target="_blank" rel="noopener">developed by AminMGMT</a>
+  </div>`;
 }
 
 function facts(s) {
@@ -303,6 +289,13 @@ export function overview(ctx) {
              ${up} of ${tuns.length} tunnels up${nodes.length
                ? ` · ${onlineNodes}/${nodes.length} servers connected` : ''}</span></div>`}
 
+        <div class="sectitle"><h3>This server</h3><div class="ln"></div></div>
+        ${facts(s)}
+
+        <!-- Traffic beside where it went: one figure and its breakdown are one
+             thought, and reading them a page apart made the second look like a
+             separate report of the same thing. -->
+        <div class="ov-row">
         <!-- Traffic: the one figure that only grows, with the month that made it. -->
         <div class="tk">
           <div class="tk-head">
@@ -324,14 +317,14 @@ export function overview(ctx) {
           ${dayBars()}
         </div>
 
-        <div class="sectitle"><h3>Where it goes</h3><div class="ln"></div>
-          <span class="sec-n">${tuns.length}</span></div>
-        ${tunnelRows(tuns)}
+        <div class="ov-where">
+          <div class="sectitle"><h3>Where it goes</h3><div class="ln"></div>
+            <span class="sec-n">${tuns.length}</span></div>
+          ${tunnelRows(tuns)}
+        </div>
+        </div>
 
-        ${activity(state)}
-
-        <div class="sectitle"><h3>This server</h3><div class="ln"></div></div>
-        ${facts(s)}
+        ${footer()}
       </div>`;
 
     const total = state.stats ? (s.totalTraffic || 0) : null;

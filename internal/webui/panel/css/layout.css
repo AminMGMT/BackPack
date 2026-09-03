@@ -166,10 +166,18 @@
 .panel .RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
   border:1px solid var(--ln);border-radius:15px;overflow:hidden}
 @container pg (max-width:1000px){ .panel .RZ{grid-template-columns:repeat(2,1fr)} }
-/* The component's own ladder drops to one column at 520; this wrapper is more
-   specific and stopped at two, so on a phone the strip kept a ~500px floor and
-   pushed the whole page — header buttons included — off the side. */
-@container pg (max-width:520px){ .panel .RZ{grid-template-columns:1fr} }
+/* Two across, never one.
+ *
+ * Below 520px these used to stack into a single column: four tiles one under
+ * another, then two more for the rates, and the whole strip pushed the page it
+ * is meant to sit above off the screen. Two and two keeps Processor beside
+ * Memory and Disk beside Swap — the pairs anyone reads together — and keeps the
+ * strip short enough to be a strip. */
+@container pg (max-width:520px){
+  .panel .RZ{grid-template-columns:repeat(2,1fr)}
+  .panel .RZ .t4{padding:11px 12px 10px}
+  .panel .RZ .head6 .num{font-size:17px}
+}
 @container pg (max-width:430px){ .panel .RZ .trend{display:none} .panel .RZ .t4{padding:12px 12px 11px} }
 /* A grid item's min-width is auto, so a long figure can widen its own track. */
 .panel .RZ .t4{min-width:0}
@@ -231,7 +239,7 @@
 
 /* The two rates get the strip treatment, side by side. */
 .panel .RZ.rates { margin-top: 9px; grid-template-columns: repeat(2, 1fr); }
-@container pg (max-width:520px){ .panel .RZ.rates{grid-template-columns:1fr} }
+/* The two rates stay side by side too, for the same reason. */
 
 /* Everything under them that is only text. */
 .panel .factline {

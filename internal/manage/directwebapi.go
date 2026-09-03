@@ -117,9 +117,17 @@ func DirectCarriers() []map[string]string {
 			"desc": "plain and simple — use it where the path does not interfere"},
 		{"value": "quic", "label": "QUIC", "needsRoot": "",
 			"desc": "a real QUIC session on UDP — indistinguishable from HTTP/3, and needs no root"},
-		{"value": "sni", "label": "SNI spoofing", "needsRoot": "1",
+		// cliOnly keeps a carrier out of the panel without taking it away.
+		//
+		// These two are the ones whose answers depend on the route rather than
+		// on the tunnel: which forged source a path will carry, which domain it
+		// already lets through. Getting them wrong produces a tunnel that comes
+		// up and moves nothing, and finding out costs a capture on the machine
+		// itself. That is CLI work, so the panel does not offer them — and the
+		// engine still runs a config that names one, whichever screen wrote it.
+		{"value": "sni", "label": "SNI spoofing", "needsRoot": "1", "cliOnly": "1",
 			"desc": "PCK, plus a TLS hello naming a domain your route allows — the box in front reads that name and lets the rest through"},
-		{"value": "spoof", "label": "Spoof", "needsRoot": "1",
+		{"value": "spoof", "label": "Spoof", "needsRoot": "1", "cliOnly": "1",
 			"desc": "raw packets with a forged source address — needs testing on your route"},
 		{"value": "xdi", "label": "ICMP", "needsRoot": "1",
 			"desc": "inside ping, for a path that filters UDP and TCP but lets ping through"},
@@ -143,6 +151,18 @@ func offeredCarrier(name string) bool {
 		}
 	}
 	return false
+}
+
+// PanelDirectCarriers is DirectCarriers without the ones the panel does not
+// offer. The CLI reads the whole list; this is what /api/direct/options serves.
+func PanelDirectCarriers() []map[string]string {
+	out := make([]map[string]string, 0, len(DirectCarriers()))
+	for _, c := range DirectCarriers() {
+		if c["cliOnly"] == "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // DirectPresets is what the panel offers for tuning, in the same order as the

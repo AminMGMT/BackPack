@@ -14,13 +14,6 @@ import { go } from '../router.js';
 
 let open = false;
 
-const fact = (k, v, warn, full) =>
-  el('div', { class: 'fct' + (full ? ' full' : '') }, [
-    el('div', { class: 'k', text: k }),
-    el('b', { text: v || '—' }),
-    warn ? el('i', { text: warn }) : null,
-  ]);
-
 const item = (icon, label, onClick, extra) =>
   el('button', { class: 'it', role: 'menuitem', on: { click: onClick } }, [
     el('span', { html: svg(icon, 'ic') }),
@@ -45,27 +38,14 @@ export function renderMenu(state) {
       ]),
     ]),
     el('div', { class: 'hr' }),
-    el('div', { class: 'facts' }, [
-      fact('Uptime', s.uptime), fact('OS', s.os),
-      fact('IPv4', s.ipv4), fact('IPv6', s.ipv6),
-      fact('Location', s.location), fact('ISP', s.isp),
-      s.congestion
-        ? fact('Congestion', s.congestion.toUpperCase(),
-            s.congestionWanted && s.congestion !== s.congestionWanted
-              ? s.congestionWanted.toUpperCase() + ' not available on this kernel' : null, true)
-        : null,
-      s.proxyEnabled
-        ? fact('Built-in proxy',
-            (s.proxyType || 'proxy').toUpperCase() + (s.proxyPort ? ' :' + s.proxyPort : ''),
-            s.proxyRunning ? null : 'Enabled but not running — forwarded ports to it are refused',
-            true)
-        : null,
-    ].filter(Boolean)),
     el('div', { class: 'hr' }),
+    /* What is not reachable anywhere else, and nothing that is.
+     *
+     * Alerts has its own button in the header and Servers its own place in the
+     * dock, so listing them here was a second door onto the same room. The
+     * machine's own facts went the same way: they are what the overview opens
+     * with. What is left is the two screens with no other entrance. */
     item('gear', 'Settings', () => hop('/settings')),
-    item('bell', 'Alerts', () => hop('/alerts'),
-      alertCount ? el('span', { class: 'cnt', text: String(alertCount) }) : null),
-    item('nodes', 'Servers', () => hop('/servers')),
     item('pulse', 'Health check', () => hop('/health')),
     item('box', 'Maintenance', () => hop('/maintenance'),
       s.updateTag ? el('span', { class: 'cnt', text: '1' }) : null),

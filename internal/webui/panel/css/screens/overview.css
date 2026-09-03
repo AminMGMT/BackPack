@@ -86,7 +86,7 @@
 .panel .tk-list{display:grid;gap:1px;background:var(--ln);border:1px solid var(--ln);
   border-radius:15px;overflow:hidden}
 .panel .tk-row{font:inherit;text-align:left;display:grid;align-items:center;gap:12px;
-  grid-template-columns:8px minmax(0,1.3fr) minmax(90px,1.9fr) auto auto auto;
+  grid-template-columns:8px minmax(0,1fr) minmax(60px,1.2fr) auto;
   padding:12px 15px;background:var(--s1);border:0;cursor:pointer;color:var(--tx);
   animation:ov-in .4s var(--spring) both;animation-delay:calc(var(--i) * 35ms + 80ms);
   transition:background .18s ease}
@@ -113,19 +113,31 @@
 .panel .tk-upt{font-size:11px;color:var(--dim);text-align:right;min-width:70px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* ---- recently ------------------------------------------------------------ */
-.panel .ac{display:grid;gap:1px;background:var(--ln);border:1px solid var(--ln);
-  border-radius:15px;overflow:hidden}
-.panel .ac-row{display:flex;align-items:baseline;gap:14px;padding:10px 15px;background:var(--s1);
-  animation:ov-in .38s var(--spring) both;animation-delay:calc(var(--i) * 30ms + 60ms)}
-.panel .ac-when{font-size:10.5px;color:var(--dim);flex:none;min-width:76px;
-  font-variant-numeric:tabular-nums}
-.panel .ac-msg{font-size:12px;color:var(--tx2);line-height:1.5;min-width:0}
+/* ---- the traffic pair ----------------------------------------------------
+   One figure and its breakdown are one thought. They used to be a page apart,
+   which made the second read as a separate report of the same thing. */
+.panel .ov-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:14px;align-items:start;margin-top:14px}
+.panel .ov-row > .tk{margin-top:0}
+.panel .ov-where{min-width:0}
+.panel .ov-where .sectitle{margin-top:0}
+
+/* ---- who wrote it -------------------------------------------------------- */
+.panel .ov-foot{display:flex;flex-direction:column;align-items:center;gap:8px;
+  margin:26px 0 6px;opacity:.75}
+.panel .ov-links{display:flex;gap:14px}
+.panel .ov-links a{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;
+  color:var(--dim);border:1px solid var(--ln);transition:color .18s ease,border-color .18s ease}
+.panel .ov-links a:hover{color:var(--tx);border-color:var(--ln2)}
+.panel .ov-links svg{width:15px;height:15px;fill:none;stroke:currentColor;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.panel .ov-by{font-size:10.5px;color:var(--dim);text-decoration:none}
+.panel .ov-by:hover{color:var(--tx2);text-decoration:underline}
 
 @container pg (max-width:700px){
+  .panel .ov-row{grid-template-columns:1fr}
   .panel .tk-row{grid-template-columns:8px minmax(0,1fr) auto}
-  .panel .tk-bar,.panel .tk-png,.panel .tk-upt{display:none}
-  .panel .ac-when{min-width:64px}
+  .panel .tk-bar{display:none}
   .panel .tk-num{font-size:30px}
   .panel .tk-chips{margin-left:0;width:100%}
 }
