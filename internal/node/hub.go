@@ -22,7 +22,14 @@ import (
 const (
 	handshakeTimeout = 20 * time.Second
 	authTimeout      = 15 * time.Second
-	callTimeout      = 60 * time.Second
+
+	// ackTimeout is how long the panel waits to hear that a freshly enrolled
+	// node stored its key. The node writes one small file and answers, so this
+	// is long enough to be about a machine under load rather than about the
+	// work; a node that predates the message trips it at once by closing the
+	// stream instead.
+	ackTimeout  = 5 * time.Second
+	callTimeout = 60 * time.Second
 )
 
 // muxSettings are small on purpose. The largest message is one tunnel's form;
@@ -328,6 +335,19 @@ func (h *Hub) authenticate(st net.Conn, expect string) (Node, error) {
 			// and cannot connect. Take it back out.
 			_ = Remove(n.Name)
 			return Node{}, fmt.Errorf("could not hand the node its key: %w", err)
+		}
+
+		// Wait to be told the key reached the node's disk. The write above only
+		// says the bytes left this machine; the token is already spent, so if
+		// the node goes away before it saves, both ends have lost the
+		// credential. Hearing OpEnrolled is what retires the token — and not
+		// hearing it is not an error, because the node may simply be older than
+		// this message. Either way the registry's grace window decides how long
+		// the token stays usable, so a node that has to try again can.
+		st.SetDeadline(time.Now().Add(ackTimeout))
+		var ack Request
+		if err := readMsg(st, &ack); err == nil && ack.Op == OpEnrolled {
+			_ = ConfirmEnrolment(n.Name)
 		}
 		return n, nil
 

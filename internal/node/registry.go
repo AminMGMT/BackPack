@@ -61,6 +61,20 @@ type Pending struct {
 	Token   string `json:"token"`
 	Port    int    `json:"port"`
 	Created int64  `json:"created"`
+
+	// Claimed is when a node traded this token for a key, and zero while the
+	// token is still waiting to be used.
+	//
+	// The token is not thrown away at that moment, because answering an
+	// enrolment is not the same as the node having the answer. The panel has
+	// already spent the token by the time its reply is on the wire; a node that
+	// dies, is stopped, or loses the connection in the gap before it writes the
+	// key to disk ends up holding nothing, with nothing left to try again with,
+	// and the operator is left with a node that is enrolled in the panel and
+	// can never connect. So the token stays live until the node confirms the
+	// key landed — see OpEnrolled — and only a short grace after that, because
+	// a live setup token is a live secret.
+	Claimed int64 `json:"claimed,omitempty"`
 }
 
 // Expired reports whether a token has been outstanding too long.
@@ -72,10 +86,25 @@ type Pending struct {
 // about a secret that has been sitting in one of those is that it is no longer
 // a secret.
 func (p Pending) Expired(now time.Time) bool {
+	if p.Claimed != 0 {
+		return now.Unix()-p.Claimed > int64(enrollGrace/time.Second)
+	}
 	return now.Unix()-p.Created > int64(enrollTTL/time.Second)
 }
 
 const enrollTTL = 24 * time.Hour
+
+// enrollGrace is how long a claimed token stays usable while the panel waits to
+// hear that the node stored its key.
+//
+// It is generous against the thing it protects against and short against the
+// thing it costs. A node that failed to save retries on its own within seconds,
+// and an operator restarting the service does it within a minute or two, so ten
+// minutes covers every version of the recovery. Against that, the window only
+// stays open at all while no node has ever used the key — the moment one does,
+// the token is retired — so there is never a period where a working node could
+// be displaced by somebody replaying the setup command.
+const enrollGrace = 10 * time.Minute
 
 // Store is the whole persisted state.
 type Store struct {
@@ -258,9 +287,22 @@ func NewEnrollToken(name string, port int) (token, hub string, err error) {
 	return token, hub, err
 }
 
-// Redeem trades a valid enrolment token for a node key, burning the token.
+// Redeem trades a valid enrolment token for a node key.
+//
+// The token is claimed rather than burned: it keeps working until the node says
+// it has the key, and for a short grace after. A second attempt inside that
+// window is not a stranger replaying the setup command, it is the same node
+// trying again after the first key never reached its disk, so it is answered
+// with a fresh key for the record already there. See Pending.Claimed.
 func Redeem(token string, info Info) (Node, error) {
 	var out Node
+
+	// refuse carries a refusal back out without losing the pruning that goes
+	// with it: update only writes the store when its function succeeds, so a
+	// token dropped on the way to an error would be left in the file to be
+	// found again on the next attempt.
+	var refuse error
+
 	err := update(func(s *Store) error {
 		now := time.Now()
 		idx := -1
@@ -274,13 +316,47 @@ func Redeem(token string, info Info) (Node, error) {
 			return fmt.Errorf("that setup token is not valid")
 		}
 		p := s.Pending[idx]
-		s.Pending = append(s.Pending[:idx], s.Pending[idx+1:]...)
+		drop := func() { s.Pending = append(s.Pending[:idx], s.Pending[idx+1:]...) }
+
 		if p.Expired(now) {
-			return fmt.Errorf("that setup token has expired — generate a new one")
+			drop()
+			if p.Claimed != 0 {
+				// It was used, and long enough ago that the node it was used
+				// for has had every chance to come back.
+				refuse = fmt.Errorf("that setup token has already been used")
+			} else {
+				refuse = fmt.Errorf("that setup token has expired — generate a new one")
+			}
+			return nil
 		}
+
+		// Claimed, still in grace: the node is retrying. Hand the record it
+		// already has a new key, because whoever holds the old one demonstrably
+		// never stored it. The claim stamp is left alone, so retrying does not
+		// extend the window indefinitely.
+		if p.Claimed != 0 {
+			for i, n := range s.Nodes {
+				if strings.EqualFold(n.Name, p.Name) {
+					info.Name = n.Name
+					s.Nodes[i].Key = randomKey(24)
+					s.Nodes[i].LastSeen = now.Unix()
+					s.Nodes[i].Info = info
+					out = s.Nodes[i]
+					return nil
+				}
+			}
+			// The record was removed while the token was outstanding, which is
+			// the operator withdrawing this enrolment.
+			drop()
+			refuse = fmt.Errorf("that setup token is not valid")
+			return nil
+		}
+
 		for _, n := range s.Nodes {
 			if strings.EqualFold(n.Name, p.Name) {
-				return fmt.Errorf("a node called %q is already enrolled", p.Name)
+				drop()
+				refuse = fmt.Errorf("a node called %q is already enrolled", p.Name)
+				return nil
 			}
 		}
 		info.Name = p.Name
@@ -293,12 +369,38 @@ func Redeem(token string, info Info) (Node, error) {
 			Info:     info,
 		}
 		s.Nodes = append(s.Nodes, out)
+		s.Pending[idx].Claimed = now.Unix()
 		return nil
 	})
 	if err != nil {
 		return Node{}, err
 	}
+	if refuse != nil {
+		return Node{}, refuse
+	}
 	return out, nil
+}
+
+// ConfirmEnrolment retires the token a node was set up with, once that node has
+// said the key reached its disk.
+func ConfirmEnrolment(name string) error {
+	return update(func(s *Store) error {
+		s.Pending = withoutClaim(s.Pending, name)
+		return nil
+	})
+}
+
+// withoutClaim drops a claimed token for one node, leaving unclaimed ones —
+// a token generated for a name that is waiting to be set up is not retired by
+// anything an already-enrolled node does.
+func withoutClaim(pending []Pending, name string) []Pending {
+	kept := pending[:0]
+	for _, p := range pending {
+		if p.Claimed == 0 || !strings.EqualFold(p.Name, name) {
+			kept = append(kept, p)
+		}
+	}
+	return kept
 }
 
 // ByKey finds the node holding a key and records that it has been seen.
@@ -322,6 +424,10 @@ func ByKey(key string) (Node, bool) {
 		return Node{}, false
 	}
 	s.Nodes[hit].LastSeen = time.Now().Unix()
+	// Authenticating with a key is proof the node has one, which retires the
+	// token it was set up with as surely as OpEnrolled does. This is what
+	// settles a node that enrolled before the panel asked to be told.
+	s.Pending = withoutClaim(s.Pending, s.Nodes[hit].Name)
 	out := s.Nodes[hit]
 	_ = SaveStore(s)
 	storeMu.Unlock()
@@ -375,7 +481,9 @@ func PendingList() []Pending {
 	now := time.Now()
 	out := make([]Pending, 0, len(s.Pending))
 	for _, p := range s.Pending {
-		if p.Expired(now) {
+		// A claimed token belongs to a node that is already in the fleet list;
+		// showing it here as well would read as a setup nobody has finished.
+		if p.Expired(now) || p.Claimed != 0 {
 			continue
 		}
 		p.Token = "" // the port is not secret; the token is

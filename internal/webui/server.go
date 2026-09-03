@@ -196,7 +196,6 @@ func Serve() error {
 	// session; the remote access token reaches the read-only ones only.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
-	mux.HandleFunc("/login2fa", srv.handleLogin2FA)
 	mux.HandleFunc("/logout", srv.handleLogout)
 	mux.HandleFunc("/", srv.requireAuth(srv.handleDashboard))
 	// The rebuilt panel, opt-in and served from its own subtree so the
@@ -249,8 +248,6 @@ func Serve() error {
 	mux.HandleFunc("/api/speedtest/plan", srv.requireAuth(srv.handleSpeedTestPlan))
 	mux.HandleFunc("/api/speedtest", srv.requireAuth(srv.handleSpeedTestRun))
 	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
-	mux.HandleFunc("/api/remotetoken", srv.requireAuth(srv.handleRemoteToken))
-	mux.HandleFunc("/api/security", srv.requireAuth(srv.handleSecurity))
 	mux.HandleFunc("/api/sessions", srv.requireAuth(srv.handleSessions))
 	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
 	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
@@ -345,21 +342,20 @@ func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// requireReadAuth accepts either a panel session or the remote access token.
-// Only read-only endpoints go through this: the token can look, never change.
+// requireReadAuth guards the read-only endpoints.
+//
+// It used to accept a second credential as well — a read-only token, for a
+// scraper or a peer panel. Nothing used it: it had to be minted by hand from a
+// screen most operators never opened, and the panel it was for does not exist.
+// A credential nobody issues is a credential nobody rotates, so it went. What
+// is left is the session, which is the same check requireAuth makes; the two
+// stay apart because read-only and read-write is a distinction worth keeping
+// even while they happen to agree.
 func (s *server) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.valid(c.Value) {
 			next(w, r)
 			return
-		}
-		token := Load().RemoteToken
-		if token != "" {
-			given := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(given), []byte(token)) == 1 {
-				next(w, r)
-				return
-			}
 		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}
@@ -383,18 +379,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Constant-time comparison + small delay to slow brute force.
 		if subtle.ConstantTimeCompare([]byte(given), []byte(s.password())) == 1 {
 			limiter.reset(ip)
-			// With two-factor on, the password alone is only half the login.
-			if Load().TwoFA && telegramReady() {
-				if s.startTwoFA(w, r) {
-					return
-				}
-				http.Error(w, "could not send the login code through Telegram — "+
-					"check the bot from the CLI, or disable two_fa in the panel config file",
-					http.StatusBadGateway)
-				return
-			}
 			tok := s.sessions.create(ip)
-			notifyLogin(r)
 			http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return

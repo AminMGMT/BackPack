@@ -459,7 +459,6 @@ func webPanelMenu() {
 			{Title: "Regenerate login code", Desc: "new random 8-digit code"},
 			{Title: "Set a custom password", Desc: "replace the login code with your own"},
 			{Title: "Certificate", Desc: panelCertDesc(cfg)},
-			{Title: "Two-factor sign-in", Desc: twoFADesc(cfg)},
 			{Title: "Restart panel", Desc: "also starts it when stopped"},
 			{Title: "Stop panel", Desc: "disable the web UI"},
 		})
@@ -479,8 +478,6 @@ func webPanelMenu() {
 		case 3:
 			panelCertMenu(cfg)
 		case 4:
-			twoFAMenu(cfg)
-		case 5:
 			if _, err := webui.EnsureRunning(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else if err := manage.RestartService(app.WebUIService); err != nil {
@@ -489,7 +486,7 @@ func webPanelMenu() {
 				tui.Success("Web panel restarted.")
 			}
 			tui.PressEnter()
-		case 6:
+		case 5:
 			if err := webui.Disable(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else {
@@ -512,60 +509,6 @@ func panelCertDesc(cfg webui.Config) string {
 	default:
 		return "HTTPS with a self-signed certificate"
 	}
-}
-
-// twoFADesc says whether a code is asked for at sign-in.
-func twoFADesc(cfg webui.Config) string {
-	if cfg.TwoFA {
-		return "on — a code is sent to the Telegram admin at every sign-in"
-	}
-	return "off — the password alone opens the panel"
-}
-
-// twoFAMenu turns the panel's second factor on and off.
-//
-// It exists because there was no way back. Two-factor is set from the panel,
-// the code is delivered by the Telegram bot, and when that delivery stops
-// working — a revoked token, an admin id that changed, a server that cannot
-// reach Telegram — the panel refuses every sign-in and the setting that caused
-// it can only be reached from the panel. The remedy was editing
-// /etc/backpack/webui.json by hand, which is not a remedy anyone finds while
-// locked out. Here is the way back.
-func twoFAMenu(cfg webui.Config) {
-	tui.Clear()
-	tui.Title("Two-factor sign-in")
-	fmt.Println()
-	tui.Info("Currently: " + twoFADesc(cfg))
-	fmt.Println()
-	if cfg.TwoFA {
-		tui.Warn("If the code never arrives, the panel cannot be signed into at all.")
-		tui.Warn("Turning it off here is the way back in.")
-		fmt.Println()
-		if !tui.Confirm("Turn two-factor off", true) {
-			return
-		}
-		cfg.TwoFA = false
-	} else {
-		tui.Info("A code is sent to the Telegram admin at every sign-in, so the bot")
-		tui.Info("must be configured and able to reach Telegram from this server.")
-		fmt.Println()
-		if !tui.Confirm("Turn two-factor on", false) {
-			return
-		}
-		cfg.TwoFA = true
-	}
-
-	if err := webui.Save(cfg); err != nil {
-		tui.Error("Failed: " + err.Error())
-		tui.PressEnter()
-		return
-	}
-	if err := manage.RestartService(app.WebUIService); err != nil {
-		tui.Warn("Saved, but the panel would not restart: " + err.Error())
-	} else {
-		tui.Success("Saved. " + twoFADesc(cfg))
-	}
-	tui.PressEnter()
 }
 
 // panelCertMenu chooses how the panel presents itself.

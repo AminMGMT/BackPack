@@ -52,6 +52,7 @@ const BTN = {
   logs:  `<svg class="iA" viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 00-2 2v14a2 2 0 002 2h9a2 2 0 002-2v-2"/><path d="M16 3h4v4"/><path d="M9 8h5M9 12h6M9 16h4"/></svg>`,
   chart: `<svg class="iA" viewBox="0 0 24 24"><path d="M3 20h18"/><path d="M6 16l4-5 3.5 3L20 6"/></svg>`,
   more:  `<svg class="iA" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>`,
+  link:  `<svg class="iA" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7L12.2 19"/></svg>`,
 };
 
 function card(t, idx) {
@@ -97,8 +98,8 @@ ${field(t, idx)}
   </div>
 
   <div class="totals">
-    <span class="t"><i>↓</i><b>${bytes(t.bytesIn || 0)}</b><em>total</em></span>
-    <span class="t"><i>↑</i><b>${bytes(t.bytesOut || 0)}</b><em>total</em></span>
+    <span class="t"><i>↓</i><b>${bytes(t.inBytes || 0)}</b><em>total</em></span>
+    <span class="t"><i>↑</i><b>${bytes(t.outBytes || 0)}</b><em>total</em></span>
   </div>
 
   </div>
@@ -116,6 +117,7 @@ ${field(t, idx)}
     <button class="btn" data-act="edit"   title="Edit">${BTN.edit}</button>
     <button class="btn" data-act="logs"   title="Logs">${BTN.logs}</button>
     <button class="btn" data-act="detail" title="Metrics">${BTN.chart}</button>
+    <button class="btn" data-act="link"   title="Link test">${BTN.link}</button>
     <button class="btn" data-act="more"   title="Start, stop, restart, delete">${BTN.more}</button>
   </div>
 
@@ -254,6 +256,11 @@ export function dashboard(ctx) {
       case 'edit':   go(`/t/${encodeURIComponent(name)}/edit`); break;
       case 'logs':   go(`/t/${encodeURIComponent(name)}/logs`); break;
       case 'detail': go(`/t/${encodeURIComponent(name)}/metrics`); break;
+      /* The link test measures the path to the far server and says what
+         transport suits what it finds. It was reachable only from the metrics
+         screen, two clicks in, which is one more than a thing you run when a
+         tunnel feels slow should take. */
+      case 'link':   go(`/t/${encodeURIComponent(name)}/link`); break;
       case 'add':    go('/add'); break;
       case 'restartall': {
         if (!await confirmBox({

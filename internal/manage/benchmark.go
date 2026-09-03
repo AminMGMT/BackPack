@@ -247,6 +247,11 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 		r.Why = append(r.Why,
 			fmt.Sprintf("the link is clean and steady (%s, ±%s, no measurable loss)", shortDur(q.Avg), shortDur(q.Jitter)),
 			"with nothing to repair, plain multiplexed TCP is the fastest and the lightest on CPU")
+		r.Caveats = append(r.Caveats,
+			"this test is TCP only, so it cannot tell you whether UDP is throttled on your route — "+
+				"a clean result here says nothing either way about KCP or QUIC",
+			"and it measures speed, not filtering: if the tunnel works but is throttled after a while, "+
+				"that is a filtering problem and the answer is a camouflaged transport rather than a faster one")
 	}
 
 	// When the answer is KCP, the parity ratio is the setting that most decides

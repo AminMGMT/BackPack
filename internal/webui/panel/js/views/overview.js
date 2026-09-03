@@ -154,17 +154,17 @@ function tunnelRows(tuns) {
   if (!tuns.length) {
     return `<div class="tk-empty">No tunnels yet. Add one from <b>Tunnels</b>.</div>`;
   }
-  const rows = [...tuns].sort((a, b) => (b.bytesTotal || 0) - (a.bytesTotal || 0));
-  const peak = Math.max(...rows.map(t => t.bytesTotal || 0), 1);
+  const rows = [...tuns].sort((a, b) => (b.totalBytes || 0) - (a.totalBytes || 0));
+  const peak = Math.max(...rows.map(t => t.totalBytes || 0), 1);
   return `<div class="tk-list">${rows.map((t, i) => {
-    const share = ((t.bytesTotal || 0) / peak) * 100;
+    const share = ((t.totalBytes || 0) / peak) * 100;
     /* direction says which way it is dialled, carrier says what carries it —
        two fields, because they are two facts. Reading "direct" off the presence
        of a carrier labelled every tunnel direct, since the server fills the
        carrier in for both kinds. */
     const kind = `${t.direction === 'direct' ? 'direct' : 'reverse'} `
                + `${t.carrier || t.transport || ''}`.trim();
-    const inn = t.bytesIn || 0, outt = t.bytesOut || 0;
+    const inn = t.inBytes || 0, outt = t.outBytes || 0;
     const io = inn + outt || 1;
     /* The name and what it has carried, and nothing else. This sits beside the
        all-time figure now, in half the width it used to have, and the ping and
@@ -178,7 +178,7 @@ function tunnelRows(tuns) {
         <i class="in" style="--w:${((inn / io) * share).toFixed(1)}%"></i>
         <i class="out" style="--w:${((outt / io) * share).toFixed(1)}%"></i>
       </span>
-      <span class="tk-fig">${esc(bytes(t.bytesTotal || 0))}</span>
+      <span class="tk-fig">${esc(bytes(t.totalBytes || 0))}</span>
     </button>`;
   }).join('')}</div>`;
 }
@@ -277,7 +277,10 @@ export function overview(ctx) {
     const onlineNodes = nodes.filter(n => n.online).length;
     const bad = troubles(state, fleet, backup);
 
-    const sent = s.totalSent || 0, recv = s.totalRecv || 0;
+    /* The numeric siblings, not totalSent/totalRecv: those are formatted for
+       reading, and adding two of them concatenated the strings, which made the
+       split bar below NaN% wide and therefore invisible. */
+    const sent = Number(s.totalSentBytes) || 0, recv = Number(s.totalRecvBytes) || 0;
     const both = sent + recv || 1;
 
     view.innerHTML = `
@@ -327,7 +330,7 @@ export function overview(ctx) {
         ${footer()}
       </div>`;
 
-    const total = state.stats ? (s.totalTraffic || 0) : null;
+    const total = state.stats ? (Number(s.totalTrafficBytes) || 0) : null;
     countTo($('#ovTotal', view), total, !counted && total > 0);
     if (total > 0) counted = true;
     view.querySelectorAll('[data-to]').forEach(b =>

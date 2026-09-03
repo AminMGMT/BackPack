@@ -60,6 +60,24 @@ type SystemStats struct {
 	UpSpeed   string `json:"upSpeed"`
 	DownSpeed string `json:"downSpeed"`
 
+	// The same five measurements as plain numbers — bytes, and bytes per
+	// second.
+	//
+	// The strings above are formatted for a reader and are what the classic
+	// panel prints. Anything that has to compute rather than print needs the
+	// number: the new panel scales a column history against a peak, works out
+	// each tunnel's share of the total, and animates the headline figure up to
+	// its value. Number("873 B/s") is NaN, so every one of those silently
+	// became zero — a page reporting no traffic on a link that was carrying
+	// it. Sending both is the honest fix; parsing a formatted string back into
+	// a number in the browser is guesswork about units that will be wrong the
+	// first time the formatter changes.
+	UpBps             float64 `json:"upBps"`
+	DownBps           float64 `json:"downBps"`
+	TotalSentBytes    uint64  `json:"totalSentBytes"`
+	TotalRecvBytes    uint64  `json:"totalRecvBytes"`
+	TotalTrafficBytes uint64  `json:"totalTrafficBytes"`
+
 	TunnelsTotal   int `json:"tunnelsTotal"`
 	TunnelsRunning int `json:"tunnelsRunning"`
 
@@ -148,6 +166,13 @@ type TunnelInfo struct {
 	Uptime   string `json:"uptime,omitempty"`
 	BytesIn  string `json:"bytesIn,omitempty"`
 	BytesOut string `json:"bytesOut,omitempty"`
+	// InBytes/OutBytes/TotalBytes are the same three as numbers, for the same
+	// reason as the system totals above: the panel sorts tunnels by what they
+	// have carried and draws each one's share of the busiest, and neither is
+	// possible with "200.0 MiB".
+	InBytes    uint64 `json:"inBytes,omitempty"`
+	OutBytes   uint64 `json:"outBytes,omitempty"`
+	TotalBytes uint64 `json:"totalBytes,omitempty"`
 	// BytesTotal is the two added. The card shows all three on one line, and a
 	// sum of two already-formatted strings is not something the browser can do.
 	BytesTotal string `json:"bytesTotal,omitempty"`
@@ -391,6 +416,7 @@ func fillNetwork(s *SystemStats, tunnels []manage.Tunnel) {
 	s.TotalRecv = sysstat.HumanBytes(in)
 	s.TotalSent = sysstat.HumanBytes(out)
 	s.TotalTraffic = sysstat.HumanBytes(in + out)
+	s.TotalRecvBytes, s.TotalSentBytes, s.TotalTrafficBytes = in, out, in+out
 
 	counters, err := psnet.IOCounters(false)
 	if err != nil || len(counters) == 0 {
@@ -406,8 +432,10 @@ func fillNetwork(s *SystemStats, tunnels []manage.Tunnel) {
 	if !prev.at.IsZero() {
 		secs := cur.at.Sub(prev.at).Seconds()
 		if secs > 0 {
-			s.UpSpeed = sysstat.HumanBytes(uint64(float64(cur.sent-prev.sent)/secs)) + "/s"
-			s.DownSpeed = sysstat.HumanBytes(uint64(float64(cur.recv-prev.recv)/secs)) + "/s"
+			s.UpBps = float64(cur.sent-prev.sent) / secs
+			s.DownBps = float64(cur.recv-prev.recv) / secs
+			s.UpSpeed = sysstat.HumanBytes(uint64(s.UpBps)) + "/s"
+			s.DownSpeed = sysstat.HumanBytes(uint64(s.DownBps)) + "/s"
 		}
 	}
 	if s.UpSpeed == "" {
@@ -763,6 +791,8 @@ func fillMetrics(info *TunnelInfo, snap metrics.Snapshot) {
 	info.BytesIn = sysstat.HumanBytes(snap.BytesIn)
 	info.BytesOut = sysstat.HumanBytes(snap.BytesOut)
 	info.BytesTotal = sysstat.HumanBytes(snap.BytesIn + snap.BytesOut)
+	info.InBytes, info.OutBytes = snap.BytesIn, snap.BytesOut
+	info.TotalBytes = snap.BytesIn + snap.BytesOut
 	info.Rates = rates.sample(info.Name, snap)
 	info.Pool = snap.Pool
 	if snap.KCP != nil {

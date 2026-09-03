@@ -159,15 +159,25 @@ func (a *Agent) session(ctx context.Context) error {
 	// and go on answering the panel until the socket happened to break.
 	stop := make(chan struct{})
 	defer close(stop)
+	identified := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
+			// Shutdown waits for identify. Enrolment is the one moment that
+			// must not be cut short: the panel spends the setup token before
+			// it answers, so a node torn down between the panel's reply and
+			// SaveAgent below would hold no credential and could never enrol
+			// again — bricked by nothing worse than being stopped at the wrong
+			// instant. identify carries its own deadline, so this cannot hang.
+			<-identified
 			mux.Close()
 		case <-stop:
 		}
 	}()
 
-	if err := a.identify(mux); err != nil {
+	err = a.identify(mux)
+	close(identified)
+	if err != nil {
 		return err
 	}
 	a.onLog("connected to the panel at " + a.cfg.Server)
@@ -222,6 +232,11 @@ func (a *Agent) identify(mux *smux.Session) error {
 		if err := SaveAgent(a.cfg); err != nil {
 			return fmt.Errorf("enrolled, but could not save the credential: %w", err)
 		}
+		// Now that the key is on disk, tell the panel so it can retire the
+		// setup token. Failing to say so is not worth abandoning the session
+		// for — the key is saved either way, and the panel retires the token
+		// on the first authentication regardless.
+		_ = writeMsg(st, Request{Op: OpEnrolled})
 		a.onLog("enrolled with the panel as " + res.Name)
 		return nil
 	}

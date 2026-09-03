@@ -54,7 +54,7 @@ function fill(root, values, prefix = '') {
 /* The rail's one-line summaries and the version list were drawn with example
    values. They are rewritten from what the server reports, because a summary
    that is decoration is a summary that lies the first time something changes. */
-function summarise(root, { stats, sec, tg, ch, ses, ab, upd }) {
+function summarise(root, { stats, tg, ch, ses, ab, upd }) {
   const say = (label, text) => {
     for (const b of root.querySelectorAll('b')) {
       if (b.textContent.trim() !== label) continue;
@@ -68,7 +68,6 @@ function summarise(root, { stats, sec, tg, ch, ses, ab, upd }) {
     location.protocol === 'https:' ? 'HTTPS' : 'Plain HTTP',
   ].filter(Boolean).join(' · '));
   say('Security', [
-    sec ? (sec.twoFA ? '2FA on' : '2FA off') : null,
     ses ? `${ses.length} device${ses.length === 1 ? '' : 's'}` : null,
   ].filter(Boolean).join(' · '));
   say('Telegram bot', tg ? (tg.configured ? 'Connected' : 'Not configured') : null);
@@ -96,8 +95,8 @@ export function settingsView(ctx) {
     bind: async (root, close) => {
       dialogSubtitle(root, store.get().stats,
         'changes apply as you make them unless a control says otherwise');
-      const [sec, tg, ch, ses, ab, upd] = await Promise.allSettled([
-        api.security(), api.telegram(), api.channel(), api.sessions(),
+      const [tg, ch, ses, ab, upd] = await Promise.allSettled([
+        api.telegram(), api.channel(), api.sessions(),
         api.autoBackup(), api.updateCheck(),
       ]);
       const val = r => (r.status === 'fulfilled' ? r.value : null);
@@ -121,11 +120,10 @@ export function settingsView(ctx) {
         return pane ? [...pane.querySelectorAll('button')].filter(b => re.test(b.textContent.trim())) : [];
       };
 
-      if (sec.status === 'fulfilled') fill(root, sec.value);
       if (tg.status === 'fulfilled') fill(root, tg.value);
       if (ch.status === 'fulfilled') fill(root, ch.value);
       summarise(root, {
-        stats: store.get().stats, sec: val(sec), tg: val(tg), ch: val(ch),
+        stats: store.get().stats, tg: val(tg), ch: val(ch),
         ses: val(ses), ab: val(ab), upd: val(upd),
       });
 
@@ -304,37 +302,6 @@ export function settingsView(ctx) {
         }
       }
 
-      /* The token has one place it is shown, and it is not inside the button's
-         own row: the preview put it in the row below, with a made-up value that
-         every panel displayed as if it were theirs. It is read on open, written
-         when one is issued and cleared when one is revoked, and the Copy beside
-         it copies whatever is actually there. */
-      const tokenBox = () => root.querySelector('[data-p="security"] .mono2');
-      const showToken = t => {
-        const box = tokenBox();
-        if (!box) return;
-        box.textContent = t || 'none issued yet';
-        box.dataset.token = t || '';
-      };
-      api.remoteTokenRead().then(r => showToken(r && r.token)).catch(() => showToken(''));
-
-      const tokenRow = tokenBox()?.closest('.arow');
-      tokenRow?.querySelector('button')?.addEventListener('click', async () => {
-        const t = tokenBox()?.dataset.token || '';
-        if (!t) return toast('There is no token to copy yet.', true);
-        try { await navigator.clipboard.writeText(t); toast('Token copied.'); }
-        catch (e) { toast('There is nothing on the clipboard.', true); }
-      });
-
-      byText(/^revoke$/i).forEach(bt => bt.addEventListener('click', async () => {
-        if (!await confirmBox({
-          title: 'Revoke the token?',
-          body: 'Every peer and scraper using it loses access.',
-          go: 'Revoke', danger: true,
-        })) return;
-        try { await api.remoteToken('revoke'); showToken(''); toast('Token revoked.'); } catch (e) { oops(e); }
-      }));
-
       /* Only the one that means every other device. The rows painted above have
          a "Sign out" of their own and their own handler, and matching that text
          here as well gave one device's button the meaning of all of them. */
@@ -392,14 +359,6 @@ export function settingsView(ctx) {
           if (r.url) setTimeout(() => { location.href = r.url; }, 2500);
         } catch (e) { oops(e); }
       });
-
-      byText(/^generate$/i).forEach(b => b.addEventListener('click', async () => {
-        try {
-          const r = await api.remoteToken('generate');
-          showToken(r && r.token);
-          toast('A new token was issued.');
-        } catch (e) { oops(e); }
-      }));
 
       /* The port and the password both end this session, so both ask first. */
       byTextIn('access', /^(save|apply)$/i).forEach(b => b.addEventListener('click', async () => {
@@ -503,9 +462,9 @@ export function settingsView(ctx) {
        * Nine of them: two-factor, the sign-in notice, the three Telegram
        * notices, the bot language, the relay, the update channel and the weekly
        * backup. Every one rendered, none did anything — api.setChannel and
-       * api.setAutoBackup were never called from anywhere, /api/security was
-       * only ever read, and telegramSave posted JSON at a handler that reads
-       * form values, so it reported success and changed nothing.
+       * api.setAutoBackup were never called from anywhere, and telegramSave
+       * posted JSON at a handler that reads form values, so it reported
+       * success and changed nothing.
        *
        * Each control now carries the handler's own form key as data-name, and
        * saves the moment it is used: a settings screen with no Save button
@@ -515,12 +474,6 @@ export function settingsView(ctx) {
       const isOn = n => !!ctlOf(n)?.classList.contains('on');
       const valOf = n => ctlOf(n)?.dataset.value ?? '';
 
-      const saveSecurity = async () => {
-        try {
-          await api.setSecurity({ twoFA: isOn('twoFA'), loginNotify: isOn('loginNotify') });
-          toast('Sign-in settings saved.');
-        } catch (e) { oops(e); }
-      };
       /* The bot's own settings travel together — the handler reads the whole
          form and keeps what is missing, so sending one key alone is fine, but
          sending them together is what the Save button already does. */
@@ -537,7 +490,6 @@ export function settingsView(ctx) {
       };
 
       const onFlip = {
-        twoFA: saveSecurity, loginNotify: saveSecurity,
         alertsEnabled: saveTelegram, alertTunnelDown: saveTelegram,
         alertNewRelease: saveTelegram,
         autoBackup: async on => {
@@ -631,13 +583,10 @@ export function settingsView(ctx) {
       });
 
       /* What the server already has, reflected onto the faces. */
-      const secNow = val(sec) || {}, tgNow = val(tg) || {}, chNow = val(ch) || {}, abNow = val(ab) || {};
       const setSw = (n, on) => {
         const c = ctlOf(n);
         if (c) { c.classList.toggle('on', !!on); c.setAttribute('aria-checked', String(!!on)); }
       };
-      setSw('twoFA', secNow.twoFA);
-      setSw('loginNotify', secNow.loginNotify);
       setSw('alertsEnabled', tgNow.alerts?.enabled);
       setSw('alertTunnelDown', tgNow.alerts?.tunnelDown);
       setSw('alertNewRelease', tgNow.alerts?.newRelease);

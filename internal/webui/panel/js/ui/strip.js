@@ -70,8 +70,8 @@ function rateTile(key, label, bytesPerSec) {
 
 function totalsRow(s) {
   return `<div class="RZ rates">
-    ${rateTile('dn', 'Download', s.downSpeed)}
-    ${rateTile('up', 'Upload', s.upSpeed)}
+    ${rateTile('dn', 'Download', s.downBps)}
+    ${rateTile('up', 'Upload', s.upBps)}
   </div>`;
 }
 

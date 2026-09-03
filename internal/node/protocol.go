@@ -84,6 +84,18 @@ const (
 
 	// OpAuth presents an existing node key.
 	OpAuth = "auth"
+
+	// OpEnrolled says the node has written its new key to disk.
+	//
+	// The panel spends the setup token to answer an enrolment, so between its
+	// reply and the node's save there is a moment where the token is gone and
+	// the key exists only in flight. A node stopped there would hold no
+	// credential and have nothing left to enrol with. This is the panel's only
+	// evidence that the key survived: until it arrives the token stays live, so
+	// the node's next attempt enrols it again rather than finding the door
+	// shut. A node that predates this message simply never sends it, and the
+	// panel falls back to the grace window in the registry.
+	OpEnrolled = "enrolled"
 )
 
 // maxFrame caps a single message. The largest thing that legitimately crosses

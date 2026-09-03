@@ -1,12 +1,10 @@
 package webui
 
 import (
-	"bytes"
 	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -115,7 +113,9 @@ func TestClearedCookieMatchesTheCookieItReplaces(t *testing.T) {
 // readable from script is a session token an injected script can take.
 func TestPanelCookiesAreHttpOnlyAndSameSite(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "http://panel.example/login", nil)
-	for _, name := range []string{sessionCookie, pendingCookie} {
+	// There was a second cookie here, for the half-finished two-factor login;
+	// that whole path is gone.
+	for _, name := range []string{sessionCookie} {
 		c := authCookie(r, name, "value", time.Minute)
 		if !c.HttpOnly {
 			t.Errorf("%s is readable from script", name)
@@ -160,43 +160,3 @@ func TestPanelServerHasItsLimits(t *testing.T) {
 }
 
 // A code works exactly once; three wrong tries kill the pending login.
-func TestTwoFAStore(t *testing.T) {
-	st := &twoFAStore{pending: map[string]*pendingLogin{}}
-
-	tok, code := st.start()
-	if ok, _ := st.verify(tok, code); !ok {
-		t.Fatal("correct code rejected")
-	}
-	if ok, dead := st.verify(tok, code); ok || !dead {
-		t.Fatal("a code must not work twice")
-	}
-
-	tok, _ = st.start()
-	for i := 0; i < twoFAMaxAttempts-1; i++ {
-		if _, dead := st.verify(tok, "000000"); dead {
-			t.Fatalf("killed after %d attempts", i+1)
-		}
-	}
-	if _, dead := st.verify(tok, "000000"); !dead {
-		t.Fatal("pending login should die after max attempts")
-	}
-}
-
-// There has to be a way back from two-factor.
-//
-// It is set from the panel and delivered by the Telegram bot; when delivery
-// stops working the panel refuses every sign-in, and the only setting that
-// would fix it lived behind that sign-in. The CLI now carries it, so this
-// checks the menu still offers it — a rename that quietly dropped the entry
-// would put the lockout back.
-func TestTheCLIOffersAWayOutOfTwoFactor(t *testing.T) {
-	src, err := os.ReadFile("../menu/menu.go")
-	if err != nil {
-		t.Fatalf("read menu.go: %v", err)
-	}
-	for _, want := range []string{"Two-factor sign-in", "func twoFAMenu", "cfg.TwoFA = false"} {
-		if !bytes.Contains(src, []byte(want)) {
-			t.Errorf("the panel menu no longer offers a way to turn two-factor off (%q missing)", want)
-		}
-	}
-}

@@ -128,18 +128,8 @@ export const setAutoBackup = on =>
   post('/api/autobackup', new URLSearchParams({ enabled: on ? '1' : '0' }));
 
 /* ---- CLI: 5 Web Panel ---------------------------------------------------- */
-export const security   = () => get('/api/security');
-/* Both switches travel together: the endpoint takes the pair, and sending one
-   alone would read as turning the other off. */
-export const setSecurity = ({ twoFA, loginNotify }) =>
-  post('/api/security', new URLSearchParams({
-    twoFA: twoFA ? '1' : '0', loginNotify: loginNotify ? '1' : '0',
-  }));
 export const sessions   = () => get('/api/sessions');
-/* Ending a session and revoking the read-only token are two different things on
- * two different endpoints. Both session buttons used to call the token one, so
- * signing out a device revoked the token instead and "sign out every other
- * device" was refused outright. */
+/* Ending one device's session, and ending every other one. */
 export const sessionRevoke = id =>
   post('/api/sessions', new URLSearchParams({ action: 'revoke', id }));
 export const sessionRevokeOthers = () =>
@@ -151,8 +141,6 @@ export const panelCertRead = () => get('/api/panelcert');
    without it the endpoint has nothing to apply and refuses the whole request. */
 export const panelCert   = ({ mode, domain = '', email = '' }) =>
   post('/api/panelcert', new URLSearchParams({ mode, domain, email }));
-export const remoteToken     = action => post('/api/remotetoken', new URLSearchParams({ action }));
-export const remoteTokenRead = () => get('/api/remotetoken');
 
 /* ---- CLI: 7 Telegram Bot ------------------------------------------------- */
 export const telegram     = () => get('/api/telegram');
