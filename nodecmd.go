@@ -1,40 +1,39 @@
 package main
 
 import (
-	"context"
-	"flag"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
-	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/node"
 )
 
-// `backpack node ...` — the managed side of the panel-to-node channel.
+// `backpack node ...` — the managed side of the panel-to-server channel.
 //
-// It is a subcommand rather than another flag on main because it is the one
-// thing on this binary an operator types on a server they are not otherwise
-// setting up: the whole point of the feature is that the foreign machine is
-// touched once, with one line, and never again.
+// There is almost nothing here, and that is the change.
+//
+// This used to hold a setup command, an agent, a service unit and a way to stop
+// being managed, because the far server dialled the panel and had to be told
+// how: a port to reach, a key to present, a daemon to hold the connection open.
+// Every one of those was a thing to install on a machine the operator only
+// wanted to use, and a thing that could be wrong while the panel showed the
+// server as simply offline.
+//
+// The panel reaches servers over their own SSH now. That is already running,
+// already authenticated and already how the machine is administered — so the
+// far side needs no state at all, and what is left is the one command the panel
+// runs there.
 
-const nodeUsage = `backpack node — connect this server to a Backpack panel
+const nodeUsage = `backpack node — the panel-managed side of this server
 
-  backpack node setup --panel <host:port> --key <setup-key>
-        Register this server with a panel and start the agent.
-        The panel shows this line ready to paste, on Nodes → Add server.
+  backpack node exec <request>
+        Perform one operation and print the answer. Both are JSON, base64
+        encoded. This is what a Backpack panel runs over SSH; there is no
+        reason to type it.
 
-  backpack node status
-        Show whether this server is managed, and by which panel.
-
-  backpack node run
-        Run the agent in the foreground. This is what the service executes;
-        there is no reason to run it by hand.
-
-  backpack node remove
-        Stop being managed. Tunnels already on this server keep running.
+Nothing needs to be set up here. A panel manages this server by logging in
+over SSH, so adding it to a fleet is done entirely from the panel.
 `
 
 func runNode(args []string) {
@@ -43,18 +42,8 @@ func runNode(args []string) {
 		os.Exit(2)
 	}
 	switch args[0] {
-	case "setup":
-		nodeSetup(args[1:])
-	case "run":
-		nodeRun()
-	case "status":
-		nodeStatus()
-	case "remove":
-		if err := node.Uninstall(); err != nil {
-			fmt.Fprintln(os.Stderr, "could not remove the node agent:", err)
-			os.Exit(1)
-		}
-		fmt.Println("This server is no longer managed. Its tunnels were left running.")
+	case "exec":
+		nodeExec(args[1:])
 	case "-h", "--help", "help":
 		fmt.Print(nodeUsage)
 	default:
@@ -63,100 +52,37 @@ func runNode(args []string) {
 	}
 }
 
-func nodeSetup(args []string) {
-	fs := flag.NewFlagSet("node setup", flag.ExitOnError)
-	panelAddr := fs.String("panel", "", "the panel's node address, host:port")
-	key := fs.String("key", "", "the setup key the panel generated")
-	fs.Parse(args)
-
-	if *panelAddr == "" || *key == "" {
-		fmt.Fprint(os.Stderr, "both --panel and --key are required\n\n"+nodeUsage)
+// nodeExec performs one operation for a panel reaching this server over SSH.
+//
+// The request arrives as an argument rather than on stdin because the panel
+// gets to this through a shell, and a shell handed one opaque word has fewer
+// ways to go wrong than one handed a redirect as well. Base64 for the same
+// reason: nothing in it can be read as shell syntax, whatever the request holds.
+//
+// The answer always goes to stdout, including a refusal — the panel reads a
+// Response either way, and a command that failed with nothing on stdout would
+// reach it as "the far end said nothing", which is what a broken SSH looks like
+// and is a different problem. The exit status stays 0 for the same reason; a
+// non-zero one means this command failed, not that the operation did.
+func nodeExec(args []string) {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "node exec takes one base64 request")
 		os.Exit(2)
 	}
-	hub, enroll, err := node.ParseSetupKey(*key)
+	raw, err := base64.StdEncoding.DecodeString(args[0])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "the request is not valid base64:", err)
+		os.Exit(2)
 	}
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "run this as root — it installs a service and writes to "+app.ConfigDir)
-		os.Exit(1)
+	var req node.Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		fmt.Fprintln(os.Stderr, "the request is not valid JSON:", err)
+		os.Exit(2)
 	}
-
-	if err := node.Install(node.AgentConfig{Server: *panelAddr, HubKey: hub, Enroll: enroll}); err != nil {
-		fmt.Fprintln(os.Stderr, "could not install the node agent:", err)
-		os.Exit(1)
-	}
-
-	// Installed is not the same as working, and the difference is exactly what
-	// the operator is standing there to find out. Wait for the agent to be
-	// issued a credential, which only happens once it has reached the panel and
-	// been accepted.
-	fmt.Printf("Registering with %s ...\n", *panelAddr)
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if node.IsManaged() {
-			c, _ := node.LoadAgent()
-			fmt.Printf("\nThis server is now managed as %q.\n", c.Name)
-			fmt.Println("Create tunnels for it from the panel — nothing else is needed here.")
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	fmt.Fprintf(os.Stderr, `
-The agent is installed but has not been accepted yet.
-
-That usually means one of:
-  - the panel cannot be reached at %s (a firewall in front of the port)
-  - the setup key was already used, or has expired
-  - the panel's node listener is turned off
-
-It keeps retrying, so fixing any of those is enough — nothing to re-run here.
-Watch it with:  journalctl -u %s -f
-`, *panelAddr, app.NodeService)
-	os.Exit(1)
-}
-
-func nodeRun() {
-	cfg, err := node.LoadAgent()
+	out, err := json.Marshal(node.Execute(req))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "this server is not set up as a node — run `backpack node setup` first")
+		fmt.Fprintln(os.Stderr, "could not encode the answer:", err)
 		os.Exit(1)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-
-	done := make(chan struct{})
-	go func() { node.NewAgent(cfg, func(m string) { logger.Info(m) }).Run(ctx); close(done) }()
-
-	<-sig
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-	}
-	logger.Info("backpack node agent stopped")
-}
-
-func nodeStatus() {
-	cfg, err := node.LoadAgent()
-	if err != nil {
-		fmt.Println("This server is not managed by a panel.")
-		return
-	}
-	fmt.Println("Panel:    ", cfg.Server)
-	if cfg.Name != "" {
-		fmt.Println("Known as: ", cfg.Name)
-	}
-	switch {
-	case cfg.NodeKey == "":
-		fmt.Println("State:     waiting to be accepted")
-	case node.Running():
-		fmt.Println("State:     managed, agent running")
-	default:
-		fmt.Println("State:     managed, but the agent is not running")
-		fmt.Println("           start it with: systemctl start " + app.NodeService)
-	}
+	fmt.Println(base64.StdEncoding.EncodeToString(out))
 }

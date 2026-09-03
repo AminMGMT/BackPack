@@ -14,6 +14,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
+	"github.com/backpack/backpack/internal/sysstat"
 )
 
 // ApplyRequest is the complete desired state of one tunnel.
@@ -244,6 +245,7 @@ func cachedAddrs() (v4, v6 string) {
 func LocalInfo() Info {
 	host, _ := os.Hostname()
 	v4, v6 := cachedAddrs()
+	m := sysstat.Get()
 	return Info{
 		Hostname: host,
 		Version:  app.Version,
@@ -251,6 +253,8 @@ func LocalInfo() Info {
 		Arch:     runtime.GOARCH,
 		IPv4:     v4,
 		IPv6:     v6,
+		Distro:   m.OS,
+		Uptime:   sysstat.HumanDuration(m.Uptime),
 	}
 }
 

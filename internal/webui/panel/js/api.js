@@ -55,14 +55,18 @@ export const shareLink = name =>
 export const shareLinkDecode = link => post('/api/tunnel/sharelink', { link });
 /* Managed servers. The four actions share one endpoint because they are one
    thing — the fleet — and each returns the state that follows, so the screen
-   never has to guess what changed. Adding is the exception: it answers with the
-   command to run, which is not state. */
+   never has to guess what changed. */
 export const nodes = () => get('/api/nodes');
 const nodePost = form => post('/api/nodes', new URLSearchParams(form));
 export const nodeListenerOn  = () => nodePost({ action: 'enable' });
 export const nodeListenerOff = () => nodePost({ action: 'disable' });
 export const nodeRemove = name => nodePost({ action: 'remove', name });
-export const nodeAdd = (name, port) => nodePost({ action: 'add', name, port });
+/* Adding reaches the server while the operator waits, and installs Backpack on
+   it if it has none, so this is the one node call that can take minutes. */
+export const nodeAdd = fields => nodePost({ action: 'add', ...fields });
+export const nodeCredentials = fields => nodePost({ action: 'credentials', ...fields });
+export const nodeUpgrade = name => nodePost({ action: 'upgrade', name });
+export const nodeUpgradeAll = () => nodePost({ action: 'upgradeall' });
 
 export const nodeTunnels = name =>
   get('/api/node/tunnels?node=' + encodeURIComponent(name));

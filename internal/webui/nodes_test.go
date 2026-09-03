@@ -2,18 +2,14 @@ package webui
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/node"
 )
@@ -37,8 +33,55 @@ func isolateFleet(t *testing.T) {
 }
 
 func newFleetServer() *server {
-	return &server{sessions: newSessionStore(), nodes: &hubRunner{}}
+	return &server{sessions: newSessionStore(), nodes: &fleet{}}
 }
+
+// fakeRunner stands in for a fleet of real machines.
+//
+// The transport is SSH now, so a test that wanted a live node would need a
+// second computer. What the panel's own behaviour depends on is narrower than
+// that: whether a server answers, and what it says — so that is what is
+// substituted, and every path through the handlers is exercised for real.
+type fakeRunner struct {
+	up      map[string]bool
+	answers map[string]any   // op -> what it returns
+	fail    map[string]error // op -> what it refuses with
+	calls   []string
+	forgot  []string
+}
+
+func newFake() *fakeRunner {
+	return &fakeRunner{up: map[string]bool{}, answers: map[string]any{}, fail: map[string]error{}}
+}
+
+func (f *fakeRunner) Call(name, op string, body, out any) error {
+	f.calls = append(f.calls, name+":"+op)
+	if !f.up[name] {
+		return node.ErrOffline{Name: name, Why: "no route to host"}
+	}
+	if err := f.fail[op]; err != nil {
+		return err
+	}
+	if v, ok := f.answers[op]; ok && out != nil {
+		b, _ := json.Marshal(v)
+		return json.Unmarshal(b, out)
+	}
+	return nil
+}
+
+func (f *fakeRunner) IsOnline(name string) bool { return f.up[name] }
+
+func (f *fakeRunner) Reachable(name string) (bool, string) {
+	if f.up[name] {
+		return true, ""
+	}
+	return false, "no route to host"
+}
+
+func (f *fakeRunner) Forget(name string) { f.forgot = append(f.forgot, name) }
+
+// withFleet puts a stand-in behind the panel's fleet.
+func withFleet(s *server, f *fakeRunner) { s.nodes.run = f }
 
 func post(t *testing.T, s *server, form string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -70,11 +113,10 @@ func TestTheFleetIsEmptyAndClosedUntilItIsTurnedOn(t *testing.T) {
 			state.Enabled, len(state.Nodes))
 	}
 
-	// Issuing a setup command with nothing listening would hand the operator a
-	// line that cannot work.
-	if w := post(t, s, "action=add&name=kharej&port=40555"); w.Code == http.StatusOK {
-		t.Error("a setup command was issued with no listener to connect to")
-	} else if !strings.Contains(w.Body.String(), "Accept servers") {
+	// Nothing can be added before the feature is on.
+	if w := post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=x"); w.Code == http.StatusOK {
+		t.Error("a server was added with the feature turned off")
+	} else if !strings.Contains(w.Body.String(), "Managed servers") {
 		t.Errorf("unhelpful refusal: %q", strings.TrimSpace(w.Body.String()))
 	}
 
@@ -90,11 +132,21 @@ func TestTheFleetIsEmptyAndClosedUntilItIsTurnedOn(t *testing.T) {
 
 // Turning it on and adding a server issues a usable command on that server's
 // own port.
-func TestAddingAServerIssuesAUsableCommand(t *testing.T) {
+// Adding a server is one round trip to it, and the fleet only keeps what
+// answered.
+//
+// The flow this replaces saved the details first and found out whether they
+// worked later — which is how a server came to sit in the fleet doing nothing
+// with nothing saying why. A login that does not work is a typo, and a typo is
+// worth reporting while the operator is still looking at the form.
+func TestAddingAServerKeepsOnlyWhatAnswers(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
 	t.Cleanup(s.nodes.stop)
 
+	if w := post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=x"); w.Code == http.StatusOK {
+		t.Error("a server was added before the feature was turned on")
+	}
 	if w := post(t, s, "action=enable"); w.Code != http.StatusOK {
 		t.Fatalf("enable: %d %s", w.Code, w.Body.String())
 	}
@@ -102,86 +154,102 @@ func TestAddingAServerIssuesAUsableCommand(t *testing.T) {
 		t.Error("the choice was not persisted")
 	}
 
-	// A port is suggested, and it is one nothing else on the machine holds.
-	var state struct {
-		SuggestPort int `json:"suggestPort"`
-	}
-	r := httptest.NewRequest("GET", "/api/nodes", nil)
-	w := httptest.NewRecorder()
-	s.handleNodes(w, r)
-	json.Unmarshal(w.Body.Bytes(), &state)
-	if state.SuggestPort < 10000 || state.SuggestPort > 65535 {
-		t.Errorf("suggested port %d is not the five-digit one the panel promises", state.SuggestPort)
-	}
+	f := newFake()
+	withFleet(s, f)
 
-	port := freeTestPort(t)
-	if w := post(t, s, "action=add&name=kharej&port=notanumber"); w.Code == http.StatusOK {
-		t.Error("a non-numeric port was accepted")
-	}
-	w = post(t, s, fmt.Sprintf("action=add&name=kharej&port=%d", port))
-	if w.Code != http.StatusOK {
-		t.Fatalf("add: %d %s", w.Code, w.Body.String())
-	}
-	var got struct {
-		Command, CommandShort, Panel string
-		Port                         int
-	}
-	json.Unmarshal(w.Body.Bytes(), &got)
-	if got.Port != port {
-		t.Errorf("the server was given port %d, not the %d asked for", got.Port, port)
-	}
-
-	// Two lines, for two states the far server can be in. Both have to carry
-	// this server's own port and the same key.
-	want := ":" + strconv.Itoa(port)
-	for _, tc := range []struct{ what, line string }{
-		{"one-line", got.Command}, {"short", got.CommandShort},
+	// The form is checked before anything is dialled.
+	for _, bad := range []struct{ what, form string }{
+		{"no address", "action=add&name=kharej&host=&user=root&password=x"},
+		{"no password", "action=add&name=kharej&host=203.0.113.9&user=root&password="},
+		{"a bad name", "action=add&name=kha%2Frej&host=203.0.113.9&user=root&password=x"},
+		{"a bad ssh port", "action=add&name=kharej&host=203.0.113.9&user=root&password=x&sshPort=0"},
 	} {
-		for _, frag := range []string{"--panel", "--key", want} {
-			if !strings.Contains(tc.line, frag) {
-				t.Errorf("the %s command has no %q: %s", tc.what, frag, tc.line)
-			}
+		if w := post(t, s, bad.form); w.Code == http.StatusOK {
+			t.Errorf("a server with %s was accepted", bad.what)
 		}
 	}
-	if !strings.Contains(got.Command, "install.sh") {
-		t.Errorf("the one-line command does not fetch the installer: %s", got.Command)
+
+	// A server that does not answer is not kept.
+	if w := post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=x"); w.Code == http.StatusOK {
+		t.Error("a server that could not be reached was added anyway")
 	}
-	keyOf := func(line string) string { return line[strings.Index(line, "--key ")+len("--key "):] }
-	if keyOf(got.Command) != keyOf(got.CommandShort) {
-		t.Error("the two lines carry different keys")
-	}
-	if _, _, err := node.ParseSetupKey(keyOf(got.Command)); err != nil {
-		t.Errorf("the key in the command does not parse: %v", err)
+	if len(node.List()) != 0 {
+		t.Errorf("an unreachable server was left in the fleet: %+v", node.List())
 	}
 
-	// A second server cannot be put on the same port.
-	if w := post(t, s, fmt.Sprintf("action=add&name=other&port=%d", port)); w.Code == http.StatusOK {
-		t.Error("two servers were given the same port")
+	// One that does is.
+	f.up["kharej"] = true
+	f.answers[node.OpHello] = node.Info{Version: "v1.7.6", OS: "Ubuntu 24.04"}
+	if w := post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=x"); w.Code != http.StatusOK {
+		t.Fatalf("add: %d %s", w.Code, w.Body.String())
+	}
+	got := node.List()
+	if len(got) != 1 {
+		t.Fatalf("the fleet holds %d servers", len(got))
+	}
+	if got[0].Host != "203.0.113.9" || got[0].User != "root" {
+		t.Errorf("the server was stored as %+v", got[0])
+	}
+	if got[0].Password != "" {
+		t.Error("List handed out the password")
+	}
+	if got[0].Info.Version != "v1.7.6" {
+		t.Errorf("what the server said about itself was not kept: %+v", got[0].Info)
 	}
 
-	// Withdrawing it takes the token and closes the door.
+	// The same machine twice is a mistake worth catching: two names for one
+	// server means two cards that disagree about it.
+	if w := post(t, s, "action=add&name=other&host=203.0.113.9&user=root&password=x"); w.Code == http.StatusOK {
+		t.Error("the same address was added twice")
+	}
+
+	// Removing it drops the connection with the record.
 	if w := post(t, s, "action=remove&name=kharej"); w.Code != http.StatusOK {
 		t.Fatalf("remove: %d %s", w.Code, w.Body.String())
 	}
-	if len(node.PendingList()) != 0 {
-		t.Error("removing a pending server left its token live")
+	if len(node.List()) != 0 {
+		t.Error("the server is still in the fleet")
 	}
-	if hub := s.nodes.get(); hub != nil {
-		if _, still := hub.Listening()[port]; still {
-			t.Error("the port is still open after the server was withdrawn")
-		}
+	if len(f.forgot) == 0 || f.forgot[0] != "kharej" {
+		t.Error("the connection to a removed server was left open")
 	}
 }
 
-// freeTestPort takes a port and hands it straight back, so the hub can bind it.
-func freeTestPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("no free port: %v", err)
+// The password is never sent to the browser, and changing the address forgets
+// the host key — a different machine is entitled to a different one.
+func TestCredentialsCanBeChangedAndAreNeverSentBack(t *testing.T) {
+	isolateFleet(t)
+	s := newFleetServer()
+	t.Cleanup(s.nodes.stop)
+	post(t, s, "action=enable")
+	f := newFake()
+	f.up["kharej"] = true
+	withFleet(s, f)
+	post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=first")
+
+	if err := node.NoteFingerprint("kharej", "SHA256:abc"); err != nil {
+		t.Fatalf("fingerprint: %v", err)
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	if w := post(t, s, "action=credentials&name=kharej&host=198.51.100.7&password=second"); w.Code != http.StatusOK {
+		t.Fatalf("credentials: %d %s", w.Code, w.Body.String())
+	}
+	n, _ := node.Find("kharej")
+	if n.Host != "198.51.100.7" {
+		t.Errorf("the address was not changed: %s", n.Host)
+	}
+	if n.Fingerprint != "" {
+		t.Error("the host key from the old address was kept for the new one")
+	}
+
+	r := httptest.NewRequest("GET", "/api/nodes", nil)
+	w := httptest.NewRecorder()
+	s.handleNodes(w, r)
+	if strings.Contains(w.Body.String(), "first") || strings.Contains(w.Body.String(), "second") {
+		t.Error("the fleet listing carries the server's password")
+	}
+	if !strings.Contains(w.Body.String(), "198.51.100.7") {
+		t.Error("the fleet listing does not say where the server is")
+	}
 }
 
 // The point of the feature: an edit that cannot reach the other end says so,
@@ -284,96 +352,48 @@ func TestTheNodePickerAndSetupLinkReachBothKindsOfTunnel(t *testing.T) {
 // place they meet is a server the operator has just pasted into. A flag renamed
 // on one side fails there, minutes into an install, with an error nobody here
 // would ever see. So they are pinned against each other instead.
-func TestTheSetupCommandIsOneTheInstallerAccepts(t *testing.T) {
-	sh, err := os.ReadFile(filepath.Join("..", "..", "install.sh"))
-	if err != nil {
-		t.Fatalf("reading install.sh: %v", err)
-	}
-	script := string(sh)
-
-	cmd := setupCommand("203.0.113.9:8443", "aaaa.bbbb")
-
-	// Every token the panel emits has to be one the script branches on.
-	for _, tok := range []string{"node", "--panel", "--key"} {
-		if !strings.Contains(cmd, tok) {
-			t.Errorf("the panel's command is missing %q: %s", tok, cmd)
-		}
-		if !strings.Contains(script, tok) {
-			t.Errorf("install.sh does not handle %q, which the panel sends", tok)
-		}
-	}
-	// And the installer it points at has to be this repository's.
-	want := "https://raw.githubusercontent.com/" + app.RepoOwner + "/" + app.RepoName + "/main/install.sh"
-	if !strings.Contains(cmd, want) {
-		t.Errorf("the command does not fetch this repo's installer:\n%s", cmd)
-	}
-	// The script has to actually run the enrolment at the end, or it would
-	// install and then drop the operator into a menu having done nothing.
-	if !strings.Contains(script, "node setup --panel") {
-		t.Error("install.sh never runs `backpack node setup`, so the one-line form " +
-			"would install and stop")
-	}
-	// And the binary still has the subcommand both lines end in.
+// A server is added and managed without anything being run on it.
+//
+// This is the change the whole batch is for. What used to be here checked that
+// the panel handed out a setup command, that install.sh understood it, and that
+// the binary had the subcommand it ended in — three things that all had to
+// agree, and one line for the operator to carry to another machine.
+//
+// There is no line now. What has to hold instead is that the far side needs no
+// state of its own: one command, which the panel runs itself.
+func TestTheFarSideNeedsNothingButTheOneCommand(t *testing.T) {
 	cli, err := os.ReadFile(filepath.Join("..", "..", "nodecmd.go"))
 	if err != nil {
 		t.Fatalf("reading nodecmd.go: %v", err)
 	}
-	if !strings.Contains(string(cli), `case "setup":`) {
-		t.Error("`backpack node setup` is gone, so both the one-line and the short " +
-			"form now end in a command that does not exist")
+	src := string(cli)
+	if !strings.Contains(src, `case "exec":`) {
+		t.Fatal("`backpack node exec` is gone, and it is the only thing the panel runs " +
+			"on a managed server")
+	}
+	for _, gone := range []string{`case "setup":`, `case "run":`, `case "remove":`} {
+		if strings.Contains(src, gone) {
+			t.Errorf("nodecmd.go still has %s — the far server keeps no state now, so "+
+				"anything that sets it up or tears it down is a second model of the "+
+				"same thing", gone)
+		}
+	}
+
+	sh, err := os.ReadFile(filepath.Join("..", "..", "install.sh"))
+	if err != nil {
+		t.Fatalf("reading install.sh: %v", err)
+	}
+	if strings.Contains(string(sh), "node setup") {
+		t.Error("install.sh still ends in `backpack node setup`, which no longer exists")
+	}
+	// And it must still install without a terminal, because that is how the
+	// panel runs it on a server that has no Backpack yet.
+	if !strings.Contains(string(sh), "if [ -t 0 ]") {
+		t.Error("install.sh no longer checks for a terminal, so a remote install would " +
+			"open a menu nobody can answer")
 	}
 }
 
-// The address put in the setup command comes from the request when it can.
-//
-// It has to, for two reasons that pull the same way: the host the operator is
-// reaching the panel on is known to work, and asking the internet instead costs
-// five timeouts on the machine most likely to have no route out. But an address
-// that only means something on this network must not be handed to a server on
-// another continent, so those fall through to the lookup.
-func TestTheSetupAddressPrefersTheHostTheOperatorUses(t *testing.T) {
-	for _, tc := range []struct{ host, want string }{
-		{"203.0.113.9:7777", "203.0.113.9"},
-		{"203.0.113.9", "203.0.113.9"},
-		{"panel.example.com:7777", "panel.example.com"},
-		{"[2001:db8::1]:7777", "2001:db8::1"},
-	} {
-		r := httptest.NewRequest("POST", "/api/nodes", nil)
-		r.Host = tc.host
-		if got := panelHost(r); got != tc.want {
-			t.Errorf("panelHost(%q) = %q, want %q", tc.host, got, tc.want)
-		}
-	}
-
-	// Everything a foreign server could not dial.
-	for _, host := range []string{
-		"127.0.0.1", "localhost", "10.0.0.4", "192.168.1.9", "172.16.0.3",
-		"169.254.1.1", "0.0.0.0",
-	} {
-		if !privateHost(host) {
-			t.Errorf("%q was treated as an address another server can reach", host)
-		}
-	}
-	for _, host := range []string{"203.0.113.9", "panel.example.com", "2001:db8::1"} {
-		if privateHost(host) {
-			t.Errorf("%q was treated as unreachable from outside", host)
-		}
-	}
-
-	// And the port is the listener's, not the panel's.
-	r := httptest.NewRequest("POST", "/api/nodes", nil)
-	r.Host = "203.0.113.9:7777"
-	if got := nodeDialAddr(8443, r); got != "203.0.113.9:8443" {
-		t.Errorf("nodeDialAddr = %q, want 203.0.113.9:8443", got)
-	}
-}
-
-// The card's buttons reach both ends.
-//
-// A tunnel across a managed server has one state, not two. Stopping only this
-// end leaves the other half dialling something that will never answer, and the
-// panel used to report that as a clean stop — so the guard here is that the
-// reply says which ends actually moved.
 func TestStartStopAndRestartReachTheOtherEnd(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()

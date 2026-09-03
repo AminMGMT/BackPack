@@ -234,3 +234,59 @@ body[data-t="light"] .panel .sv7:hover .sv-bg{opacity:.16}
 @media (prefers-reduced-motion:reduce){
   .panel .sv7:hover .sv-bg{transform:none}
 }
+
+/* ---- adding a server ------------------------------------------------------
+ *
+ * A form on the page rather than a dialog over it: the fleet behind it is the
+ * context — what is already there, and under what names — and covering that up
+ * to ask for a name is the wrong way round.
+ *
+ * It also replaces the block that used to show a command to copy. Nothing is
+ * copied anywhere now; the panel logs in itself.
+ */
+.panel .addsv{background:var(--s1);border:1px solid var(--ln);border-radius:15px;
+  padding:15px 16px;margin:0 0 14px;display:grid;gap:13px}
+.panel .addsv.open7{margin-top:-6px}
+
+.panel .asv-h b{display:block;font-size:13px;font-weight:640}
+.panel .asv-h span{display:block;font-size:11px;color:var(--dim);margin-top:3px}
+
+.panel .asv-g{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@container pg (max-width:760px){ .panel .asv-g{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@container pg (max-width:420px){ .panel .asv-g{grid-template-columns:1fr} }
+.panel .asv-g .wide{grid-column:1/-1}
+
+.panel .asv-g label{display:block;font-size:10.5px;font-weight:620;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim);min-width:0}
+.panel .asv-g input{display:block;width:100%;margin-top:5px;box-sizing:border-box;
+  background:var(--s2);border:1px solid var(--ln);border-radius:10px;
+  padding:9px 11px;font:inherit;font-size:12.5px;color:var(--tx);
+  text-transform:none;letter-spacing:normal}
+.panel .asv-g input:focus{outline:none;border-color:var(--ac)}
+
+.panel .asv-f{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.panel .asv-note{font-size:10.5px;color:var(--dim);flex:1 1 220px;min-width:0}
+
+/* Why a server cannot be reached, on the card that says it cannot.
+   "Down" and "the password was changed" are both unreachable and are not the
+   same problem; this is the only place that can tell them apart. */
+.panel .sv-why{font-size:11px;color:var(--warn,var(--dim));background:var(--s2);
+  border-radius:10px;padding:7px 10px;margin:2px 0 0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* The login the panel uses, small, under the card's own buttons. */
+.panel .sv-f .sub7{font-size:10.5px;color:var(--dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+
+/* Servers behind this panel.
+ *
+ * Above the fleet rather than on each card: a release landing makes every
+ * server out of date at once, so it is one fact and one action, not a badge to
+ * be dealt with card by card. */
+.panel .behind7{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--s1);border:1px solid var(--ln);border-radius:15px;
+  padding:12px 15px;margin:0 0 14px}
+.panel .behind7 .t7{flex:1 1 240px;min-width:0}
+.panel .behind7 b{display:block;font-size:12.5px;font-weight:640}
+.panel .behind7 span{display:block;font-size:10.5px;color:var(--dim);margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -27,82 +26,66 @@ import (
 //
 // The panel holds no login for any of them. See internal/node.
 
-// hubRunner owns the listener's lifetime.
+// fleet owns the panel's side of the managed servers.
 //
-// The port is a setting the operator can change while the panel is running, so
-// the listener has to be able to move; and because moving it drops every node,
-// which then reconnect, that is done by cancelling one context and starting
-// again rather than by anything more delicate.
-type hubRunner struct {
-	mu     sync.Mutex
-	hub    *node.Hub
-	cancel context.CancelFunc
+// There is no lifetime to manage any more. The channel this replaces had a
+// listener per server that had to be opened, moved when its port changed, and
+// closed when the server went — three things that could each be wrong on their
+// own, and each of which left a server listed here and unreachable. The panel
+// dials out now, so the only state worth holding is the connections it is
+// reusing, and those look after themselves.
+type fleet struct {
+	mu  sync.Mutex
+	run node.Runner
 }
 
-// start brings the hub up and opens a listener for every server the panel knows
-// about — the enrolled ones and the ones still waiting for their command to be
-// run. A port that cannot be taken is reported and the rest still come up: one
-// server whose port is occupied must not keep the other nine offline.
-func (r *hubRunner) start() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.cancel != nil {
-		r.cancel()
-		r.cancel, r.hub = nil, nil
-	}
-	key, err := node.EnsureHubKey()
-	if err != nil {
-		return err
-	}
-	h := node.NewHub(func(m string) { log.Printf("node hub: %s", m) })
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := h.Start(ctx, key); err != nil {
-		cancel()
-		return err
-	}
-	var failed []string
-	for port, name := range node.Ports() {
-		if err := h.Open(port, name); err != nil {
-			failed = append(failed, fmt.Sprintf("%s (%v)", name, err))
-		}
-	}
-	r.hub, r.cancel = h, cancel
-	if len(failed) > 0 {
-		sort.Strings(failed)
-		return fmt.Errorf("listening for %s failed", strings.Join(failed, ", "))
+// start makes the runner if there is none. It contacts nothing: whether a
+// server answers is a question asked when something is asked of it.
+func (f *fleet) start() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.run == nil {
+		f.run = node.NewSSHRunner(func(m string) { log.Printf("fleet: %s", m) })
 	}
 	return nil
 }
 
-func (r *hubRunner) stop() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.cancel != nil {
-		r.cancel()
+func (f *fleet) stop() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Whatever it is holding open is dropped; an interface that cannot be
+	// closed simply has nothing to drop.
+	if c, ok := f.run.(interface{ Close() }); ok {
+		c.Close()
 	}
-	r.cancel, r.hub = nil, nil
+	f.run = nil
 }
 
-func (r *hubRunner) get() *node.Hub {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.hub
+func (f *fleet) get() node.Runner {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.run
 }
 
 // nodeView is one row of the fleet screen.
 type nodeView struct {
-	Name     string    `json:"name"`
-	Port     int       `json:"port"`
+	Name string `json:"name"`
+
+	// How the panel reaches it. The password is never sent back.
+	Host    string `json:"host"`
+	SSHPort int    `json:"sshPort,omitempty"`
+	User    string `json:"user"`
+
+	// Fingerprint is the host key this server is known by. Shown because a
+	// server whose key has changed refuses to answer, and the operator has no
+	// way to tell that from a server that is simply down unless it is here.
+	Fingerprint string `json:"fingerprint,omitempty"`
+
 	Online   bool      `json:"online"`
-	Enrolled int64     `json:"enrolled"`
+	Why      string    `json:"why,omitempty"` // why not, when it is not
+	Added    int64     `json:"added"`
 	LastSeen int64     `json:"lastSeen,omitempty"`
 	Info     node.Info `json:"info,omitempty"`
-
-	// Listening is whether the panel currently has this server's port open.
-	// A node can be enrolled, and its port refused at startup because something
-	// else took it — in which case that server can never connect and nothing
-	// else on the screen would say so.
-	Listening bool `json:"listening"`
 
 	// Tunnels are the ones this panel built there. It is what this panel
 	// remembers, not what the server has: a tunnel someone set up on that
@@ -125,40 +108,35 @@ func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
 func (s *server) writeNodeState(w http.ResponseWriter) { s.writeNodeStateWith(w, "") }
 
 func (s *server) writeNodeStateWith(w http.ResponseWriter, warning string) {
-	hub := s.nodes.get()
-	open := map[int]string{}
-	if hub != nil {
-		open = hub.Listening()
-	}
+	run := s.nodes.get()
 
-	rows := []nodeView{}
-	for _, n := range node.List() {
-		_, listening := open[n.Port]
-		rows = append(rows, nodeView{
-			Name:      n.Name,
-			Port:      n.Port,
-			Online:    hub != nil && hub.IsOnline(n.Name),
-			Listening: listening,
-			Enrolled:  n.Enrolled,
-			LastSeen:  n.LastSeen,
-			Info:      n.Info,
-			Tunnels:   manage.TunnelsOnNode(n.Name),
-		})
+	// Every card asks whether its server is up, and asking means a connection.
+	// Doing that one after another would make the page take as long as the
+	// slowest server times the number of them, so they are asked together and
+	// the runner's own short memory keeps a poll from costing anything at all.
+	list := node.List()
+	rows := make([]nodeView, len(list))
+	var wg sync.WaitGroup
+	for i, n := range list {
+		rows[i] = nodeView{
+			Name: n.Name, Host: n.Host, SSHPort: n.SSHPort, User: n.User,
+			Fingerprint: n.Fingerprint, Added: n.Added, LastSeen: n.LastSeen,
+			Info: n.Info, Tunnels: manage.TunnelsOnNode(n.Name),
+		}
+		if run == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			rows[i].Online, rows[i].Why = run.Reachable(name)
+		}(i, n.Name)
 	}
-	pending := []map[string]any{}
-	for _, p := range node.PendingList() {
-		pending = append(pending, map[string]any{
-			"name": p.Name, "port": p.Port, "created": p.Created,
-		})
-	}
+	wg.Wait()
+
 	out := map[string]any{
-		"enabled": hub != nil,
+		"enabled": run != nil,
 		"nodes":   rows,
-		"pending": pending,
-		// The port the next server would be offered. Suggested on every read
-		// rather than held anywhere: the operator may add one now or in a week,
-		// and a port that was free then may not be free now.
-		"suggestPort": suggestNodePort(),
 	}
 	if warning != "" {
 		out["warning"] = warning
@@ -183,9 +161,9 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		s.writeNodeState(w)
 
 	case "disable":
-		// The servers stay enrolled. Turning it off is "stop accepting
-		// connections", not "forget the fleet" — an operator who wanted the
-		// second one would remove the servers.
+		// The servers stay in the fleet. Turning it off is "stop reaching out",
+		// not "forget the fleet" — an operator who wanted the second one would
+		// remove the servers.
 		s.nodes.stop()
 		if err := node.SetEnabled(false); err != nil {
 			http.Error(w, "could not save: "+err.Error(), http.StatusInternalServerError)
@@ -194,55 +172,155 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		s.writeNodeState(w)
 
 	case "add":
-		hub := s.nodes.get()
-		if hub == nil {
-			http.Error(w, "turn Accept servers on first — a server has nothing to connect to yet",
-				http.StatusBadRequest)
+		if s.nodes.get() == nil {
+			http.Error(w, "turn Managed servers on first", http.StatusBadRequest)
 			return
 		}
 		name := strings.TrimSpace(r.FormValue("name"))
-		port, err := strconv.Atoi(strings.TrimSpace(r.FormValue("port")))
-		if err != nil || port < 1 || port > 65535 {
-			http.Error(w, "choose a port between 1 and 65535", http.StatusBadRequest)
-			return
+		host := strings.TrimSpace(r.FormValue("host"))
+		user := strings.TrimSpace(r.FormValue("user"))
+		if user == "" {
+			user = "root"
 		}
-		token, hubKey, err := node.NewEnrollToken(name, port)
-		if err != nil {
+		port := 22
+		if v := strings.TrimSpace(r.FormValue("sshPort")); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 65535 {
+				http.Error(w, "choose an SSH port between 1 and 65535", http.StatusBadRequest)
+				return
+			}
+			port = n
+		}
+		if _, err := node.Add(name, host, port, user, r.FormValue("password")); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		// The door is opened before the command is handed over, so a port that
-		// cannot be taken is a message now rather than a server that pastes a
-		// line and waits for nothing.
-		if err := hub.Open(port, name); err != nil {
+
+		// Reached once, now, while the operator is looking at the form.
+		//
+		// The alternative is to save the details and let the first real
+		// operation discover that the password is wrong — which is the shape
+		// the old flow had, and it is why a server could sit in the fleet doing
+		// nothing with nothing saying why. A server that cannot be reached is
+		// taken back out, because a fleet entry that has never worked is not a
+		// server, it is a typo.
+		var info node.Info
+		err := s.nodes.get().Call(name, node.OpHello, nil, &info)
+
+		// A machine that answers SSH and has no Backpack on it is the ordinary
+		// case, not a failure: it is a server the operator has just bought. The
+		// panel installs it rather than sending them to a terminal on it, which
+		// is the whole point of managing it from here.
+		if err != nil && strings.Contains(err.Error(), "not installed") {
+			inst, ok := s.nodes.get().(interface{ Install(string) (string, error) })
+			if ok && r.FormValue("install") != "0" {
+				if _, ierr := inst.Install(name); ierr != nil {
+					_ = node.Remove(name)
+					http.Error(w, ierr.Error(), http.StatusBadGateway)
+					return
+				}
+				err = s.nodes.get().Call(name, node.OpHello, nil, &info)
+			}
+		}
+		if err != nil {
 			_ = node.Remove(name)
-			http.Error(w, "could not listen on port "+strconv.Itoa(port)+": "+err.Error(),
-				http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		addr := nodeDialAddr(port, r)
-		key := node.SetupKey(hubKey, token)
-		writeJSON(w, map[string]any{
-			"name":         name,
-			"port":         port,
-			"command":      setupCommand(addr, key),
-			"commandShort": fmt.Sprintf("backpack node setup --panel %s --key %s", addr, key),
-			"panel":        addr,
-		})
+		_ = node.NoteInfo(name, info)
+		s.writeNodeState(w)
+
+	case "credentials":
+		// The address, the login or the password changed. The host key is
+		// dropped with the address inside SetCredentials, and the connection is
+		// dropped here so the next call dials with what was just saved.
+		name := strings.TrimSpace(r.FormValue("name"))
+		port := 0
+		if v := strings.TrimSpace(r.FormValue("sshPort")); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 65535 {
+				http.Error(w, "choose an SSH port between 1 and 65535", http.StatusBadRequest)
+				return
+			}
+			port = n
+		}
+		if err := node.SetCredentials(name, strings.TrimSpace(r.FormValue("host")), port,
+			strings.TrimSpace(r.FormValue("user")), r.FormValue("password")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if run := s.nodes.get(); run != nil {
+			run.Forget(name)
+		}
+		s.writeNodeState(w)
+
+	case "upgrade":
+		// One click, from here, for a server the operator may never log into.
+		// It is the same installer that put Backpack there: it fetches the
+		// current release, replaces the binary and restarts what was running.
+		run := s.nodes.get()
+		up, ok := run.(interface{ Upgrade(string) (string, error) })
+		if !ok {
+			http.Error(w, "this panel cannot upgrade servers", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(r.FormValue("name"))
+		if _, err := up.Upgrade(name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		// Read back what it is now, so the card does not keep showing the
+		// version it had before.
+		var info node.Info
+		if err := run.Call(name, node.OpHello, nil, &info); err == nil {
+			_ = node.NoteInfo(name, info)
+		}
+		s.writeNodeState(w)
+
+	case "upgradeall":
+		// Every server behind this panel, in one action.
+		//
+		// A release lands on the panel and every managed server is then a
+		// version behind, which is a thing to fix once rather than a thing to
+		// remember for each of them. They are done in parallel because each is
+		// minutes of download, and one that fails is reported without stopping
+		// the others: a fleet where nine upgraded and one did not is a better
+		// place to be than a fleet where the first failure stopped the rest.
+		run := s.nodes.get()
+		up, ok := run.(interface{ Upgrade(string) (string, error) })
+		if !ok {
+			http.Error(w, "this panel cannot upgrade servers", http.StatusBadRequest)
+			return
+		}
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var failed []string
+		for _, n := range node.List() {
+			wg.Add(1)
+			go func(name string) {
+				defer wg.Done()
+				if _, err := up.Upgrade(name); err != nil {
+					mu.Lock()
+					failed = append(failed, name+" ("+err.Error()+")")
+					mu.Unlock()
+					return
+				}
+				var info node.Info
+				if err := run.Call(name, node.OpHello, nil, &info); err == nil {
+					_ = node.NoteInfo(name, info)
+				}
+			}(n.Name)
+		}
+		wg.Wait()
+		if len(failed) > 0 {
+			sort.Strings(failed)
+			s.writeNodeStateWith(w, "could not upgrade "+strings.Join(failed, ", "))
+			return
+		}
+		s.writeNodeState(w)
 
 	case "remove":
 		name := strings.TrimSpace(r.FormValue("name"))
-		// Read before the removal, which is what forgets it.
-		port := 0
-		if n, ok := node.Find(name); ok {
-			port = n.Port
-		} else {
-			for _, p := range node.PendingList() {
-				if strings.EqualFold(p.Name, name) {
-					port = p.Port
-				}
-			}
-		}
 		if err := node.Remove(name); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -252,8 +330,8 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		// of them — keeping that would make a later edit report a node that is
 		// no longer in the fleet.
 		_ = manage.ForgetNodePairs(name)
-		if hub := s.nodes.get(); hub != nil && port > 0 {
-			hub.Close(port)
+		if run := s.nodes.get(); run != nil {
+			run.Forget(name)
 		}
 		s.writeNodeState(w)
 
@@ -359,7 +437,7 @@ func (s *server) handleNodeTunnels(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.URL.Query().Get("node"))
 	hub := s.nodes.get()
 	if hub == nil {
-		http.Error(w, "the node listener is off", http.StatusBadRequest)
+		http.Error(w, "managed servers are turned off", http.StatusBadRequest)
 		return
 	}
 	var out []node.TunnelState
@@ -407,17 +485,20 @@ func (s *server) handleNodePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not read the form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	hub := s.nodes.get()
-	if hub == nil {
-		http.Error(w, "the node listener is off", http.StatusBadRequest)
+	run := s.nodes.get()
+	if run == nil {
+		http.Error(w, "managed servers are turned off", http.StatusBadRequest)
 		return
 	}
 	// Checked before anything is written. Creating this end and then finding
 	// the other server unreachable leaves half a tunnel and an operator who has
 	// to know that is what happened.
-	if !hub.IsOnline(req.Node) {
-		http.Error(w, "node "+req.Node+" is not connected — nothing was created",
-			http.StatusBadGateway)
+	if ok, why := run.Reachable(req.Node); !ok {
+		msg := req.Node + " could not be reached — nothing was created"
+		if why != "" {
+			msg += ": " + why
+		}
+		http.Error(w, msg, http.StatusBadGateway)
 		return
 	}
 
@@ -451,7 +532,7 @@ func (s *server) handleNodePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peer, perr := s.pushPeerEnd(hub, req.Node, name, req.PeerConn, r)
+	peer, perr := s.pushPeerEnd(run, req.Node, name, req.PeerConn, r)
 	resp := map[string]any{
 		"status":  "ok",
 		"name":    name,
@@ -488,12 +569,12 @@ func (s *server) handleNodePair(w http.ResponseWriter, r *http.Request) {
 // A node that cannot be reached, or has no such tunnel yet, returns nothing:
 // this is a carry-forward, so having nothing to carry is an ordinary answer and
 // not a reason to fail an edit that is otherwise fine.
-func peerConnOnNode(hub *node.Hub, nodeName, tunnel string) *manage.ConnTune {
-	if hub == nil {
+func peerConnOnNode(run node.Runner, nodeName, tunnel string) *manage.ConnTune {
+	if run == nil {
 		return nil
 	}
 	var cur manage.TunnelSettings
-	if err := hub.Call(nodeName, node.OpSettings, node.NameRequest{Name: tunnel}, &cur); err != nil {
+	if err := run.Call(nodeName, node.OpSettings, node.NameRequest{Name: tunnel}, &cur); err != nil {
 		return nil
 	}
 	conn := cur.Conn
@@ -501,7 +582,7 @@ func peerConnOnNode(hub *node.Hub, nodeName, tunnel string) *manage.ConnTune {
 }
 
 // pushPeerEnd mirrors a freshly created tunnel and applies it on the node.
-func (s *server) pushPeerEnd(hub *node.Hub, nodeName, tunnel string, peerConn *manage.ConnTune, r *http.Request) (any, error) {
+func (s *server) pushPeerEnd(run node.Runner, nodeName, tunnel string, peerConn *manage.ConnTune, r *http.Request) (any, error) {
 	link, err := manage.ShareLinkFor(tunnel, panelHost(r))
 	if err != nil {
 		return nil, fmt.Errorf("could not read back the tunnel just created: %w", err)
@@ -524,13 +605,13 @@ func (s *server) pushPeerEnd(hub *node.Hub, nodeName, tunnel string, peerConn *m
 			// An edit sends none, because an edit is about this end. Carrying
 			// the far end's current ones across keeps a rebuild from dropping
 			// settings the operator gave when the tunnel was paired.
-			peerConn = peerConnOnNode(hub, nodeName, form.Name)
+			peerConn = peerConnOnNode(run, nodeName, form.Name)
 		}
 		t.Conn = peerConn
 		req.Tunnel = &t
 	}
 	var res node.ApplyResult
-	if err := hub.Call(nodeName, node.OpApply, req, &res); err != nil {
+	if err := run.Call(nodeName, node.OpApply, req, &res); err != nil {
 		return nil, err
 	}
 	return map[string]any{

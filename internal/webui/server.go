@@ -162,7 +162,7 @@ type server struct {
 	// nodes owns the listener managed servers connect to. It is always present
 	// and holds no listener until the feature is turned on, so every handler
 	// can ask it a question without checking whether the feature exists.
-	nodes *hubRunner
+	nodes *fleet
 }
 
 // password always reads the current password from disk, so a change made from
@@ -184,7 +184,7 @@ func Serve() error {
 	if err != nil {
 		return err
 	}
-	srv := &server{sessions: newSessionStore(), nodes: &hubRunner{}}
+	srv := &server{sessions: newSessionStore(), nodes: &fleet{}}
 
 	// The SOCKS5 relay, the watchdog, the Telegram bot and the alerts all
 	// deliberately run elsewhere — in the backpack-monitor service. See
@@ -221,7 +221,7 @@ func Serve() error {
 	// Handing a tunnel's paired settings to the other server, and taking them
 	// from it. See handleShareLink.
 	mux.HandleFunc("/api/tunnel/sharelink", srv.requireAuth(srv.handleShareLink))
-	// Managed servers: the fleet, the setup command that enrols one, and
+	// Managed servers: the fleet, the login each one is reached with, and
 	// building both ends of a tunnel in a single submission. See
 	// handlers_nodes.go.
 	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
@@ -261,14 +261,12 @@ func Serve() error {
 	mux.HandleFunc("/icons/", handleIconPNG)
 	mux.HandleFunc("/sw.js", handleServiceWorker)
 
-	// The node listener, if this panel manages any servers. A failure here is
-	// reported and not fatal: the panel itself still has to come up, and a
-	// listener that cannot take its port is a setting to fix, not a reason to
-	// leave the operator without a way to fix it.
-	if node.LoadStore().Enabled {
-		if err := srv.nodes.start(); err != nil {
-			log.Printf("node listeners: %v", err)
-		}
+	// Ready to reach the fleet, if this panel manages one. Nothing is
+	// contacted here and nothing can fail: the panel dials out when it has
+	// something to ask, so a server that is down costs the operation that
+	// wanted it and nothing else.
+	if node.Enabled() {
+		_ = srv.nodes.start()
 	}
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)

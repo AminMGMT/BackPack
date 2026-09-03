@@ -208,7 +208,7 @@ func (s *server) alsoOnNode(name, action string) map[string]any {
 	hub := s.nodes.get()
 	if hub == nil || !hub.IsOnline(pair.Node) {
 		out["status"] = "partial"
-		out["peerError"] = pair.Node + " is not connected, so its end was not " + action + "ed"
+		out["peerError"] = pair.Node + " could not be reached, so its end was not " + action + "ed"
 		out["peerHint"] = "This end is " + action + "ed. Do it again once that server is back."
 		return out
 	}
@@ -251,7 +251,7 @@ func (s *server) afterEdit(name string, r *http.Request) map[string]any {
 	hub := s.nodes.get()
 	if hub == nil {
 		out["status"] = "partial"
-		out["peerError"] = "the node listener is off, so " + nodeName + " could not be updated"
+		out["peerError"] = "managed servers are turned off, so " + nodeName + " could not be updated"
 		out["peerHint"] = "This end changed. Turn the listener back on and save again to move " +
 			nodeName + " with it."
 		return out

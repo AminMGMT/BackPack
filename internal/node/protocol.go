@@ -1,11 +1,8 @@
 package node
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 )
 
 // The operations a node will perform. This list is the security boundary: a
@@ -84,25 +81,7 @@ const (
 
 	// OpAuth presents an existing node key.
 	OpAuth = "auth"
-
-	// OpEnrolled says the node has written its new key to disk.
-	//
-	// The panel spends the setup token to answer an enrolment, so between its
-	// reply and the node's save there is a moment where the token is gone and
-	// the key exists only in flight. A node stopped there would hold no
-	// credential and have nothing left to enrol with. This is the panel's only
-	// evidence that the key survived: until it arrives the token stays live, so
-	// the node's next attempt enrols it again rather than finding the door
-	// shut. A node that predates this message simply never sends it, and the
-	// panel falls back to the grace window in the registry.
-	OpEnrolled = "enrolled"
 )
-
-// maxFrame caps a single message. The largest thing that legitimately crosses
-// this channel is one tunnel's form, which is a few kilobytes; a megabyte is
-// far above that and far below anything that would trouble the machine, so a
-// peer that claims to be sending more has gone wrong or is trying something.
-const maxFrame = 1 << 20
 
 // Request is one operation. Body is the operation's own arguments, left as raw
 // JSON so that a panel and a node running different versions can pass a field
@@ -131,6 +110,16 @@ type Info struct {
 	Arch     string `json:"arch,omitempty"`
 	IPv4     string `json:"ipv4,omitempty"`
 	IPv6     string `json:"ipv6,omitempty"`
+
+	// What the fleet card says about the machine itself.
+	//
+	// OS above is the kernel's word for the platform — "linux" — which says
+	// nothing an operator did not already know. Distro is what the machine
+	// calls itself, and Uptime is how long it has been up, which together are
+	// the two facts worth looking at a server's card to read when nothing is
+	// wrong.
+	Distro string `json:"distro,omitempty"`
+	Uptime string `json:"uptime,omitempty"`
 }
 
 // TunnelState is one tunnel on a node, as the fleet screen shows it.
@@ -170,41 +159,5 @@ type authRequest struct {
 	Info    Info   `json:"info"`
 }
 
-// writeMsg puts one length-prefixed JSON message on the wire.
-func writeMsg(w io.Writer, v any) error {
-	body, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if len(body) > maxFrame {
-		return fmt.Errorf("message is %d bytes, over the %d limit", len(body), maxFrame)
-	}
-	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(body)))
-	if _, err := w.Write(append(hdr[:], body...)); err != nil {
-		return err
-	}
-	return nil
-}
-
-// readMsg reads one length-prefixed JSON message.
-func readMsg(r io.Reader, v any) error {
-	var hdr [4]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return err
-	}
-	n := binary.BigEndian.Uint32(hdr[:])
-	if n > maxFrame {
-		return fmt.Errorf("peer announced a %d byte message, over the %d limit", n, maxFrame)
-	}
-	body := make([]byte, n)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return err
-	}
-	return json.Unmarshal(body, v)
-}
-
-// errUnknownOp is what a node answers to anything not on the list above. It is
-// deliberately the same shape as any other failure: a peer probing for what
-// this build supports learns only that it does not support that.
-var errUnknownOp = errors.New("unsupported operation")
+// errUnknownOp is what a node answers to anything not on the list.
+var errUnknownOp = errors.New("this panel asked for something this server does not do")
