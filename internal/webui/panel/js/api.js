@@ -50,9 +50,9 @@ export const tunnelOptions = () => get('/api/tunnel/options');
 /* One string carrying everything the two ends must agree on. The mirroring —
    which side becomes which, which addresses swap — is the server's, so the
    panel never holds a second idea of what "the other side" means. */
-export const shareLink = name =>
-  get('/api/tunnel/sharelink?name=' + encodeURIComponent(name));
-export const shareLinkDecode = link => post('/api/tunnel/sharelink', { link });
+/* The setup link is gone. It existed so a second panel on the other server
+   could be filled in from this one; the panel writes that end itself now. The
+   mirroring it fed still happens, on the server side, in pushPeerEnd. */
 /* Managed servers. The four actions share one endpoint because they are one
    thing — the fleet — and each returns the state that follows, so the screen
    never has to guess what changed. */
@@ -103,8 +103,15 @@ export const speedRun = body => post('/api/speedtest', body);
 
 /* ---- CLI: Manage → Tunnel Metrics, and the long view --------------------- */
 /* Plain text, not JSON — the handler writes journald's own output. */
-export const logs = async name => {
-  const r = await fetch('/api/logs?name=' + encodeURIComponent(name), { cache: 'no-store' });
+/* Either end's journal, as text rather than JSON — a log is lines, and the
+   panel renders them itself.
+
+   end === 'peer' asks the managed server holding the other end. A tunnel is one
+   thing in two places and its log is not: half of what went wrong is on the
+   other machine, and reading it used to mean logging into it. */
+export const logs = async (name, end) => {
+  const url = '/api/logs?name=' + encodeURIComponent(name) + (end === 'peer' ? '&end=peer' : '');
+  const r = await fetch(url, { cache: 'no-store' });
   if (!r.ok) throw new Error(await r.text() || r.statusText);
   return r.text();
 };

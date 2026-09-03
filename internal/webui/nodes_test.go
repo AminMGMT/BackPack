@@ -320,7 +320,7 @@ func TestPairingsAreForgottenWithTheirServer(t *testing.T) {
 // simply absent for every direct tunnel — which is half of what this project
 // builds. A rule about where two ids live is cheap; discovering this from a bug
 // report is not.
-func TestTheNodePickerAndSetupLinkReachBothKindsOfTunnel(t *testing.T) {
+func TestTheNodePickerReachesBothKindsOfTunnel(t *testing.T) {
 	loadExperimentalPanel()
 
 	raw, err := fs.ReadFile(panelRoot, "views/add.html")
@@ -329,20 +329,26 @@ func TestTheNodePickerAndSetupLinkReachBothKindsOfTunnel(t *testing.T) {
 	}
 	html := string(raw)
 
+	// The box that pasted a setup link from a second panel used to be checked
+	// beside this one. It is gone: the panel writes the far end itself, so
+	// there is no second panel and nothing to paste.
+	if strings.Contains(html, `id="apaste"`) {
+		t.Error("add.html still has the paste-a-setup-link box, which is the two-pass " +
+			"flow the fleet exists to remove")
+	}
+
 	rev := strings.Index(html, `<div class="step3rev">`)
 	if rev < 0 {
 		t.Fatal("add.html has no .step3rev — this guard needs updating")
 	}
-	for _, id := range []string{`id="nodeGrp"`, `id="apaste"`} {
-		at := strings.Index(html, id)
-		if at < 0 {
-			t.Errorf("%s is not in add.html any more", id)
-			continue
-		}
-		if at > rev {
-			t.Errorf("%s sits inside .step3rev, so it is hidden for every direct "+
-				"tunnel — move it above the reverse/direct split", id)
-		}
+	at := strings.Index(html, `id="nodeGrp"`)
+	if at < 0 {
+		t.Fatal(`id="nodeGrp" is not in add.html any more, so there is no way to pick ` +
+			"the server the far end is written on")
+	}
+	if at > rev {
+		t.Error(`id="nodeGrp" sits inside .step3rev, so it is hidden for every direct ` +
+			"tunnel — move it above the reverse/direct split")
 	}
 }
 

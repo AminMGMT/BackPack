@@ -220,7 +220,6 @@ func Serve() error {
 	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
 	// Handing a tunnel's paired settings to the other server, and taking them
 	// from it. See handleShareLink.
-	mux.HandleFunc("/api/tunnel/sharelink", srv.requireAuth(srv.handleShareLink))
 	// Managed servers: the fleet, the login each one is reached with, and
 	// building both ends of a tunnel in a single submission. See
 	// handlers_nodes.go.
@@ -435,8 +434,54 @@ func (s *server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing name", http.StatusBadRequest)
 		return
 	}
+
+	// ?end=peer asks for the other server's journal for the same tunnel.
+	//
+	// A tunnel is one thing in two places and its log is not. Half of what went
+	// wrong is on the far machine — a client that cannot dial, a certificate it
+	// could not read, a port already held there — and reading it meant logging
+	// into that machine, which is the second pass this whole feature exists to
+	// remove.
+	if r.URL.Query().Get("end") == "peer" {
+		s.writePeerLogs(w, name)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte(TunnelLogs(name)))
+}
+
+// writePeerLogs fetches the far end's journal, or says plainly why it cannot.
+//
+// Plain text either way, including the refusals: the screen puts this in a log
+// pane, and a JSON error there would be read as something the tunnel printed.
+func (s *server) writePeerLogs(w http.ResponseWriter, name string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	pair, ok := manage.PairFor(name)
+	if !ok {
+		fmt.Fprintf(w, "%s was not built across a managed server, so there is no "+
+			"other end for this panel to read.\n", name)
+		return
+	}
+	run := s.nodes.get()
+	if run == nil {
+		fmt.Fprintf(w, "Managed servers are turned off, so %s cannot be reached.\n", pair.Node)
+		return
+	}
+	peer := pair.PeerName
+	if peer == "" {
+		peer = name
+	}
+	var res node.LogsResult
+	if err := run.Call(pair.Node, node.OpLogs, node.LogsRequest{Name: peer, Lines: 150}, &res); err != nil {
+		fmt.Fprintf(w, "Could not read %s's log on %s: %v\n", peer, pair.Node, err)
+		return
+	}
+	if strings.TrimSpace(res.Text) == "" {
+		fmt.Fprintf(w, "%s on %s has written nothing to its journal yet.\n", peer, pair.Node)
+		return
+	}
+	w.Write([]byte(res.Text))
 }
 
 // handlePassword lets a logged-in user set their own password. It updates the

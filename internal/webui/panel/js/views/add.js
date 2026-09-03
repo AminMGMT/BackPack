@@ -376,25 +376,19 @@ export function addView(ctx) {
         const step = steps[steps.length - 1];
         if (!step) return;
 
+        /* One shape, because there is only one way to make a tunnel here now.
+         *
+         * This step used to have two: a pane that watched the tunnel come up,
+         * and a pane that handed the operator a setup link and four values to
+         * type into a second panel on the other server. The second one is gone.
+         * The panel writes both ends over SSH, so there is nothing to carry
+         * anywhere and nothing to type twice — and a form that still offered to
+         * would be offering a way to build half a tunnel. */
         const hand = step.querySelector('.handpane');
         const conn = step.querySelector('.connpane');
-
-        /* With a managed server this step is not a report on something that
-           already happened — it is where it happens. */
-        if (root.dataset.staged) {
-          if (hand) hand.hidden = true;
-          if (conn) conn.hidden = false;
-          runBuild(conn);
-          return;
-        }
-
-        const direct = chosen.direction === 'direct';
-        const finishing = direct ? chosen.side === 'server' : chosen.side === 'client';
-        if (hand) hand.hidden = finishing;
-        if (conn) conn.hidden = !finishing;
-        if (!finishing) { paintHandoff(hand); return; }
-        if (!conn) return;
-        watchLocal(conn);
+        if (hand) hand.remove();
+        if (conn) conn.hidden = false;
+        if (conn) runBuild(conn);
       }
 
       /* Building both ends, said out loud.
@@ -523,59 +517,6 @@ export function addView(ctx) {
 
       /* The single-ended flow, unchanged: nothing is created here, the tunnel
          already exists, and this only waits to see it come up. */
-      function watchLocal(conn) {
-        const name = root.querySelector('[name="name"]')?.value?.trim();
-        const addr = root.querySelector('[name="peerAddr"], [name="serverAddr"]')?.value?.trim();
-        const third = conn.querySelectorAll('.sg .tx6')[2];
-        if (third && addr) third.textContent = 'Reaching ' + addr;
-
-        const rows = [...conn.querySelectorAll('.sg')];
-        const title = conn.querySelector('#connTitle');
-        const sub = conn.querySelector('#connSub');
-        const result = conn.querySelector('#connResult');
-        const t0 = Date.now();
-        let i = 0;
-
-        /* Three of the four are things this side just did, so they land as they
-           happen; the last one is the only thing the server can confirm. */
-        const tick = async () => {
-          if (i >= rows.length) return;
-          rows[i].classList.add('doing');
-          const stamp = () => {
-            const d = rows[i].querySelector('.dur');
-            if (d) d.textContent = ((Date.now() - t0) / 1000).toFixed(1) + 's';
-          };
-          if (i < rows.length - 1) {
-            rows[i].classList.add('done'); stamp(); i++;
-            setTimeout(tick, 420);
-            return;
-          }
-          await store.loadTunnels();
-          const made = name ? store.tunnel(name) : null;
-          const up = isUp(made);
-          rows[i].classList.add(up ? 'done' : 'failed');
-          stamp();
-          conn.querySelector('.spin')?.setAttribute('hidden', '');
-          if (title) title.textContent = up ? 'Connected' : 'Not up yet';
-          if (sub) sub.textContent = up
-            ? 'Both ends are talking. Nothing else to do on this server.'
-            : 'The config is written and the service is running, but the control channel has not come up yet.';
-          if (result) {
-            result.innerHTML = up
-              ? `<div class="doneline"><span class="tick">✓</span><div>
-                   <b id="doneName">${esc(made.name)} is running on this server</b>
-                   <span>${esc(made.peerLocation || '')} · ${esc(made.addr || '')}</span>
-                 </div></div>`
-              : `<div class="doneline warn"><span class="tick">!</span><div>
-                   <b>Give it a moment</b>
-                   <span>Check the other side is set up with the same port and token.
-                         The tunnel card will turn green on its own when it connects.</span>
-                 </div></div>`;
-          }
-          store.refresh();
-        };
-        tick();
-      }
 
       /* The numbered header moved with the step in the preview; it is wired to
          the same event the Back and Continue buttons raise. */
@@ -682,132 +623,12 @@ export function addView(ctx) {
           catch (e) { toast(line); }
         }));
 
-      /* The setup link: everything the two ends must agree on, in one string.
-         It is asked for by name, because the server builds it from the tunnel
-         that was just written rather than from what is on screen — the file is
-         the truth, and a link built from the form would describe a tunnel that
-         might not be the one running. */
-      /* Set to the node's name once both ends have been built here, so the
-         handoff pane stops asking for something that has already happened. */
-      let paired = false;
+      /* Neither the setup link nor the pane that pasted one back is here any
+         more. Both existed for a second panel on the other server, typing the
+         same values in again; the panel writes that end itself now. */
 
-      async function paintHandoff(hand) {
-        if (!hand) return;
-        const pane = hand.querySelector('#linkPane');
-        if (paired) { if (pane) pane.hidden = true; return; }
-        const val = hand.querySelector('#linkVal');
-        const name = root.querySelector('[name="name"]')?.value?.trim();
-        if (!pane || !val || !name) return;
-        try {
-          const r = await api.shareLink(name);
-          val.textContent = r.link;
-          pane.hidden = false;
-        } catch (e) {
-          /* No link is not a failure of the tunnel: the four values below still
-             set the other side up by hand. So the pane simply stays away. */
-          pane.hidden = true;
-        }
-      }
-
-      root.querySelector('#linkCopy')?.addEventListener('click', async () => {
-        const link = root.querySelector('#linkVal')?.textContent?.trim();
-        if (!link) return;
-        try { await navigator.clipboard.writeText(link); toast('Setup link copied.'); }
-        catch (e) { toast(link); }
-      });
-
-      /* Pasting a link from the other server. The mirroring is the server's, so
-         this only paints what comes back — and remembers which fields came from
-         the link, because changing one of those is what silently breaks a pair. */
-      const fromLink = new Map();
-
-      function fillFromPeerForm(f) {
-        fromLink.clear();
-        const put = (sel, v) => {
-          if (v === undefined || v === null || v === '') return;
-          const el = root.querySelector(sel);
-          if (!el) return;
-          if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
-        };
-        /* Named fields first: the form is read by name on submit, so filling by
-           name is filling exactly what will be sent. */
-        for (const [k, v] of Object.entries(f)) {
-          if (k === 'paired' || k === 'spoof' || typeof v === 'object') continue;
-          put(`[name="${k}"]`, v);
-        }
-        if (f.spoof) {
-          for (const [k, v] of Object.entries(f.spoof)) put(`[name="spoof.${k}"]`, v);
-        }
-        /* Which side and which kind the link is for are choices, not fields. */
-        if (f.side) { chosen.side = f.side === 'iran' ? 'server' : 'client'; markGroup('setSide', chosen.side); }
-        if (f.kind) {
-          chosen.direction = f.kind;
-          markGroup('mode3', f.kind === 'direct' ? 'dir' : 'rev');
-        }
-        if (f.transport) { chosen.transport = f.transport; }
-        if (f.carrier) { chosen.carrier = f.carrier; }
-        applyShape();
-
-        /* Remember the value each paired field arrived with, so an edit can be
-           recognised as a divergence rather than merely as typing. */
-        (f.paired || []).forEach(name => {
-          const el = root.querySelector(`[name="${name}"]`);
-          if (el) fromLink.set(name, el.type === 'checkbox' ? el.checked : el.value);
-        });
-      }
-
-      /* The warning the operator asked for: it appears at the moment a paired
-         field is edited, names what was changed, and offers the way back. It is
-         a warning and not a lock — the field stays editable, because there are
-         real reasons to change one (both ends at once), and a form that refuses
-         is a form people work around. */
-      const pasteMsg = root.querySelector('#pasteMsg');
-      function warnIfDiverged() {
-        if (!pasteMsg || !fromLink.size) return;
-        const changed = [];
-        for (const [name, was] of fromLink) {
-          const el = root.querySelector(`[name="${name}"]`);
-          if (!el) continue;
-          const now = el.type === 'checkbox' ? el.checked : el.value;
-          if (now !== was) changed.push(name.replace(/^spoof\./, ''));
-        }
-        if (!changed.length) { pasteMsg.hidden = true; return; }
-        pasteMsg.querySelector('span:last-child').textContent =
-          'You have changed ' + changed.join(', ') + ', which came from the other server. '
-          + 'Both ends must agree on these — change the other side to match, or the tunnel '
-          + 'will connect and carry nothing.';
-        pasteMsg.hidden = false;
-      }
-      root.addEventListener('input', warnIfDiverged);
-      root.addEventListener('change', warnIfDiverged);
-
-      async function applyPastedLink() {
-        const box = root.querySelector('#apaste');
-        if (!box || !pasteMsg) return;
-        const link = box.value.trim();
-        if (!link) return;
-        try {
-          const f = await api.shareLinkDecode(link);
-          fillFromPeerForm(f);
-          pasteMsg.hidden = true;
-          toast(f.note ? 'Filled in. ' + f.note : 'Filled in from the other server.');
-        } catch (e) {
-          /* The server's wording, not ours: it knows whether the link was cut
-             short, or made by a version this one does not understand. */
-          pasteMsg.querySelector('span:last-child').textContent = String(e.message || e);
-          pasteMsg.hidden = false;
-        }
-      }
-      /* The managed servers this tunnel could be built on.
-       *
-       * Only the connected ones are offered. A server that is enrolled but
-       * offline cannot be written to, and listing it would turn a choice the
-       * operator makes now into a failure they discover at the end of the form.
-       * If none are connected the whole group stays away — an empty picker is
-       * a question with no answers. */
       const nodeSel = root.querySelector('#anode');
       const nodeGrp = root.querySelector('#nodeGrp');
-      const pasteGrp = root.querySelector('#apaste')?.closest('.grp3');
       /* The form in three parts, which is what it has always been without
        * saying so.
        *
@@ -1101,7 +922,21 @@ export function addView(ctx) {
       let peerIP = '';               // the one for the server that was picked
       api.nodes().then(state => {
         const live = (state.nodes || []).filter(n => n.online);
-        if (!live.length || !nodeSel || !nodeGrp) { reveal(); return; }
+        /* No managed server, no tunnel from here.
+         *
+         * This form writes both ends. Without a server to write the other one
+         * on it could only ever build half a tunnel and then ask the operator
+         * to go and finish it somewhere else — which is the two-pass flow the
+         * fleet exists to remove, and the source of most of what went wrong
+         * with it: two forms, filled in twice, agreeing by hand.
+         *
+         * So it says what is missing and where the other route is. Tunnels can
+         * still be made from the CLI on each machine; the panel shows their
+         * cards and manages them like any other. */
+        if (!live.length || !nodeSel || !nodeGrp) {
+          noFleet(state);
+          return;
+        }
         live.forEach(n => {
           nodeSel.append(el('option', { value: n.name, text: n.name }));
           const ip = n.info?.ipv4;
@@ -1151,12 +986,45 @@ export function addView(ctx) {
         }
         applyShape();
 
-      }).catch(() => { /* the fleet is an offer, not a requirement */ });
+      }).catch(() => noFleet(null));
+
+      /* What this screen is when there is no server to build the far end on. */
+      function noFleet(state) {
+        const body = root.querySelector('.body5');
+        const steps = root.querySelector('.steps');
+        const foot = root.querySelector('.df, .dfoot, .actions5');
+        if (steps) steps.hidden = true;
+        if (foot) foot.hidden = true;
+        if (!body) { reveal(); return; }
+
+        const any = (state?.nodes || []).length;
+        body.innerHTML = `
+          <div class="nofleet">
+            <svg class="x" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/>
+              <path d="M7 7.5h.01M7 17.5h.01"/></svg>
+            <b>${any ? 'No server is answering' : 'No managed server yet'}</b>
+            <p>This screen writes <b>both</b> ends of a tunnel — this one here, and the other
+               one on a server the panel logs into. ${any
+                 ? 'The servers in the fleet are not answering at the moment, so the far end could not be written.'
+                 : 'Add a server first: its address, SSH port, username and password.'}</p>
+            <p class="alt">A tunnel whose other end is a machine this panel does not manage is
+               made from the CLI on each server — <code>sudo backpack</code> — and its card
+               appears here like any other.</p>
+            <div class="nf-act">
+              <button class="nb primary" data-to="/servers">${any ? 'Open the fleet' : 'Add a server'}</button>
+            </div>
+          </div>`;
+        body.querySelector('[data-to]')?.addEventListener('click', () => {
+          close();
+          go('/servers');
+        });
+        reveal();
+      }
 
       /* Picking a server and pasting a link from one are the same job done two
          ways, so only one of them is ever on screen. */
       nodeSel?.addEventListener('change', () => {
-        if (pasteGrp) pasteGrp.hidden = !!nodeSel.value;
 
         /* The address is not asked for, because it is already known.
          *
@@ -1183,8 +1051,6 @@ export function addView(ctx) {
         }
       });
 
-      root.querySelector('#apasteb')?.addEventListener('click', applyPastedLink);
-      root.querySelector('#apaste')?.addEventListener('paste', () => setTimeout(applyPastedLink, 0));
 
       /* Building the tunnel.
        *

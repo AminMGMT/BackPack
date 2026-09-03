@@ -177,3 +177,16 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
   background:var(--tx);color:var(--bg);font-size:12.5px;font-weight:580;padding:11px 16px;border-radius:12px;
   box-shadow:0 14px 34px -12px rgba(0,0,0,.7);display:none;max-width:min(520px,92vw);line-height:1.5}
 .toast.on{display:block;animation:arrive .32s cubic-bezier(.32,.72,0,1)}
+
+/* Which end's log this is.
+ *
+ * The same segmented control as the level filter, and first in the bar, because
+ * it is the wider question: which machine, then which lines from it. Only drawn
+ * for a tunnel this panel built across a managed server — the switch is absent
+ * rather than disabled, since a control that cannot work is worse than none. */
+.panel .bar2 .ends{display:flex;gap:2px;background:var(--sunk);border-radius:11px;padding:3px;flex:none}
+.panel .bar2 .ends button{font:inherit;font-size:12px;font-weight:570;padding:7px 12px;border-radius:8px;
+  border:0;background:transparent;color:var(--mu);cursor:pointer;max-width:170px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  transition:background .22s ease,color .22s ease}
+.panel .bar2 .ends button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.25)}

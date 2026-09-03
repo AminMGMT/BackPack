@@ -162,6 +162,16 @@ type TunnelInfo struct {
 	// because ":1231" is what matters and "0.0.0.0:1231" is noise.
 	TunnelPort string `json:"tunnelPort"`
 
+	// Node is the managed server holding this tunnel's other end, when this
+	// panel built both. Empty for a tunnel whose far end was set up by hand,
+	// which is a real and ordinary thing to have.
+	//
+	// The panel needs it to know there is a second side it can act on at all —
+	// a log to read there, a speed test that can start a receiver — without
+	// asking the fleet about every tunnel on every poll.
+	Node     string `json:"node,omitempty"`
+	PeerName string `json:"peerName,omitempty"`
+
 	// From the tunnel's metrics snapshot (empty when none has been written yet).
 	Uptime   string `json:"uptime,omitempty"`
 	BytesIn  string `json:"bytesIn,omitempty"`
@@ -468,6 +478,7 @@ func GatherTunnels() []TunnelInfo {
 			// One read serves both the peer fallback and the traffic fields.
 			snap, snapErr := metrics.Read(app.ConfigDir, t.Name)
 			ports, relayPort, bot := splitBotRelay(t.Ports, "")
+			pair, paired := manage.PairFor(t.Name)
 			info := TunnelInfo{
 				Name:         t.Name,
 				Role:         t.Role,
@@ -485,6 +496,9 @@ func GatherTunnels() []TunnelInfo {
 				Ping:       -1,
 				Direction:  manage.TunnelDirection(t),
 				Carrier:    manage.TunnelCarrier(t),
+			}
+			if paired {
+				info.Node, info.PeerName = pair.Node, pair.PeerName
 			}
 			// The question is whether this side can ping the far end from its
 			// own config, or has to detect whoever connected to it. A reverse

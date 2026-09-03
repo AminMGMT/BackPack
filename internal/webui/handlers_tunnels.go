@@ -3,7 +3,6 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -391,59 +390,4 @@ func (s *server) handleDirectCreate(w http.ResponseWriter, r *http.Request) {
 		"service": service,
 		"active":  active,
 	})
-}
-
-// handleShareLink builds the link that hands a tunnel's paired settings to the
-// other server, and decodes one that arrives from it.
-//
-// Both directions live behind one route because they are one feature, and both
-// keep the mirroring in the manage package rather than in the browser: the
-// inversion is the part that is easy to get subtly wrong, and a second copy of
-// it in JavaScript would drift from this one without anybody noticing until a
-// tunnel went quiet.
-func (s *server) handleShareLink(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		name := strings.TrimSpace(r.URL.Query().Get("name"))
-		if name == "" {
-			http.Error(w, "which tunnel?", http.StatusBadRequest)
-			return
-		}
-		// The other end reaches this machine at its public address, which the
-		// config does not hold: a listening tunnel binds 0.0.0.0 and a dialling
-		// one records where it is going. The panel knows it, so it is asked for
-		// — and where it cannot be worked out the link still carries everything
-		// else, and the operator fills the address in by hand.
-		host := strings.TrimSpace(r.URL.Query().Get("host"))
-		if host == "" {
-			host = manage.PublicIPv4()
-		}
-		link, err := manage.ShareLinkFor(name, host)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, map[string]any{"link": link, "host": host})
-
-	case http.MethodPost:
-		var body struct {
-			Link string `json:"link"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
-			http.Error(w, "could not read the link", http.StatusBadRequest)
-			return
-		}
-		parsed, err := manage.DecodeShareLink(body.Link)
-		if err != nil {
-			// The decoder's messages are written for the person holding the
-			// link — a copy that stopped short, a version mismatch — so they go
-			// through verbatim rather than being replaced with a generic one.
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, manage.MirrorForPeer(parsed))
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
 }

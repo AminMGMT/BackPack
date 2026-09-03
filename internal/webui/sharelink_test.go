@@ -1,102 +1,78 @@
 package webui
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"io/fs"
 	"strings"
 	"testing"
 
 	"github.com/backpack/backpack/internal/manage"
 )
 
-// The endpoint is one feature in two directions: it hands the paired settings
-// over, and it takes them from the other side. What matters here is that a bad
-// paste reaches the operator as the decoder's own words — a copy that stopped
-// short, a version mismatch — rather than as a generic failure they cannot act
-// on.
+// The setup link is gone from the panel, and this is what it leaves behind.
+//
+// It existed for a second panel on the other server: the operator built one
+// end here, copied a link, opened the panel over there and pasted it in. That
+// is the two-pass flow the fleet exists to remove, and it is where most of what
+// went wrong with pairing came from — two forms, filled in twice, agreeing by
+// hand. The panel writes both ends over SSH now.
+//
+// What must not go with it is the mirroring itself: pushing the far end still
+// derives it from the tunnel just written, through exactly the same code.
 
-func TestPastingABadLinkSaysWhatIsWrong(t *testing.T) {
-	srv := &server{sessions: newSessionStore()}
+func TestThePanelNoLongerHandsOutSetupLinks(t *testing.T) {
+	loadExperimentalPanel()
 
-	for _, tc := range []struct{ name, link, want string }{
-		{"empty", "", "paste the setup link"},
-		{"not a link", "just some text", "does not look like"},
-		{"truncated", "backpack://1.H4sIAAAA", "damaged"},
-		{"a future version", "backpack://9.abc", "version 9"},
-	} {
-		body, _ := json.Marshal(map[string]string{"link": tc.link})
-		r := httptest.NewRequest("POST", "/api/tunnel/sharelink", strings.NewReader(string(body)))
-		w := httptest.NewRecorder()
-		srv.handleShareLink(w, r)
+	api, err := fs.ReadFile(panelRoot, "js/api.js")
+	if err != nil {
+		t.Fatalf("cannot read api.js: %v", err)
+	}
+	if strings.Contains(string(api), "sharelink") {
+		t.Error("the panel still calls the share-link endpoint, which is gone — the " +
+			"call would 404 and the wizard would offer a link it cannot build")
+	}
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("%s: status %d, want 400", tc.name, w.Code)
-			continue
+	add, err := fs.ReadFile(panelRoot, "js/views/add.js")
+	if err != nil {
+		t.Fatalf("cannot read add.js: %v", err)
+	}
+	src := string(add)
+	for _, gone := range []string{"shareLinkDecode", "paintHandoff", "applyPastedLink"} {
+		if strings.Contains(src, gone) {
+			t.Errorf("add.js still has %s, so the second-pass path is still on screen", gone)
 		}
-		if !strings.Contains(w.Body.String(), tc.want) {
-			t.Errorf("%s: %q does not tell the operator what happened (want %q)",
-				tc.name, strings.TrimSpace(w.Body.String()), tc.want)
-		}
+	}
+	// And it must refuse rather than build half a tunnel.
+	if !strings.Contains(src, "noFleet") {
+		t.Error("the wizard no longer has a state for having no managed server, so with " +
+			"an empty fleet it would build this end and leave the other undone")
 	}
 }
 
-// A good link comes back as the other side's form, with the paired fields
-// named — that list is what the panel warns on, and it has to arrive.
-func TestPastingAGoodLinkReturnsTheMirroredForm(t *testing.T) {
+// The mirroring is what the push depends on, so it stays, and stays exercised.
+func TestTheMirrorStillDerivesTheFarEnd(t *testing.T) {
 	link, err := manage.ShareLink{
-		Kind: "reverse", From: "iran", Name: "iran-a",
-		Tok: "a-real-looking-token-0123456789abcdef", Tr: "tcp",
-		Port: "8443", Host: "203.0.113.9", Preset: "turbo",
+		V: 1, Kind: "reverse", From: "iran", Name: "fr-relay",
+		Tr: "tcpmux", Host: "203.0.113.9", Port: "8443", Tok: "s3cret",
 	}.Encode()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("encode: %v", err)
 	}
-
-	srv := &server{sessions: newSessionStore()}
-	body, _ := json.Marshal(map[string]string{"link": link})
-	r := httptest.NewRequest("POST", "/api/tunnel/sharelink", strings.NewReader(string(body)))
-	w := httptest.NewRecorder()
-	srv.handleShareLink(w, r)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	parsed, err := manage.DecodeShareLink(link)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	var form manage.PeerForm
-	if err := json.Unmarshal(w.Body.Bytes(), &form); err != nil {
-		t.Fatalf("the reply is not a form: %v", err)
+	form := manage.MirrorForPeer(parsed)
+	if form.Kind != "reverse" {
+		t.Errorf("the mirror changed the kind to %q", form.Kind)
 	}
-	if form.Side != "kharej" || form.Transport != "tcp" || form.Token == "" {
-		t.Errorf("the form did not arrive filled: %+v", form)
+	t2 := form.ToNewTunnel()
+	if t2.Role != "client" {
+		t.Errorf("the far end of a server is %q, not a client", t2.Role)
 	}
-	if form.ServerAddr != "203.0.113.9" {
-		t.Errorf("the kharej side was not told where to dial: %q", form.ServerAddr)
+	if t2.Token != "s3cret" {
+		t.Error("the token did not survive the mirror, so the two ends would not agree")
 	}
-	if len(form.Paired) == 0 {
-		t.Error("no fields were marked paired, so the panel would warn about nothing")
-	}
-}
-
-// Asking for a link for a tunnel that does not exist is a mistake to report,
-// not something to answer with an empty link the operator would then paste.
-func TestAskingForALinkForNothingIsRefused(t *testing.T) {
-	srv := &server{sessions: newSessionStore()}
-	for _, q := range []string{"", "?name=does-not-exist"} {
-		r := httptest.NewRequest("GET", "/api/tunnel/sharelink"+q, nil)
-		w := httptest.NewRecorder()
-		srv.handleShareLink(w, r)
-		if w.Code == http.StatusOK {
-			t.Errorf("%q was answered with a link", q)
-		}
-	}
-}
-
-func TestShareLinkRejectsOtherMethods(t *testing.T) {
-	srv := &server{sessions: newSessionStore()}
-	r := httptest.NewRequest("DELETE", "/api/tunnel/sharelink", nil)
-	w := httptest.NewRecorder()
-	srv.handleShareLink(w, r)
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status %d, want 405", w.Code)
+	if t2.Transport != "tcpmux" {
+		t.Errorf("the transport changed to %q", t2.Transport)
 	}
 }

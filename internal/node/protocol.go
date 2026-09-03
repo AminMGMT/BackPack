@@ -44,6 +44,14 @@ const (
 	// the panel asks the node what it currently has and lays the edit over it.
 	OpSettings = "settings"
 
+	// OpLogs returns the far end's journal for one tunnel.
+	//
+	// A tunnel is one thing in two places and its log is not: half of what went
+	// wrong is on the other machine, and reading it meant logging into that
+	// machine — which is the second pass the whole fleet feature exists to
+	// remove. The panel asks for it the same way it asks for anything else.
+	OpLogs = "logs"
+
 	// OpStart, OpStop and OpRestart drive one tunnel's service. Nothing is
 	// written by any of them.
 	//
@@ -120,6 +128,18 @@ type Info struct {
 	// wrong.
 	Distro string `json:"distro,omitempty"`
 	Uptime string `json:"uptime,omitempty"`
+}
+
+// LogsRequest asks for one tunnel's journal on the far server.
+type LogsRequest struct {
+	Name  string `json:"name"`
+	Lines int    `json:"lines,omitempty"` // 0 means the usual number
+}
+
+// LogsResult is what came back.
+type LogsResult struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 // TunnelState is one tunnel on a node, as the fleet screen shows it.

@@ -96,6 +96,20 @@ func Execute(req Request) Response {
 		}
 		return doReceive(rr)
 
+	case OpLogs:
+		var lr LogsRequest
+		if err := json.Unmarshal(req.Body, &lr); err != nil {
+			return failf("malformed logs request")
+		}
+		if _, ok := manage.Find(lr.Name); !ok {
+			return failf("no tunnel named %q on this server", lr.Name)
+		}
+		lines := lr.Lines
+		if lines <= 0 || lines > 500 {
+			lines = 150
+		}
+		return okBody(LogsResult{Name: lr.Name, Text: manage.Logs(lr.Name, lines)})
+
 	case OpStart, OpStop, OpRestart:
 		var nr NameRequest
 		if err := json.Unmarshal(req.Body, &nr); err != nil {

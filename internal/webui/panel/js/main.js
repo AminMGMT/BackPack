@@ -15,7 +15,6 @@ import { editView } from './views/edit.js';
 import { addView } from './views/add.js';
 import { settingsView } from './views/settings.js';
 import { serversView } from './views/servers.js';
-import { speedtestView } from './views/speedtest.js';
 import { maintView, undoView } from './views/maint.js';
 import { alertsView, healthView, speedView } from './views/monitor.js';
 import { starView, supportView } from './views/support.js';
@@ -93,7 +92,6 @@ function paintHeader(state) {
 router.route('/', overview);
 router.route('/tunnels', dashboard);
 router.route('/servers', serversView);
-router.route('/speedtest', speedtestView);
 
 /* A screen that opens over the fleet keeps the fleet underneath: the route
    renders the dashboard first, then puts the dialog on top of it, so closing
@@ -237,7 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const paintDock = path => {
     /* A dialog opened over a section leaves that section marked, because it is
        still where you are — except Settings, which the dock offers itself. */
-    const at = ['/servers', '/tunnels', '/speedtest', '/settings'].find(p => path.startsWith(p))
+    const at = ['/servers', '/tunnels', '/settings'].find(p => path.startsWith(p))
       || (path.startsWith('/t/') ? '/tunnels' : '/');
     document.querySelectorAll('#dock [data-dock]').forEach(b => {
       const on = b.dataset.dock === at;

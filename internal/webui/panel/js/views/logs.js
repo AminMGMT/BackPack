@@ -3,7 +3,7 @@
  * CLI: Manage → Manage Tunnels → Live Log.
  */
 
-import { $, $$, esc } from '../lib/dom.js';
+import { $, $$, el, esc } from '../lib/dom.js';
 import { flag, kindLabel } from '../lib/format.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
@@ -95,14 +95,12 @@ export async function logsView(ctx) {
         [t.peerLocation, t.peerISP, kindLabel(t)].filter(Boolean).join(' · ');
 
       const box = root.querySelector('.log');
-      let level = 'all', lines = [], follow = true;
-
-      const segs = $$('.segs button', root);
-      segs.forEach((b, i) => b.addEventListener('click', () => {
-        segs.forEach(x => x.classList.toggle('on', x === b));
-        level = ['all', 'warn', 'error'][i] || 'all';
-        render(box, lines, level);
-      }));
+      /* All of this screen's state in one place, and declared before anything
+         that touches it. seenAt was declared beside the jump button it belongs
+         to, further down — and setFollow, which runs on the way in, assigns it.
+         So opening the screen threw before it had drawn anything, and the only
+         sign was a toast. */
+      let level = 'all', lines = [], follow = true, end = 'local', seenAt = 0;
 
       /* Three buttons share the .tool class, and only the first was bound.
        *
@@ -115,6 +113,7 @@ export async function logsView(ctx) {
       const pauseBtn = root.querySelector('#pauseBtn');
       const setFollow = on => {
         follow = on;
+        if (on) seenAt = lines.length;
         liveBtn?.classList.toggle('on', follow);
         if (pauseBtn) {
           pauseBtn.lastChild.textContent = follow ? ' Pause' : ' Resume';
@@ -148,17 +147,87 @@ export async function logsView(ctx) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       });
 
+      /* "N new" — jump back to the tail.
+       *
+       * The preview drew this button reading "3 new" and wired it to a handler
+       * that was never written, so it sat there permanently claiming three
+       * lines had arrived and did nothing when pressed. It is what it says now:
+       * shown only while following is off and lines have actually arrived since,
+       * counting them, and putting the reader back at the bottom.
+       */
+      const jump = root.querySelector('#jump');
+      const jumpN = root.querySelector('#jumpN');
+      const paintJump = () => {
+        if (!jump) return;
+        const behind = follow ? 0 : Math.max(0, lines.length - seenAt);
+        jump.hidden = behind === 0;
+        if (jumpN) jumpN.textContent = behind === 1 ? '1 new' : `${behind} new`;
+      };
+      jump?.addEventListener('click', () => {
+        setFollow(true);
+        box.scrollTop = box.scrollHeight;
+      });
+
+      const countNote = root.querySelector('#count');
       const diagBox = root.querySelector('.diag');
       const pull = async () => {
         try {
-          const text = await api.logs(name);
+          const text = await api.logs(end === 'peer' ? name : name, end);
           lines = String(text).split('\n').filter(Boolean);
           render(box, lines, level);
           diagnose(diagBox, text);
-          if (follow) box.scrollTop = box.scrollHeight;
+          if (follow) { box.scrollTop = box.scrollHeight; seenAt = lines.length; }
+          paintJump();
+          if (countNote) {
+            countNote.textContent = `${lines.length} ${lines.length === 1 ? 'line' : 'lines'}`
+              + (follow ? ' · following' : ' · paused');
+          }
         } catch (e) { oops(e); }
       };
       await pull();
+
+      /* Which end's log this is.
+       *
+       * A tunnel is one thing in two places, and until now this screen only
+       * showed the half on this machine. The other half is where a client that
+       * cannot dial, a certificate it could not read or a port already held
+       * over there says so — and reading it meant logging into that server,
+       * which is the second pass the fleet exists to remove.
+       *
+       * Only offered for a tunnel this panel built across a managed server:
+       * anything else has no other end this panel can reach, and a switch that
+       * cannot work is worse than no switch. */
+      /* Set up after the first read, because switching ends calls pull() and a
+         handler that closed over it before it was declared threw the moment the
+         other end was picked — the pane just said "Reading…" for ever. */
+      if (t?.node) {
+        const pick = el('div', { class: 'ends' }, [
+          el('button', { class: 'on', text: 'This server' }),
+          el('button', { text: t.node }),
+        ]);
+        const segsRow = root.querySelector('.segs')?.parentElement;
+        (segsRow || box.parentElement).insertBefore(pick, segsRow ? segsRow.firstChild : box);
+        const [localB, peerB] = pick.querySelectorAll('button');
+        const setEnd = which => {
+          if (end === which) return;
+          end = which;
+          localB.classList.toggle('on', which === 'local');
+          peerB.classList.toggle('on', which === 'peer');
+          lines = [];
+          box.innerHTML = `<div class="ln info"><span class="msg">Reading…</span></div>`;
+          pull();
+        };
+        localB.addEventListener('click', () => setEnd('local'));
+        peerB.addEventListener('click', () => setEnd('peer'));
+      }
+
+      const segs = $$('.segs button', root);
+      segs.forEach((b, i) => b.addEventListener('click', () => {
+        segs.forEach(x => x.classList.toggle('on', x === b));
+        level = ['all', 'warn', 'error'][i] || 'all';
+        render(box, lines, level);
+      }));
+
       const timer = setInterval(() => { if (!document.hidden) pull(); }, 3000);
 
       ctx.setTeardown(() => { clearInterval(timer); close(); });
