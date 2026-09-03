@@ -266,6 +266,53 @@ type NewTunnel struct {
 // is created and reported as not running, exactly as the CLI reports it, rather
 // than being refused after the config was already written.
 func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
+	// Checked before the form is turned into a configuration, because building
+	// one has side effects — a WSS server generates a certificate — and doing
+	// that for a tunnel that is about to be refused leaves files behind.
+	if name := strings.TrimSpace(n.Name); validName(name) && fileExists(app.ConfigPath(name)) {
+		return "", false, fmt.Errorf("a tunnel named %q already exists", name)
+	}
+	s, err := specFromNew(n)
+	if err != nil {
+		return "", false, err
+	}
+	service, err = s.Save()
+	if err != nil {
+		return service, false, err
+	}
+	return service, IsActive(service), nil
+}
+
+// ApplyTunnel writes the tunnel this form describes, whether or not it is
+// already there.
+//
+// It is the operation a managed node performs, where create and edit are not
+// two different things: the panel sends the complete state a tunnel should be
+// in, and this puts the machine in that state. An existing tunnel goes through
+// applySpec, so a configuration that will not start is rolled back and the
+// previous one is filed, exactly as an edit made on this machine would be.
+func ApplyTunnel(n NewTunnel) (service string, active bool, created bool, err error) {
+	s, err := specFromNew(n)
+	if err != nil {
+		return "", false, false, err
+	}
+	service = app.ServiceName(s.Name)
+	if !fileExists(app.ConfigPath(s.Name)) {
+		service, err = s.Save()
+		if err != nil {
+			return service, false, true, err
+		}
+		return service, IsActive(service), true, nil
+	}
+	if err := applySpec(s); err != nil {
+		return service, IsActive(service), false, err
+	}
+	return service, IsActive(service), false, nil
+}
+
+// specFromNew turns a filled setup form into the configuration it describes.
+// It writes nothing.
+func specFromNew(n NewTunnel) (TunnelSpec, error) {
 	// Forwarded ports carry TCP only unless the Fine Tune drawer turns UDP on,
 	// which is what the CLI wizard defaults to too. See ForwardsUDP for why the
 	// default is off.
@@ -275,30 +322,27 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	case "server", "client":
 		s.Role = n.Role
 	default:
-		return "", false, fmt.Errorf("role must be server or client")
+		return s, fmt.Errorf("role must be server or client")
 	}
 
 	s.Transport = strings.ToLower(strings.TrimSpace(n.Transport))
 	if !validTransport(s.Transport) {
-		return "", false, fmt.Errorf("unknown transport %q", n.Transport)
+		return s, fmt.Errorf("unknown transport %q", n.Transport)
 	}
 
 	s.Name = strings.TrimSpace(n.Name)
 	if !validName(s.Name) {
-		return "", false, fmt.Errorf("invalid name %q — use letters, digits, dots and dashes (max 40)", n.Name)
-	}
-	if fileExists(app.ConfigPath(s.Name)) {
-		return "", false, fmt.Errorf("a tunnel named %q already exists", s.Name)
+		return s, fmt.Errorf("invalid name %q — use letters, digits, dots and dashes (max 40)", n.Name)
 	}
 
 	port := strings.TrimSpace(n.TunnelPort)
 	if !validPort(port) {
-		return "", false, fmt.Errorf("the tunnel port must be between 1 and 65535")
+		return s, fmt.Errorf("the tunnel port must be between 1 and 65535")
 	}
 
 	s.Token = strings.TrimSpace(n.Token)
 	if s.Token == "" {
-		return "", false, fmt.Errorf("a security token is required — both ends must use the same one")
+		return s, fmt.Errorf("a security token is required — both ends must use the same one")
 	}
 
 	if s.Role == "server" {
@@ -312,10 +356,10 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 
 		s.Ports = parsePorts(n.Ports)
 		if len(s.Ports) == 0 {
-			return "", false, fmt.Errorf("at least one forwarded port is required")
+			return s, fmt.Errorf("at least one forwarded port is required")
 		}
 		if err := validatePortSpecs(s.Ports); err != nil {
-			return "", false, err
+			return s, err
 		}
 		if supportsProxyProtocol(s.Transport) {
 			s.ProxyProtocol = n.ProxyProtocol
@@ -323,7 +367,7 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	} else {
 		host := strings.Trim(strings.TrimSpace(n.ServerAddr), "[]")
 		if host == "" {
-			return "", false, fmt.Errorf("the server address is required")
+			return s, fmt.Errorf("the server address is required")
 		}
 		s.RemoteAddr = net.JoinHostPort(host, port)
 	}
@@ -335,14 +379,14 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 		addr = s.RemoteAddr
 	}
 	if why := portClash(s.Role, addr, s.Name); why != "" {
-		return "", false, fmt.Errorf("%s", why)
+		return s, fmt.Errorf("%s", why)
 	}
 
 	// Caught here rather than silently applied, for the reason given in the edit
 	// path: on a kernel-stack transport this profile's knobs would be written and
 	// then ignored.
 	if !presetSuitsTransport(n.Preset, s.Transport) {
-		return "", false, fmt.Errorf("the %s preset applies to the udp+kcp+fec transport only, not %q",
+		return s, fmt.Errorf("the %s preset applies to the udp+kcp+fec transport only, not %q",
 			presetLabel(n.Preset), s.Transport)
 	}
 	ApplyPreset(&s, n.Preset)
@@ -356,22 +400,17 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	if s.Role == "server" && needsTLS(s.Transport) {
 		cert, key, err := EnsureSelfSignedCert(s.Name, "")
 		if err != nil {
-			return "", false, fmt.Errorf("could not generate a TLS certificate: %w", err)
+			return s, fmt.Errorf("could not generate a TLS certificate: %w", err)
 		}
 		s.TLSCert, s.TLSKey = cert, key
 	}
 	// The advanced drawers, in the order the wizard asks them. A form that never
 	// opened one sends nothing for it, and the tunnel keeps the defaults.
 	if err := applyAdvanced(&s, n.Pck, n.Conn, n.Limits, port); err != nil {
-		return "", false, err
+		return s, err
 	}
 	optimize.ApplyQuiet()
-
-	service, err = s.Save()
-	if err != nil {
-		return service, false, err
-	}
-	return service, IsActive(service), nil
+	return s, nil
 }
 
 // TunnelEdit is the set of changes the panel's Edit form can make. Every field
@@ -395,6 +434,12 @@ type TunnelEdit struct {
 	// ProxyProtocol is a pointer because false is an answer: a plain bool could
 	// not tell "turn it off" from "the form did not mention it".
 	ProxyProtocol *bool `json:"proxyProtocol"`
+
+	// The certificate, on the transports that present one. Pointers for the
+	// same reason: an empty string means "go back to the self-signed one",
+	// which is a different instruction from "leave the certificate alone".
+	ACMEDomain *string `json:"acmeDomain"`
+	ACMEEmail  *string `json:"acmeEmail"`
 }
 
 // EditTunnelSettings applies every change in one pass and restarts the tunnel
@@ -442,6 +487,43 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 	if e.Tune != nil {
 		e.Tune.apply(&s)
 		changed = true
+	}
+
+	// The certificate, on the same terms as the CLI's Edit screen: only a
+	// server on a TLS transport has one, and the self-signed pair stays on disk
+	// either way because it is what the config still points at when Let's
+	// Encrypt has nothing to offer yet.
+	if e.ACMEDomain != nil || e.ACMEEmail != nil {
+		domain := s.ACMEDomain
+		if e.ACMEDomain != nil {
+			domain = strings.ToLower(strings.TrimSpace(*e.ACMEDomain))
+		}
+		email := s.ACMEEmail
+		if e.ACMEEmail != nil {
+			email = strings.TrimSpace(*e.ACMEEmail)
+		}
+		if domain != "" {
+			if s.Role != "server" {
+				return fmt.Errorf("the certificate is a server-side setting — the client does not present one")
+			}
+			if !needsTLS(s.Transport) {
+				return fmt.Errorf("transport %s does not use TLS, so it presents no certificate", s.Transport)
+			}
+			if net.ParseIP(domain) != nil {
+				return fmt.Errorf("Let's Encrypt cannot issue a certificate for an IP address — use a domain name")
+			}
+		}
+		if domain != s.ACMEDomain || email != s.ACMEEmail {
+			s.ACMEDomain, s.ACMEEmail = domain, email
+			if needsTLS(s.Transport) && s.Role == "server" && (s.TLSCert == "" || !fileExists(s.TLSCert)) {
+				cert, key, err := EnsureSelfSignedCert(s.Name, domain)
+				if err != nil {
+					return fmt.Errorf("could not prepare the self-signed certificate: %w", err)
+				}
+				s.TLSCert, s.TLSKey = cert, key
+			}
+			changed = true
+		}
 	}
 
 	if port := strings.TrimSpace(e.TunnelPort); port != "" {
@@ -552,6 +634,14 @@ type TunnelSettings struct {
 	Conn          ConnTune     `json:"conn"`
 	Limits        TunnelLimits `json:"limits"`
 	ProxyProtocol bool         `json:"proxyProtocol"`
+
+	// The certificate a TLS transport presents. Empty ACMEDomain means the
+	// self-signed pair generated when the tunnel was made. The panel could
+	// never see or change this — only the CLI could — so a WSS tunnel set up
+	// from the panel stayed on a certificate no browser trusts, with nothing on
+	// the screen to say why or what to do about it.
+	ACMEDomain string `json:"acmeDomain,omitempty"`
+	ACMEEmail  string `json:"acmeEmail,omitempty"`
 }
 
 // TunnelSettingsOf reads a tunnel's editable settings from its config.
@@ -571,6 +661,8 @@ func TunnelSettingsOf(name string) (TunnelSettings, error) {
 		Conn:          connOf(s),
 		Limits:        limitsOf(s),
 		ProxyProtocol: s.ProxyProtocol,
+		ACMEDomain:    s.ACMEDomain,
+		ACMEEmail:     s.ACMEEmail,
 	}
 	if s.Role == "server" {
 		out.TunnelPort = addrPort(s.BindAddr)

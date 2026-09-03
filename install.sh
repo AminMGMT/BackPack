@@ -35,6 +35,48 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/tmp}")" 2>/dev/null && pwd || ec
 
 if [[ $EUID -ne 0 ]]; then err "Please run as root (sudo)."; exit 1; fi
 
+# Optional: install and enrol this server with a panel in one line.
+#
+#   bash <(curl -fsSL .../install.sh) node --panel <host:port> --key <setup-key>
+#
+# The panel hands that line out ready to paste. Without it the script behaves
+# exactly as it always has.
+#
+# The arguments are checked here, before a download and a build that can take
+# minutes — a key with a typo in it should be a message now, not a failure at
+# the end of a long install.
+NODE_PANEL=""; NODE_KEY=""
+if [[ "${1:-}" == "node" ]]; then
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --panel) NODE_PANEL="${2:-}"; shift 2 ;;
+      --key)   NODE_KEY="${2:-}";   shift 2 ;;
+      --panel=*) NODE_PANEL="${1#*=}"; shift ;;
+      --key=*)   NODE_KEY="${1#*=}";   shift ;;
+      *) err "Unknown option for node: $1"; exit 2 ;;
+    esac
+  done
+  if [[ -z "$NODE_PANEL" || -z "$NODE_KEY" ]]; then
+    err "node needs both --panel <host:port> and --key <setup-key>."
+    err "Copy the whole line from the panel, under Servers."
+    exit 2
+  fi
+  if [[ "$NODE_PANEL" != *:* ]]; then
+    err "--panel must be host:port, for example 203.0.113.9:8443 — got: $NODE_PANEL"
+    exit 2
+  fi
+  if [[ "$NODE_KEY" != *.* ]]; then
+    err "--key does not look like a setup key. Copy the whole line from the panel."
+    exit 2
+  fi
+  info "This server will be enrolled with the panel at ${NODE_PANEL} once Backpack is installed."
+elif [[ $# -gt 0 ]]; then
+  err "Unknown argument: $1"
+  err "Run with no arguments to install, or:  node --panel <host:port> --key <setup-key>"
+  exit 2
+fi
+
 case "$(uname -m)" in
   x86_64|amd64) ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
@@ -196,6 +238,18 @@ fi
 chmod +x "$BIN_PATH"
 echo
 echo -e "${WHITE}Done!${NC}"
+
+# Asked to enrol: do that instead of opening the menu. There is nothing to
+# choose on this server — the panel decides what runs here — so dropping the
+# operator into a menu would only be one more thing to close.
+#
+# exec replaces this shell, so the exit status the operator sees is the
+# enrolment's own: a setup key that has already been used has to fail loudly
+# here, not be hidden behind a successful install.
+if [[ -n "$NODE_PANEL" ]]; then
+  echo
+  exec "$BIN_PATH" node setup --panel "$NODE_PANEL" --key "$NODE_KEY"
+fi
 
 # Open the menu straight away — people miss the "now run sudo backpack" step.
 # Only when there is an interactive terminal to read from: a piped install

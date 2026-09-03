@@ -394,7 +394,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 				select {
 				case g.tunnelChannel <- session: // ok
 				default:
-					s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
+					s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.LocalAddr().String())
 					conn.Close()
 				}
 			}
@@ -635,7 +635,7 @@ func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, rem
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
-				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
+				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 
 				// +1 for stream counter
 				atomic.AddInt32(&s.streamCounter, 1)
@@ -651,7 +651,7 @@ func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, rem
 				}
 
 			default: // channel is full, discard the connection
-				s.logger.Warnf("local listener channel is full, discarding TCP connection from %s", tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.LocalAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

@@ -41,6 +41,18 @@ type TLSSettings struct {
 	// Losing it only means re-issuing, but doing that repeatedly hits rate
 	// limits, so it should be on persistent storage.
 	ACMECacheDir string
+
+	// FallbackCertFile and FallbackKeyFile are served when Let's Encrypt cannot
+	// issue. Only the panel sets them, and only because of what the alternative
+	// is: autocert answers a handshake it has no certificate for by failing it,
+	// so a domain that does not resolve yet, a blocked port 80, a rejected
+	// contact address or an unreachable CA all end the same way — every browser
+	// gets a TLS error and the operator has locked themselves out of the page
+	// they would fix it from. A self-signed certificate warns once and lets
+	// them in. Tunnels leave these empty: their client is not a person who can
+	// decide to accept a warning.
+	FallbackCertFile string
+	FallbackKeyFile  string
 }
 
 // UsesACME reports whether these settings request a Let's Encrypt certificate.
@@ -196,13 +208,37 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 	// the client sends no SNI when it dials an address literal, and so every
 	// connection was refused before autocert ever tried to obtain anything.
 	issue := cfg.GetCertificate
+	var fallback *certReloader
+	if s.FallbackCertFile != "" && s.FallbackKeyFile != "" {
+		fallback = &certReloader{certFile: s.FallbackCertFile, keyFile: s.FallbackKeyFile}
+		if _, err := fallback.load(); err != nil {
+			logf("the fallback certificate could not be read (%v); "+
+				"a failed Let's Encrypt issuance will refuse handshakes", err)
+			fallback = nil
+		}
+	}
+	warned := false
 	cfg.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		want := hello
 		if hello.ServerName == "" {
 			clone := *hello
 			clone.ServerName = s.ACMEDomain
-			return issue(&clone)
+			want = &clone
 		}
-		return issue(hello)
+		crt, err := issue(want)
+		if err == nil || fallback == nil {
+			return crt, err
+		}
+		// Said once, not once per handshake: a browser retrying makes this the
+		// loudest line in the log for a fault that has one cause.
+		if !warned {
+			warned = true
+			logf("serving the self-signed certificate because Let's Encrypt has not "+
+				"issued one for %s yet (%v) — the browser will warn, and the panel "+
+				"switches to the real certificate on its own once issuance succeeds",
+				s.ACMEDomain, err)
+		}
+		return fallback.get(want)
 	}
 	// TLSConfig() already advertises acme-tls/1, which is what lets Let's
 	// Encrypt validate over the listener itself when it is on port 443 — no
@@ -217,7 +253,7 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 	// not started afresh here.
 	acmeResponder.use(m, logf)
 
-	primeACMECert(m, s.ACMEDomain, logf)
+	primeACMECert(m, s.ACMEDomain, fallback != nil, logf)
 
 	return cfg, nil
 }
@@ -252,7 +288,12 @@ const acmePrimeTimeout = 6 * time.Minute
 // on a challenge, which is far too long to hold up a listener, and it is best
 // effort: a cached certificate is served whatever happens here, and a failure
 // now is retried by the ordinary lazy path on the next handshake.
-func primeACMECert(m *autocert.Manager, domain string, logf func(string, ...any)) {
+func primeACMECert(m *autocert.Manager, domain string, hasFallback bool, logf func(string, ...any)) {
+	fallbackNote := "TLS will not come up until this succeeds."
+	if hasFallback {
+		fallbackNote = "The self-signed certificate is being served meanwhile, so the " +
+			"page still opens — with a browser warning — and switches over on its own once this succeeds."
+	}
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -278,10 +319,10 @@ func primeACMECert(m *autocert.Manager, domain string, logf func(string, ...any)
 		select {
 		case err := <-done:
 			if err != nil {
-				logf("certificate for %s could not be obtained: %v — TLS will not come up until this succeeds. "+
+				logf("certificate for %s could not be obtained: %v — %s "+
 					"Check that %s resolves to this server, that port 80 is reachable from outside (or that this "+
-					"tunnel listens on 443), and that this server can reach acme-v02.api.letsencrypt.org",
-					domain, err, domain)
+					"listener is on 443), and that this server can reach acme-v02.api.letsencrypt.org",
+					domain, err, fallbackNote, domain)
 				return
 			}
 			logf("certificate for %s is ready", domain)

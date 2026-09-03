@@ -138,6 +138,18 @@ export async function historyView(ctx) {
 
       /* Fewer than two samples and there is no rate to draw at all. */
       if (data.collecting) {
+        /* The tiles sit above the panes, so replacing the panes alone left a
+           tunnel with no samples yet showing the preview's uptime and its
+           1.24 TB week — invented numbers, directly above the line explaining
+           that there are no numbers yet. */
+        $$('.st7', root).forEach(tile => {
+          const v = tile.querySelector('.v7');
+          if (v) v.innerHTML = '—';
+          const bar = tile.querySelector('.bar7 i');
+          if (bar) bar.style.width = '0%';
+          const sub = tile.querySelector('small');
+          if (sub) sub.textContent = 'nothing measured yet';
+        });
         const body = root.querySelector('.panes') || root;
         body.innerHTML = `<div class="coll7"><div class="rings"><i></i><i></i><i></i></div>
           <b>Still collecting</b>
@@ -160,10 +172,14 @@ export async function historyView(ctx) {
          very days the chart below is about. */
       const week = (data.days || []).reduce(
         (a, d) => ({ in: a.in + (d.in || 0), out: a.out + (d.out || 0) }), { in: 0, out: 0 });
+      /* Written whether or not there is anything to write. Guarding on "some
+         traffic was seen" left a tunnel that has carried nothing showing the
+         preview's 1.24 TB — an invented figure, on the screen whose whole job
+         is to report real ones. */
       const tiles = $$('.st7', root);
-      if (tiles[2] && (week.in || week.out)) {
+      if (tiles[2]) {
         const total = bytes(week.in + week.out).split(' ');
-        tiles[2].querySelector('.v7').innerHTML = `${total[0]}<em>${total[1]}</em>`;
+        tiles[2].querySelector('.v7').innerHTML = `${total[0]}<em>${total[1] || ''}</em>`;
         const sub = tiles[2].querySelector('small');
         if (sub) sub.textContent = `${bytes(week.in)} down · ${bytes(week.out)} up`;
       }

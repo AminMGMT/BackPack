@@ -1,0 +1,236 @@
+/* Servers — the fleet page.
+ *
+ * A page rather than a dialog: a server is one of the two things this panel is
+ * about, and the dock puts it beside the tunnels. Everything is scoped to .np7
+ * so this sheet can be loaded for the whole session — the screens/ sheets are
+ * swapped in and out because each was drawn on its own and they restyle .dlg
+ * between them; nothing else uses this class.
+ */
+
+
+.np7 .row7{display:flex;align-items:center;gap:12px;padding:12px 13px;border:1px solid var(--ln);
+  border-radius:13px;background:var(--s2);margin-bottom:9px}
+.np7 .row7 .t7{flex:1;min-width:0}
+.np7 .row7 b{display:block;font-size:12.5px;font-weight:620;letter-spacing:-.01em}
+.np7 .row7 span{display:block;font-size:11px;color:var(--dim);margin-top:3px;line-height:1.5}
+
+.np7 .in7{width:74px;flex:none;font-size:12px;padding:8px 10px;border-radius:10px;text-align:center;
+  border:1px solid var(--ln2);background:var(--sunk);color:var(--tx);outline:0;
+  font-variant-numeric:tabular-nums;transition:border-color .2s ease}
+.np7 .in7.wide7{width:150px;text-align:left;font-variant-numeric:normal}
+.np7 .in7:focus{border-color:var(--ln3)}
+.np7 .in7::placeholder{color:var(--faint)}
+
+.np7 .btn7{font:inherit;font-size:11.5px;font-weight:620;padding:8px 13px;border-radius:10px;flex:none;
+  border:1px solid var(--ln2);background:transparent;color:var(--tx);cursor:pointer;
+  transition:background .22s ease,border-color .22s ease,opacity .2s ease}
+.np7 .btn7:hover{background:var(--sunk)}
+.np7 .btn7.solid{background:var(--tx);color:var(--bg);border-color:transparent}
+.np7 .btn7.solid:hover{opacity:.9;background:var(--tx)}
+.np7 .btn7[disabled]{opacity:.4;cursor:default}
+.np7 .btn7.warn{border-color:color-mix(in srgb,var(--er) 45%,transparent);color:var(--er)}
+.np7 .btn7.warn:hover{background:color-mix(in srgb,var(--er) 10%,transparent)}
+
+.np7 .sw7{width:38px;height:22px;border-radius:11px;background:var(--ln2);border:0;cursor:pointer;flex:none;
+  position:relative;transition:background .26s var(--spring)}
+.np7 .sw7::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:var(--s1);transition:transform .26s var(--spring)}
+.np7 .sw7.on{background:var(--tx)}
+.np7 .sw7.on::after{transform:translateX(16px);background:var(--bg)}
+
+/* The setup command. It is the one thing on this screen that has to be read
+   character by character, so it is monospaced, selectable, and allowed to wrap
+   rather than scroll — a key with its middle hidden is a key that gets pasted
+   half-copied. */
+.np7 .cmd7{border:1px solid var(--ln2);border-radius:13px;background:var(--sunk);
+  padding:11px 13px 12px;margin:0 0 9px}
+.np7 .cmd7 .ch7{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.np7 .cmd7 .ch7 b{font-size:11.5px;font-weight:620}
+.np7 .cmd7 .ch7 em{font-style:normal;color:var(--mu)}
+.np7 .cmd7 .sp{flex:1}
+.np7 .cmd7 code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11.5px;line-height:1.65;color:var(--tx2);word-break:break-all;user-select:all}
+.np7 .cmd7 .ch7{flex-wrap:wrap}
+.np7 .cmd7 .ch7 .sub7{display:block;font-size:10.5px;color:var(--dim);
+  flex-basis:100%;order:3;margin-top:1px}
+.np7 .alt7{margin-top:9px;font-size:10.5px;color:var(--dim);line-height:1.6}
+.np7 .alt7 code{margin-top:6px;font-size:11px}
+.np7 .lnk7{font:inherit;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;
+  color:var(--mu);text-decoration:underline;text-underline-offset:2px}
+.np7 .lnk7:hover{color:var(--tx)}
+
+.np7 .wait7{display:flex;align-items:center;gap:7px;margin-top:9px;font-size:11px;color:var(--dim)}
+.np7 .wait7 i{width:7px;height:7px;border-radius:50%;background:var(--wr);flex:none;
+  animation:pulse7 1.5s ease-in-out infinite}
+.np7 .wait7.done7 i{background:var(--ok);animation:none}
+@keyframes pulse7{0%,100%{opacity:.35}50%{opacity:1}}
+
+.np7 .hd7{font-size:10.5px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--dim);margin:15px 2px 8px}
+
+/* One server, as a card.
+ *
+ * Square-ish and dense on purpose: a fleet is read by scanning, and a grid of
+ * blocks is scanned in two directions where a list of rows is only scanned in
+ * one. The address is the largest thing on it because it is what gets copied
+ * into a tunnel.
+ */
+.panel .sv7{position:relative;display:flex;flex-direction:column;gap:0;
+  border:1px solid var(--ln);border-radius:17px;background:var(--s1);overflow:hidden;
+  animation:sv-in .42s var(--spring) both;
+  transition:border-color .22s ease,transform .22s var(--spring),box-shadow .22s ease}
+.panel .sv7::before{content:'';position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 70% at 8% -10%,var(--sunk),transparent 62%)}
+.panel .sv7>*{position:relative}
+.panel .sv7:hover{border-color:var(--ln2);transform:translateY(-2px);box-shadow:var(--lift)}
+.panel .sv7.pend7{border-style:dashed}
+@keyframes sv-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.panel .sv-h{display:flex;align-items:center;gap:10px;padding:15px 16px 0}
+.panel .sv-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--faint)}
+.panel .sv7.on7 .sv-dot{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+.panel .sv-id{flex:1;min-width:0}
+.panel .sv-id b{display:block;font-size:14px;font-weight:640;letter-spacing:-.022em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .sv-id em{display:block;font-style:normal;font-size:11px;color:var(--dim);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .sv-tag{font-size:10.5px;font-weight:620;padding:3px 9px;border-radius:8px;flex:none;
+  border:1px solid var(--ln2);color:var(--mu)}
+.panel .sv7.on7 .sv-tag{border-color:color-mix(in srgb,var(--ok) 34%,transparent);color:var(--tx2)}
+
+/* The address, given the room it earns. */
+.panel .sv-addr{padding:14px 16px 15px;min-width:0}
+.panel .sv-addr span{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:17px;font-weight:600;letter-spacing:-.02em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .sv-addr em{display:block;font-style:normal;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:10.5px;color:var(--dim);margin-top:4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.panel .sv-facts{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--ln);
+  border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
+.panel .sv-fact{background:var(--s1);padding:10px 16px;min-width:0}
+.panel .sv-fact span{display:block;font-size:9.5px;font-weight:620;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--dim)}
+.panel .sv-fact b{display:block;font-size:12.5px;font-weight:600;margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.panel .sv-wait{padding:14px 16px 16px;font-size:11.5px;color:var(--dim);line-height:1.6;
+  border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
+
+.panel .sv-f{display:flex;align-items:center;padding:11px 12px 11px 16px}
+.panel .sv-f .sp{flex:1}
+
+/* Removing asks inside the card. */
+.panel .sv7 .cf7{display:none;position:absolute;inset:0;border-radius:17px;background:var(--s1);
+  flex-direction:column;justify-content:center;gap:12px;padding:18px;z-index:2}
+.panel .sv7.arm7 .cf7{display:flex}
+.panel .sv7 .cf7 p{font-size:12px;line-height:1.6;color:var(--tx2)}
+.panel .sv7 .cf7 button{align-self:flex-start}
+
+.np7 .warn7{display:flex;gap:9px;padding:11px 12px;border-radius:12px;margin:0 0 9px;
+  border:1px solid color-mix(in srgb,var(--wr) 34%,transparent);
+  background:color-mix(in srgb,var(--wr) 8%,transparent)}
+.np7 .warn7 svg{width:14px;height:14px;color:var(--wr);flex:none;margin-top:1px}
+.np7 .warn7 p{font-size:11px;line-height:1.6;color:var(--tx2)}
+
+.np7 .empty7{display:grid;place-items:center;gap:7px;text-align:center;padding:34px 24px}
+.np7 .empty7 svg{width:22px;height:22px;color:var(--faint)}
+.np7 .empty7 b{font-size:13px;font-weight:640}
+.np7 .empty7 span{font-size:11.5px;color:var(--dim);line-height:1.6;max-width:42ch}
+
+@media (max-width:560px){
+  .np7 .row7{flex-wrap:wrap}
+  .np7 .in7.wide7{width:100%;order:3}
+  .np7 .row7 .t7{flex-basis:100%}
+}
+
+/* Page-level. The dialog had a header and a scroll box of its own; a page has
+   the section title above it and the window's own scrollbar. */
+.panel .np7{padding-bottom:8px}
+.panel .np7 .row7,
+.panel .np7 .nd7,
+.panel .np7 .cmd7,
+.panel .np7 .warn7{max-width:none}
+.panel .np7 .sech2 .sb[disabled]{opacity:.45;cursor:default}
+
+/* ---- the card a server is set up in ---------------------------------------
+   Three states in one place — a form, then the command, then gone, replaced by
+   the server itself. Building it where it will live is the point: the operator
+   is looking at the grid and the new one appears in it, rather than at a panel
+   above it that has nothing to do with where the result lands.
+*/
+.panel .sv7.draft7{border-style:dashed;border-color:var(--ln2)}
+.panel .sv7.draft7:hover{transform:none;box-shadow:none}
+.panel .sv7.cmd7c{border-style:solid;border-color:color-mix(in srgb,var(--wr) 34%,transparent)}
+
+.panel .sv-x{font:inherit;font-size:18px;line-height:1;width:26px;height:26px;flex:none;
+  border:0;border-radius:8px;background:transparent;color:var(--dim);cursor:pointer;
+  transition:background .18s ease,color .18s ease}
+.panel .sv-x:hover{background:var(--sunk);color:var(--tx)}
+
+.panel .df-body{padding:14px 16px 4px;display:grid;gap:11px}
+.panel .df-f{display:grid;gap:5px}
+.panel .df-f span{font-size:10.5px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--dim)}
+.panel .df-f input{font:inherit;font-size:13px;padding:9px 11px;border-radius:10px;
+  border:1px solid var(--ln2);background:var(--sunk);color:var(--tx);outline:0;
+  transition:border-color .2s ease}
+.panel .df-f input:focus{border-color:var(--ln3)}
+.panel .df-f input::placeholder{color:var(--faint)}
+.panel .df-hint{font-size:11px;color:var(--dim);line-height:1.6}
+
+.panel .df-cmd{padding:13px 16px 14px;border-top:1px solid var(--ln)}
+.panel .df-ch{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.panel .df-ch b{font-size:11.5px;font-weight:620}
+.panel .df-ch .sp{flex:1}
+.panel .df-cmd code,.panel .np7 .alt7 code{display:block;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.65;
+  color:var(--tx2);word-break:break-all;user-select:all}
+.panel .np7 .alt7{margin-top:9px;font-size:10.5px;color:var(--dim);line-height:1.6}
+.panel .np7 .alt7 code{margin-top:6px}
+.panel .np7 .lnk7{font:inherit;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;
+  color:var(--mu);text-decoration:underline;text-underline-offset:2px}
+.panel .np7 .lnk7:hover{color:var(--tx)}
+
+.panel .np7 .wait7{display:flex;align-items:center;gap:7px;padding:11px 16px 14px;
+  font-size:11px;color:var(--dim);border-top:1px solid var(--ln)}
+.panel .np7 .wait7 i{width:7px;height:7px;border-radius:50%;background:var(--wr);flex:none;
+  animation:pulse7 1.5s ease-in-out infinite}
+@keyframes pulse7{0%,100%{opacity:.35}50%{opacity:1}}
+
+.panel .sv-fact.bad7 b{color:var(--er)}
+.panel .sv-fact i{display:block;font-style:normal;font-size:10px;color:var(--er);margin-top:2px}
+
+/* ---- the mark behind a card ------------------------------------------------
+   Texture, not decoration. Big enough to read as a shape rather than a smudge,
+   faint enough that the card says exactly the same thing with it and without,
+   and faded out towards the left so it never sits under the name or the
+   address. It takes no pointer events: a card is still a card.
+*/
+/* It lives in the top block, beside the name and the address, and nowhere else.
+   Spanning the card looked right until the facts below turned out to have a
+   ground of their own: the drawing was cut into three pieces by the cells that
+   paint over it. Kept above them it stays one shape. */
+.panel .sv7 .sv-bg{position:absolute;right:-10px;top:-10px;
+  height:132px;aspect-ratio:120/150;width:auto;
+  pointer-events:none;overflow:visible;
+  fill:none;stroke:var(--tx);stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round;
+  opacity:.09;
+  -webkit-mask-image:linear-gradient(to left,#000 52%,transparent 100%);
+  mask-image:linear-gradient(to left,#000 52%,transparent 100%);
+  transition:opacity .3s ease,transform .5s var(--spring)}
+.panel .sv7:hover .sv-bg{opacity:.15;transform:translateX(-5px)}
+.panel .sv7.pend7 .sv-bg{opacity:.045}
+
+/* The one part of it that means anything: the top unit's light follows the
+   card's state, so the shape alone says whether the server is there. */
+.panel .sv7.on7 .sv-bg .led{stroke:var(--ok);fill:var(--ok);fill-opacity:.55}
+
+/* A light ground has less contrast to spend. */
+body[data-t="light"] .panel .sv7 .sv-bg{opacity:.11}
+body[data-t="light"] .panel .sv7:hover .sv-bg{opacity:.16}
+
+@media (prefers-reduced-motion:reduce){
+  .panel .sv7:hover .sv-bg{transform:none}
+}

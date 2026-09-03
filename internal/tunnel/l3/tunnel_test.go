@@ -230,7 +230,7 @@ func TestTunnelCarriesPacketsBothWays(t *testing.T) {
 		encap  string
 		greKey uint32
 	}{
-		{"ipip", "ipip", 0},
+		{"a config that says ipip", "ipip", 0},
 		{"gre", "gre", 0},
 		{"gre keyed", "gre", 0x0BADCAFE},
 	} {
@@ -384,7 +384,7 @@ func TestTheKeyIsPartOfTheIdentity(t *testing.T) {
 	plain, _ := NewEncap("gre", 0)
 	keyed, _ := NewEncap("gre", 4242)
 	other, _ := NewEncap("gre", 9999)
-	ipip, _ := NewEncap("ipip", 0)
+	legacy, _ := NewEncap("ipip", 0)
 
 	if encapID(plain) == encapID(keyed) {
 		t.Error("a keyed and an unkeyed gre tunnel announce the same identity")
@@ -392,8 +392,11 @@ func TestTheKeyIsPartOfTheIdentity(t *testing.T) {
 	if encapID(keyed) == encapID(other) {
 		t.Error("two different gre keys announce the same identity")
 	}
-	if encapID(ipip) == encapID(plain) {
-		t.Error("ipip and gre announce the same identity")
+	// A config that still says ipip runs GRE, so it must announce GRE too —
+	// announcing the old name would refuse a handshake with an end whose file
+	// happens to say the new one, for two tunnels that wrap packets alike.
+	if encapID(legacy) != encapID(plain) {
+		t.Error("a config that says ipip announces something other than the gre it runs")
 	}
 	if encapID(keyed) != "gre:4242" {
 		t.Errorf("keyed identity = %q", encapID(keyed))
@@ -544,8 +547,8 @@ func TestConfigDefaults(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if cfg.Encap != "ipip" {
-		t.Fatalf("Encap defaulted to %q, want ipip", cfg.Encap)
+	if cfg.Encap != "gre" {
+		t.Fatalf("Encap defaulted to %q, want gre", cfg.Encap)
 	}
 	if cfg.Carrier != "udp" {
 		t.Fatalf("Carrier defaulted to %q, want udp", cfg.Carrier)

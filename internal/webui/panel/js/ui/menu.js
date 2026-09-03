@@ -65,6 +65,7 @@ export function renderMenu(state) {
     item('gear', 'Settings', () => hop('/settings')),
     item('bell', 'Alerts', () => hop('/alerts'),
       alertCount ? el('span', { class: 'cnt', text: String(alertCount) }) : null),
+    item('nodes', 'Servers', () => hop('/servers')),
     item('pulse', 'Health check', () => hop('/health')),
     item('box', 'Maintenance', () => hop('/maintenance'),
       s.updateTag ? el('span', { class: 'cnt', text: '1' }) : null),

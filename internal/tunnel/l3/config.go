@@ -69,7 +69,8 @@ type Config struct {
 	// Carrier names the datagram carrier beneath the tunnel.
 	Carrier string
 
-	// Encap is "ipip" or "gre".
+	// Encap names the framing. There is one: "gre". A config that still says
+	// "ipip" is read as GRE — see NewEncap.
 	Encap string
 
 	// GREKey is the RFC 2890 key. Zero omits the field entirely.
@@ -194,9 +195,10 @@ func (c *Config) Validate() error {
 	if _, err := NewEncap(c.Encap, c.GREKey); err != nil {
 		return err
 	}
-	if c.Encap == "" {
-		c.Encap = "ipip"
-	}
+	// Normalised to what is actually used, so everything downstream — the
+	// handshake identifier included — names the same thing the packets are
+	// wrapped in.
+	c.Encap = "gre"
 	c.Carrier = strings.ToLower(strings.TrimSpace(c.Carrier))
 	if c.Carrier == "" {
 		c.Carrier = CarrierUDP

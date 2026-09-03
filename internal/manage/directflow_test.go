@@ -63,17 +63,24 @@ func TestTheWizardAlwaysWritesGRE(t *testing.T) {
 
 // The engine must still read a config that says ipip, so a tunnel built before
 // the choice was removed keeps running.
-func TestIPIPStillWorksForConfigsThatHaveIt(t *testing.T) {
+// A config written before there was one encapsulation still loads and runs.
+//
+// It runs as GRE — there is only one now — and the important part is that the
+// file does not have to be rewritten by hand for the tunnel to come up. Both
+// ends have to be updated together; the handshake says so by name if they are
+// not, which is the loud failure the old silent one was replaced with.
+func TestAConfigThatStillSaysIPIPLoadsAndRunsAsGRE(t *testing.T) {
 	cfg := decode(t, l3Spec{
 		Side: sideIran, Carrier: "pck", Encap: "ipip",
 		Addr: "1.2.3.4:9000", Token: "t", Iface: "bp0",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 	}.render())
-	if cfg.L3.Encap != "ipip" {
-		t.Fatalf("encap = %q", cfg.L3.Encap)
+	// What is rendered now says gre, whatever it was asked for.
+	if cfg.L3.Encap != "gre" {
+		t.Fatalf("encap = %q, want gre", cfg.L3.Encap)
 	}
 	if _, err := l3EncapForTest(cfg); err != nil {
-		t.Fatalf("the engine refused an existing ipip config: %v", err)
+		t.Fatalf("the engine refused it: %v", err)
 	}
 }
 

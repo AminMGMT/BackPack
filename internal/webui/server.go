@@ -18,6 +18,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
+	"github.com/backpack/backpack/internal/node"
 	"github.com/backpack/backpack/internal/utils/network"
 )
 
@@ -157,6 +158,11 @@ func (s *sessionStore) clear() {
 
 type server struct {
 	sessions *sessionStore
+
+	// nodes owns the listener managed servers connect to. It is always present
+	// and holds no listener until the feature is turned on, so every handler
+	// can ask it a question without checking whether the feature exists.
+	nodes *hubRunner
 }
 
 // password always reads the current password from disk, so a change made from
@@ -178,7 +184,7 @@ func Serve() error {
 	if err != nil {
 		return err
 	}
-	srv := &server{sessions: newSessionStore()}
+	srv := &server{sessions: newSessionStore(), nodes: &hubRunner{}}
 
 	// The SOCKS5 relay, the watchdog, the Telegram bot and the alerts all
 	// deliberately run elsewhere — in the backpack-monitor service. See
@@ -216,6 +222,12 @@ func Serve() error {
 	// Handing a tunnel's paired settings to the other server, and taking them
 	// from it. See handleShareLink.
 	mux.HandleFunc("/api/tunnel/sharelink", srv.requireAuth(srv.handleShareLink))
+	// Managed servers: the fleet, the setup command that enrols one, and
+	// building both ends of a tunnel in a single submission. See
+	// handlers_nodes.go.
+	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
+	mux.HandleFunc("/api/node/tunnels", srv.requireAuth(srv.handleNodeTunnels))
+	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
 	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
 	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
@@ -252,6 +264,16 @@ func Serve() error {
 	mux.HandleFunc("/icons/", handleIconPNG)
 	mux.HandleFunc("/sw.js", handleServiceWorker)
 
+	// The node listener, if this panel manages any servers. A failure here is
+	// reported and not fatal: the panel itself still has to come up, and a
+	// listener that cannot take its port is a setting to fix, not a reason to
+	// leave the operator without a way to fix it.
+	if node.LoadStore().Enabled {
+		if err := srv.nodes.start(); err != nil {
+			log.Printf("node listeners: %v", err)
+		}
+	}
+
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
 		Addr:         addr,
@@ -274,6 +296,16 @@ func Serve() error {
 		ACMEDomain:   cfg.TLSDomain,
 		ACMEEmail:    cfg.TLSEmail,
 		ACMECacheDir: app.ConfigDir + "/acme",
+	}
+	// The self-signed pair is prepared on both paths. On the Let's Encrypt path
+	// it is never served while issuance is working; it is what keeps the panel
+	// answering when it is not, which is the difference between "the browser
+	// warns" and "the operator cannot reach the page that would fix it".
+	if certFile, keyFile, err := manage.EnsurePanelCert(cfg.TLSSelfHost); err == nil {
+		settings.FallbackCertFile, settings.FallbackKeyFile = certFile, keyFile
+	} else if settings.ACMEDomain != "" {
+		log.Printf("no fallback certificate (%v) — if Let's Encrypt cannot issue, "+
+			"this panel will refuse every connection", err)
 	}
 	if settings.ACMEDomain == "" {
 		// EnsurePanelCert builds the SAN set from the machine's own interfaces

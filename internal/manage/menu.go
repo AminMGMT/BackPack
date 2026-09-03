@@ -59,6 +59,22 @@ func manageOne(t Tunnel) {
 		tui.Title(fmt.Sprintf("Tunnel: %s", t.Name))
 		fmt.Printf("  %s%s %s%s  %s\n\n", tui.Gray, t.Role, t.Transport, tui.Reset, stateLabel(t.Service))
 
+		// A tunnel whose other end is on a managed server is one tunnel in two
+		// places, and this menu can only change one of them: the channel to the
+		// node belongs to the running panel, and this is a separate process
+		// that has no way to reach it.
+		//
+		// Editing here is still allowed — the operator may have a reason, and a
+		// menu that refuses is a menu people work around — but they are told
+		// first, because the failure it causes is silent. Both ends report
+		// themselves as running and no traffic passes.
+		if on, ok := NodeFor(t.Name); ok {
+			tui.Warn(fmt.Sprintf(
+				"The other end of this tunnel is on %q, a server managed from the web panel.\n"+
+					"  Changes made here are not carried across, and the two ends must agree.\n"+
+					"  Edit it from the panel instead, so both ends move together.\n", on))
+		}
+
 		idx := tui.ChooseOpt("Choose an action:", []tui.Option{
 			{Title: "Edit", Desc: "change tunnel port & forwarded ports"},
 			{Title: "Start", Desc: "start the tunnel service"},

@@ -325,7 +325,7 @@ func saveL3(t Tunnel, l config.L3Config) {
 	spec := l3Spec{
 		Name: t.Name, Side: side,
 		Carrier: orDefault(l.Carrier, "udp"),
-		Encap:   orDefault(l.Encap, "ipip"), GREKey: l.GREKey,
+		Encap:   "gre", GREKey: l.GREKey,
 		Addr: l.Addr, Token: l.Token,
 		Iface:   orDefault(l.Iface, "bp0"),
 		LocalIP: l.LocalIP, PeerIP: l.PeerIP, MTU: l.MTU,

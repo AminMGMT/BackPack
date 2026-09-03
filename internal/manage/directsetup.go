@@ -126,7 +126,9 @@ func setupL3(side directSide) {
 	// the kernel's protocol 47 — and offering a choice between that and IPIP
 	// was offering four bytes of saving in exchange for one more decision and
 	// one more thing the two ends can silently disagree about. The engine still
-	// reads "ipip" from a config that has it, so nothing already built breaks.
+	// reads "ipip" from a config that has it as GRE, so nothing already built
+	// stops loading — but both ends have to be updated together, which the
+	// handshake says plainly if they are not.
 	const encap = "gre"
 	greKey := uint32(0)
 
@@ -374,31 +376,27 @@ func askL3Advanced(cfg *l3Spec, side directSide) {
 // throughput collapse rather than degrade, so tcp, ws and kcp are not offered
 // at all.
 //
-// xdi is no longer offered either. It still runs — the engine reads a config
-// that names it, so an existing tunnel keeps working — but ICMP-only routes are
-// rare enough that it was one more choice to weigh against three that matter.
+// The order is what to reach for first. pck survives the most; udp is the
+// plain one; quic is the one that is not pretending — a real QUIC session, so
+// it looks like the HTTP/3 that dominates a modern path, and it is the only
+// obfuscated choice here that needs no root. spoof and xdi are for routes that
+// have defeated the others.
 func askL3Carrier() (string, bool) {
-	switch tui.ChooseOpt("How should the packets travel?", []tui.Option{
-		{Title: "PCK", Desc: "looks like an ordinary TCP flow, but with no socket the firewall can touch"},
-		{Title: "UDP", Desc: "plain and simple — use it where the path does not interfere"},
-		{Title: "Spoof", Desc: "raw packets with a forged source address — needs testing on your route"},
-	}) {
-	case 0:
-		return "pck", true
-	case 1:
-		return "udp", true
-	case 2:
-		return "spoof", true
+	// Built from the same list the panel offers, so the two cannot drift: they
+	// used to be two literals in two files, which is a difference nobody sees
+	// until an operator is told about a carrier one of the screens does not have.
+	carriers := DirectCarriers()
+	opts := make([]tui.Option, 0, len(carriers))
+	for _, c := range carriers {
+		opts = append(opts, tui.Option{Title: c["label"], Desc: c["desc"]})
 	}
-	return "", false
+	i := tui.ChooseOpt("How should the packets travel?", opts)
+	if i < 0 || i >= len(carriers) {
+		return "", false
+	}
+	return carriers[i]["value"], true
 }
 
-// askL3Encap settles how the inner packet is framed.
-//
-// It is asked plainly because the honest answer is that most people want
-// ipip and should not have to think about it: it costs nothing and there is
-// nothing to get wrong. GRE earns its four bytes only when the key is wanted,
-// so that is what the question is really about.
 // askGREKey is the RFC 2890 key, which both GRE kinds offer and mean the same
 // thing by: a number that separates tunnels sharing the same two endpoints.
 func askGREKey() uint32 {

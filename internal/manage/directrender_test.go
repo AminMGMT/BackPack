@@ -217,15 +217,16 @@ func TestRenderedConfigsPassEngineValidation(t *testing.T) {
 // GRE is implemented in the engine, so the wizard must be able to reach it —
 // it could not, until the encap question was added.
 func TestL3EncapRoundTrips(t *testing.T) {
+	// Whatever a caller asks for, one encapsulation is written.
 	plain := decode(t, l3Spec{
 		Side: sideIran, Carrier: "udp", Encap: "ipip", Addr: "1.2.3.4:9000",
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 	}.render())
-	if plain.L3.Encap != "ipip" {
-		t.Fatalf("encap = %q, want ipip", plain.L3.Encap)
+	if plain.L3.Encap != "gre" {
+		t.Fatalf("encap = %q, want gre", plain.L3.Encap)
 	}
 	if plain.L3.GREKey != 0 {
-		t.Fatalf("an ipip tunnel was given a gre key: %d", plain.L3.GREKey)
+		t.Fatalf("an unkeyed tunnel was given a gre key: %d", plain.L3.GREKey)
 	}
 
 	keyed := decode(t, l3Spec{
@@ -248,10 +249,10 @@ func TestL3EncapRoundTrips(t *testing.T) {
 	if got := l3EncapLabel(keyed.L3); got != "GRE + Noise (key 4242)" {
 		t.Fatalf("label = %q", got)
 	}
-	if got := l3EncapLabel(plain.L3); got != "IPIP + Noise" {
+	if got := l3EncapLabel(plain.L3); got != "GRE + Noise" {
 		t.Fatalf("label = %q", got)
 	}
-	if keyed.L3.Encap != "gre" || plain.L3.Encap != "ipip" {
+	if keyed.L3.Encap != "gre" || plain.L3.Encap != "gre" {
 		t.Fatal("the display name leaked into the config value, which both ends compare")
 	}
 }

@@ -39,7 +39,7 @@ func TestTheListenerReportsAPeerOnTheHandshakeAlone(t *testing.T) {
 	t.Cleanup(cancel)
 
 	listener, err := New(Config{
-		Mode: ModeListen, Addr: "127.0.0.1:0", Token: token, Encap: "ipip",
+		Mode: ModeListen, Addr: "127.0.0.1:0", Token: token, Encap: "gre",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 	}, quietLogger())
 	if err != nil {
@@ -63,7 +63,7 @@ func TestTheListenerReportsAPeerOnTheHandshakeAlone(t *testing.T) {
 	}
 	defer conn.Close()
 
-	attempt, err := beginHandshake(token, 0, "ipip")
+	attempt, err := beginHandshake(token, 0, "gre")
 	if err != nil {
 		t.Fatalf("beginHandshake: %v", err)
 	}

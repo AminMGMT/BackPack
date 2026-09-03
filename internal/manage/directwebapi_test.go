@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,16 +82,17 @@ func TestThePanelRefusesWhatTheWizardWould(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(*NewDirectTunnel){
-		"no side":            func(n *NewDirectTunnel) { n.Side = "" },
-		"unknown side":       func(n *NewDirectTunnel) { n.Side = "server" },
-		"unknown carrier":    func(n *NewDirectTunnel) { n.Carrier = "kcp" },
-		"xdi is not offered": func(n *NewDirectTunnel) { n.Carrier = "xdi" },
-		"no token":           func(n *NewDirectTunnel) { n.Token = "  " },
-		"bad port":           func(n *NewDirectTunnel) { n.TunnelPort = "70000" },
-		"no peer address":    func(n *NewDirectTunnel) { n.PeerAddr = "" },
-		"no ports on iran":   func(n *NewDirectTunnel) { n.Ports = "" },
-		"bad port spec":      func(n *NewDirectTunnel) { n.Ports = "not-a-port" },
-		"bad name":           func(n *NewDirectTunnel) { n.Name = "has spaces/" },
+		"no side":      func(n *NewDirectTunnel) { n.Side = "" },
+		"unknown side": func(n *NewDirectTunnel) { n.Side = "server" },
+		// kcp retransmits, which is why it is not a carrier and never can be.
+		"a reliable carrier":            func(n *NewDirectTunnel) { n.Carrier = "kcp" },
+		"a carrier that does not exist": func(n *NewDirectTunnel) { n.Carrier = "wireguard" },
+		"no token":                      func(n *NewDirectTunnel) { n.Token = "  " },
+		"bad port":                      func(n *NewDirectTunnel) { n.TunnelPort = "70000" },
+		"no peer address":               func(n *NewDirectTunnel) { n.PeerAddr = "" },
+		"no ports on iran":              func(n *NewDirectTunnel) { n.Ports = "" },
+		"bad port spec":                 func(n *NewDirectTunnel) { n.Ports = "not-a-port" },
+		"bad name":                      func(n *NewDirectTunnel) { n.Name = "has spaces/" },
 	} {
 		n := base()
 		mutate(&n)
@@ -118,16 +120,22 @@ func TestThePanelDemandsTheSpoofPeer(t *testing.T) {
 
 // The panel's carrier list must be the wizard's list, in the wizard's order.
 func TestThePanelOffersTheSameCarriersAsTheWizard(t *testing.T) {
+	// One list, read by both screens — see askL3Carrier. What is checked here
+	// is that it is complete and that every carrier in it is one the engine can
+	// actually open, so a screen can never offer a name that fails at startup.
 	var got []string
 	for _, c := range DirectCarriers() {
 		got = append(got, c["value"])
-	}
-	if strings.Join(got, ",") != "pck,udp,spoof" {
-		t.Fatalf("panel carriers = %v, want pck, udp, spoof in that order", got)
-	}
-	for _, c := range DirectCarriers() {
 		if c["desc"] == "" || c["label"] == "" {
 			t.Errorf("carrier %q is offered with no label or description", c["value"])
+		}
+		if !l3.KnownCarrier(c["value"]) {
+			t.Errorf("the screens offer %q, which the engine cannot open", c["value"])
+		}
+	}
+	for _, want := range []string{"pck", "udp", "quic", "spoof", "xdi"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("the screens do not offer %q", want)
 		}
 	}
 }

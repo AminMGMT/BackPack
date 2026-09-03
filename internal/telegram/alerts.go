@@ -168,6 +168,10 @@ const releaseCheckEvery = 6 * time.Hour
 // a message when something crosses a threshold and again when it recovers.
 func RunAlerts(ctx context.Context) {
 	w := newWatcher()
+	// Everything the other monitor jobs record is picked up from here and sent
+	// too. Only what is written from now on: the file survives restarts, and
+	// replaying it would greet an operator with an hour of old news.
+	lastEvent := time.Now()
 	for {
 		c := Load()
 		alerts := c.Alerts.normalise()
@@ -201,7 +205,28 @@ func RunAlerts(ctx context.Context) {
 
 		tunnels := tunnelStates()
 		msgs := w.checkAt(alerts, sysstat.Get(), tunnels, time.Now())
+
+		/* The watchdog's own messages, which had nowhere to go.
+		 *
+		 * It is the thing that restarts a tunnel that has stopped carrying
+		 * traffic, and it said so only into the history file — read by the
+		 * panel, and by the bot only when somebody pressed a button. So a
+		 * tunnel the watchdog had just fixed produced no notification at all,
+		 * which is the half of the story the operator is actually waiting for.
+		 * They go under the same setting as the other tunnel messages, because
+		 * that is the setting whose name they answer to.
+		 *
+		 * Drained before this pass is recorded, or the recording would be read
+		 * straight back and every alert would be sent twice.
+		 */
+		if alerts.TunnelDown {
+			for _, e := range alerthist.Since(lastEvent) {
+				msgs = append(msgs, e.Message)
+			}
+		}
 		alerthist.Record(msgs, w.activeConditions(tunnels))
+		lastEvent = time.Now()
+
 		if configured {
 			// To every admin, not just the owner. An account that can press the
 			// buttons but is never told a tunnel dropped has the half of the bot

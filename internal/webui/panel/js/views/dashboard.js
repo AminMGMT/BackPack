@@ -8,6 +8,7 @@
  */
 
 import { $, delegate, esc } from '../lib/dom.js';
+import { isUp, stateLabel, stateTone } from '../lib/tstate.js';
 import { bytes, speed, kindLabel, flag } from '../lib/format.js';
 import * as store from '../store.js';
 import * as api from '../api.js';
@@ -54,13 +55,21 @@ const BTN = {
 };
 
 function card(t, idx) {
-  const off = t.state !== 'running';
-  const dotCls = off ? 'dot off' : (t.kcpLossPercent > 2 ? 'dot wr' : 'dot');
-  const label = off ? (t.state === 'failed' ? 'Failed' : 'Stopped') : 'Online';
+  const up = isUp(t);
+  const off = !up;
+  const tone = stateTone(t);
+  const dotCls = tone === 'off' ? 'dot off'
+               : (tone === 'warn' || t.kcpLossPercent > 2 ? 'dot wr' : 'dot');
+  const label = stateLabel(t);
   const hasPing = t.ping !== undefined && t.ping >= 0;
   const dir = t.direction === 'direct' ? 'Direct' : 'Reverse';
   const carrier = (t.carrier || t.transport || '').toUpperCase();
-  const ports = (t.ports || []).map(p => ':' + String(p).split('=')[0]).join(', ');
+  // ports arrives as one ", "-joined string, not a list — an empty one is
+  // falsy and so used to fall through to a harmless [], which is why only a
+  // tunnel that actually forwards a port ever hit this.
+  const ports = String(t.ports || '').split(',')
+    .map(p => p.trim()).filter(Boolean)
+    .map(p => ':' + p.split('=')[0]).join(', ');
   const [ip, port] = String(t.addr || '').split(':');
 
   return `<div class="c7 ${off ? 'off' : ''}" data-name="${esc(t.name)}">
@@ -120,130 +129,20 @@ ${field(t, idx)}
 </div></div>`;
 }
 
-/* ---- the server strip ---------------------------------------------------- */
-const COLS = 22;
-function tile(key, label, percent, sub, history) {
-  /* The last column is the reading now; anything at 85% or above is marked,
-     which is the one thing the strip has to say without colour doing the work. */
-  const bars = Array.from({ length: COLS }, (_, i) => {
-    const v = history ? history[i] : percent;
-    const cls = [i === COLS - 1 ? 'now' : '', v >= 85 ? 'over' : ''].filter(Boolean).join(' ');
-    return `<i class="${cls}" style="--h:${Math.max(4, Math.min(100, v)).toFixed(0)}%"></i>`;
-  }).join('');
-  return `<div class="t4" data-m="${key}">
-    <div class="head6">
-      <span class="v"><span class="num">${percent.toFixed(0)}</span><em>%</em></span>
-      <span class="k">${label}</span><span class="trend"></span>
-    </div>
-    <div class="cols">${bars}</div>
-    <div class="s">${esc(sub)}</div>
-  </div>`;
-}
-
-/* One short history per meter so the columns mean something between polls. */
-const hist = { cpu: [], mem: [], dsk: [], swp: [], dn: [], up: [] };
-function push(key, v) {
-  const a = hist[key];
-  a.push(v);
-  while (a.length > COLS) a.shift();
-  return Array.from({ length: COLS }, (_, i) => a[i] ?? v);
-}
-
-/* Under the meters: what is moving right now, and two figures that only grow.
+/* New points into the line that is already there, rather than a new line.
  *
- * The rates get the same column history the CPU and memory tiles have, because
- * a number that changes every four seconds is hard to read on its own — the
- * shape next to it says whether 40 Mb/s is the usual or a spike. The columns
- * are scaled to the highest value in the window rather than to the link speed,
- * which nothing here knows, so a quiet tunnel still draws a readable line.
- */
-function rateTile(key, label, bytesPerSec) {
-  const hist = push(key, Number(bytesPerSec) || 0);
-  const peak = Math.max(...hist, 1);
-  const bars = hist.map((v, i) => {
-    const h = Math.max(4, (v / peak) * 100);
-    const cls = i === COLS - 1 ? 'now' : '';
-    return `<i class="${cls}" style="--h:${h.toFixed(0)}%"></i>`;
-  }).join('');
-  const [n, unit = ''] = speed(bytesPerSec || 0).split(' ');
-  return `<div class="t4" data-m="${key}">
-    <div class="head6">
-      <span class="v"><span class="num">${esc(n)}</span><em>${esc(unit)}</em></span>
-      <span class="k">${esc(label)}</span><span class="trend"></span>
-    </div>
-    <div class="cols">${bars}</div>
-    <div class="s">peak ${esc(speed(peak))} in the last ${COLS} readings</div>
-  </div>`;
-}
-
-/* The line under the two rates.
- *
- * Total traffic gets a strip beside it because a running total means little on
- * its own — 1.2 TB is only worth reading next to how it was spent. The bars are
- * summed from every tunnel's own per-day figures.
- *
- * The window is a month. The store keeps 720 hourly buckets, and the endpoint
- * takes ?days= up to 30 — it still answers a week to anyone who does not ask,
- * so the older dashboard draws exactly what it always did.
- */
-let dayTotals = null;          /* [{label, bytes}] summed across tunnels */
-
-async function loadDayTotals(names) {
-  const sum = new Map();
-  const runs = await Promise.allSettled(names.map(n => api.history(n, 30)));
-  for (const r of runs) {
-    if (r.status !== 'fulfilled' || !r.value?.days) continue;
-    for (const d of r.value.days) {
-      sum.set(d.label, (sum.get(d.label) || 0) + (d.in || 0) + (d.out || 0));
-    }
-  }
-  dayTotals = [...sum].map(([label, bytes]) => ({ label, bytes }));
-  return dayTotals;
-}
-
-function daysStrip() {
-  if (!dayTotals || !dayTotals.length) return '';
-  const peak = Math.max(...dayTotals.map(d => d.bytes), 1);
-  const w = 7, gap = 3;
-  const bars = dayTotals.map((d, i) => {
-    const h = Math.max(2, (d.bytes / peak) * 20);
-    return `<rect x="${i * (w + gap)}" y="${(22 - h).toFixed(1)}" width="${w}"
-      height="${h.toFixed(1)}" rx="1.5"><title>${esc(d.label)} · ${esc(bytes(d.bytes))}</title></rect>`;
-  }).join('');
-  const width = dayTotals.length * (w + gap) - gap;
-  return `<svg class="dstrip" viewBox="0 0 ${width} 22" width="${width}" height="22"
-    aria-label="traffic per day, last ${dayTotals.length} days">${bars}</svg>`;
-}
-
-function factLine(s) {
-  return `<div class="factline">
-    <span>Version <b>${esc(s.version || '—')}</b></span>
-    <span class="dot"></span>
-    <span class="tt">Total traffic <b>${bytes(s.totalTraffic || 0)}</b>${daysStrip()}</span>
-    ${dayTotals?.length ? `<span class="cap">last ${dayTotals.length} days</span>` : ''}
-  </div>`;
-}
-
-function totalsRow(s) {
-  return `<div class="RZ rates">
-    ${rateTile('dn', 'Download', s.downSpeed)}
-    ${rateTile('up', 'Upload', s.upSpeed)}
-  </div>
-  ${factLine(s)}`;
-}
-
-function serverStrip(s) {
-  const gb = n => (n / 1024 ** 3).toFixed(1);
-  return `<div class="sectitle"><h3>Server</h3><div class="ln"></div></div>
-  <div class="RZ">
-    ${tile('cpu', 'Processor', s.cpuPercent, `${s.cpuCores} cores · load ${s.load || '—'}`, push('cpu', s.cpuPercent))}
-    ${tile('mem', 'Memory', s.memPercent, `${gb(s.memUsed)} / ${gb(s.memTotal)} GB`, push('mem', s.memPercent))}
-    ${tile('dsk', 'Disk', s.diskPercent, `${gb(s.diskUsed)} / ${gb(s.diskTotal)} GB`, push('dsk', s.diskPercent))}
-    ${s.swapTotal > 0
-      ? tile('swp', 'Swap', s.swapPercent, `${gb(s.swapUsed)} / ${gb(s.swapTotal)} GB`, push('swp', s.swapPercent))
-      : tile('swp', 'Swap', 0, 'not configured', push('swp', 0))}
-  </div>
-  ${totalsRow(s)}`;
+ * Setting d on an existing path moves it; replacing the path element restarts
+ * the draw animation attached to it. Only one of those is what a fresh reading
+ * means. */
+function updateSpark(el, t, idx) {
+  const p = sparkPaths(t.rates);
+  const svg = el.querySelector('.field svg');
+  if (!p) { el.querySelector('.field')?.remove(); return; }
+  if (!svg) return;
+  const line = svg.querySelector('path.sparkpath');
+  const area = svg.querySelector('path:not(.sparkpath)');
+  if (line) line.setAttribute('d', p.line);
+  if (area) area.setAttribute('d', p.area);
 }
 
 const EMPTY = `<div class="emptybox">
@@ -256,40 +155,92 @@ const ACTION_DONE = {
   restart: 'Tunnel restarted.', delete: 'Tunnel deleted.',
 };
 
+/* What a card draws, minus the chart.
+ *
+ * The chart is left out on purpose. Its points change on every poll, so a
+ * signature that included them would never match and the card would be rebuilt
+ * every few seconds — which is the fault this exists to stop. The line is
+ * updated in place instead; see paint.
+ */
+function cardSig(t) {
+  return JSON.stringify([
+    t.state, t.role, t.direction, t.transport, t.carrier, t.addr, t.ports,
+    t.ping, t.uptime, t.bytesIn, t.bytesOut, t.country, t.peerCountry,
+    t.peerLocation, t.peerISP, t.botRelay, t.botRelayPort, t.tunnelPort,
+    t.kcpLossPercent, t.pool, t.preset, t.certType, t.certDomain, t.certExpiry,
+    t.maxConnections, t.bandwidthMbps,
+  ]);
+}
+
 export function dashboard(ctx) {
   const view = $('#view');
 
+  view.innerHTML = `
+    <div class="sech2">
+      <h2>Tunnels</h2>
+      <span class="cnt" id="tCount">0</span>
+      <span class="sp"></span>
+      <button class="sb" data-act="restartall">Restart all</button>
+      <button class="sb primary" data-act="add">Add tunnel</button>
+    </div>
+    <div class="grid3" id="tGrid"></div>`;
+
+  const grid = $('#tGrid', view);
+  const held = new Map();   // name -> { el, sig }
+
+  /* Painting without rebuilding.
+   *
+   * The obvious paint writes the whole grid on every poll — and every four
+   * seconds that destroyed every card and made it again, which restarted the
+   * draw animation on each chart. That is the white line people see sweeping
+   * across the metrics: not a refresh, the same one-shot animation running over
+   * and over because the element it belongs to keeps being a new element.
+   *
+   * So a card is rebuilt only when something it draws has changed, and the
+   * chart — the one part that changes on every poll — is updated in place. An
+   * animation that has already finished stays finished when its path is given
+   * new points.
+   */
   const paint = state => {
-    const s = state.stats;
-    view.innerHTML = (s ? serverStrip(s) : '') + `
-      <div class="sech2">
-        <h2>Tunnels</h2>
-        <span class="cnt">${state.tunnels.length}</span>
-        <span class="sp"></span>
-        <button class="sb" data-act="restartall">Restart all</button>
-        <button class="sb primary" data-act="add">Add tunnel</button>
-      </div>
-      <div class="grid3">${state.tunnels.length
-        ? state.tunnels.map(card).join('')
-        : EMPTY}</div>`;
+    const tuns = state.tunnels || [];
+    $('#tCount', view).textContent = String(tuns.length);
+
+    if (!tuns.length) {
+      held.clear();
+      if (!grid.querySelector('.emptybox')) grid.innerHTML = EMPTY;
+      return;
+    }
+    if (grid.querySelector('.emptybox')) grid.innerHTML = '';
+
+    const want = new Set(tuns.map(t => t.name));
+    for (const [name, h] of held) {
+      if (!want.has(name)) { h.el.remove(); held.delete(name); }
+    }
+
+    let at = null;
+    tuns.forEach((t, i) => {
+      const sig = cardSig(t);
+      let h = held.get(t.name);
+      if (!h || h.sig !== sig) {
+        const box = document.createElement('div');
+        box.innerHTML = card(t, i);
+        const fresh = box.firstElementChild;
+        if (h) h.el.replaceWith(fresh); else if (at) at.after(fresh); else grid.prepend(fresh);
+        h = { el: fresh, sig };
+        held.set(t.name, h);
+      } else {
+        if (at ? h.el.previousElementSibling !== at : grid.firstElementChild !== h.el) {
+          if (at) at.after(h.el); else grid.prepend(h.el);
+        }
+        updateSpark(h.el, t, i);
+      }
+      at = h.el;
+    });
   };
 
   const unsub = store.subscribe(paint);
 
-  /* One pass over the tunnels for their per-day figures; the strip is the sum.
-     It waits for the first tunnel list rather than asking once and giving up —
-     on a cold load the view is built before that list has arrived. */
-  let asked = false;
-  const wantDays = store.subscribe(async state => {
-    if (asked || dayTotals || !state.tunnels.length) return;
-    asked = true;
-    try {
-      await loadDayTotals(state.tunnels.map(t => t.name));
-      paint(store.get());
-    } catch (e) { /* the line simply has no strip */ }
-  });
-
-  delegate(view, 'click', '[data-act]', async (ev, btn) => {
+  const offAct = delegate(view, 'click', '[data-act]', async (ev, btn) => {
     const name = btn.closest('.c7')?.dataset.name;
     switch (btn.dataset.act) {
       case 'more': {
@@ -322,7 +273,7 @@ export function dashboard(ctx) {
     }
   });
 
-  delegate(view, 'click', '[data-do]', async (ev, btn) => {
+  const offDo = delegate(view, 'click', '[data-do]', async (ev, btn) => {
     const cardEl = btn.closest('.c7');
     const name = cardEl.dataset.name;
     const action = btn.dataset.do;
@@ -341,8 +292,25 @@ export function dashboard(ctx) {
       if (!ok) return;
     }
     cardEl.style.opacity = '.5';
-    try { await api.tunnelAction(name, action); toast(ACTION_DONE[action] || 'Done.'); }
-    catch (e) { oops(e); }
+    try {
+      const r = await api.tunnelAction(name, action);
+      /* A tunnel built across a managed server is one tunnel in two places, and
+         the button reaches both. When only one end moved, that is the thing
+         worth saying — "Tunnel stopped" over a far end still dialling is the
+         message that costs somebody an afternoon. */
+      if (r && r.status === 'partial') {
+        toast(r.peerHint || r.peerError || 'Only this end changed.', true);
+      } else {
+        /* The server says what actually happened when it is not simply "both
+           ends": a delete is the one action that does not cross, because a node
+           has no operation that removes a tunnel. Appending "Both ends" to it
+           told the operator the far end was gone when it is still there. */
+        toast(r && r.note
+          ? `${ACTION_DONE[action] || 'Done.'} ${r.note}`
+          : (ACTION_DONE[action] || 'Done.')
+            + (r && r.node ? ` Both ends, here and on ${r.node}.` : ''));
+      }
+    } catch (e) { oops(e); }
     cardEl.style.opacity = '';
     store.refresh();
   });
@@ -350,5 +318,10 @@ export function dashboard(ctx) {
   const closeSheets = () => view.querySelectorAll('.card-more.on').forEach(s => s.classList.remove('on'));
   document.addEventListener('click', closeSheets);
 
-  ctx.setTeardown(() => { unsub(); wantDays(); document.removeEventListener('click', closeSheets); });
+  ctx.setTeardown(() => {
+    unsub();
+    offAct();
+    offDo();
+    document.removeEventListener('click', closeSheets);
+  });
 }

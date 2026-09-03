@@ -67,16 +67,30 @@ type Encap interface {
 	Unwrap(frame []byte) ([]byte, error)
 }
 
-// NewEncap builds the encapsulation named by an [l3] config. A GRE key of zero
-// means the key field is omitted entirely, which is the RFC 2784 form.
+// NewEncap builds the encapsulation for an [l3] config. A GRE key of zero means
+// the key field is omitted entirely, which is the RFC 2784 form.
+//
+// There is one encapsulation now, and it is GRE.
+//
+// Offering two was offering a way for the two ends to disagree, and the cost of
+// that disagreement is out of all proportion to what the choice bought: ipip
+// saved four bytes and, when only one end had it, produced a tunnel that came
+// up, reported a peer, logged nothing and carried nothing. The handshake
+// refuses a mismatch by name now, so the failure is loud rather than silent —
+// but the better answer is for there to be nothing to mismatch. GRE is also the
+// one that can carry a key, which is what separates two tunnels between the
+// same pair of addresses.
+//
+// A config that still says "ipip" is read as GRE rather than refused: it is a
+// file somebody already has, and the update has to be able to run it. Both ends
+// must be updated together, which the handshake will say plainly if they are
+// not.
 func NewEncap(name string, greKey uint32) (Encap, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "ipip":
-		return ipipEncap{}, nil
-	case "gre":
+	case "", "ipip", "gre":
 		return greEncap{key: greKey, keyed: greKey != 0}, nil
 	default:
-		return nil, fmt.Errorf("l3: unknown encapsulation %q (want \"ipip\" or \"gre\")", name)
+		return nil, fmt.Errorf("l3: unknown encapsulation %q (the only one is \"gre\")", name)
 	}
 }
 
@@ -92,28 +106,6 @@ func ipVersion(pkt []byte) (byte, error) {
 	default:
 		return 0, errBadIPVersion
 	}
-}
-
-// ipipEncap carries the inner packet with no header at all.
-type ipipEncap struct{}
-
-func (ipipEncap) Name() string  { return "ipip" }
-func (ipipEncap) Overhead() int { return 0 }
-
-func (ipipEncap) Wrap(dst, pkt []byte) ([]byte, error) {
-	// Validated on the way out as well as the way in: a malformed packet from
-	// our own TUN is a bug worth catching here rather than at the peer.
-	if _, err := ipVersion(pkt); err != nil {
-		return nil, err
-	}
-	return append(dst, pkt...), nil
-}
-
-func (ipipEncap) Unwrap(frame []byte) ([]byte, error) {
-	if _, err := ipVersion(frame); err != nil {
-		return nil, err
-	}
-	return frame, nil
 }
 
 // greEncap is RFC 2784, optionally with the RFC 2890 key.

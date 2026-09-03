@@ -1,43 +1,25 @@
 /* The only place the panel talks to the server.
  *
  * Every function here is one route the Go server already serves, named after
- * it. Nothing else in the panel calls fetch(), so switching between the mock
- * and the real server is the MOCK flag below and nothing more — and a route
- * that changes shape breaks in one file instead of ten.
+ * it. Nothing else in the panel calls fetch(), so a route that changes shape
+ * breaks in one file instead of ten.
  *
- * MOCK is on when the panel is opened from a static server (the preview) and
- * off when it is served by the Go binary, which is decided by whether the
- * session cookie endpoint answers. It can be forced either way with
- * ?mock=1 / ?mock=0 in the URL.
+ * There is one code path and it is the real one. The panel used to carry a
+ * second — a directory of fixtures, chosen by a flag — which was how the screens
+ * were drawn before the server existed. It outlived its purpose twice over: the
+ * fixtures were never shipped inside the binary, so forcing that mode on a real
+ * panel fetched files that are not there and drew an empty server over a busy
+ * one; and having somewhere for made-up numbers to come from is what let so
+ * many of them survive on screens that were supposed to have been wired up.
  */
 
-const params = new URLSearchParams(location.search);
-export const MOCK = params.has('mock')
-  ? params.get('mock') !== '0'
-  : !window.__BACKPACK_LIVE__;
-
-const MOCK_DELAY = 260;   // enough to see the loading states behave
-
-async function mock(file) {
-  const r = await fetch(`mock/${file}`, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`mock/${file}: ${r.status}`);
-  const data = await r.json();
-  await new Promise(res => setTimeout(res, MOCK_DELAY));
-  return data;
-}
-
-async function get(path, mockFile) {
-  if (MOCK) return mock(mockFile);
+async function get(path) {
   const r = await fetch(path, { cache: 'no-store' });
   if (!r.ok) throw new Error(await r.text() || r.statusText);
   return r.json();
 }
 
-async function post(path, body, mockResult) {
-  if (MOCK) {
-    await new Promise(res => setTimeout(res, MOCK_DELAY));
-    return typeof mockResult === 'function' ? mockResult() : (mockResult ?? { status: 'ok' });
-  }
+async function post(path, body) {
   const opts = { method: 'POST' };
   if (body instanceof FormData || body instanceof URLSearchParams) opts.body = body;
   else if (body !== undefined) {
@@ -51,109 +33,151 @@ async function post(path, body, mockResult) {
 }
 
 /* ---- CLI: Manage → Status ------------------------------------------------ */
-export const stats   = () => get('/api/stats', 'stats.json');
-export const tunnels = () => get('/api/tunnels', 'tunnels.json');
+export const stats   = () => get('/api/stats');
+export const tunnels = () => get('/api/tunnels');
 
 /* ---- CLI: Manage → Manage Tunnels ---------------------------------------- */
 export const tunnelAction = (name, action) =>
-  post('/api/tunnel/action', new URLSearchParams({ name, action }), { status: 'ok' });
+  post('/api/tunnel/action', new URLSearchParams({ name, action }));
 export const restartAll = () =>
-  post('/api/tunnel/action', new URLSearchParams({ action: 'restartall' }),
-       { restarted: 5, failed: 1 });
+  post('/api/tunnel/action', new URLSearchParams({ action: 'restartall' }));
 export const tunnelSettings = name =>
-  get('/api/tunnel/settings?name=' + encodeURIComponent(name), 'settings.json');
+  get('/api/tunnel/settings?name=' + encodeURIComponent(name));
 export const tunnelEdit  = payload => post('/api/tunnel/edit', payload);
-export const tunnelOptions = () => get('/api/tunnel/options', 'options.json');
+export const tunnelOptions = () => get('/api/tunnel/options');
 
 /* ---- Handing a tunnel's paired settings to the other server --------------- */
 /* One string carrying everything the two ends must agree on. The mirroring —
    which side becomes which, which addresses swap — is the server's, so the
    panel never holds a second idea of what "the other side" means. */
 export const shareLink = name =>
-  get('/api/tunnel/sharelink?name=' + encodeURIComponent(name), 'sharelink.json');
-export const shareLinkDecode = link =>
-  post('/api/tunnel/sharelink', { link }, () => ({
-    kind: 'reverse', side: 'kharej', transport: 'tcp', token: 'a-mock-token',
-    tunnelPort: '8443', serverAddr: '185.4.28.11', paired: ['token', 'tunnelPort', 'transport'],
-  }));
-export const tunnelDefaults = () => get('/api/tunnel/defaults', 'defaults.json');
-/* The mock has to roll a fresh port each time or "Random" looks broken; the
-   real endpoint picks a free one on the machine. */
-export const tunnelSuggest = async () => {
-  if (!MOCK) return get('/api/tunnel/suggest', 'suggest.json');
-  await new Promise(r => setTimeout(r, 120));
-  return { port: 1024 + Math.floor(Math.random() * 64000) };
-};
+  get('/api/tunnel/sharelink?name=' + encodeURIComponent(name));
+export const shareLinkDecode = link => post('/api/tunnel/sharelink', { link });
+/* Managed servers. The four actions share one endpoint because they are one
+   thing — the fleet — and each returns the state that follows, so the screen
+   never has to guess what changed. Adding is the exception: it answers with the
+   command to run, which is not state. */
+export const nodes = () => get('/api/nodes');
+const nodePost = form => post('/api/nodes', new URLSearchParams(form));
+export const nodeListenerOn  = () => nodePost({ action: 'enable' });
+export const nodeListenerOff = () => nodePost({ action: 'disable' });
+export const nodeRemove = name => nodePost({ action: 'remove', name });
+export const nodeAdd = (name, port) => nodePost({ action: 'add', name, port });
+
+export const nodeTunnels = name =>
+  get('/api/node/tunnels?node=' + encodeURIComponent(name));
+/* Both ends in one submission: this end is created here, and the other is
+   derived from it and applied on the node. See handleNodePair. */
+export const nodePair = body => post('/api/node/pair', body);
+/* What a preset actually produces, for the drawer that calls itself "preset
+   defaults": the three arguments decide the answer, and asking without them
+   describes some other tunnel. */
+export const tunnelDefaults = ({ preset = '', role = '', transport = '' } = {}) =>
+  get(`/api/tunnel/defaults?preset=${encodeURIComponent(preset)}`
+    + `&role=${encodeURIComponent(role)}&transport=${encodeURIComponent(transport)}`);
+/* A token both ends will hold. Generated rather than typed wherever the panel
+   writes both ends itself — nobody has to read it, so nobody should. */
+export const tunnelToken = () => get('/api/tunnel/suggest?what=token');
+/* what=port, because the endpoint answers two questions and refuses one that
+   names neither: without it every Random port button got a 400. */
+export const tunnelSuggest = () => get('/api/tunnel/suggest?what=port');
 
 /* ---- CLI: 1 Setup Iran / 2 Setup Kharej ---------------------------------- */
-export const tunnelCreate = payload => post('/api/tunnel/create', payload,
-  { status: 'ok', active: true });
-export const directOptions  = () => get('/api/direct/options', 'directoptions.json');
-export const directDefaults = () => get('/api/direct/defaults', 'directdefaults.json');
-export const directCreate   = payload => post('/api/direct/create', payload,
-  { status: 'ok', active: true });
+export const tunnelCreate = payload => post('/api/tunnel/create', payload);
+export const directOptions  = () => get('/api/direct/options');
+export const directDefaults = () => get('/api/direct/defaults');
+export const directCreate   = payload => post('/api/direct/create', payload);
 
 /* ---- CLI: Manage → Health Check / Link Test / Speed Test ------------------ */
-export const health = () => get('/api/health', 'health.json');
-export const linkTestStatus = () => get('/api/linktest', 'linktest.json');
+export const health = () => get('/api/health');
+export const linkTestStatus = () => get('/api/linktest');
 export const linkTestRun = name =>
-  post('/api/linktest?name=' + encodeURIComponent(name), undefined, { status: 'started' });
+  post('/api/linktest?name=' + encodeURIComponent(name));
 export const speedPlan = name =>
-  get('/api/speedtest/plan?name=' + encodeURIComponent(name), 'speedplan.json');
-export const speedRun = payload => post('/api/speedtest', payload, { status: 'started' });
+  get('/api/speedtest/plan?name=' + encodeURIComponent(name));
+export const speedRun = body => post('/api/speedtest', body);
 
 /* ---- CLI: Manage → Tunnel Metrics, and the long view --------------------- */
 /* Plain text, not JSON — the handler writes journald's own output. */
 export const logs = async name => {
-  const path = MOCK ? 'mock/logs.txt'
-                    : '/api/logs?name=' + encodeURIComponent(name);
-  const r = await fetch(path, { cache: 'no-store' });
+  const r = await fetch('/api/logs?name=' + encodeURIComponent(name), { cache: 'no-store' });
   if (!r.ok) throw new Error(await r.text() || r.statusText);
   return r.text();
 };
 /* days is optional and the server clamps it to 30 — the store keeps a month of
    hourly buckets, and the endpoint answers a week unless asked for more. */
 export const history = (name, days) =>
-  get('/api/history?name=' + encodeURIComponent(name) + (days ? '&days=' + days : ''),
-      days && days > 7 ? 'history30.json' : 'history.json');
+  get('/api/history?name=' + encodeURIComponent(name) + (days ? '&days=' + days : ''));
 
 /* ---- CLI: per-tunnel → Undo a change ------------------------------------- */
 export const confHistory = name =>
-  get('/api/confhist?name=' + encodeURIComponent(name), 'confhist.json');
-export const confRestore = (name, at) => post('/api/confhist/restore', { name, at }, { ok: true });
+  get('/api/confhist?name=' + encodeURIComponent(name));
+export const confRestore = (name, at) => post('/api/confhist/restore', { name, at });
 
 /* ---- CLI: 4 Backup & Restore --------------------------------------------- */
 export const backupExportURL = () => '/api/backup/export';
 export const backupImport = file => {
   const fd = new FormData();
   fd.append('backup', file);
-  return post('/api/backup/import', fd,
-    { status: 'ok', files: 41, tunnels: ['fr-relay', 'de-edge'], started: 5, failed: 1 });
+  return post('/api/backup/import', fd);
 };
-export const autoBackup    = () => get('/api/autobackup', 'autobackup.json');
-export const setAutoBackup = on => post('/api/autobackup', new URLSearchParams({ on: on ? '1' : '0' }));
+export const autoBackup    = () => get('/api/autobackup');
+/* enabled, not on — the same kind of miss as setChannel, and just as invisible
+   while nothing called it. */
+export const setAutoBackup = on =>
+  post('/api/autobackup', new URLSearchParams({ enabled: on ? '1' : '0' }));
 
 /* ---- CLI: 5 Web Panel ---------------------------------------------------- */
-export const security   = () => get('/api/security', 'security.json');
-export const sessions   = () => get('/api/sessions', 'sessions.json');
+export const security   = () => get('/api/security');
+/* Both switches travel together: the endpoint takes the pair, and sending one
+   alone would read as turning the other off. */
+export const setSecurity = ({ twoFA, loginNotify }) =>
+  post('/api/security', new URLSearchParams({
+    twoFA: twoFA ? '1' : '0', loginNotify: loginNotify ? '1' : '0',
+  }));
+export const sessions   = () => get('/api/sessions');
+/* Ending a session and revoking the read-only token are two different things on
+ * two different endpoints. Both session buttons used to call the token one, so
+ * signing out a device revoked the token instead and "sign out every other
+ * device" was refused outright. */
+export const sessionRevoke = id =>
+  post('/api/sessions', new URLSearchParams({ action: 'revoke', id }));
+export const sessionRevokeOthers = () =>
+  post('/api/sessions', new URLSearchParams({ action: 'others' }));
 export const setPassword = payload => post('/api/password', payload);
 export const setPanelPort = port => post('/api/panelport', new URLSearchParams({ port }));
-export const panelCert   = payload => post('/api/panelcert', payload);
-export const remoteToken = action => post('/api/remotetoken', new URLSearchParams({ action }));
+export const panelCertRead = () => get('/api/panelcert');
+/* Form-encoded, because the handler reads r.FormValue. `mode` is not optional:
+   without it the endpoint has nothing to apply and refuses the whole request. */
+export const panelCert   = ({ mode, domain = '', email = '' }) =>
+  post('/api/panelcert', new URLSearchParams({ mode, domain, email }));
+export const remoteToken     = action => post('/api/remotetoken', new URLSearchParams({ action }));
+export const remoteTokenRead = () => get('/api/remotetoken');
 
 /* ---- CLI: 7 Telegram Bot ------------------------------------------------- */
-export const telegram     = () => get('/api/telegram', 'telegram.json');
-export const telegramSave = payload => post('/api/telegram', payload);
-export const telegramTest = () => post('/api/telegram/test', undefined, { ok: true });
-export const relays       = () => get('/api/relays', 'relays.json');
+export const telegram     = () => get('/api/telegram');
+/* Form-encoded, because the handler reads r.FormValue. It was posting JSON, so
+   every key arrived empty and applyTelegramForm kept the values it already had
+   — a save that reported success and changed nothing. */
+export const telegramSave = fields =>
+  post('/api/telegram', new URLSearchParams(
+    Object.fromEntries(Object.entries(fields)
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => [k, typeof v === 'boolean' ? (v ? '1' : '0') : String(v)]))));
+export const telegramTest = () => post('/api/telegram/test', undefined);
+export const relays       = () => get('/api/relays');
 
 /* ---- CLI: 8 Update ------------------------------------------------------- */
-export const updateCheck  = () => get('/api/update', 'update.json');
-export const updateStart  = () => post('/api/update', undefined, { status: 'started' });
-export const updateStatus = () => get('/api/update/status', 'updatestatus.json');
-export const restorePoints = () => get('/api/restorepoints', 'restorepoints.json');
-export const channel      = () => get('/api/channel', 'channel.json');
-export const setChannel   = beta => post('/api/channel', new URLSearchParams({ beta: beta ? '1' : '0' }));
+export const updateCheck  = () => get('/api/update');
+export const updateStart  = () => post('/api/update', undefined);
+export const updateStatus = () => get('/api/update/status');
+export const restorePoints = () => get('/api/restorepoints');
+export const channel      = () => get('/api/channel');
+/* The handler takes the channel by name and answers with the name it set;
+   this was sending beta=1, which it does not read, so the channel never moved.
+   Nothing called it, so nothing noticed. */
+export const setChannel   = beta =>
+  post('/api/channel', new URLSearchParams({ channel: beta ? 'beta' : 'stable' }));
 
 /* ---- alerts -------------------------------------------------------------- */
-export const alerts = () => get('/api/alerts', 'alerts.json');
+export const alerts = () => get('/api/alerts');

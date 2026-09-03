@@ -33,9 +33,15 @@ Two consequences follow, and the second is the cost:
 - **It does not interoperate.** A Cisco, a MikroTik or a plain Linux GRE
   endpoint cannot talk to it. Backpack talks to Backpack.
 
-`encap = "ipip"` is still read, so a tunnel built before the choice was removed
-keeps running. It saves four bytes and buys nothing else, which is why it is no
-longer offered.
+There is one encapsulation and it is **GRE**. A config that still says
+`encap = "ipip"` is read as GRE, so a tunnel built before the choice was removed
+keeps loading — but **both ends must be on the same version**, and the handshake
+refuses a mismatch by name if they are not.
+
+Two encapsulations were a way for the two ends to disagree, and the
+disagreement cost far more than the choice was worth: ipip saved four bytes,
+and a pair that disagreed came up, reported a peer, logged nothing above debug,
+and carried nothing at all.
 
 The config value stays `encap = "gre"` — both ends compare it, so it cannot
 change. Only what the screens call it changed.
@@ -182,7 +188,7 @@ Two things worth knowing:
 | `token` | *required* | The shared secret. The only credential |
 | `local_ip` | *required* | This end's tunnel address, normally with a prefix: `10.10.0.1/30` |
 | `peer_ip` | | The other end's tunnel address. Required if `local_ip` has no prefix |
-| `encap` | `ipip` | `ipip` or `gre` |
+| `encap` | `gre` | `gre` — a file that says `ipip` is read as GRE |
 | `gre_key` | `0` | RFC 2890 key, letting several logical tunnels share a carrier. `gre` only |
 | `carrier` | `udp` | `udp`, `pck`, `xdi` or `spoof` — see below |
 | `iface` | `bp0` | Interface name to create |
@@ -287,16 +293,12 @@ pck_interface = "eth0"        # optional
 > reply from the packets themselves and must be told. Backpack refuses the
 > config up front rather than coming up and replying nowhere.
 
-### `ipip` or `gre`
+### Encapsulation
 
-`ipip` costs **nothing** — the payload is the inner packet, with no header of
-its own. It is the right default.
+**GRE**, always. Four bytes, or eight when a key is set — the key is what lets
+several logical tunnels share one carrier between the same pair of addresses.
 
-`gre` costs four bytes, or eight with a key. Take it when you want the key
-(several tunnels over one carrier) or interoperability with a format everyone
-knows.
-
-Both carry IPv4 and IPv6 over the same tunnel; the first nibble of a packet
+It carries IPv4 and IPv6 over the same tunnel; the first nibble of a packet
 says which it is. There is no separate `sit`/`6in4` mode because none is
 needed.
 
@@ -313,7 +315,8 @@ The budget is:
 mtu = path − outer IP − carrier − session (29) − encap
 ```
 
-On a clean 1500-byte path with `udp` and `ipip` that comes to **1443**. The log
+On a clean 1500-byte path with `udp` that comes to **1439** (GRE's four bytes
+included). The log
 prints what it computes at startup and warns if your configured MTU exceeds it.
 
 ---

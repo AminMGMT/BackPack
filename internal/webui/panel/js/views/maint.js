@@ -3,7 +3,7 @@
  * CLI: 4 Backup & Restore, and 8 Update.
  */
 
-import { $$, esc } from '../lib/dom.js';
+import { $$, esc, dialogSubtitle } from '../lib/dom.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
 import { openScreen } from '../ui/screen.js';
@@ -18,6 +18,7 @@ export async function maintView(ctx) {
   openScreen('maint', {
     pick: '.dlg[data-d="maint"]',
     bind: async (root, close) => {
+      dialogSubtitle(root, store.get().stats, (store.get().stats || {}).version);
       const s = store.get().stats || {};
       const now = root.querySelector('.now6');
       if (now) now.textContent = s.version || '—';
@@ -35,6 +36,22 @@ export async function maintView(ctx) {
           install.textContent = 'Install ' + (next?.textContent || '');
         }
       } catch (e) { if (hint) hint.textContent = 'Could not reach the release list.'; }
+
+      /* The backup pane's status line was written by the preview — a date and a
+         kind, both invented. Nothing reports when the last automatic backup ran;
+         /api/autobackup answers whether the weekly one is on. Say that. */
+      const bkNote = [...root.querySelectorAll('[data-p="bk"] .note6')]
+        .find(n => /last backup/i.test(n.textContent));
+      if (bkNote) {
+        try {
+          const ab = await api.autoBackup();
+          bkNote.textContent = ab.enabled
+            ? 'The weekly backup is on. Each result is filed with the alerts, so a failure is not silent.'
+            : 'The weekly backup is off — nothing is taken automatically.';
+        } catch (e) {
+          bkNote.textContent = 'Whether the weekly backup is on could not be read.';
+        }
+      }
 
       const log = root.querySelector('#log6');
       const list = root.querySelector('#lgl');

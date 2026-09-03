@@ -31,8 +31,9 @@ func TestEncapRoundTrip(t *testing.T) {
 		greKey   uint32
 		overhead int
 	}{
-		{"ipip", "ipip", 0, 0},
-		{"ipip by default", "", 0, 0},
+		// The two names a config can still carry, both of which are GRE now.
+		{"a config that says ipip", "ipip", 0, 4},
+		{"a config that says nothing", "", 0, 4},
 		{"gre unkeyed", "gre", 0, 4},
 		{"gre keyed", "gre", 0xDEADBEEF, 8},
 	}
@@ -157,5 +158,35 @@ func TestGRERejectsMalformedFrames(t *testing.T) {
 func TestNewEncapRejectsUnknownName(t *testing.T) {
 	if _, err := NewEncap("vxlan", 0); err == nil {
 		t.Fatal("NewEncap accepted an encapsulation it does not implement")
+	}
+}
+
+// One encapsulation, and nothing that can put a second one back.
+//
+// Two was a way for the ends to disagree, and the disagreement was expensive
+// out of all proportion to what the choice bought: four bytes, against a tunnel
+// that came up, reported a peer, logged nothing and carried nothing. Every
+// name a config can hold now produces the same wrapping and announces the same
+// identity, so there is nothing left to mismatch.
+func TestThereIsOnlyOneEncapsulation(t *testing.T) {
+	var ids []string
+	for _, name := range []string{"", "ipip", "IPIP", " gre ", "gre"} {
+		e, err := NewEncap(name, 0)
+		if err != nil {
+			t.Fatalf("NewEncap(%q): %v", name, err)
+		}
+		if e.Name() != "gre" {
+			t.Errorf("NewEncap(%q) built %q, not gre", name, e.Name())
+		}
+		ids = append(ids, encapID(e))
+	}
+	for _, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("the names announce different identities: %v", ids)
+		}
+	}
+	// And an unknown one is still refused rather than quietly becoming gre.
+	if _, err := NewEncap("vxlan", 0); err == nil {
+		t.Error("an encapsulation nothing implements was accepted")
 	}
 }

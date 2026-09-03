@@ -54,6 +54,25 @@ func Load() State {
 	return st
 }
 
+// Since returns the events recorded after t, oldest first.
+//
+// It exists so the writers that are not the alert watcher can still be heard in
+// Telegram. The watchdog is the one that matters: it is what restarts a tunnel
+// that has stopped carrying traffic, and it said so only into this file — read
+// by the panel, and by the bot only when somebody pressed a button. From the
+// bot's side a tunnel the watchdog had fixed produced silence, which is exactly
+// the half of the story an operator is waiting for. The alert loop drains this
+// on every pass; see telegram.RunAlerts.
+func Since(t time.Time) []Event {
+	var out []Event
+	for _, e := range Load().Events {
+		if e.Time.After(t) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // RecordEvent appends one event without touching the active conditions — for
 // writers other than the alert watcher, like the watchdog announcing a
 // restart or the auto-backup announcing an archive.

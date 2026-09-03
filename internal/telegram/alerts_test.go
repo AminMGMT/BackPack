@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/backpack/backpack/internal/alerthist"
 	"github.com/backpack/backpack/internal/sysstat"
 )
 
@@ -249,5 +250,39 @@ func TestBarStaysInBounds(t *testing.T) {
 		if n := len([]rune(got)); n != 12 { // 10 segments plus the brackets
 			t.Errorf("bar(%v) = %q, which is %d runes wide, want 12", pct, got, n)
 		}
+	}
+}
+
+// What the watchdog says has to reach the bot.
+//
+// The watchdog is what restarts a tunnel that has stopped carrying traffic, and
+// it wrote that only into the history file — read by the panel, and by the bot
+// only when somebody pressed a button. So the notification an operator waits
+// for after a drop, the one that says it came back, never arrived at all. The
+// alert loop drains the file; this pins the draining, and pins that a pass does
+// not read back its own messages and send everything twice.
+func TestWatchdogEventsAreForwardedOnceEach(t *testing.T) {
+	alerthist.Dir = t.TempDir()
+
+	start := time.Now()
+	time.Sleep(2 * time.Millisecond)
+	alerthist.RecordEvent("🔁 Watchdog restarted tunnel fr")
+	alerthist.RecordEvent("🟢 Tunnel fr is carrying traffic again after the restart")
+
+	first := alerthist.Since(start)
+	if len(first) != 2 {
+		t.Fatalf("the loop would forward %d of the watchdog's 2 messages", len(first))
+	}
+
+	// A pass records what it is about to send; the next drain must not pick
+	// those up again.
+	cut := time.Now()
+	alerthist.Record([]string{"🔴 Tunnel fr went down"}, nil)
+	if again := alerthist.Since(cut); len(again) == 0 {
+		t.Fatal("the test's own precondition failed: Record wrote nothing")
+	}
+	after := time.Now()
+	if again := alerthist.Since(after); len(again) != 0 {
+		t.Errorf("a pass reads back %d of its own messages and would send them twice", len(again))
 	}
 }

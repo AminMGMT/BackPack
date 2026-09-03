@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/backpack/backpack/internal/manage"
+	"github.com/backpack/backpack/internal/node"
 )
 
 // Tunnel management endpoints.
@@ -169,14 +170,105 @@ func (s *server) handleTunnelEdit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, map[string]string{"status": "ok"})
+		writeJSON(w, s.afterEdit(req.Name, r))
 		return
 	}
 	if err := manage.EditTunnelSettings(req.Name, req.TunnelEdit); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSON(w, s.afterEdit(req.Name, r))
+}
+
+// alsoOnNode drives the same service on the other server.
+//
+// A tunnel is one tunnel in two places and its state is one state. Stopping
+// only this end does not stop the tunnel: it leaves the other half dialling
+// something that will never answer, retrying on its timer for as long as
+// somebody leaves it that way. Starting only this end cannot bring it up at
+// all. So the card's buttons reach across, exactly as its Edit does.
+//
+// Delete is the exception and stays one — see the delete branch above. There is
+// deliberately no operation that removes a tunnel on a node, because a delete
+// here is not consent to one there.
+func (s *server) alsoOnNode(name, action string) map[string]any {
+	out := map[string]any{"status": "ok"}
+	op := map[string]string{
+		"start": node.OpStart, "stop": node.OpStop, "restart": node.OpRestart,
+	}[action]
+	if op == "" {
+		return out
+	}
+	pair, paired := manage.PairFor(name)
+	if !paired {
+		return out
+	}
+	out["node"] = pair.Node
+
+	hub := s.nodes.get()
+	if hub == nil || !hub.IsOnline(pair.Node) {
+		out["status"] = "partial"
+		out["peerError"] = pair.Node + " is not connected, so its end was not " + action + "ed"
+		out["peerHint"] = "This end is " + action + "ed. Do it again once that server is back."
+		return out
+	}
+	peer := pair.PeerName
+	if peer == "" {
+		peer = name // an older pairing, before the far end's name was recorded
+	}
+	if err := hub.Call(pair.Node, op, node.NameRequest{Name: peer}, nil); err != nil {
+		out["status"] = "partial"
+		out["peerError"] = err.Error()
+		out["peerHint"] = "This end is " + action + "ed and " + pair.Node + "'s is not."
+		return out
+	}
+	out["peer"] = map[string]any{"name": peer, "done": true}
+	return out
+}
+
+// afterEdit carries a change through to the tunnel's other end, when that end
+// is on a managed server.
+//
+// A tunnel built across a node is one tunnel in two places, and half the values
+// on this form are ones both ends have to agree on — the port, the transport,
+// the MTU. Changing them here and not there does not produce a slower tunnel;
+// it produces one that stops carrying traffic, with both machines reporting
+// themselves as running. So the far end is rewritten from this one's finished
+// configuration, by the same path that created it.
+//
+// The reply describes what actually happened rather than reporting success for
+// the half that worked. Nothing is rolled back here: this end's change is
+// legitimate, the node applies its own rollback if the new configuration will
+// not start there, and an operator told exactly which end is behind can fix it.
+func (s *server) afterEdit(name string, r *http.Request) map[string]any {
+	out := map[string]any{"status": "ok"}
+	nodeName, ok := manage.NodeFor(name)
+	if !ok {
+		return out
+	}
+	out["node"] = nodeName
+
+	hub := s.nodes.get()
+	if hub == nil {
+		out["status"] = "partial"
+		out["peerError"] = "the node listener is off, so " + nodeName + " could not be updated"
+		out["peerHint"] = "This end changed. Turn the listener back on and save again to move " +
+			nodeName + " with it."
+		return out
+	}
+	// nil: an edit rewrites the far end from this one's configuration, and the
+	// far end's own connectivity is not in it. Sending an empty drawer would
+	// clear the proxy or the interface that was set when it was created, so the
+	// push reads the far end's current ones back off the node instead.
+	if _, err := s.pushPeerEnd(hub, nodeName, name, nil, r); err != nil {
+		out["status"] = "partial"
+		out["peerError"] = err.Error()
+		out["peerHint"] = "This end changed and " + nodeName + " did not. " +
+			"Save again once it is back, or paste this tunnel's setup link there."
+		return out
+	}
+	out["peer"] = map[string]any{"updated": true}
+	return out
 }
 
 // handleTunnelAction runs one of the four service actions on a tunnel, or
@@ -216,7 +308,18 @@ func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
 	case "restart":
 		err = manage.Restart(name)
 	case "delete":
+		// Read before the delete, which is what forgets it.
+		onNode, paired := manage.NodeFor(name)
 		err = manage.Delete(name)
+		if err == nil && paired {
+			writeJSON(w, map[string]any{
+				"status": "ok",
+				"node":   onNode,
+				"note": "Removed from this server. The other end is still on " + onNode +
+					" — this panel cannot delete a tunnel there, so remove it on that machine.",
+			})
+			return
+		}
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
@@ -225,7 +328,7 @@ func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSON(w, s.alsoOnNode(name, action))
 }
 
 // The direct-tunnel half of the panel's setup form.

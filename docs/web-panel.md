@@ -16,6 +16,12 @@ also cover update, panel port and password). Open the port first:
 sudo ufw allow 7777
 ```
 
+## See also
+
+- [Managed servers (nodes)](managed-servers.md) — registering a foreign server
+  with this panel and building both ends of a tunnel from one screen. New panel
+  only.
+
 ---
 
 <div dir="rtl">

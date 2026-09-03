@@ -1,0 +1,157 @@
+/* Overview. Loaded with the shell, not injected, because it is a section.
+ *
+ * The motion here is deliberate and short. Every animation runs once, on paint,
+ * and every one of them is a value arriving at its size — bars growing to their
+ * height, a split filling to its share, a total counting to itself. Nothing
+ * loops and nothing moves that is not saying something, because a page people
+ * check three times a day cannot afford to be busy.
+ */
+
+.panel .ov{padding-bottom:8px}
+
+/* ---- state, in one line ---------------------------------------------------
+   Four things wrong used to be four cards, which filled the screen before any
+   content and read as the alerts panel the header already has. They are pills
+   now: the same information, one line, and the page starts with what it is for.
+*/
+.panel .ov-bar{display:flex;flex-wrap:wrap;gap:7px;margin:2px 0 16px}
+.panel .ov-pill{font:inherit;display:inline-flex;align-items:center;gap:7px;
+  font-size:11.5px;font-weight:600;padding:7px 12px;border-radius:10px;
+  border:1px solid var(--ln);background:var(--s2);color:var(--tx2);cursor:pointer;
+  animation:ov-in .38s var(--spring) both;animation-delay:calc(var(--i,0) * 40ms);
+  transition:background .18s ease,border-color .18s ease}
+.panel .ov-pill:hover{background:var(--s3);border-color:var(--ln2)}
+.panel .ov-pill .ov-dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ln3)}
+.panel .ov-pill.er{border-color:color-mix(in srgb,var(--er) 38%,transparent)}
+.panel .ov-pill.er .ov-dot{background:var(--er);box-shadow:0 0 0 3px color-mix(in srgb,var(--er) 18%,transparent)}
+.panel .ov-pill.wr{border-color:color-mix(in srgb,var(--wr) 32%,transparent)}
+.panel .ov-pill.wr .ov-dot{background:var(--wr);box-shadow:0 0 0 3px color-mix(in srgb,var(--wr) 18%,transparent)}
+.panel .ov-pill.ok{cursor:default;border-color:color-mix(in srgb,var(--ok) 30%,transparent)}
+.panel .ov-pill.ok .ov-dot{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+
+@keyframes ov-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ---- the traffic card ---------------------------------------------------- */
+.panel .tk{border:1px solid var(--ln);border-radius:17px;background:var(--s1);
+  padding:18px 18px 14px;position:relative;overflow:hidden;
+  animation:ov-in .5s var(--spring) both}
+/* A single wash from the top, so the card has a light source and the month of
+   bars along its base sits in the dark half of it. */
+.panel .tk::before{content:'';position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 80% at 12% -20%,var(--sunk),transparent 60%)}
+.panel .tk>*{position:relative}
+
+.panel .tk-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.panel .tk-tot{min-width:0}
+.panel .tk-num{display:block;font-size:38px;font-weight:670;letter-spacing:-.045em;
+  line-height:1;font-variant-numeric:tabular-nums}
+.panel .tk-cap{display:block;font-size:11.5px;color:var(--dim);margin-top:7px}
+.panel .tk-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.panel .tk-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+  padding:5px 10px;border-radius:9px;border:1px solid var(--ln);background:var(--s2);color:var(--tx2)}
+.panel .tk-chip.ghost{color:var(--mu);background:transparent}
+.panel .tk-chip i{width:6px;height:6px;border-radius:2px;flex:none}
+.panel .tk-chip i.up{background:var(--spark)}
+.panel .tk-chip i.dn{background:var(--ln3)}
+
+/* Sent against received, as one bar. Two numbers side by side are two numbers;
+   one bar is the ratio, which is the thing being asked. */
+.panel .tk-split{display:flex;gap:3px;height:5px;margin:15px 0 16px}
+.panel .tk-split i{border-radius:3px;width:var(--w);animation:tk-grow .7s var(--spring) both .12s}
+.panel .tk-split i.up{background:var(--spark)}
+.panel .tk-split i.dn{background:var(--ln2)}
+@keyframes tk-grow{from{width:0}to{width:var(--w)}}
+
+/* A month, one column a day, filling left to right in the order they happened. */
+.panel .tk-days{display:flex;align-items:flex-end;gap:3px;height:64px}
+.panel .tk-days i{flex:1;min-width:2px;border-radius:2px 2px 1px 1px;height:var(--h);
+  background:linear-gradient(180deg,var(--spark),color-mix(in srgb,var(--spark) 28%,transparent));
+  opacity:.55;transform-origin:bottom;
+  animation:tk-rise .5s var(--spring) both;
+  animation-delay:calc(var(--i) * 18ms + 140ms);
+  transition:opacity .18s ease}
+.panel .tk-days:hover i{opacity:.3}
+.panel .tk-days i:hover{opacity:1}
+@keyframes tk-rise{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+
+.panel .tk-axis{display:flex;margin-top:8px;font-size:10.5px;color:var(--dim)}
+.panel .tk-axis .sp{flex:1}
+.panel .tk-empty{font-size:11.5px;color:var(--dim);line-height:1.6;padding:14px 0 4px}
+.panel .tk-empty b{color:var(--tx2);font-weight:600}
+
+/* ---- where it goes ------------------------------------------------------- */
+.panel .sectitle .sec-n{font-size:11px;font-weight:620;padding:2px 8px;border-radius:7px;
+  background:var(--sunk);color:var(--mu)}
+
+.panel .tk-list{display:grid;gap:1px;background:var(--ln);border:1px solid var(--ln);
+  border-radius:15px;overflow:hidden}
+.panel .tk-row{font:inherit;text-align:left;display:grid;align-items:center;gap:12px;
+  grid-template-columns:8px minmax(0,1.3fr) minmax(90px,1.9fr) auto auto auto;
+  padding:12px 15px;background:var(--s1);border:0;cursor:pointer;color:var(--tx);
+  animation:ov-in .4s var(--spring) both;animation-delay:calc(var(--i) * 35ms + 80ms);
+  transition:background .18s ease}
+.panel .tk-row:hover{background:var(--s2)}
+.panel .tk-dot{width:8px;height:8px;border-radius:50%}
+.panel .tk-dot.up{background:var(--ok)}
+.panel .tk-dot.dn{background:var(--faint)}
+.panel .tk-nm{min-width:0}
+.panel .tk-nm b{display:block;font-size:12.5px;font-weight:620;letter-spacing:-.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .tk-nm em{display:block;font-style:normal;font-size:10.5px;color:var(--dim);margin-top:2px;
+  text-transform:uppercase;letter-spacing:.05em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .tk-bar{height:6px;border-radius:3px;background:var(--sunk);overflow:hidden}
+.panel .tk-bar{display:flex;gap:2px}
+.panel .tk-bar i{display:block;height:100%;width:var(--w);border-radius:3px;
+  animation:tk-grow .8s var(--spring) both .18s}
+.panel .tk-bar i.in{background:var(--spark);opacity:.85}
+.panel .tk-bar i.out{background:var(--ln3)}
+.panel .tk-fig{font-size:12px;font-weight:620;font-variant-numeric:tabular-nums;
+  text-align:right;min-width:72px}
+.panel .tk-png{font-size:11px;color:var(--mu);font-variant-numeric:tabular-nums;
+  text-align:right;min-width:56px}
+.panel .tk-upt{font-size:11px;color:var(--dim);text-align:right;min-width:70px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- recently ------------------------------------------------------------ */
+.panel .ac{display:grid;gap:1px;background:var(--ln);border:1px solid var(--ln);
+  border-radius:15px;overflow:hidden}
+.panel .ac-row{display:flex;align-items:baseline;gap:14px;padding:10px 15px;background:var(--s1);
+  animation:ov-in .38s var(--spring) both;animation-delay:calc(var(--i) * 30ms + 60ms)}
+.panel .ac-when{font-size:10.5px;color:var(--dim);flex:none;min-width:76px;
+  font-variant-numeric:tabular-nums}
+.panel .ac-msg{font-size:12px;color:var(--tx2);line-height:1.5;min-width:0}
+
+@container pg (max-width:700px){
+  .panel .tk-row{grid-template-columns:8px minmax(0,1fr) auto}
+  .panel .tk-bar,.panel .tk-png,.panel .tk-upt{display:none}
+  .panel .ac-when{min-width:64px}
+  .panel .tk-num{font-size:30px}
+  .panel .tk-chips{margin-left:0;width:100%}
+}
+
+/* ---- this server --------------------------------------------------------- */
+.panel .ov-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
+  border:1px solid var(--ln);border-radius:15px;overflow:hidden}
+@container pg (max-width:1000px){ .panel .ov-facts{grid-template-columns:repeat(2,1fr)} }
+@container pg (max-width:430px){ .panel .ov-facts{grid-template-columns:1fr} }
+.panel .ov-fact{background:var(--s1);padding:12px 15px;min-width:0}
+.panel .ov-fact span{display:block;font-size:10.5px;font-weight:620;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim)}
+.panel .ov-fact b{display:block;font-size:12.5px;font-weight:600;margin-top:4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Once the page has settled, a repaint is a value changing — not the page
+   arriving. Everything that animated on the way in stops doing it, or the whole
+   overview replays itself every time the poller comes back. */
+.panel .ov.settled *{animation:none!important}
+.panel .ov.settled .tk-days i{transform:none}
+.panel .ov.settled .tk-split i,
+.panel .ov.settled .tk-bar i{transition:width .5s var(--spring)}
+
+/* The whole page reads the same with none of it. */
+@media (prefers-reduced-motion:reduce){
+  .panel .ov *{animation:none!important;transition:none!important}
+  .panel .tk-days i{transform:none}
+  .panel .tk-split i,.panel .tk-bar i{width:var(--w)}
+}

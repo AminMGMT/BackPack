@@ -359,17 +359,28 @@ type ConnTune struct {
 	LocalAddr     string `json:"localAddr"` // client, pin it to a source address
 	FallbackAddrs string `json:"fallbackAddrs"`
 	LoadBalance   bool   `json:"loadBalance"`
+
+	// HealthFailover scores every address and keeps traffic on the healthiest,
+	// where LoadBalance spreads it over all of them at once. The wizard has
+	// asked this since failover existed; the panel could only ever set the
+	// other one, so a tunnel built here could not be given the multi-exit
+	// setup at all.
+	//
+	// It overrides LoadBalance, which is the engine's rule and not a choice
+	// made here — see TunnelSpec.HealthFailover.
+	HealthFailover bool `json:"healthFailover"`
 }
 
 func connOf(s TunnelSpec) ConnTune {
 	return ConnTune{
-		SimpleAuth:    s.SimpleAuth,
-		EdgeIP:        s.EdgeIP,
-		Proxy:         s.Proxy,
-		Interface:     s.Interface,
-		LocalAddr:     s.LocalAddr,
-		FallbackAddrs: strings.Join(s.FallbackAddrs, ", "),
-		LoadBalance:   s.LoadBalance,
+		SimpleAuth:     s.SimpleAuth,
+		EdgeIP:         s.EdgeIP,
+		Proxy:          s.Proxy,
+		Interface:      s.Interface,
+		LocalAddr:      s.LocalAddr,
+		FallbackAddrs:  strings.Join(s.FallbackAddrs, ", "),
+		LoadBalance:    s.LoadBalance,
+		HealthFailover: s.HealthFailover,
 	}
 }
 
@@ -439,9 +450,12 @@ func (f ConnTune) apply(s *TunnelSpec, defaultPort string) error {
 		s.FallbackAddrs = append(s.FallbackAddrs, part)
 	}
 
-	// Load balancing spreads the connections over every address at once. With
-	// no backups there is nothing to spread them over.
-	s.LoadBalance = f.LoadBalance && len(s.FallbackAddrs) > 0
+	// Both of these pick between backup addresses, so with no backups there is
+	// nothing for either to do. Failover wins where both are asked for, which
+	// is the engine's rule rather than a choice made here.
+	haveBackups := len(s.FallbackAddrs) > 0
+	s.HealthFailover = f.HealthFailover && haveBackups
+	s.LoadBalance = f.LoadBalance && haveBackups && !s.HealthFailover
 	return nil
 }
 

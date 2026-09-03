@@ -570,9 +570,9 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
-				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
+				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 			default: // channel is full, discard the connection
-				s.logger.Warnf("local listener channel is full, discarding TCP connection from %s", tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.LocalAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

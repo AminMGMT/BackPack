@@ -1248,6 +1248,17 @@
       <span class="lbl" data-i18n>Health check</span>
       <svg class="chev" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
     </button>
+    <!-- The way over to the new panel, mirroring the way back it offers here.
+         It was only ever a checkbox inside Settings → Interface, two clicks
+         deep behind a collapsed accordion, so the two panels were not equally
+         easy to leave. A plain link rather than a call to the API on purpose:
+         it has to keep working on a page where something else has failed, and
+         the server treats ?panel=next as both the redirect and the choice. -->
+    <button class="menuitem" role="menuitem" onclick="location.href='/?panel=next'">
+      <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span class="lbl" data-i18n>New panel</span>
+      <svg class="chev" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
     <!-- The star count is fetched from GitHub by the browser, cached, and simply
          left off when it cannot be had — the link still works on a machine with
          no internet, which is where a lot of these panels live. -->
@@ -2191,7 +2202,7 @@ const $=id=>document.getElementById(id);
 const FA={
   // header & menu
   "Menu":"منو","Settings":"تنظیمات","Alerts":"هشدارها","Health check":"بررسی سلامت",
-  "Support Backpack":"حمایت از بک‌پک","Log out":"خروج",
+  "Support Backpack":"حمایت از بک‌پک","Log out":"خروج","New panel":"پنل جدید",
   "Uptime":"مدت روشن بودن","IPv4":"IPv4","IPv6":"IPv6","OS":"سیستم‌عامل",
   "Location":"موقعیت","ISP":"سرویس‌دهنده","Tunnels":"تونل‌ها","Load":"بار سیستم",
   "Download":"دانلود","Upload":"آپلود","Total In":"مجموع ورودی","Total Out":"مجموع خروجی",

@@ -1,0 +1,45 @@
+/* The dock: the panel's two halves.
+ *
+ * A server and a tunnel are different kinds of thing, and until now one of them
+ * lived in the menu — which is where settings go, not where a section of the
+ * product goes. Two segments under the header say what the panel is: servers on
+ * one side, tunnels on the other.
+ *
+ * It sits under the server strip, because the strip is about this machine and
+ * everything below the dock is about what runs on it — the divide the dock
+ * marks is the same one the page already has.
+ *
+ * Centred: four segments left-aligned under a full-width strip read as the
+ * start of the content rather than as navigation for all of it.
+ */
+
+.panel .dockZ{display:flex;justify-content:center;padding:18px 0 6px}
+.panel .dock{display:inline-flex;gap:3px;padding:3px;border-radius:13px;
+  border:1px solid var(--ln);background:var(--s2)}
+
+.panel .dock button{font:inherit;display:inline-flex;align-items:center;gap:8px;
+  font-size:12.5px;font-weight:590;letter-spacing:-.012em;
+  padding:8px 14px;border-radius:10px;border:0;background:transparent;color:var(--mu);
+  cursor:pointer;transition:background .2s ease,color .2s ease}
+.panel .dock button:hover{color:var(--tx2)}
+.panel .dock button.on{background:var(--tx);color:var(--bg)}
+
+.panel .dock svg{width:15px;height:15px;flex:none}
+.panel .dock .n{font-size:10.5px;font-weight:620;padding:1px 7px;border-radius:7px;
+  background:var(--sunk);color:var(--mu);font-variant-numeric:tabular-nums}
+.panel .dock button.on .n{background:color-mix(in srgb,var(--bg) 22%,transparent);color:var(--bg)}
+.panel .dock .n:empty{display:none}
+
+/* On a narrow screen the two fill the width rather than huddling on the left:
+   a segmented control that reaches both edges is one you can hit with a thumb. */
+/* Four segments do not fit a phone at this size, so the labels go and the
+   icons carry it — with the current one keeping its word, because an icon row
+   with nothing named is a row you have to learn. */
+@container pg (max-width:720px){
+  .panel .dockZ{padding:14px 0 4px}
+  .panel .dock{display:flex;width:100%}
+  .panel .dock button{flex:1;justify-content:center;padding:8px 10px}
+  .panel .dock button:not(.on) span:not(.n){position:absolute;width:1px;height:1px;
+    overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .panel .dock button:not(.on) .n{display:none}
+}

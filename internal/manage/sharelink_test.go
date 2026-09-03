@@ -250,3 +250,26 @@ func TestTheSuggestedNameNamesTheOtherSide(t *testing.T) {
 		t.Errorf("a link with no name suggested %q", got)
 	}
 }
+
+// A spoof tunnel on its defaults still has to tell the other side where the
+// packets really come from.
+//
+// The far end cannot learn it: every packet it receives carries a forged
+// source, and the engine refuses to start without the address. It used to be
+// carried only when some spoof tuning had also been set, so the ordinary case —
+// pick the carrier, accept the defaults — produced a link that built one end
+// and could never build the other.
+func TestASpoofLinkCarriesTheRealAddressEvenWithNoTuning(t *testing.T) {
+	l := ShareLink{
+		Name: "sp", Kind: "direct", From: "iran", Tr: "spoof",
+		Host: "198.51.100.5", Port: "9000", Tok: "tok",
+		LocalIP: "10.0.0.1", PeerIP: "10.0.0.2",
+	}
+	f := MirrorForPeer(l)
+	if f.SpoofPeerIP != "198.51.100.5" {
+		t.Errorf("SpoofPeerIP = %q, want the producer's real address", f.SpoofPeerIP)
+	}
+	if f.ToNewDirectTunnel().SpoofPeerIP != "198.51.100.5" {
+		t.Error("the setup form built from the mirror drops the address again")
+	}
+}

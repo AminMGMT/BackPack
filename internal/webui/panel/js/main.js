@@ -7,6 +7,7 @@ import * as router from './router.js';
 import { renderMenu, toggleMenu, closeMenu, menuOpen } from './ui/menu.js';
 import { toast } from './ui/toast.js';
 import { dashboard } from './views/dashboard.js';
+import { overview } from './views/overview.js';
 import { logsView } from './views/logs.js';
 import { metricsView } from './views/metrics.js';
 import { historyView } from './views/history.js';
@@ -14,11 +15,14 @@ import { linkTestView } from './views/linktest.js';
 import { editView } from './views/edit.js';
 import { addView } from './views/add.js';
 import { settingsView } from './views/settings.js';
+import { serversView } from './views/servers.js';
+import { speedtestView } from './views/speedtest.js';
 import { maintView, undoView } from './views/maint.js';
 import { alertsView, healthView, speedView } from './views/monitor.js';
 import { starView, supportView } from './views/support.js';
 import { closeScreen } from './ui/screen.js';
-import { MOCK } from './api.js';
+import { mountStrip } from './ui/strip.js';
+import * as api from './api.js';
 
 /* ---- appearance ----------------------------------------------------------
    Two choices, both remembered: the ground (dark or light) and the accent. The
@@ -86,15 +90,32 @@ function paintHeader(state) {
 }
 
 /* ---- routes -------------------------------------------------------------- */
-router.route('/', dashboard);
+/* The four sections. Each renders into #view; the strip above them is chrome
+   and belongs to no section. */
+router.route('/', overview);
+router.route('/tunnels', dashboard);
+router.route('/servers', serversView);
+router.route('/speedtest', speedtestView);
 
 /* A screen that opens over the fleet keeps the fleet underneath: the route
    renders the dashboard first, then puts the dialog on top of it, so closing
    the dialog lands back on the cards rather than on an empty page. */
-function over(view) {
+function over(view, under = dashboard) {
   return ctx => {
-    dashboard({ setTeardown: () => {} });
-    view(ctx);
+    /* Both halves are torn down, and that is the whole point of this.
+     *
+     * The page underneath subscribes to the store, and the subscription used to
+     * be dropped on the floor here — so opening any dialog left a second view
+     * alive, repainting #view on every poll for the rest of the session. It was
+     * invisible while every route drew the same page underneath. With sections
+     * it is not: you open Add tunnel, go to Servers, and a few seconds later
+     * the poll puts the tunnels back over the top of it.
+     */
+    let underDown = () => {};
+    let viewDown = () => {};
+    under({ setTeardown: fn => { if (fn) underDown = fn; } });
+    view({ ...ctx, setTeardown: fn => { if (fn) viewDown = fn; } });
+    ctx.setTeardown(() => { viewDown(); underDown(); });
   };
 }
 router.route('/t/:name/logs',    over(logsView));
@@ -106,7 +127,8 @@ router.route('/t/:name/edit',    over(editView));
 router.route('/t/:name/undo',    over(undoView));
 
 router.route('/add',         over(addView));
-router.route('/settings',    over(settingsView));
+router.route('/settings',    over(settingsView, overview));
+
 router.route('/alerts',      over(alertsView));
 router.route('/health',      over(healthView));
 router.route('/maintenance', over(maintView));
@@ -210,10 +232,45 @@ document.addEventListener('DOMContentLoaded', () => {
     if (menuOpen()) { closeMenu(); $('#menu-btn')?.focus(); }
   });
 
-  router.start(() => { closeMenu(); closeScreen(); });
+  /* The dock. Only the two sections light it up: a dialog opened over one of
+     them — Add tunnel, Settings — leaves the section underneath marked, because
+     that is still where you are. */
+  bind('#dock', 'click', ev => {
+    const b = ev.target.closest('[data-dock]');
+    if (b) router.go(b.dataset.dock);
+  });
+  const paintDock = path => {
+    /* A dialog opened over a section leaves that section marked, because it is
+       still where you are — except Settings, which the dock offers itself. */
+    const at = ['/servers', '/tunnels', '/speedtest', '/settings'].find(p => path.startsWith(p))
+      || (path.startsWith('/t/') ? '/tunnels' : '/');
+    document.querySelectorAll('#dock [data-dock]').forEach(b => {
+      const on = b.dataset.dock === at;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+  };
+  store.subscribe(state => {
+    const n = $('#dock-t');
+    if (n) n.textContent = state.tunnels?.length ? String(state.tunnels.length) : '';
+  });
+
+  /* The other half of the dock. The tunnels are already in the store; the fleet
+     is not, and asking for it once here is what stops the badge reading as
+     "no servers" until you happen to open the section. It is deliberately not
+     polled: a count that is one page-load stale is not worth a request every
+     few seconds, and the section itself is live while you are on it. */
+  api.nodes()
+    .then(state => {
+      const n = $('#dock-s');
+      if (n) n.textContent = state.nodes?.length ? String(state.nodes.length) : '';
+    })
+    .catch(() => { /* the badge simply stays empty */ });
+
+  mountStrip();
+  router.start(path => { closeMenu(); closeScreen(); paintDock(path); });
 
   /* ?wide=0 goes back to the auto-filling square card, for comparison. */
   if (new URLSearchParams(location.search).get('wide') === '0') document.body.classList.remove('wide');
 
-  if (MOCK) document.body.append(el('div', { class: 'mock-flag', text: 'mock data' }));
 });

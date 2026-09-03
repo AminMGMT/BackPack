@@ -10,6 +10,7 @@
  */
 
 import { $$ } from '../lib/dom.js';
+import { isUp } from '../lib/tstate.js';
 import { bytes, speed, ago, kindLabel, flag } from '../lib/format.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
@@ -33,7 +34,7 @@ function values(t) {
     'Transport': (t.carrier || t.transport || '').toUpperCase(),
 
     'Peer': t.addr || '—',
-    'Control channel': t.state === 'running' ? 'Held' : 'Not held',
+    'Control channel': isUp(t) ? 'Held' : 'Not held',
     'Snapshot taken': last ? ago(last.t) : '—',
     'Role': t.role === 'client' ? 'Client — dials out' : 'Server — waits to be dialled',
 

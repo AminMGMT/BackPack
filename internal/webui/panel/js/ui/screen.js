@@ -61,6 +61,12 @@ export async function openScreen(name, { pick = '.dlg', bind } = {}) {
   const holder = el('div', { html });
   const node = holder.querySelector(pick) || holder.firstElementChild;
   if (!node) throw new Error(`screen ${name}: nothing matched ${pick}`);
+  /* Several previews drew more than one dialog in one file and left all but the
+     first `hidden`, which is how they showed one at a time on a static page.
+     Picking one here is the decision to show it, so the attribute goes: without
+     this, Support and Undo were built, wired and appended to a page that then
+     refused to draw them. */
+  node.hidden = false;
 
   const scrim = el('div', { class: 'scrim' }, el('div', { class: 'veil' }));
   scrim.append(node);
@@ -168,7 +174,18 @@ export function closeScreen() {
   document.removeEventListener('keydown', onKey);
   scrim.classList.remove('on');
   document.body.classList.remove('modal');
-  setTimeout(() => { scrim.remove(); dropCSS(); }, 320);
+  /* The sheet is dropped only if nothing has opened in the meantime.
+   *
+   * Going from one screen straight to another is the common case — Health to
+   * Support, Maintenance to Undo — and the next screen attaches its stylesheet
+   * within a few milliseconds, well inside this delay. Dropping unconditionally
+   * therefore tore the sheet out from under the screen that had just opened,
+   * and since each screen's CSS is what gives .scrim and .dlg their layout, the
+   * result was a dialog present in the page with no size and nothing visible. */
+  setTimeout(() => {
+    scrim.remove();
+    if (!active) dropCSS();
+  }, 320);
 }
 
 export const screenOpen = () => !!active;

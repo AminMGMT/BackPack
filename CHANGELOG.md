@@ -40,6 +40,45 @@ just unit tested.
 
 ### Added
 
+- **Managed servers.** A foreign server can register itself with a panel and be
+  configured from it, so a tunnel is set up in one place instead of twice. On
+  the panel: **Servers** → turn the listener on, name the server, copy the line
+  it produces. That line **installs Backpack and enrols the server in one go** —
+  `bash <(curl -fsSL .../install.sh) node --panel <ip>:<port> --key <key>` — so
+  a bare VPS is one paste rather than two steps in an order that has to be got
+  right. The installer validates the arguments before it downloads anything, and
+  a server that already has Backpack can use the short `backpack node setup …`
+  form the panel keeps one click away. After that **Add
+  tunnel** offers it under *The other server*, and Create builds both ends —
+  every transport and carrier, reverse or direct. Editing sends the complete
+  state the tunnel should be in, so a changed MTU or transport rewrites the
+  config on the far server too, with the same write-restart-and-roll-back
+  protection a local edit has always had. An edit that cannot reach the server
+  is reported as exactly that — this end changed, that one did not, and which
+  one is behind — rather than as plain success. Deleting a tunnel removes it
+  here only; the panel names the server that still has it. The CLI menu warns
+  before editing a paired tunnel, because that process has no channel to the
+  node and the change would not travel.
+
+  The panel is **never given a login** for the machine. The command installs a
+  local service that holds the privilege; what crosses the wire is a request to
+  perform one of four operations — apply, list, status, restart — and the node
+  refuses anything else. There is deliberately no operation that runs a command,
+  reads a file, or removes a tunnel. The server dials the panel rather than the
+  reverse, so it opens no inbound port of its own, and the channel is a Noise
+  `NNpsk0` session with no fingerprint to match on. Setup keys are single-use
+  and expire in a day; each server's own credential is issued at enrolment and
+  revoked by **Remove**, which leaves its tunnels running. The channel is
+  independent of the tunnels, so a tunnel that is down does not take away the
+  way to fix it. A speed test on a tunnel whose far end is managed now starts
+  the receiver there itself — it was the last step that still needed somebody
+  on the other machine — and that sink closes itself when the run is over. A tunnel's
+  card drives both ends too: start, stop and restart reach the managed server,
+  because a tunnel in two places has one state and an end stopped on its own
+  just leaves the other half dialling. Delete stays local by design. **New panel only.** See
+  [docs/managed-servers.md](docs/managed-servers.md).
+
+
 - **Error correction on the direct tunnel.** For every `fec_data` datagrams the
   tunnel sends `fec_parity` spare ones, and any `fec_parity` of a group may be
   lost without loss — redundancy, never retransmission, which is the only thing
@@ -77,6 +116,14 @@ just unit tested.
   and the wizard offers to relax it after a spoof setup.
 
 ### Fixed
+
+- **The setup link was only offered on reverse tunnels.** The box that takes a
+  link from the other server sat inside the reverse half of the setup form, so
+  on a direct tunnel — which is what the wizard builds — it was never on screen,
+  and the paired values had to be retyped after all. It now sits above the
+  split, where it applies to both. The decoder always handled either kind; only
+  the box was unreachable. *(New panel.)*
+
 
 - **The icmp spoof profile silenced ICMP on the tunnel itself.** To stop the
   kernel answering the forged echo requests — a wasted reply per data packet, on

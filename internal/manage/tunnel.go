@@ -85,6 +85,11 @@ func Delete(name string) error {
 	removeUnit(name)
 	os.Remove(app.ConfigPath(name))
 	deleteTunnelMeta(name)
+	// The other end, if it was on a managed server, is left running there —
+	// there is deliberately no operation that removes a tunnel on a node, and a
+	// delete on this machine is not consent to one on another. What goes is
+	// only the record that the two were a pair.
+	_ = ForgetNodePair(name)
 	return DaemonReload()
 }
 

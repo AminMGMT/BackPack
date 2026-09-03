@@ -34,6 +34,9 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 
 ### Monitoring
 - [Web panel](web-panel.md)
+- [Managed servers (nodes)](managed-servers.md) — register a foreign server with
+  the panel once, then build both ends of a tunnel from one screen, with no SSH
+  and no login held for that machine
 - [Telegram bot](telegram-bot.md)
 - [Alerts](alerts.md)
 - [Tunnel Metrics](tunnel-metrics.md)

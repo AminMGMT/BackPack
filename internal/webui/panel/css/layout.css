@@ -3,7 +3,6 @@
  * off, not a re-drawing of it. Class names are kept so the markup matches.
  */
 
-
 /* ===================== dashboard shell ===================== */
 .page{max-width:1300px;margin:0 auto;padding:0 clamp(14px,3vw,26px) 70px}
 
@@ -96,7 +95,6 @@
 .empty b{display:block;font-size:14.5px;font-weight:620;letter-spacing:-.02em;margin-bottom:6px}
 .empty span{display:block;font-size:12.5px;color:var(--dim);line-height:1.6;max-width:52ch;margin:0 auto 16px}
 
-
 /* ---------- the whole page reacts, not just the header ---------- */
 .page2{container-type:inline-size;container-name:pg;max-width:1300px;margin:0 auto;
   padding:0 clamp(12px,3vw,26px) 70px}
@@ -148,7 +146,6 @@
 [data-state="empty"] #grid{display:none}
 [data-state="normal"] .emptybox{display:none}
 [data-state="warn"] .emptybox{display:none}
-
 
 /* ---- the page shell the preview wrapped everything in ---- */
 
@@ -231,11 +228,6 @@
 /* the theme button borrows the palette chip's shape */
 .HH .pal2{border:1px solid var(--ln);background:var(--s1);color:var(--mu);cursor:pointer}
 .HH .pal2:hover{background:var(--sunk);color:var(--tx)}
-
-/* says out loud that nothing here came from a server */
-.mock-flag{position:fixed;left:14px;bottom:14px;z-index:120;font-size:10px;font-weight:660;
-  letter-spacing:.08em;text-transform:uppercase;color:var(--dim);background:var(--s1);
-  border:1px dashed var(--ln2);border-radius:9px;padding:5px 9px;pointer-events:none}
 
 /* The two rates get the strip treatment, side by side. */
 .panel .RZ.rates { margin-top: 9px; grid-template-columns: repeat(2, 1fr); }

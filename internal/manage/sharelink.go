@@ -291,7 +291,12 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		paired = append(paired, "mss")
 	}
 
-	if l.Profile != "" || l.Uplink != "" || l.Downlink != "" || l.SrcIPs != "" {
+	// The carrier decides this, not the tuning. Keying it on a profile or a
+	// forged-source list meant a spoof tunnel left on its defaults carried none
+	// of this across — including the producer's real address, which the
+	// listening side cannot work out for itself and refuses to start without.
+	// So a spoof tunnel built from the panel could never have its far end made.
+	if l.Tr == "spoof" || l.Profile != "" || l.Uplink != "" || l.Downlink != "" || l.SrcIPs != "" {
 		sp := &SpoofTune{
 			Profile:   l.Profile,
 			Uplink:    l.Uplink,
@@ -388,7 +393,7 @@ func ShareLinkFor(name, host string) (string, error) {
 		}
 		l.Tok = cfg.L3.Token
 		l.Tr = orDefault(cfg.L3.Carrier, "udp")
-		l.Encap = orDefault(cfg.L3.Encap, "ipip")
+		l.Encap = "gre"
 		l.Port = addrPort(cfg.L3.Addr)
 		l.Preset = cfg.L3.Preset
 		l.Ports = strings.Join(cfg.L3.Ports, ", ")

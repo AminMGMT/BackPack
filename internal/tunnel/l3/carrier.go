@@ -121,13 +121,23 @@ const (
 	CarrierPck   = "pck"
 	CarrierXdi   = "xdi"
 	CarrierSpoof = "spoof"
+	// CarrierQuic is a real QUIC connection carrying the tunnel in DATAGRAM
+	// frames — unreliable, so it is a carrier and not a transport. See
+	// carrier_quic.go.
+	CarrierQuic = "quic"
 )
+
+// KnownCarrier reports whether a carrier name is one this engine can open.
+//
+// Exported so the screens that offer carriers can be checked against the engine
+// that has to open them, rather than against a second list written by hand.
+func KnownCarrier(name string) bool { return knownCarrier(name) }
 
 // knownCarrier reports whether a name can be opened, so a configuration can be
 // refused before anything is created rather than after.
 func knownCarrier(name string) bool {
 	switch name {
-	case CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof:
+	case CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic:
 		return true
 	}
 	return false
@@ -164,12 +174,14 @@ func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 		return openXdi(cfg)
 	case CarrierSpoof:
 		return openSpoof(cfg)
+	case CarrierQuic:
+		return openQuic(cfg)
 	default:
 		// Refusing by name is better than accepting one and quietly running it
 		// over UDP, which would look like it worked until the path filtered it.
 		return nil, nil, fmt.Errorf(
-			"l3: carrier %q is not available (have %q, %q, %q, %q)",
-			cfg.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof)
+			"l3: carrier %q is not available (have %q, %q, %q, %q, %q)",
+			cfg.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic)
 	}
 }
 

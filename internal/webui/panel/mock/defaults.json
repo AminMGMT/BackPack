@@ -1,6 +1,0 @@
-{
-  "tunnelPort": 8443,
-  "preset": "turbo",
-  "maxConnections": 256,
-  "bandwidthMbps": 100
-}

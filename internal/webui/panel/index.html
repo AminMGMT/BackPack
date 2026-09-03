@@ -13,6 +13,10 @@
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/layout.css">
 <link rel="stylesheet" href="css/components/header.css">
+<link rel="stylesheet" href="css/components/dock.css">
+<link rel="stylesheet" href="css/components/servers.css">
+<link rel="stylesheet" href="css/screens/overview.css">
+<link rel="stylesheet" href="css/screens/speedtest.css">
 <link rel="stylesheet" href="css/components/resources.css">
 <link rel="stylesheet" href="css/components/card.css">
 <link rel="stylesheet" href="css/wide.css">
@@ -90,6 +94,34 @@
               tunnel that drops will not be restarted and no alert will reach you.</span>
       </div>
       <button class="act">Start it</button>
+    </div>
+
+    <!-- This machine, on every section. See js/ui/strip.js. -->
+    <div id="strip"></div>
+
+    <div class="dockZ">
+      <div class="dock" id="dock" role="tablist" aria-label="Sections">
+        <button data-dock="/" role="tab" aria-selected="true">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
+          <span>Overview</span><span class="n" id="dock-o"></span>
+        </button>
+        <button data-dock="/servers" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 17.5h.01"/></svg>
+          <span>Servers</span><span class="n" id="dock-s"></span>
+        </button>
+        <button data-dock="/tunnels" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><path d="M4 12h4l3-7 3 14 3-7h3"/></svg>
+          <span>Tunnels</span><span class="n" id="dock-t"></span>
+        </button>
+        <button data-dock="/speedtest" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 118-8"/><path d="M12 12l5-3"/><circle cx="12" cy="12" r="1.3"/></svg>
+          <span>Speedtest</span>
+        </button>
+        <button data-dock="/settings" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1 1.55V21a2 2 0 11-4 0v-.09A1.7 1.7 0 009 19.4a1.7 1.7 0 00-1.87.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09A1.7 1.7 0 004.6 9a1.7 1.7 0 00-.33-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.7 1.7 0 0019.4 9v0a1.7 1.7 0 001.55 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.55 1z"/></svg>
+          <span>Settings</span>
+        </button>
+      </div>
     </div>
 
     <div id="view"></div>

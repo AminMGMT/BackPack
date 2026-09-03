@@ -119,3 +119,21 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .ed .bt:disabled{opacity:.4;cursor:default}
 .ed .anim{opacity:0}
 .cell.open .ed .eh{position:relative;z-index:2}
+
+/* The switches and menus were drawn as divs and are controls now.
+ *
+ * The .sww face already existed in the preview; what it never had was a state
+ * that meant anything. .selmenu is new — the list a .sel opens, positioned
+ * against the control so it travels with the drawer it sits in.
+ */
+.dlg .sww{cursor:pointer}
+.dlg .sel{position:relative;cursor:pointer}
+.dlg .sel.open{border-color:var(--ln3)}
+.dlg .selmenu{position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:30;
+  display:grid;gap:1px;padding:4px;border-radius:11px;border:1px solid var(--ln2);
+  background:var(--s1);box-shadow:var(--lift);max-height:220px;overflow-y:auto}
+.dlg .selopt{font:inherit;text-align:left;font-size:12.5px;padding:8px 10px;border:0;
+  border-radius:8px;background:transparent;color:var(--tx2);cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  transition:background .16s ease,color .16s ease}
+.dlg .selopt:hover{background:var(--sunk);color:var(--tx)}

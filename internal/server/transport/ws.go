@@ -622,10 +622,10 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 					s.logger.Warn("channel is full, cannot request a new connection")
 				}
 
-				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
+				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 
 			default: // channel is full, discard the connection
-				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

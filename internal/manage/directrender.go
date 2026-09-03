@@ -211,7 +211,10 @@ func (s l3Spec) render() string {
 	// Written out even when it is the default, because the two ends have to
 	// agree on it and a key that is only implied is one an operator cannot
 	// check against the other machine's file.
-	writeKV(&b, "encap", quote(orDefault(s.Encap, "ipip")))
+	// One encapsulation, written plainly rather than defaulted: a file that
+	// says what it does is a file the next reader does not have to know the
+	// defaults of.
+	writeKV(&b, "encap", quote("gre"))
 	if s.GREKey != 0 {
 		writeKV(&b, "gre_key", fmt.Sprint(s.GREKey))
 	}
@@ -468,7 +471,7 @@ func l3EncapLabel(l config.L3Config) string {
 	// framing carried inside an encrypted session, which is a different thing
 	// with the same header. Saying so everywhere costs eight characters and
 	// stops the two being confused.
-	label := strings.ToUpper(orDefault(l.Encap, "ipip")) + " + Noise"
+	label := "GRE + Noise"
 	if l.GREKey != 0 {
 		label += fmt.Sprintf(" (key %d)", l.GREKey)
 	}

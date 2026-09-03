@@ -100,10 +100,42 @@ func RunWatchdog(ctx context.Context) {
 					restarts[t.Name] = recentRestarts(restarts[t.Name], now)
 					reportRestart(t.Name, restarts[t.Name], lastFlapReport, now)
 					fails[t.Name] = 0
+					// And whether it worked. Saying only that a restart
+					// happened leaves the operator with the half of the story
+					// that worries them and none of the half that would settle
+					// it — "it went down" with nothing after it is the most
+					// reported complaint about these messages.
+					go reportRecovery(t)
 				}
 			}
 		}
 	}
+}
+
+// recoveryWait is how long a restarted tunnel is given to reconnect before the
+// watchdog says whether it did. Long enough for a control channel to be dialled
+// and established on a slow path, short enough that the answer still arrives
+// while anyone is looking.
+const recoveryWait = 45 * time.Second
+
+// reportRecovery follows a watchdog restart with what came of it.
+//
+// It runs in its own goroutine so the watchdog's own cadence is untouched: this
+// waits, and the loop it was started from must not.
+func reportRecovery(t Tunnel) {
+	deadline := time.Now().Add(recoveryWait)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		if !IsActive(t.Service) {
+			continue
+		}
+		if tunnelHealthy(t, establishedPairs()) {
+			alerthist.RecordEvent("🟢 Tunnel " + t.Name + " is carrying traffic again after the restart")
+			return
+		}
+	}
+	alerthist.RecordEvent("🔴 Tunnel " + t.Name + " did not come back after the restart — " +
+		"it is running but still not connected")
 }
 
 // engineSaysConnected asks the tunnel's own engine whether it holds a control

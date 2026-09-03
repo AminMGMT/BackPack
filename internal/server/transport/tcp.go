@@ -539,7 +539,7 @@ func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
 	select {
 	case g.tunnelChannel <- conn:
 	default: // The channel is full, do nothing
-		s.logger.Warnf("tunnel listener channel is full, discarding TCP connection from %s", conn.LocalAddr().String())
+		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.LocalAddr().String())
 		conn.Close()
 	}
 }
@@ -718,10 +718,10 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 					s.logger.Warn("channel is full, cannot request a new connection")
 				}
 
-				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
+				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 
 			default: // channel is full, discard the connection
-				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

@@ -31,6 +31,14 @@ var logger = utils.NewLogger("info")
 //   - Menu mode:    `backpack`  (no arguments)
 //     Opens the interactive management CLI on the VPS.
 func main() {
+	// Handled before the flags, because it is a subcommand with flags of its
+	// own: `backpack node setup --panel ... --key ...`. The flag package would
+	// stop at "node" and report the rest as unknown.
+	if len(os.Args) > 1 && os.Args[1] == "node" {
+		runNode(os.Args[2:])
+		return
+	}
+
 	configPath := flag.String("c", "", "path to a tunnel configuration file (TOML) — runs in engine mode")
 	showVersion := flag.Bool("v", false, "print the version and exit")
 	restartAll := flag.Bool("restart-all", false, "restart every configured tunnel and exit (used by the auto-refresh job)")

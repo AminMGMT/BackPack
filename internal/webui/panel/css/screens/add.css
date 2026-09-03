@@ -363,6 +363,23 @@ body[data-t="light"]{
 .dlg.add input[type=text],.dlg.add .sel4{width:100%;background:var(--field);border:1px solid var(--ln);
   border-radius:10px;padding:9px 11px;font:inherit;font-size:12.5px;color:var(--tx);outline:0;
   transition:border-color .22s ease}
+/* A native select brings the operating system's own menu with it — a grey
+   Chrome dropdown in the middle of a form that has none of that anywhere else.
+   It is dressed as the panel's other fields, with the arrow drawn rather than
+   inherited, and the menu itself given the panel's ground so the list matches
+   the control that opens it. */
+.dlg.add select{width:100%;background:var(--field);border:1px solid var(--ln);
+  border-radius:10px;padding:9px 32px 9px 11px;font:inherit;font-size:12.5px;color:var(--tx);
+  outline:0;cursor:pointer;appearance:none;-webkit-appearance:none;
+  transition:border-color .22s ease;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e8e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;background-size:13px}
+.dlg.add select:hover{border-color:var(--ln2)}
+.dlg.add select:focus{border-color:var(--ln3)}
+.dlg.add select option{background:var(--s1);color:var(--tx)}
+body[data-t="light"] .dlg.add select{
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b6b6b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")}
+
 .dlg.add input:hover,.dlg.add .sel4:hover{border-color:var(--ln2)}
 .dlg.add input:focus{border-color:var(--ln3)}
 .dlg.add input.bad{border-color:color-mix(in srgb,var(--er) 55%,transparent)}
@@ -590,3 +607,35 @@ svg.x{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke
   .dlg.add .conn2 .spin svg{animation:none}
   .dlg.add .fadein{animation:none}
 }
+
+
+/* Held back until the wizard knows its own shape.
+ *
+ * Whether this panel manages any servers decides how many steps there are and
+ * what the first one is, and that answer arrives just after the dialog opens.
+ * Hiding it from JavaScript was a frame too late — the markup is on screen
+ * before the view runs, so the old first step showed and then rearranged
+ * itself under the operator. Hidden here, revealed by the view. */
+.dlg.add .steps,
+.dlg.add .body5{visibility:hidden}
+.dlg.add.ready .steps,
+.dlg.add.ready .body5{visibility:visible}
+
+/* The drawer menus.
+ *
+ * .sel4 was drawn as a select and was never one; this is the list it opens. It
+ * is positioned against the control rather than the page so it travels with the
+ * drawer it belongs to, and it scrolls once there are more interfaces than fit.
+ */
+.dlg.add .sel4{position:relative}
+.dlg.add .sel4.open4{border-color:var(--ln3)}
+.dlg.add .sel4menu{position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:20;
+  display:grid;gap:1px;padding:4px;border-radius:11px;border:1px solid var(--ln2);
+  background:var(--s1);box-shadow:var(--lift);max-height:230px;overflow-y:auto}
+.dlg.add .sel4opt{font:inherit;text-align:left;font-size:12.5px;padding:8px 10px;border:0;
+  border-radius:8px;background:transparent;color:var(--tx2);cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  transition:background .16s ease,color .16s ease}
+.dlg.add .sel4opt:hover{background:var(--sunk);color:var(--tx)}
+.dlg.add .sel4 .cv2,.dlg.add .sel4 svg{transition:transform .22s var(--spring)}
+.dlg.add .sel4.open4 svg{transform:rotate(180deg)}

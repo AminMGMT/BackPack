@@ -2,9 +2,8 @@
  *
  * The hash is used rather than the History API because the panel is served by
  * a Go mux that knows nothing about client-side paths: a deep link to
- * /panel/t/fr-relay would 404 on reload, and the fix is a catch-all rewrite
- * that the mock preview (a plain static server, or a file:// open) cannot
- * provide either. #/t/fr-relay reloads correctly everywhere.
+ * /panel/t/fr-relay would 404 on reload, and the fix is a catch-all rewrite.
+ * #/t/fr-relay reloads correctly everywhere.
  *
  * Routes are patterns with :params — "#/t/:name/logs" — matched in order.
  */

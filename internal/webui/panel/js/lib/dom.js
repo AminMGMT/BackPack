@@ -36,12 +36,30 @@ export function clear(node) { while (node.firstChild) node.removeChild(node.firs
 
 /* One delegated listener instead of one per row: the rows are replaced on every
    poll, and listeners bound to them would be rebound just as often. */
+/* Returns a disposer. #view outlives every view rendered into it, so a
+ * delegated listener left on it survives the view that added it: come back to a
+ * screen five times and the fifth click on one of its buttons fires five times.
+ * The caller is expected to call this from its teardown. */
 export function delegate(root, event, selector, handler) {
-  root.addEventListener(event, ev => {
+  const onEvent = ev => {
     const hit = ev.target.closest(selector);
     if (hit && root.contains(hit)) handler(ev, hit);
-  });
+  };
+  root.addEventListener(event, onEvent);
+  return () => root.removeEventListener(event, onEvent);
 }
 
 export const reduceMotion = () =>
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* The preview drew every dialog's subtitle with its own server's name and its
+ * own version — "ubuntu-4gb-nbg1-2 · v1.7.5" — and a screen that does not
+ * overwrite it shows the operator somebody else's machine. `tail` is whatever
+ * the screen wants to add after the host.
+ */
+export function dialogSubtitle(root, stats, tail) {
+  const el = root.querySelector('.dh .ttl small');
+  if (!el) return;
+  const parts = [(stats && stats.hostname) || '', tail].filter(Boolean);
+  el.textContent = parts.join(' · ') || '—';
+}

@@ -104,16 +104,48 @@ export async function logsView(ctx) {
         render(box, lines, level);
       }));
 
+      /* Three buttons share the .tool class, and only the first was bound.
+       *
+       * querySelector takes one, so Pause was wired to the copy handler and the
+       * other two to nothing: pressing Pause copied the log, Copy for report did
+       * nothing at all, and Download raised a toast naming a file from the
+       * preview that was never written. They are bound by what they are now.
+       */
       const liveBtn = root.querySelector('.live');
-      liveBtn?.addEventListener('click', () => {
-        follow = !follow;
-        liveBtn.classList.toggle('on', follow);
-      });
+      const pauseBtn = root.querySelector('#pauseBtn');
+      const setFollow = on => {
+        follow = on;
+        liveBtn?.classList.toggle('on', follow);
+        if (pauseBtn) {
+          pauseBtn.lastChild.textContent = follow ? ' Pause' : ' Resume';
+          pauseBtn.classList.toggle('on', !follow);
+        }
+      };
+      setFollow(follow);
+      liveBtn?.addEventListener('click', () => setFollow(!follow));
+      pauseBtn?.addEventListener('click', () => setFollow(!follow));
 
-      root.querySelector('.tool')?.addEventListener('click', async () => {
+      const copyLog = async () => {
         const text = lines.join('\n');
         try { await navigator.clipboard.writeText(text); toast('Log copied.'); }
         catch (e) { toast('This browser will not let the page read the clipboard.', true); }
+      };
+      const tools = $$('.tool', root);
+      (root.querySelector('#copyBtn')
+        || tools.find(b => /copy/i.test(b.textContent)))?.addEventListener('click', copyLog);
+
+      /* Saved from what is on screen rather than fetched again: the lines here
+         are the ones the operator is looking at, filter and all. */
+      tools.find(b => /download/i.test(b.textContent))?.addEventListener('click', () => {
+        const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `backpack-${name}-${new Date().toISOString().slice(0, 10)}.log`;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       });
 
       const diagBox = root.querySelector('.diag');

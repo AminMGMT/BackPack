@@ -220,7 +220,14 @@ func CheckUpdate() (bool, string, error) {
 		return false, "", err
 	}
 	if !newerVersion(tag, app.Version) {
-		return false, fmt.Sprintf("Already up to date (%s, latest release %s).", app.Version, tag), nil
+		// Naming both reads as a contradiction when this build is ahead of the
+		// last published release — "up to date (v1.7.6, latest release v1.7.5)"
+		// makes an operator look twice at a machine that is fine.
+		if tag != "" && tag != app.Version {
+			return false, fmt.Sprintf("Already up to date — %s is newer than the latest release (%s).",
+				app.Version, tag), nil
+		}
+		return false, fmt.Sprintf("Already up to date (%s).", app.Version), nil
 	}
 	return true, fmt.Sprintf("Version %s is available (current %s).", tag, app.Version), nil
 }

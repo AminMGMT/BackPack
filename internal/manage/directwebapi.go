@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
@@ -104,9 +105,32 @@ func DirectCarriers() []map[string]string {
 			"desc": "looks like an ordinary TCP flow, but with no socket the firewall can touch"},
 		{"value": "udp", "label": "UDP",
 			"desc": "plain and simple — use it where the path does not interfere"},
+		{"value": "quic", "label": "QUIC",
+			"desc": "a real QUIC session on UDP — indistinguishable from HTTP/3, and needs no root"},
 		{"value": "spoof", "label": "Spoof",
 			"desc": "raw packets with a forged source address — needs testing on your route"},
+		{"value": "xdi", "label": "ICMP",
+			"desc": "inside ping, for a path that filters UDP and TCP but lets ping through"},
 	}
+}
+
+// carrierNames is DirectCarriers reduced to the values, in the same order.
+func carrierNames() []string {
+	out := make([]string, 0, len(DirectCarriers()))
+	for _, c := range DirectCarriers() {
+		out = append(out, c["value"])
+	}
+	return out
+}
+
+// offeredCarrier reports whether a carrier is one the screens offer.
+func offeredCarrier(name string) bool {
+	for _, c := range DirectCarriers() {
+		if c["value"] == name {
+			return true
+		}
+	}
+	return false
 }
 
 // DirectPresets is what the panel offers for tuning, in the same order as the
@@ -146,39 +170,106 @@ func SuggestDirectDefaults(side string) map[string]any {
 // either way, and the usual cause — a port already taken — is fixed by editing
 // the tunnel, not by creating it again.
 func CreateDirectTunnel(n NewDirectTunnel) (service string, active bool, err error) {
-	spec, err := n.spec()
+	name, body, err := directBody(n)
 	if err != nil {
 		return "", false, err
 	}
+	if err := writeDirectConfig(name, body); err != nil {
+		return "", false, err
+	}
+	service = app.ServiceName(name)
+	if err := StartService(service); err != nil {
+		return service, false, err
+	}
+	return service, IsActive(service), nil
+}
 
-	body := spec.render()
+// ApplyDirectTunnel writes the direct tunnel this form describes, whether or
+// not it is already there. It is the direct half of ApplyTunnel; see there for
+// why a managed node has one verb rather than create and edit.
+func ApplyDirectTunnel(n NewDirectTunnel) (service string, active bool, created bool, err error) {
+	name, body, err := directBody(n)
+	if err != nil {
+		return "", false, false, err
+	}
+	path := app.ConfigPath(name)
+	service = app.ServiceName(name)
+
+	if !fileExists(path) {
+		if err := writeDirectConfig(name, body); err != nil {
+			return service, false, true, err
+		}
+		if err := StartService(service); err != nil {
+			return service, false, true, err
+		}
+		return service, IsActive(service), true, nil
+	}
+
+	// Replacing a running tunnel, so the same protection an edit gets on this
+	// machine applies: keep the old file, and put it back if the new one does
+	// not come up. On a node this is the difference between a bad push being an
+	// error message and a bad push being a server that has to be fixed by hand.
+	prev, err := os.ReadFile(path)
+	if err != nil {
+		return service, false, false, fmt.Errorf("could not read the current config: %w", err)
+	}
+	wasActive := IsActive(service)
+
+	if err := writeDirectConfig(name, body); err != nil {
+		_ = os.WriteFile(path, prev, 0644)
+		return service, IsActive(service), false, err
+	}
+	if err := RestartService(service); err != nil {
+		revertSpec(path, prev, service, wasActive)
+		return service, IsActive(service), false,
+			fmt.Errorf("the tunnel failed to restart with the new settings — reverted: %w", err)
+	}
+	if !WaitServiceActive(service, 10*time.Second) {
+		detail := lastLogLine(service)
+		revertSpec(path, prev, service, wasActive)
+		if detail != "" {
+			return service, IsActive(service), false,
+				fmt.Errorf("the tunnel did not come up with the new settings — reverted. Reason: %s", detail)
+		}
+		return service, IsActive(service), false,
+			fmt.Errorf("the tunnel did not come up with the new settings — reverted to the previous config")
+	}
+	recordConfigChange(name, prev, "")
+	return service, IsActive(service), false, nil
+}
+
+// directBody turns a filled form into the name and the config text it
+// describes, writing nothing.
+func directBody(n NewDirectTunnel) (name, body string, err error) {
+	spec, err := n.spec()
+	if err != nil {
+		return "", "", err
+	}
+	body = spec.render()
 	// Parsed before it is written. A config that does not decode would leave a
 	// tunnel that cannot start and an operator with no idea why, and the cost
 	// of checking is one parse of a file we just built.
 	var check config.Config
 	if _, err := toml.Decode(body, &check); err != nil {
-		return "", false, fmt.Errorf("the form produced a config that does not parse: %w", err)
+		return "", "", fmt.Errorf("the form produced a config that does not parse: %w", err)
 	}
+	return spec.Name, body, nil
+}
 
+// writeDirectConfig puts the config and its unit on disk and reloads systemd.
+// It does not start anything.
+func writeDirectConfig(name, body string) error {
 	optimize.ApplyQuiet()
-
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
-		return "", false, err
+		return err
 	}
-	if err := os.WriteFile(app.ConfigPath(spec.Name), []byte(body), 0644); err != nil {
-		return "", false, err
+	if err := os.WriteFile(app.ConfigPath(name), []byte(body), 0644); err != nil {
+		return err
 	}
-	if err := writeUnit(spec.Name); err != nil {
-		return "", false, err
+	if err := writeUnit(name); err != nil {
+		return err
 	}
-	if err := DaemonReload(); err != nil {
-		return "", false, err
-	}
-	service = app.ServiceName(spec.Name)
-	if err := StartService(service); err != nil {
-		return service, false, err
-	}
-	return service, IsActive(service), nil
+	return DaemonReload()
 }
 
 // spec validates a form and turns it into what the renderer takes. Everything
@@ -195,13 +286,17 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 		return l3Spec{}, fmt.Errorf("side must be iran or kharej")
 	}
 
+	// Checked against the one list the screens are built from, not a copy of
+	// it. There were three copies — this one, the panel's and the wizard's —
+	// and adding a carrier to two of them produced a screen that offered
+	// something the form behind it refused by name.
 	carrier := strings.ToLower(strings.TrimSpace(n.Carrier))
-	switch carrier {
-	case "pck", "udp", "spoof":
-	case "":
+	if carrier == "" {
 		carrier = "pck"
-	default:
-		return l3Spec{}, fmt.Errorf("carrier %q is not one the panel offers (pck, udp, spoof)", n.Carrier)
+	}
+	if !offeredCarrier(carrier) {
+		return l3Spec{}, fmt.Errorf("carrier %q is not one the panel offers (%s)",
+			n.Carrier, strings.Join(carrierNames(), ", "))
 	}
 
 	port := strings.TrimSpace(n.TunnelPort)

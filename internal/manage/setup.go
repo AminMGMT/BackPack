@@ -22,11 +22,13 @@ type transportEntry struct {
 // belong to, so the setup menu asks "which kind of connection?" before asking
 // for a specific variant.
 //
-// The Experimental family is deliberately its own thing rather than a variant
-// tucked under another: what it holds is not a flavour of TCP or UDP but a
-// different idea about how to move bytes at all — xDi rides in ICMP, which is
-// neither — and it is where anything else of that sort will go, so it should
-// read as "here be things still being proven", not as a footnote to UDP.
+// There was an Experimental family here, holding xDi and — before it — IP
+// spoofing. Both are direct-tunnel carriers now, for the same reason: a reverse
+// tunnel is a control channel plus a pool of connections, each its own session,
+// and neither carrier gives a receiver anything to tell those sessions apart
+// by. They were offered here long after they had stopped being able to carry
+// traffic in this shape. They are chosen under Direct, where the single session
+// is what they can actually serve.
 var transportGroups = []struct {
 	label, desc string
 	entries     []transportEntry
@@ -47,9 +49,6 @@ var transportGroups = []struct {
 		{"WS Mux", "WebSocket — multiplexed", "wsmux"},
 		{"WSS", "secure WebSocket — TLS encrypted", "wss"},
 		{"WSS Mux", "TLS WebSocket — multiplexed", "wssmux"},
-	}},
-	{"Experimental", "newer ideas, still being proven — not for production yet", []transportEntry{
-		{"xDi (ICMP)", "tunnels inside ping packets, for networks that filter UDP/TCP but not ICMP — Linux, needs root", "xdi"},
 	}},
 }
 

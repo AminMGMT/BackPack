@@ -70,52 +70,39 @@ func TestAnUnknownPanelChoiceLandsOnTheClassicOne(t *testing.T) {
 	}
 }
 
-// The new panel decides between the real API and its fixtures by reading
-// window.__BACKPACK_LIVE__, and the Go handler is the only thing that sets it.
-// If the panel ever renames that flag, every screen a real operator opens would
-// quietly show somebody else's numbers — a panel that looks perfectly healthy
-// and is describing a machine that does not exist. So the two halves are pinned
-// against each other rather than each on its own.
-func TestTheLiveFlagTheHandlerSetsIsTheOneThePanelReads(t *testing.T) {
+// There is one code path and it is the real one.
+//
+// The panel used to carry a second: fixtures under mock/, chosen by a flag the
+// Go handler injected. It was how the screens were drawn before the server
+// existed, and it outlived that twice over — the fixtures were never shipped
+// inside the binary, so `?mock=1` on a real panel fetched files that are not
+// there and drew an empty server over a busy one; and having somewhere for
+// invented numbers to come from is what let so many of them survive on screens
+// that were supposed to have been wired up. This keeps it gone.
+func TestThePanelHasNoSecondSourceOfData(t *testing.T) {
 	loadExperimentalPanel()
 
 	api, err := fs.ReadFile(panelRoot, "js/api.js")
 	if err != nil {
 		t.Fatalf("the panel's api.js is not embedded: %v", err)
 	}
-	if !strings.Contains(string(api), "window.__BACKPACK_LIVE__") {
-		t.Error("api.js no longer reads window.__BACKPACK_LIVE__, so the served panel " +
-			"will fall back to its mock fixtures against a real server")
+	for _, gone := range []string{"__BACKPACK_LIVE__", "MOCK", "mock/"} {
+		if strings.Contains(string(api), gone) {
+			t.Errorf("api.js has grown a second source of data again (%q)", gone)
+		}
 	}
-	if !strings.Contains(liveMarker, "window.__BACKPACK_LIVE__") {
-		t.Error("the marker the handler injects does not set the flag api.js reads")
+	if strings.Contains(string(panelIndex), "__BACKPACK_LIVE__") {
+		t.Error("the served page still injects the mock-mode flag")
 	}
-}
-
-// The marker has to land in the head, ahead of the module that reads it, and
-// exactly once.
-func TestTheLiveMarkerGoesInTheHead(t *testing.T) {
-	page := []byte("<html><head><title>x</title></head><body>b</body></html>")
-	got := string(withLiveMarker(page))
-
-	if strings.Count(got, liveMarker) != 1 {
-		t.Fatalf("the marker appears %d times: %s", strings.Count(got, liveMarker), got)
-	}
-	if strings.Index(got, liveMarker) > strings.Index(got, "</head>") {
-		t.Error("the marker is after the head; the module reads the flag before it is set")
-	}
-
-	// A page with no head at all still has to have the flag set before its
-	// scripts run, so it is prefixed rather than appended.
-	bare := string(withLiveMarker([]byte("<body><script src=x></script></body>")))
-	if !strings.HasPrefix(bare, liveMarker) {
-		t.Error("a page with no head did not get the marker first")
+	// And the fixtures themselves are not in the tree any more.
+	if _, err := fs.Stat(panelRoot, "mock"); err == nil {
+		t.Error("panel/mock is back")
 	}
 }
 
-// What is served at /panel/ is the panel with the flag in it, and the assets it
-// asks for resolve — index.html names them relatively, so the trailing slash on
-// the prefix is load-bearing.
+// What is served at /panel/ is the panel itself, and the assets it asks for
+// resolve — index.html names them relatively, so the trailing slash on the
+// prefix is load-bearing.
 func TestTheNewPanelServesItselfAndItsAssets(t *testing.T) {
 	srv := &server{sessions: newSessionStore()}
 
@@ -125,9 +112,6 @@ func TestTheNewPanelServesItselfAndItsAssets(t *testing.T) {
 		t.Fatalf("GET %s = %d, want 200", panelPrefix, w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, liveMarker) {
-		t.Error("the page was served without the live flag; it would show mock data")
-	}
 	if !strings.Contains(body, `src="js/main.js"`) {
 		t.Error("the panel shell was not what was served")
 	}
@@ -203,6 +187,12 @@ func TestBothPanelsOfferTheSwitch(t *testing.T) {
 	}
 	if !strings.Contains(classic, "loadPanelUI();") {
 		t.Error("the switch is never read back, so it shows the wrong state when Settings opens")
+	}
+	// And in its menu, where the other panel keeps the same choice. It used to
+	// live only as a checkbox two clicks deep in Settings → Interface, so the
+	// two panels were not equally easy to leave.
+	if !strings.Contains(classic, "/?panel=next") {
+		t.Error("the classic panel's menu offers no one-click way over to the new one")
 	}
 
 	loadExperimentalPanel()

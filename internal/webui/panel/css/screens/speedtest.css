@@ -1,0 +1,89 @@
+/* Speedtest. Loaded with the shell, not injected, because it is a section.
+ *
+ * The dial is the one place in this panel where a big instrument is the right
+ * answer: the whole screen exists to produce one number, and a number that is
+ * the point of a page should look like it. Everything around it is quiet.
+ */
+
+.panel .st{padding-bottom:8px}
+.panel .st .sech2 select{width:auto;min-width:190px;background:var(--s1);
+  border:1px solid var(--ln);border-radius:11px;padding:9px 32px 9px 12px;font:inherit;
+  font-size:12.5px;font-weight:590;color:var(--tx);outline:0;cursor:pointer;
+  appearance:none;-webkit-appearance:none;transition:border-color .22s ease;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e8e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;background-size:13px}
+.panel .st .sech2 select:hover{border-color:var(--ln2)}
+body[data-t="light"] .panel .st .sech2 select{
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b6b6b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")}
+
+.panel .st-stage{display:grid;grid-template-columns:minmax(280px,360px) minmax(0,1fr);
+  gap:26px;align-items:center;padding:6px 0 4px}
+
+/* ---- the dial ------------------------------------------------------------ */
+.panel .st-dialwrap{position:relative;justify-self:center;width:100%;max-width:340px;
+  aspect-ratio:1}
+.panel .dial{width:100%;height:100%;overflow:visible}
+.panel .dial .trk{fill:none;stroke:var(--sunk);stroke-width:10;stroke-linecap:round}
+.panel .dial .prog{fill:none;stroke:var(--spark);stroke-width:10;stroke-linecap:round;
+  transition:opacity .3s ease}
+/* Working, not reading: the arc breathes rather than claiming a value. */
+.panel .dial .prog.live{animation:st-breathe 1.4s ease-in-out infinite}
+@keyframes st-breathe{0%,100%{opacity:.25}50%{opacity:.6}}
+.panel .dial .tk{stroke:var(--ln2);stroke-width:1.6;stroke-linecap:round}
+.panel .dial .tk.maj{stroke:var(--ln3);stroke-width:2.2}
+.panel .dial .tl{fill:var(--dim);stroke:none;font-size:10.5px;font-weight:620;
+  text-anchor:middle;font-family:inherit}
+
+.panel .st-read{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:1px;pointer-events:none}
+.panel .st-num{font-size:44px;font-weight:670;letter-spacing:-.045em;line-height:1;
+  font-variant-numeric:tabular-nums}
+.panel .st-unit{font-size:12px;font-weight:600;color:var(--mu);letter-spacing:.02em}
+.panel .st-go{pointer-events:auto;margin-top:14px;font:inherit;font-size:13px;font-weight:680;
+  letter-spacing:.08em;width:74px;height:74px;border-radius:50%;cursor:pointer;
+  border:1px solid var(--ln2);background:var(--s1);color:var(--tx);
+  transition:transform .22s var(--spring),background .22s ease,border-color .22s ease}
+.panel .st-go:hover:not(:disabled){background:var(--tx);color:var(--bg);border-color:transparent;
+  transform:scale(1.05)}
+.panel .st-go:disabled{opacity:.4;cursor:default}
+/* While it runs the elapsed counter is the reading, so the button steps back. */
+.panel .st.busy .st-go{opacity:.5;transform:scale(.94)}
+.panel .st.busy .st-num{color:var(--mu)}
+
+/* ---- the side ------------------------------------------------------------ */
+.panel .st-side{min-width:0}
+.panel .st-what{font-size:12.5px;color:var(--tx2);line-height:1.65;max-width:62ch}
+.panel .st-what b{font-weight:640}
+.panel .st-maps{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.panel .st-map{font:inherit;font-size:11.5px;font-weight:600;padding:7px 12px;border-radius:10px;
+  border:1px solid var(--ln);background:var(--s2);color:var(--mu);cursor:pointer;
+  transition:background .18s ease,color .18s ease,border-color .18s ease}
+.panel .st-map:hover:not(:disabled){border-color:var(--ln2);color:var(--tx2)}
+.panel .st-map.on{background:var(--tx);color:var(--bg);border-color:transparent}
+.panel .st-map:disabled{opacity:.4;cursor:default}
+
+.panel .st-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
+  border:1px solid var(--ln);border-radius:15px;overflow:hidden;margin-top:16px}
+.panel .st-tile{background:var(--s1);padding:12px 14px;min-width:0}
+.panel .st-tile span{display:block;font-size:9.5px;font-weight:620;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--dim)}
+.panel .st-tile b{display:block;font-size:13.5px;font-weight:640;margin-top:4px;
+  font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .st-note{font-size:11px;color:var(--dim);line-height:1.6;margin-top:11px;min-height:1.6em}
+
+@container pg (max-width:840px){
+  .panel .st-stage{grid-template-columns:1fr;gap:18px}
+  .panel .st-tiles{grid-template-columns:repeat(2,1fr)}
+}
+@container pg (max-width:520px){
+  .panel .st-num{font-size:36px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .panel .dial .prog.live{animation:none;opacity:.45}
+  .panel .st-go:hover:not(:disabled){transform:none}
+}
+
+/* A reading with a caveat says so where the reading is, not somewhere else. */
+.panel .st-note.warn{color:var(--wr)}

@@ -33,6 +33,7 @@ export const ICONS = {
   plus:   '<path d="M12 5v14M5 12h14"/>',
   link:   '<path d="M9 15l6-6"/><path d="M11 6l1-1a4.2 4.2 0 016 6l-1 1"/><path d="M13 18l-1 1a4.2 4.2 0 01-6-6l1-1"/>',
   box:    '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+  nodes:  '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 17.5h.01"/>',
   clock:  '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/>',
   gauge:  '<path d="M12 14l4-4"/><path d="M4.5 18a9 9 0 1115 0"/>',
   term:   '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/>',

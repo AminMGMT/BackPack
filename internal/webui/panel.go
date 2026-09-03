@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"bytes"
 	"embed"
 	"io/fs"
 	"net/http"
@@ -40,14 +39,6 @@ var experimentalPanelFS embed.FS
 // net/http's mux redirects the bare form here on its own.
 const panelPrefix = "/panel/"
 
-// liveMarker is what tells the new panel it is talking to a real server.
-//
-// Its api.js reads window.__BACKPACK_LIVE__ and, without it, serves every
-// screen from mock/*.json — which is right when the page is opened from the
-// static preview and would be a lie here. The panel's README states that the Go
-// handler is what sets it; this is that.
-const liveMarker = `<script>window.__BACKPACK_LIVE__=true;</script>`
-
 var (
 	panelOnce   sync.Once
 	panelRoot   fs.FS
@@ -61,25 +52,9 @@ func loadExperimentalPanel() {
 	panelOnce.Do(func() {
 		panelRoot, _ = fs.Sub(experimentalPanelFS, "panel")
 		raw, _ := fs.ReadFile(panelRoot, "index.html")
-		panelIndex = withLiveMarker(raw)
+		panelIndex = raw
 		panelServer = http.StripPrefix(panelPrefix, http.FileServerFS(panelRoot))
 	})
-}
-
-// withLiveMarker puts the marker in the page's head, ahead of the module that
-// reads it. Appending it to a page with no head at all would run it after
-// js/main.js has already imported api.js and decided, so that case is prefixed
-// instead of appended.
-func withLiveMarker(page []byte) []byte {
-	const head = "</head>"
-	i := bytes.Index(page, []byte(head))
-	if i < 0 {
-		return append([]byte(liveMarker), page...)
-	}
-	out := make([]byte, 0, len(page)+len(liveMarker))
-	out = append(out, page[:i]...)
-	out = append(out, liveMarker...)
-	return append(out, page[i:]...)
 }
 
 // handleExperimentalPanel serves the new panel and everything it loads.

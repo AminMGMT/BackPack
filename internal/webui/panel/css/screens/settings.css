@@ -497,3 +497,21 @@ body[data-t="light"]{
 .dlg .vrow .vtag{font-style:normal;font-size:10px;font-weight:640;padding:2px 7px;border-radius:6px;
   background:var(--sunk);color:var(--mu);margin-left:6px}
 .dlg .vrow span{display:block;font-size:11px;color:var(--dim);margin-top:3px;line-height:1.5}
+
+/* A section with nothing matching the search stays in the rail — moving the
+   list around under the operator while they type is worse than dimming it. */
+.dlg .rail3 [data-k].nohit{opacity:.35}
+.dlg .rail3 [data-k] .hits:empty{display:none}
+
+/* The switches and menus were drawn as divs; they are controls now. */
+.dlg .sww,.dlg .sww2{cursor:pointer}
+.dlg .sel{position:relative;cursor:pointer}
+.dlg .sel.open{border-color:var(--ln3)}
+.dlg .selmenu{position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:30;
+  display:grid;gap:1px;padding:4px;border-radius:11px;border:1px solid var(--ln2);
+  background:var(--s1);box-shadow:var(--lift);max-height:220px;overflow-y:auto}
+.dlg .selopt{font:inherit;text-align:left;font-size:12.5px;padding:8px 10px;border:0;
+  border-radius:8px;background:transparent;color:var(--tx2);cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  transition:background .16s ease,color .16s ease}
+.dlg .selopt:hover{background:var(--sunk);color:var(--tx)}
