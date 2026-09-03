@@ -190,13 +190,14 @@ Two things worth knowing:
 | `peer_ip` | | The other end's tunnel address. Required if `local_ip` has no prefix |
 | `encap` | `gre` | `gre` — a file that says `ipip` is read as GRE |
 | `gre_key` | `0` | RFC 2890 key, letting several logical tunnels share a carrier. `gre` only |
-| `carrier` | `udp` | `udp`, `pck`, `xdi` or `spoof` — see below |
+| `carrier` | `udp` | `udp`, `quic`, `pck`, `sni`, `xdi` or `spoof` — see below |
 | `iface` | `bp0` | Interface name to create |
 | `mtu` | `1400` | Interface MTU |
 | `sockbuf` | 4 MiB | Carrier socket buffers |
 | `fec_data` | `0` | Error correction: data packets per group. Both keys or neither — see [Error correction](#error-correction) |
 | `fec_parity` | `0` | Error correction: spare packets per group |
 | `paths` | `1` | Spread the `udp` carrier over this many sockets — see [Several sockets](#several-sockets) |
+| `sni_domain` | built-in | The domain the `sni` carrier announces. `sni` only |
 | `ports` | none | Forwarded port mappings — see above |
 | `accept_udp` | `false` | Forward UDP as well as TCP on those ports |
 
@@ -210,14 +211,34 @@ packets somewhere less obvious:
 | `carrier` | What is on the wire | Overhead | Needs |
 |---|---|---|---|
 | `udp` | UDP datagrams | 28 | nothing |
+| `quic` | a real QUIC session, carrying the tunnel in RFC 9221 datagrams | 60 | nothing |
 | `pck` | TCP segments built without a socket — no handshake, no connection state | 52 | root / `CAP_NET_RAW` |
+| `sni` | `pck`, plus a TLS hello naming an allowed domain at the start of the flow | 52 | root / `CAP_NET_RAW` |
 | `xdi` | ICMP echo, for a path that filters UDP and TCP but not ping | 33 | root / `CAP_NET_RAW` |
 | `spoof` | raw IP with a forged source address | 28+ | root / `CAP_NET_RAW` |
 
-All three obfuscated carriers are **Linux only**. They are the same carriers
-the `pck`, `xdi` and `spoof` transports already use — the layer-3 tunnel simply
-hands them its own packets instead of KCP's, so a fix to a carrier reaches both
-at once.
+The obfuscated ones are **Linux only**. `pck`, `xdi` and `spoof` are the same
+carriers those transports already use — the layer-3 tunnel simply hands them its
+own packets instead of KCP's, so a fix to a carrier reaches both at once.
+
+`quic` is not imitating anything: it opens a real QUIC connection, with a real
+TLS 1.3 handshake and `h3` as the ALPN, and puts the tunnel in QUIC's unreliable
+DATAGRAM frames. To a path it is the HTTP/3 that dominates a modern network. It
+is the only obfuscated choice that needs no root. The certificate it presents is
+for the shape and not for the secrecy — the tunnel's own payload is sealed by
+Noise before it reaches any carrier, and the peer is authenticated by the token.
+
+`sni` is `pck` with one extra segment at the start of the flow: a TLS
+ClientHello naming a domain the path is known to allow. A box that classifies by
+server name reads it, decides the flow is permitted, and stops looking; the
+tunnel's segments follow on the same five-tuple. Set `sni_domain` to a name your
+own route already reaches — which names those are is a property of the route,
+so it is yours to choose and to test. The far end drops the hello before the
+tunnel sees it. The technique is [patterniha's][sni-orig], by way of
+[therealaleph/sni-spoofing-rust][sni-rs].
+
+[sni-orig]: https://github.com/patterniha/SNI-Spoofing
+[sni-rs]: https://github.com/therealaleph/sni-spoofing-rust
 
 ### Error correction
 
@@ -241,7 +262,7 @@ fec_parity = 3
 
 - **Both ends must set the same pair.** It is not negotiated; a receiver
   expecting a different scheme rebuilds nothing.
-- It works over **every** carrier — `udp`, `spoof`, `pck`, `xdi` — because loss
+- It works over **every** carrier — `udp`, `quic`, `spoof`, `pck`, `sni`, `xdi` — because loss
   is a property of the path, not of the disguise.
 - Half a scheme is refused at startup: set both keys, or neither.
 - The recommended pair (10/3) is what the wizard's *Turn on error correction*

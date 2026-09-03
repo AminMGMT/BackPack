@@ -60,8 +60,13 @@ type ShareLink struct {
 	Tok   string `json:"t"`           // the shared secret
 	Tr    string `json:"tr"`          // reverse: transport. direct: carrier
 	Encap string `json:"e,omitempty"` // direct only
-	Port  string `json:"p"`           // the tunnel port
-	Host  string `json:"h,omitempty"` // the producing side's real address
+	// SNI is the domain the sni carrier announces. Both ends should announce
+	// the same one — each is only telling the box in front of it what to
+	// think, but two different names on one tunnel is a thing to remember for
+	// no benefit.
+	SNI  string `json:"sni,omitempty"` // direct, sni carrier only
+	Port string `json:"p"`             // the tunnel port
+	Host string `json:"h,omitempty"`   // the producing side's real address
 
 	Preset    string `json:"pr,omitempty"`
 	Ports     string `json:"po,omitempty"` // forwarded ports, as the Iran side has them
@@ -189,6 +194,7 @@ type PeerForm struct {
 
 	Transport  string `json:"transport,omitempty"`  // reverse
 	Carrier    string `json:"carrier,omitempty"`    // direct
+	SNIDomain  string `json:"sniDomain,omitempty"`  // direct, sni carrier only
 	Encap      string `json:"encap,omitempty"`      // direct
 	ServerAddr string `json:"serverAddr,omitempty"` // the address this side dials
 	TunnelPort string `json:"tunnelPort,omitempty"`
@@ -260,6 +266,10 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		}
 	} else {
 		f.Carrier = l.Tr
+		if l.SNI != "" {
+			f.SNIDomain = l.SNI
+			paired = append(paired, "sniDomain")
+		}
 		f.Encap = l.Encap
 		paired = append(paired, "carrier")
 		if l.Encap != "" {
@@ -393,6 +403,7 @@ func ShareLinkFor(name, host string) (string, error) {
 		}
 		l.Tok = cfg.L3.Token
 		l.Tr = orDefault(cfg.L3.Carrier, "udp")
+		l.SNI = cfg.L3.SNIDomain
 		l.Encap = "gre"
 		l.Port = addrPort(cfg.L3.Addr)
 		l.Preset = cfg.L3.Preset

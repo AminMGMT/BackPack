@@ -9,6 +9,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
+	"github.com/backpack/backpack/internal/snispoof"
 	"github.com/backpack/backpack/internal/tui"
 )
 
@@ -194,6 +195,22 @@ func setupL3(side directSide) {
 			}
 			cfg.AcceptUDP = tui.Confirm("Carry UDP as well as TCP on those ports", false)
 		}
+	}
+
+	// The SNI carrier has one question: which name to announce. It matters
+	// more than most defaults do — the whole technique is that the box in
+	// front already lets that name through, and which names those are is a
+	// property of the route rather than of this program.
+	if carrier == "sni" {
+		fmt.Println()
+		tui.Info("This carrier sends a TLS hello naming a domain, once, at the start")
+		tui.Info("of the flow. A filter that decides by server name reads it and lets")
+		tui.Info("the rest of the connection through.")
+		tui.Warn("Pick a domain your own route already reaches — a large local site is")
+		tui.Warn("the usual answer. If the tunnel does not improve, try another.")
+		fmt.Println()
+		cfg.SNIDomain = strings.ToLower(strings.TrimSpace(
+			tui.PromptDefault("Domain to announce", snispoof.DefaultDomain)))
 	}
 
 	// The forged-source carrier has a screen of its own: what the packets
@@ -388,7 +405,11 @@ func askL3Carrier() (string, bool) {
 	carriers := DirectCarriers()
 	opts := make([]tui.Option, 0, len(carriers))
 	for _, c := range carriers {
-		opts = append(opts, tui.Option{Title: c["label"], Desc: c["desc"]})
+		desc := c["desc"]
+		if c["needsRoot"] != "" {
+			desc += " · needs root"
+		}
+		opts = append(opts, tui.Option{Title: c["label"], Desc: desc})
 	}
 	i := tui.ChooseOpt("How should the packets travel?", opts)
 	if i < 0 || i >= len(carriers) {

@@ -88,6 +88,12 @@ type NewDirectTunnel struct {
 	// source.
 	SpoofPeerIP string `json:"spoofPeerIp"`
 
+	// SNIDomain is the server name the sni carrier announces at the start of
+	// the flow. Empty takes the built-in default. Both ends may name different
+	// domains — each one is only telling the box in front of it what to think —
+	// but the same one on both is one less thing to remember.
+	SNIDomain string `json:"sniDomain"`
+
 	// GREKey separates tunnels that share the same two servers. Both ends must
 	// match. Zero omits it.
 	GREKey uint32 `json:"greKey"`
@@ -100,16 +106,22 @@ type NewDirectTunnel struct {
 // DirectCarriers is what the panel offers, in the order it offers them. It is
 // the same list and the same order as the CLI wizard's, so the two do not drift.
 func DirectCarriers() []map[string]string {
+	// needsRoot is the server's answer, not the screen's guess: whether a
+	// carrier can open its socket without CAP_NET_RAW is a property of how it
+	// is built, and a screen that decided that for itself would be a second
+	// place to keep in step.
 	return []map[string]string{
-		{"value": "pck", "label": "PCK",
+		{"value": "pck", "label": "PCK", "needsRoot": "1",
 			"desc": "looks like an ordinary TCP flow, but with no socket the firewall can touch"},
-		{"value": "udp", "label": "UDP",
+		{"value": "udp", "label": "UDP", "needsRoot": "",
 			"desc": "plain and simple — use it where the path does not interfere"},
-		{"value": "quic", "label": "QUIC",
+		{"value": "quic", "label": "QUIC", "needsRoot": "",
 			"desc": "a real QUIC session on UDP — indistinguishable from HTTP/3, and needs no root"},
-		{"value": "spoof", "label": "Spoof",
+		{"value": "sni", "label": "SNI spoofing", "needsRoot": "1",
+			"desc": "PCK, plus a TLS hello naming a domain your route allows — the box in front reads that name and lets the rest through"},
+		{"value": "spoof", "label": "Spoof", "needsRoot": "1",
 			"desc": "raw packets with a forged source address — needs testing on your route"},
-		{"value": "xdi", "label": "ICMP",
+		{"value": "xdi", "label": "ICMP", "needsRoot": "1",
 			"desc": "inside ping, for a path that filters UDP and TCP but lets ping through"},
 	}
 }
@@ -340,7 +352,8 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 		// choice here and the panel does not offer one; see askL3Encap's
 		// removal in the CLI wizard for why.
 		Encap: "gre", GREKey: n.GREKey,
-		Addr: addr, Token: token,
+		SNIDomain: strings.ToLower(strings.TrimSpace(n.SNIDomain)),
+		Addr:      addr, Token: token,
 		Iface: freeL3Iface(), LocalIP: local, PeerIP: peer,
 		MTU:            defaultL3MTU,
 		MaxConnections: n.MaxConnections,

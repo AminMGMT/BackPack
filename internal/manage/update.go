@@ -109,12 +109,50 @@ type source struct {
 }
 
 // sources returns the ordered download paths: direct, then the tunnel relay.
+//
+// A tunnel chosen deliberately — see UseRelay — comes first and is used on its
+// own: the operator picked it because the direct route does not work, and
+// trying that first again only makes them wait for it to fail.
 func sources(timeout time.Duration) []source {
+	if c, name := chosenRelay(timeout); c != nil {
+		return []source{{name: "tunnel " + name, client: c}}
+	}
 	out := []source{{name: "direct", client: &http.Client{Timeout: timeout}}}
 	if relay := relayHTTPClient(timeout); relay != nil {
 		out = append(out, source{name: "tunnel relay", client: relay})
 	}
 	return out
+}
+
+// The tunnel the operator chose for this run, if any.
+//
+// It is process-wide rather than threaded through every call because the four
+// places that fetch — the tag, the raw version file, the asset and its
+// checksums — are steps of one operation, and an update that read its version
+// through the tunnel and then tried to fetch the binary directly would fail
+// halfway with a confusing error.
+var relayChoice struct {
+	name    string
+	timeout time.Duration
+}
+
+// UseRelay routes the rest of this process's update traffic through one tunnel.
+// An empty name puts it back to the ordinary direct-then-relay order.
+func UseRelay(name string) { relayChoice.name = name }
+
+// RelayChosen reports whether a tunnel has been chosen for this run, so a
+// caller does not offer the choice twice.
+func RelayChosen() bool { return relayChoice.name != "" }
+
+func chosenRelay(timeout time.Duration) (*http.Client, string) {
+	if relayChoice.name == "" {
+		return nil, ""
+	}
+	c, err := RelayClientVia(relayChoice.name, timeout)
+	if err != nil {
+		return nil, ""
+	}
+	return c, relayChoice.name
 }
 
 // tagNameRe pulls "tag_name":"v1.3.0" out of the GitHub API JSON.

@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.7.6 — 2026-09-01
+## v1.7.6 — 2026-09-03
 
 IP spoofing was a reverse transport that could not work, and this release makes
 it a direct-tunnel carrier that does. A reverse tunnel is a control channel plus
@@ -16,6 +16,21 @@ xDi. And the carrier picked up the two things it was missing against the tool it
 was modelled on: error correction, and several sockets. Everything below was
 proven end to end — a real tunnel over real sockets moving real traffic — not
 just unit tested.
+
+The direct tunnel also gained three carriers and lost a choice. QUIC carries the
+tunnel in real QUIC datagrams, so a path sees HTTP/3; ICMP is offered again; and
+SNI spoofing sends a TLS hello naming a domain the route allows, so a box that
+classifies by server name lets the rest through. The encapsulation is GRE and
+only GRE — two of them were a way for the ends to disagree, and a pair that did
+came up, reported a peer, logged nothing and carried nothing.
+
+And the new panel stopped being a drawing. It was built from a preview, and a
+preview draws controls rather than making them work: this release fixes
+thirty-six faults found by clicking every control on every screen against a real
+server — a running tunnel shown as stopped, an edit that could not be saved, a
+certificate section that refused every mode, invented figures presented as
+readings. Its second source of data is gone with them, because somewhere for
+made-up numbers to come from is what let so many of them survive.
 
 ### Changed
 
@@ -39,6 +54,36 @@ just unit tested.
   since the transport could not carry traffic before, there is nothing to lose.
 
 ### Added
+
+- **QUIC as a direct carrier.** A real QUIC session — real TLS 1.3, ALPN `h3` —
+  carrying the tunnel in RFC 9221 datagrams. It is the only obfuscated carrier
+  that needs no root, and it is not imitating HTTP/3: it is HTTP/3's transport.
+  Datagrams rather than a stream, because a layer-3 tunnel carries IP packets
+  whose flows already handle their own loss, and stacking retransmission on that
+  makes throughput collapse instead of degrade.
+- **SNI spoofing as a direct carrier.** The pck carrier plus one extra segment at
+  the start of the flow: a TLS ClientHello naming a domain the path allows. A
+  filter that decides by server name reads it and stops looking. The technique is
+  patterniha's, by way of therealaleph/sni-spoofing-rust. It wraps the pck
+  carrier rather than changing it, and the far end drops the hello before the
+  tunnel sees it — so nothing has to be smuggled past a stranger's stack.
+- **ICMP (`xdi`) is offered again.** It was built, tested and still running; it
+  had simply been taken out of the menus.
+- **The updater can be pointed at a tunnel.** It already tried a relay after a
+  direct connection, but only one that already carried the relay port — which on
+  an Iran server with working tunnels and no route to GitHub meant no relay at
+  all. The CLI now names the tunnels that are up, says which would cost a restart,
+  and fetches through the one chosen.
+- **A way out of two-factor from the CLI.** It is set from the panel and the code
+  is delivered by the bot; when that delivery stops working the panel refuses
+  every sign-in, and the setting that would fix it was behind that sign-in. Web
+  Panel → Two-factor sign-in is the way back.
+- **The watchdog says whether a tunnel came back.** It restarts one that has
+  stopped carrying traffic and said so only into a file the bot read when asked.
+  The half of the story an operator waits for now arrives.
+- **A one-click switch between the panels, in both of them.** The classic panel's
+  was a checkbox two clicks deep in Settings; the new one's was a menu item. Both
+  are menu items now.
 
 - **Managed servers.** A foreign server can register itself with a panel and be
   configured from it, so a tunnel is set up in one place instead of twice. On
@@ -116,6 +161,57 @@ just unit tested.
   and the wizard offers to relax it after a spoof setup.
 
 ### Fixed
+
+- **A running tunnel was shown as stopped, everywhere in the new panel.** The
+  server reports `online`, `offline` or `stopped`; six screens compared against
+  `running`, which nothing produces. The card said Stopped, the overview counted
+  it among the ones that were not running, and neither the speed test nor the
+  link test would offer it.
+- **Nothing on the edit screen could be saved.** Its Save button shipped disabled
+  and nothing ever enabled it; once enabled, every save was refused because the
+  form posted fields the transport does not have, and the tunnel port as a number
+  where the server wants a string.
+- **The panel could not be put behind a certificate of any kind.** The three
+  options were drawn but were not controls, and Apply posted no mode at all, so
+  every attempt came back "unknown mode" — Let's Encrypt included.
+- **A failed Let's Encrypt issuance took the panel down with it.** autocert fails
+  the handshake when it has no certificate, so a domain that does not resolve
+  yet, a blocked port 80 or a rejected contact address locked the operator out of
+  the page they would have fixed it from. The self-signed certificate is served
+  meanwhile, and the panel switches over on its own once issuance succeeds.
+- **A tunnel's certificate could only be set from the CLI.** The panel now reads
+  and sets it, on the transports that present one.
+- **Invented figures shown as readings.** Signed-in devices that belonged to
+  whoever drew the screen, a bot named `@my_backpack_bot`, a backup taken
+  "yesterday at 03:00", a week's traffic on a tunnel that had carried none, and
+  every dialog headed with another machine's hostname and version.
+- **`?mock=1` drew an empty server over a busy one.** The panel's fixtures were
+  never shipped inside the binary, so forcing that mode fetched files that were
+  not there. There is one source of data now.
+- **One click sent as many requests as the screen had been visited.** Delegated
+  handlers accumulated on a container that outlives the view, so the fifth visit
+  meant five restarts from one press.
+- **Ports, sizes and states rendered as nonsense.** Forwarded ports crashed the
+  whole tunnels page, memory and disk read `NaN / NaN GB`, and a configured swap
+  reported itself as not configured.
+- **A direct tunnel with the spoof carrier could never have its far end built.**
+  The producer's real address is what the listening side cannot learn for itself,
+  and it was carried only when some spoof tuning had also been set — so the
+  ordinary case, accepting the defaults, built one end and could never build the
+  other.
+- **Four lists of direct carriers.** The CLI's, the panel's, the create path's
+  and the wizard's markup drifted, so a carrier added to some was offered by a
+  screen whose endpoint then refused it by name. There is one list, checked
+  against the engine that has to open them.
+- **The updater's `already up to date` read as a contradiction** when the build
+  was newer than the last published release.
+- **Shutting the node hub down did not wait for it.** Closing the listeners and
+  the sessions unblocks its goroutines, but one already past its read keeps
+  running — mid-handshake, or writing the fleet to disk. A caller that then took
+  away what those goroutines were using raced them.
+- **Test ports collided between packages on CI.** The sequence started from the
+  clock in milliseconds, and `go test ./...` starts a binary per package, several
+  within the same millisecond.
 
 - **The setup link was only offered on reverse tunnels.** The box that takes a
   link from the other server sat inside the reverse half of the setup form, so

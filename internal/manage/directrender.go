@@ -147,9 +147,12 @@ func (s directSpec) render() string {
 
 // l3Spec is everything the wizard collected for an [l3] tunnel.
 type l3Spec struct {
-	Name           string
-	Side           directSide
-	Carrier        string
+	Name    string
+	Side    directSide
+	Carrier string
+	// SNIDomain is the server name the "sni" carrier announces. Ignored by
+	// every other carrier, and empty means the engine's default.
+	SNIDomain      string
 	Encap          string
 	GREKey         uint32
 	Addr           string
@@ -207,6 +210,12 @@ func (s l3Spec) render() string {
 	writeKV(&b, "addr", quote(s.Addr))
 	writeKV(&b, "token", quote(s.Token))
 	writeKV(&b, "carrier", quote(s.Carrier))
+	// Only where it means something. A domain in a udp tunnel's file is a
+	// setting nothing reads, which is the kind an operator later spends time
+	// wondering about.
+	if s.Carrier == "sni" && s.SNIDomain != "" {
+		writeKV(&b, "sni_domain", quote(s.SNIDomain))
+	}
 
 	// Written out even when it is the default, because the two ends have to
 	// agree on it and a key that is only implied is one an operator cannot

@@ -125,6 +125,10 @@ const (
 	// frames — unreliable, so it is a carrier and not a transport. See
 	// carrier_quic.go.
 	CarrierQuic = "quic"
+	// CarrierSNI is pck with a fake TLS ClientHello at the start of the flow,
+	// so a box that classifies by server name lets the rest through. See
+	// carrier_sni.go.
+	CarrierSNI = "sni"
 )
 
 // KnownCarrier reports whether a carrier name is one this engine can open.
@@ -137,7 +141,7 @@ func KnownCarrier(name string) bool { return knownCarrier(name) }
 // refused before anything is created rather than after.
 func knownCarrier(name string) bool {
 	switch name {
-	case CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic:
+	case CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic, CarrierSNI:
 		return true
 	}
 	return false
@@ -176,12 +180,14 @@ func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 		return openSpoof(cfg)
 	case CarrierQuic:
 		return openQuic(cfg)
+	case CarrierSNI:
+		return openSNI(cfg)
 	default:
 		// Refusing by name is better than accepting one and quietly running it
 		// over UDP, which would look like it worked until the path filtered it.
 		return nil, nil, fmt.Errorf(
-			"l3: carrier %q is not available (have %q, %q, %q, %q, %q)",
-			cfg.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic)
+			"l3: carrier %q is not available (have %q, %q, %q, %q, %q, %q)",
+			cfg.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic, CarrierSNI)
 	}
 }
 

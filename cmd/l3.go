@@ -59,6 +59,7 @@ func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
 		FEC:       l3.FECConfig{Data: cfg.L3.FECData, Parity: cfg.L3.FECParity},
 		Multipath: l3.MultipathConfig{Paths: cfg.L3.Paths},
 		Spoof:     cfg.L3.SpoofConfig,
+		SNIDomain: cfg.L3.SNIDomain,
 		Pck: network.PcapCarrier{
 			Interface:  cfg.L3.PckInterface,
 			GatewayMAC: cfg.L3.PckGatewayMAC,

@@ -50,9 +50,11 @@ type L3Config struct {
 
 	// Carrier is the datagram transport underneath: "udp" (the default, and
 	// the right choice on a path that does not interfere), "pck" (raw TCP
-	// segments, so a capture sees an ordinary flow), "xdi" (inside ICMP echo)
-	// or "spoof" (raw IP with a forged source). The last three are Linux-only
-	// and need CAP_NET_RAW.
+	// segments, so a capture sees an ordinary flow), "quic" (a real QUIC
+	// session, so a capture sees HTTP/3), "sni" (pck, plus a TLS ClientHello
+	// naming an allowed domain at the start of the flow), "xdi" (inside ICMP
+	// echo) or "spoof" (raw IP with a forged source). All but udp and quic are
+	// Linux-only and need CAP_NET_RAW.
 	//
 	// A reliable carrier is not an option here — see the l3 package doc for
 	// why stacking retransmission is actively harmful rather than merely
@@ -66,6 +68,12 @@ type L3Config struct {
 	// GREKey is the RFC 2890 key, letting more than one logical tunnel share
 	// a carrier. Zero omits the field. Ignored unless encap is "gre".
 	GREKey uint32 `toml:"gre_key"`
+
+	// SNIDomain is the server name the "sni" carrier puts in that hello. Empty
+	// uses the built-in default. It has to be a domain the path already lets
+	// through — which one that is depends on the route, so it is the operator's
+	// to choose and to test.
+	SNIDomain string `toml:"sni_domain"`
 
 	// Iface is the interface to create. Empty makes "bp0".
 	Iface string `toml:"iface"`

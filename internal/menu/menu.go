@@ -1052,9 +1052,18 @@ func runUpdate() {
 
 	available, summary, err := manage.CheckUpdate()
 	if err != nil {
-		tui.Error(err.Error())
-		tui.PressEnter()
-		return
+		// Nothing could be reached. On the machine this matters most for — an
+		// Iran server with working tunnels and no route to GitHub — the way out
+		// is running the whole time, so offer it rather than stopping here.
+		if !offerRelay(err) {
+			return
+		}
+		available, summary, err = manage.CheckUpdate()
+		if err != nil {
+			tui.Error(err.Error())
+			tui.PressEnter()
+			return
+		}
 	}
 	if !available {
 		tui.Success(summary)
@@ -1071,12 +1080,76 @@ func runUpdate() {
 		return
 	}
 	fmt.Println()
-	if err := manage.ApplyUpdate(func(l string) { tui.Info("• " + l) }); err != nil {
+	err = manage.ApplyUpdate(func(l string) { tui.Info("• " + l) })
+	// The check reads a few hundred bytes and the download tens of megabytes,
+	// so a route that answered the first can still fail the second. The same
+	// offer applies, and only when a tunnel has not already been chosen.
+	if err != nil && !manage.RelayChosen() {
+		fmt.Println()
+		if offerRelay(err) {
+			err = manage.ApplyUpdate(func(l string) { tui.Info("• " + l) })
+		}
+	}
+	if err != nil {
 		tui.Error("Update failed: " + err.Error())
 	} else {
 		tui.Success("Backpack updated successfully.")
 	}
 	tui.PressEnter()
+}
+
+// offerRelay asks whether to fetch the update through one of the tunnels, and
+// arranges it if so. It reports whether to carry on.
+//
+// The choice is put to the operator rather than made for them because taking it
+// costs something: a tunnel that does not already expose the relay port has to
+// be restarted to gain it, which interrupts whatever it is carrying for a
+// moment. Tunnels that need no restart are offered first and say so.
+func offerRelay(reason error) bool {
+	options := manage.RelayOptions()
+	if len(options) == 0 {
+		tui.Error(reason.Error())
+		fmt.Println()
+		tui.Warn("No tunnel is online either, so there is no way out from here.")
+		tui.Info("Install offline instead: download the release on a machine that can")
+		tui.Info("reach GitHub and copy it across — see the README.")
+		tui.PressEnter()
+		return false
+	}
+
+	tui.Error(reason.Error())
+	fmt.Println()
+	tui.Info("This server cannot reach GitHub directly. One of its tunnels can:")
+	tui.Info("the far end fetches the release and passes it back.")
+	fmt.Println()
+
+	opts := make([]tui.Option, len(options))
+	for i, o := range options {
+		desc := "restarts this tunnel briefly to open the relay port"
+		if o.Ready {
+			desc = "already carries the relay port — costs nothing"
+		}
+		opts[i] = tui.Option{Title: o.Name, Desc: desc}
+	}
+	idx := tui.ChooseOpt("Fetch the update through which tunnel?", opts)
+	if idx < 0 || idx >= len(options) {
+		return false
+	}
+
+	chosen := options[idx]
+	if !chosen.Ready {
+		fmt.Println()
+		tui.Warn("Opening the relay port restarts " + chosen.Name + ". Traffic on it stops")
+		tui.Warn("for a moment and comes back on its own.")
+		if !tui.Confirm("Go ahead", true) {
+			return false
+		}
+	}
+
+	manage.UseRelay(chosen.Name)
+	fmt.Println()
+	tui.Info("Fetching through " + chosen.Name + "...")
+	return true
 }
 
 // restorePointMenu lists saved restore points and can roll back to one.

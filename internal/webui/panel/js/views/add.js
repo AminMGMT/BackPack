@@ -122,6 +122,32 @@ export function addView(ctx) {
             <b>${esc(f.label)}</b></button>`).join('');
       }
 
+      /* The direct carriers, painted from the server rather than written into
+         the page.
+         
+         They were a fourth hardcoded list — after the CLI wizard's, the panel's
+         options endpoint and the create path's — and the four drifted: a
+         carrier added to the others was offered nowhere here, and the endpoint
+         behind this screen refused what this screen did not know about. There
+         is one list now and this reads it. */
+      async function paintCarriers() {
+        const grid = root.querySelector('.step3direct .trgrid');
+        if (!grid) return;
+        let carriers = [];
+        try { carriers = (await api.directOptions()).carriers || []; } catch (e) { return; }
+        if (!carriers.length) return;
+        grid.innerHTML = carriers.map((c, i) => {
+          const needsRoot = c.needsRoot ? '<span class="root2">needs root</span>' : '';
+          return `<button class="dc${i === 0 ? ' on' : ''}" data-car="${esc(c.value)}"
+            data-fn="setCar" data-args="'${esc(c.value)}'" title="${esc(c.desc || '')}">
+            <span class="tn2"><b>${esc(c.label)}</b>
+            <span class="key2">${esc(c.value)}</span>${needsRoot}</span></button>`;
+        }).join('');
+        chosen.carrier = carriers[0].value;
+        applyShape();
+      }
+      paintCarriers();
+
       function paintTransports() {
         const list = root.querySelector('#trlist');
         const fam = opts.families?.[chosen.family ?? 0];
@@ -284,6 +310,22 @@ export function addView(ctx) {
            create endpoints use. */
         show('[data-when="server"]', chosen.side === 'server');
         show('[data-when="client"]', chosen.side === 'client');
+        /* A field that belongs to one carrier, or to one side of one carrier.
+           These read as conditions joined by "-": "client-spoof" is the kharej
+           side of the spoof carrier, "sni" is the sni carrier whichever side
+           this is. Nothing evaluated them before, so a row marked for one
+           carrier was shown on every direct tunnel, on both sides — including
+           the one telling the operator it was required. */
+        root.querySelectorAll('[data-when]').forEach(n => {
+          const when = n.dataset.when;
+          if (when === 'server' || when === 'client' || when === 'tls') return;
+          const row = n.closest('.f3, .tg3, .f, .row') || n;
+          const ok = when.split('-').every(part => {
+            if (part === 'server' || part === 'client') return chosen.side === part;
+            return chosen.carrier === part;
+          });
+          row.hidden = !ok;
+        });
         /* Groups that were moved out of .step3rev / .step3direct carry the mode
            they belong to, because the container that used to decide it is no
            longer their parent. */

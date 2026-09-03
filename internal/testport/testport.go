@@ -37,9 +37,9 @@ package testport
 import (
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"testing"
-	"time"
 )
 
 // The range ports are drawn from: below the lowest ephemeral range of any
@@ -50,11 +50,34 @@ const (
 	high = 30000
 )
 
+// The sequence starts somewhere different in every test binary.
+//
+// It used to start from the clock, in milliseconds — and `go test ./...` starts
+// a binary per package, several of them within the same millisecond. Those got
+// the same starting point and walked the same ports in the same order, so two
+// packages would pick the same number moments apart; IsFree answers "free right
+// now", which is true for both of them. One bound it and the other's traffic
+// went somewhere it was not expected, which reads exactly like the flakiness
+// this package was written to remove:
+//
+//	no reply came back through the udp forwarder
+//
+// It only showed under -race and on CI, because that is where the binaries are
+// slow enough to overlap. The process id is what actually distinguishes them,
+// and the stride is a prime so that neighbouring ids start far apart rather
+// than adjacent.
 var (
 	mu     sync.Mutex
-	next   = low + (int(time.Now().UnixNano()/1e6) % (high - low))
+	next   = startFor(os.Getpid())
 	issued = map[int]bool{}
 )
+
+// startFor is where this process begins in the range.
+func startFor(pid int) int {
+	const stride = 7919 // prime, so consecutive pids land far apart
+	span := high - low
+	return low + ((pid*stride)%span+span)%span
+}
 
 // Free returns a loopback port that is free for both TCP and UDP and has not
 // been issued before in this run.

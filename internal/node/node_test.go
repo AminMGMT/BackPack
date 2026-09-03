@@ -35,6 +35,11 @@ func startHub(t *testing.T, ctx context.Context) *Hub {
 	if err := h.Start(ctx, key); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	// Shut down before the test's other cleanups run. Cleanups run in reverse,
+	// and isolate's — which puts the store path back — is registered first, so
+	// it runs last: by then the hub's goroutines have finished and none of them
+	// is still reading the path this is about to change.
+	t.Cleanup(h.Shutdown)
 	return h
 }
 
@@ -452,5 +457,46 @@ func TestTheFarEndCanBeAskedForItsOwnSettings(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not-there-kharej") {
 		t.Errorf("the failure does not say which tunnel was missing: %v", err)
+	}
+}
+
+// Shutdown means finished, not merely asked to stop.
+//
+// Closing the listeners and the sessions unblocks the hub's goroutines, but one
+// already past its read keeps running — mid-handshake, or writing the fleet
+// back to disk after authenticating a node. A caller that shuts the hub down
+// and then takes away what those goroutines use races them, which is what the
+// race detector caught: a test restoring the path the store lives at while a
+// node was still authenticating against it.
+func TestShutdownWaitsForTheHubsGoroutines(t *testing.T) {
+	isolate(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := NewHub(func(string) {})
+	key, err := EnsureHubKey()
+	if err != nil {
+		t.Fatalf("hub key: %v", err)
+	}
+	if err := h.Start(ctx, key); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := h.Open(freePort(t), "n"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("open: %v", err)
+		}
+	}
+
+	done := make(chan struct{})
+	go func() { h.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Shutdown did not return; it is waiting on something that never stops")
+	}
+
+	// And nothing is left listening, so the ports can be taken again.
+	if n := len(h.Listening()); n != 0 {
+		t.Errorf("%d ports are still open after Shutdown", n)
 	}
 }

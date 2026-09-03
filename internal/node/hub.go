@@ -62,6 +62,17 @@ type Hub struct {
 	hubKey string
 	ctx    context.Context
 	onLog  func(string)
+
+	// running counts the accept and serve goroutines, so Shutdown can wait for
+	// them instead of merely asking them to stop.
+	//
+	// Closing the listeners and the sessions unblocks them, but a goroutine
+	// that was already past its read is still running: it may be mid-handshake,
+	// or writing the fleet back to disk after authenticating a node. A caller
+	// that shuts the hub down and then takes away what those goroutines are
+	// using — a test restoring the path the store lives at, a panel replacing
+	// its configuration — races them. Waiting removes the question.
+	running sync.WaitGroup
 }
 
 // NewHub returns a hub. log may be nil.
@@ -108,7 +119,11 @@ func (h *Hub) Open(port int, name string) error {
 	h.expect[port] = name
 	h.mu.Unlock()
 
-	go h.accept(ctx, ln, port, name, key)
+	h.running.Add(1)
+	go func() {
+		defer h.running.Done()
+		h.accept(ctx, ln, port, name, key)
+	}()
 	return nil
 }
 
@@ -141,6 +156,9 @@ func (h *Hub) Shutdown() {
 	for _, s := range live {
 		s.mux.Close()
 	}
+	// Everything above only asks them to stop. This is what makes the hub
+	// actually finished when Shutdown returns.
+	h.running.Wait()
 }
 
 // Listening reports the ports the hub currently has open.
@@ -184,7 +202,11 @@ func (h *Hub) accept(ctx context.Context, ln net.Listener, port int, name, key s
 			h.onLog("node hub: accept on " + strconv.Itoa(port) + ": " + err.Error())
 			continue
 		}
-		go h.serve(ctx, raw, key, name)
+		h.running.Add(1)
+		go func() {
+			defer h.running.Done()
+			h.serve(ctx, raw, key, name)
+		}()
 	}
 }
 

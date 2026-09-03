@@ -12,3 +12,9 @@ Portions of the tunnel data-plane are derived from prior AGPL-3.0 / GPL-3.0
 open-source work. This single line is retained only to satisfy the copyleft
 attribution requirement of that license; all product branding, CLI, web UI, and
 management code are original to Backpack by Amin Mohammadi.
+
+The SNI-spoofing carrier reimplements a DPI-bypass technique first described by
+patterniha (https://github.com/patterniha/SNI-Spoofing) and implemented in Rust
+by therealaleph (https://github.com/therealaleph/sni-spoofing-rust, MIT). The Go
+code here is original; the fake ClientHello it sends follows the shape that
+implementation established.

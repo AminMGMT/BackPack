@@ -161,9 +161,14 @@ type Config struct {
 	Spoof config.SpoofConfig
 
 	// Pck tunes the packet-level TCP carrier. Ignored unless Carrier is
-	// "pck", and every field is optional: the carrier works out its own egress
-	// from the route to the peer.
+	// "pck" or "sni", and every field is optional: the carrier works out its
+	// own egress from the route to the peer.
 	Pck network.PcapCarrier
+
+	// SNIDomain is the server name the "sni" carrier puts in the ClientHello it
+	// sends at the start of the flow. Empty means snispoof.DefaultDomain.
+	// Ignored by every other carrier.
+	SNIDomain string
 }
 
 // Validate fills in what was left out and refuses what cannot work. It is
