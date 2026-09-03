@@ -10,6 +10,7 @@ import { openScreen } from '../ui/screen.js';
 import { oops, toast } from '../ui/toast.js';
 import { confirmBox } from '../ui/confirm.js';
 import { isUp } from '../lib/tstate.js';
+import { go } from '../router.js';
 
 /* A <select> keeps its first option when the value it is handed matches none
    of them, which is how "turbo" quietly displayed as "Balanced". The server
@@ -312,6 +313,14 @@ export function settingsView(ctx) {
         try { await api.sessionRevokeOthers(); toast('Every other device was signed out.'); }
         catch (e) { oops(e); }
       }));
+
+      /* Rows that open another screen say so with data-to, the same way the
+         overview's do. One delegated handler, because the settings screen
+         builds nothing here — the rows are in the markup. */
+      root.addEventListener('click', ev => {
+        const b = ev.target.closest('[data-to]');
+        if (b && root.contains(b)) { close(); go(b.dataset.to); }
+      });
 
       /* The buttons the preview drew without handlers, each on the endpoint
          that actually does the thing. Anything the panel has no endpoint for is

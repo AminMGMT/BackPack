@@ -4,7 +4,6 @@ import { $, el } from './lib/dom.js';
 import { paintIcons } from './lib/icons.js';
 import * as store from './store.js';
 import * as router from './router.js';
-import { renderMenu, toggleMenu, closeMenu, menuOpen } from './ui/menu.js';
 import { toast } from './ui/toast.js';
 import { dashboard } from './views/dashboard.js';
 import { overview } from './views/overview.js';
@@ -86,7 +85,6 @@ function paintHeader(state) {
   $('#hdr-sub').textContent = [s.version, s.location].filter(Boolean).join(' · ') || '—';
   /* Only speak when something is wrong or actionable. */
   $('#warnbar').hidden = s.monitorRunning !== false;
-  renderMenu(state);
 }
 
 /* ---- routes -------------------------------------------------------------- */
@@ -173,7 +171,7 @@ router.route('/star',        over(starView));
 /* A new release is worth saying once, not on every reload — the panel that
    nags is the panel people stop reading, and this one also carries the alerts.
    So: a notification the first time a given version is seen, and after that it
-   waits quietly in the menu. */
+   waits quietly on the Maintenance screen. */
 let toldAbout = null;
 try { toldAbout = localStorage.getItem('bp_seen_update'); } catch (e) {}
 
@@ -201,8 +199,8 @@ document.addEventListener('DOMContentLoaded', () => {
    *
    * These all used to run in one block, so a single element that had moved —
    * a button taken out of the header, say — threw on the first line and left
-   * everything after it unbound: the menu stopped opening and nothing said
-   * why. One missing node should cost its own feature and nothing else. */
+   * everything after it unbound, and nothing said why. One missing node should
+   * cost its own feature and nothing else. */
   const bind = (sel, ev, fn) => {
     const n = $(sel);
     if (n) n.addEventListener(ev, fn);
@@ -221,15 +219,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', ev => {
     if (appearOpen && !ev.target.closest('#appearance, #appearance-btn')) toggleAppearance();
   });
-  bind('#menu-btn', 'click', ev => { ev.stopPropagation(); toggleMenu(); });
-  bind('#menu-scrim', 'click', closeMenu);
   bind('#alerts-btn', 'click', () => router.go('/alerts'));
   bind('.warnbar .act', 'click', () => router.go('/health'));
 
   document.addEventListener('keydown', ev => {
     if (ev.key !== 'Escape') return;
     if (appearOpen) toggleAppearance();
-    if (menuOpen()) { closeMenu(); $('#menu-btn')?.focus(); }
   });
 
   /* The dock. Only the two sections light it up: a dialog opened over one of
@@ -268,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch(() => { /* the badge simply stays empty */ });
 
   mountStrip();
-  router.start(path => { closeMenu(); closeScreen(); paintDock(path); });
+  router.start(path => { closeScreen(); paintDock(path); });
 
   /* ?wide=0 goes back to the auto-filling square card, for comparison. */
   if (new URLSearchParams(location.search).get('wide') === '0') document.body.classList.remove('wide');

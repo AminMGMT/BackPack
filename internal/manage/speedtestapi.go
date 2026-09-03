@@ -2,8 +2,12 @@ package manage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"syscall"
 	"time"
+
+	"github.com/backpack/backpack/internal/app"
 )
 
 // The Speed Test, without a terminal in front of it.
@@ -138,5 +142,36 @@ func RunSpeedTest(ctx context.Context, name string, listenPort int) (ThroughputR
 
 	ctx, cancel := context.WithTimeout(ctx, speedTestBudget)
 	defer cancel()
-	return MeasureThroughputOn(ctx, peer, port)
+	res, err := MeasureThroughputOn(ctx, peer, port)
+	if err != nil && plan.Kind == "forward" && isRefused(err) {
+		return res, refusedLocally(name, port)
+	}
+	return res, err
+}
+
+// isRefused reports whether nothing was listening at the address dialled.
+func isRefused(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// refusedLocally explains a refused connection on a forwarder's own port.
+//
+// The port a forwarding measurement dials is on this machine: it is the
+// tunnel's own listener, and the bytes only reach the other server because
+// that listener carries them. So a refusal means the connection never left the
+// box, and the far end had no part in it.
+//
+// This used to come back as "is the receiver running there?", with an
+// instruction to go and start one on the other server. That is the wrong
+// machine. The report that prompted this said the speed test failed with a
+// connected server and a tunnel in place, and told them to turn on a receiver —
+// which they did, on a server that was never the problem.
+func refusedLocally(name string, port int) error {
+	if !IsActive(app.ServiceName(name)) {
+		return fmt.Errorf("this tunnel is not running on this server, so nothing is "+
+			"listening on port %d — start it and measure again", port)
+	}
+	return fmt.Errorf("nothing is listening on port %d on this server even though %s is "+
+		"running — check the tunnel's forwarded ports, and its log for a listener that "+
+		"could not bind", port, name)
 }

@@ -143,8 +143,39 @@
 }
 
 /* ---- this server --------------------------------------------------------- */
+
+/* What the server is, beside what you would do to it.
+ *
+ * The actions take the narrower column: there are four of them and they never
+ * grow, where the facts are ten values whose length depends on the machine. On
+ * a phone the pair stacks and the actions go first — they are the reason to
+ * open this page on a phone at all. */
+.panel .ov-srv{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);
+  gap:14px;align-items:start}
+@container pg (max-width:860px){ .panel .ov-srv{grid-template-columns:1fr} }
+
+.panel .ov-acts{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--ln);
+  border:1px solid var(--ln);border-radius:15px;overflow:hidden}
+@container pg (max-width:380px){ .panel .ov-acts{grid-template-columns:1fr} }
+
+.panel .qa{display:flex;gap:10px;align-items:flex-start;text-align:left;background:var(--s1);
+  border:0;padding:12px 13px;min-width:0;cursor:pointer;color:inherit;font:inherit;
+  text-decoration:none;transition:background .15s}
+.panel .qa:hover{background:var(--s2)}
+.panel .qa:focus-visible{outline:2px solid var(--ac);outline-offset:-2px}
+.panel .qa-ic{flex:0 0 auto;display:grid;place-items:center;width:28px;height:28px;
+  border-radius:9px;background:var(--s2);color:var(--tx2)}
+.panel .qa:hover .qa-ic{background:var(--s3,var(--s1));color:var(--tx)}
+.panel .qa-ic .ic{width:15px;height:15px}
+.panel .qa-tx{min-width:0}
+.panel .qa-tx b{display:block;font-size:12.5px;font-weight:640;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .qa-tx span{display:block;font-size:10.5px;color:var(--dim);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 .panel .ov-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
   border:1px solid var(--ln);border-radius:15px;overflow:hidden}
+.panel .ov-srv .ov-facts{grid-template-columns:repeat(2,1fr)}
 @container pg (max-width:1000px){ .panel .ov-facts{grid-template-columns:repeat(2,1fr)} }
 @container pg (max-width:430px){ .panel .ov-facts{grid-template-columns:1fr} }
 .panel .ov-fact{background:var(--s1);padding:12px 15px;min-width:0}

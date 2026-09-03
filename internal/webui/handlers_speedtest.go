@@ -5,6 +5,7 @@ import (
 
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/node"
+	"strings"
 )
 
 // The Speed Test, from the panel.
@@ -97,11 +98,29 @@ func (s *server) handleSpeedTestRun(w http.ResponseWriter, r *http.Request) {
 
 	res, err := manage.RunSpeedTest(r.Context(), req.Name, req.Port)
 	if err != nil {
-		// The overwhelmingly likely cause is that nobody started the receiver
-		// on the other server, and saying so is more use than the dial error.
-		http.Error(w, err.Error()+" — check that the receiver is running on the "+
-			"other server (sudo backpack → Manage → Speed Test → Receive)",
-			http.StatusBadGateway)
+		// The hint about the receiver is only worth adding when nobody here has
+		// already dealt with it, and when the failure could plausibly be the far
+		// end at all.
+		//
+		// It used to be appended to every failure. So a measurement that never
+		// left this machine — the tunnel stopped, nothing listening on its own
+		// port — came back telling the operator to go and start a receiver on
+		// the other server, and they did, and it changed nothing, because the
+		// other server was never involved. RunSpeedTest now says plainly when
+		// the refusal was local; that message must reach the page unqualified.
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "on this server"):
+			// The measurement never left this machine, so nothing about the far
+			// end belongs in the answer — including the fact that a receiver
+			// was started there.
+		case started != "":
+			msg += " — a receiver was started on " + started + " for this, so the far end was ready"
+		default:
+			msg += " — check that the receiver is running on the other server " +
+				"(sudo backpack → Manage → Speed Test → Receive)"
+		}
+		http.Error(w, msg, http.StatusBadGateway)
 		return
 	}
 	out := map[string]any{

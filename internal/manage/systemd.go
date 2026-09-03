@@ -87,10 +87,51 @@ func DisableService(service string) error {
 	return err
 }
 
+// EnsureUnits brings every tunnel's unit file up to the current template.
+//
+// A unit is written when a tunnel is created or edited and not otherwise, so a
+// tunnel set up by an older version keeps whatever that version wrote for as
+// long as it exists. That is how servers ended up running tunnels on systemd's
+// default ceiling of 1024 open files long after the template had been raised
+// to a million — and the health check told those operators to run Optimize and
+// reboot, which cannot touch a unit file and so changed nothing, ever.
+//
+// Rewriting is safe to do on the way in: it neither reloads nor restarts
+// anything, so the new unit takes effect the next time each tunnel starts. A
+// drop-in under <unit>.d/ is a separate file and is left alone, which is where
+// a local change belongs anyway.
+//
+// It returns how many were brought up to date.
+func EnsureUnits() int {
+	n := 0
+	for _, t := range List() {
+		path := app.ServiceDir + "/" + app.ServiceName(t.Name)
+		want := unitFor(t.Name)
+		if have, err := os.ReadFile(path); err == nil && string(have) == want {
+			continue
+		}
+		if os.WriteFile(path, []byte(want), 0644) == nil {
+			n++
+		}
+	}
+	if n > 0 {
+		_ = DaemonReload()
+	}
+	return n
+}
+
 // writeUnit writes a systemd unit file for a tunnel that runs the backpack
 // binary in engine mode against its config.
 func writeUnit(name string) error {
-	unit := fmt.Sprintf(`[Unit]
+	path := app.ServiceDir + "/" + app.ServiceName(name)
+	return os.WriteFile(path, []byte(unitFor(name)), 0644)
+}
+
+// unitFor is the unit a tunnel should have. One definition, so EnsureUnits is
+// comparing against the same thing writeUnit would produce rather than a copy
+// of it that will drift.
+func unitFor(name string) string {
+	return fmt.Sprintf(`[Unit]
 Description=Backpack Tunnel (%s)
 After=network.target
 
@@ -104,9 +145,6 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 `, name, app.BinPath, app.ConfigPath(name))
-
-	path := app.ServiceDir + "/" + app.ServiceName(name)
-	return os.WriteFile(path, []byte(unit), 0644)
 }
 
 // removeUnit deletes a tunnel unit file if present.

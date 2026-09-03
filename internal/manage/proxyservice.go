@@ -24,6 +24,13 @@ Type=simple
 ExecStart=%s --proxy
 Restart=always
 RestartSec=5
+# The tunnel units carry this too. A service does not inherit the ceiling in
+# /etc/security/limits.conf — that file is PAM's, and applies to login sessions
+# — so a unit that does not ask gets systemd's default of 1024, and no amount
+# of running Optimize or rebooting changes it. This process holds the panel's
+# own sockets, the node hub's listeners and whatever it proxies, so it needs
+# the same headroom the tunnels were given.
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target

@@ -38,6 +38,8 @@ export const ICONS = {
   gauge:  '<path d="M12 14l4-4"/><path d="M4.5 18a9 9 0 1115 0"/>',
   term:   '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/>',
   undo:   '<path d="M3 8v6h6"/><path d="M3.5 14a9 9 0 103-8.5L3 8"/>',
+  life:   '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.6"/><path d="M5.6 5.6l3.9 3.9M14.5 14.5l3.9 3.9M18.4 5.6l-3.9 3.9M9.5 14.5l-3.9 3.9"/>',
+  bug:    '<path d="M8.5 7a3.5 3.5 0 017 0"/><path d="M6 11a6 6 0 0112 0v3a6 6 0 01-12 0z"/><path d="M3 10h3M18 10h3M3 16h3.2M17.8 16H21M12 11v9"/>',
 };
 
 export function svg(name, cls = '') {

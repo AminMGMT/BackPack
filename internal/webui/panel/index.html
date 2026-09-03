@@ -21,7 +21,6 @@
 <link rel="stylesheet" href="css/components/card.css">
 <link rel="stylesheet" href="css/wide.css">
 <link rel="stylesheet" href="css/accent.css">
-<link rel="stylesheet" href="css/components/menu.css">
 <link rel="stylesheet" href="css/components/dialog.css">
 <link rel="stylesheet" href="css/components/toast.css">
 
@@ -78,10 +77,15 @@
             <svg class="x" viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
             <span class="bdg w" id="alerts-bdg" hidden></span>
           </button>
-          <button class="ic2" id="menu-btn" title="Menu" aria-label="Menu"
-                  aria-haspopup="true" aria-expanded="false">
-            <svg class="x" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-          </button>
+          <!-- The menu that used to be here held Settings, Health check,
+               Maintenance, GitHub and the classic-panel switch. The first two
+               are quick actions on the overview now, the next two live in
+               Settings, and GitHub is in the overview's footer — so the button
+               opened a list of doors that all had another one. What is left is
+               the one thing with no other way to reach it. -->
+          <a class="ic2" id="logout-btn" href="/logout" title="Log out" aria-label="Log out">
+            <svg class="x" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+          </a>
         </header>
       </div>
     </div>
@@ -128,8 +132,6 @@
   </div>
 </div>
 
-<div class="menu-scrim" id="menu-scrim" hidden></div>
-<nav class="menuM" id="main-menu" hidden role="menu" aria-label="Main menu"></nav>
 
 <div class="appear" id="appearance" hidden role="dialog" aria-modal="false"
      aria-label="Appearance">

@@ -19,6 +19,7 @@
  */
 
 import { $, esc } from '../lib/dom.js';
+import { svg } from '../lib/icons.js';
 import { isUp } from '../lib/tstate.js';
 import { bytes } from '../lib/format.js';
 import * as store from '../store.js';
@@ -148,46 +149,6 @@ function troubles(state, fleet, backup) {
 /* A tunnel with no measurement reports -1, not nothing, so a plain truthiness
    test prints "-1 ms" — which the dashboard has always got right and this did
    not. Same rule as there: a ping is a ping when it is zero or more. */
-const hasPing = t => t.ping !== undefined && t.ping !== null && t.ping >= 0;
-
-function tunnelRows(tuns) {
-  if (!tuns.length) {
-    return `<div class="tk-empty">No tunnels yet. Add one from <b>Tunnels</b>.</div>`;
-  }
-  const rows = [...tuns].sort((a, b) => (b.totalBytes || 0) - (a.totalBytes || 0));
-  const peak = Math.max(...rows.map(t => t.totalBytes || 0), 1);
-  return `<div class="tk-list">${rows.map((t, i) => {
-    const share = ((t.totalBytes || 0) / peak) * 100;
-    /* direction says which way it is dialled, carrier says what carries it —
-       two fields, because they are two facts. Reading "direct" off the presence
-       of a carrier labelled every tunnel direct, since the server fills the
-       carrier in for both kinds. */
-    const kind = `${t.direction === 'direct' ? 'direct' : 'reverse'} `
-               + `${t.carrier || t.transport || ''}`.trim();
-    const inn = t.inBytes || 0, outt = t.outBytes || 0;
-    const io = inn + outt || 1;
-    /* The name and what it has carried, and nothing else. This sits beside the
-       all-time figure now, in half the width it used to have, and the ping and
-       the uptime it also showed are on the tunnel's own card. A row that
-       repeats them here only makes both harder to read. */
-    return `<button class="tk-row" data-to="/t/${encodeURIComponent(t.name)}/metrics" style="--i:${i}"
-        title="${esc(kind)} · ${esc(bytes(inn))} in · ${esc(bytes(outt))} out">
-      <span class="tk-dot ${isUp(t) ? 'up' : 'dn'}"></span>
-      <span class="tk-nm"><b>${esc(t.name)}</b></span>
-      <span class="tk-bar">
-        <i class="in" style="--w:${((inn / io) * share).toFixed(1)}%"></i>
-        <i class="out" style="--w:${((outt / io) * share).toFixed(1)}%"></i>
-      </span>
-      <span class="tk-fig">${esc(bytes(t.totalBytes || 0))}</span>
-    </button>`;
-  }).join('')}</div>`;
-}
-
-/* Who wrote it, and where to find them.
- *
- * At the very bottom, small: it is the last thing on the page rather than
- * something competing with the figures above it.
- */
 function footer() {
   return `<div class="ov-foot">
     <div class="ov-links">
@@ -200,6 +161,36 @@ function footer() {
     </div>
     <a class="ov-by" href="https://blackprotocols.space" target="_blank" rel="noopener">developed by AminMGMT</a>
   </div>`;
+}
+
+/* The four things done often enough to deserve a door on the front page.
+ *
+ * They sit beside the machine's own facts rather than under them, because the
+ * pair is what this section is: what this server is, and what you would do to
+ * it. Each carries its own icon — four rows of identical grey text is a list
+ * to read, and these are meant to be aimed at.
+ *
+ * Bug reports leaves the panel, so it is an anchor and says so; the other
+ * three are screens here. */
+const ACTIONS = [
+  { icon: 'pulse', label: 'Health check', to: '/health',
+    note: 'What this server would trip over' },
+  { icon: 'gear', label: 'Settings', to: '/settings',
+    note: 'The panel, alerts and backups' },
+  { icon: 'life', label: 'Support', to: '/support',
+    note: 'Where to ask, and what to send' },
+  { icon: 'bug', label: 'Bug reports', href: 'https://github.com/AminMGMT/BackPack/issues',
+    note: 'Report one, or read the open ones' },
+];
+
+function quickActions() {
+  return `<div class="ov-acts">${ACTIONS.map(a => {
+    const inner = `<span class="qa-ic">${svg(a.icon, 'ic')}</span>
+      <span class="qa-tx"><b>${esc(a.label)}</b><span>${esc(a.note)}</span></span>`;
+    return a.href
+      ? `<a class="qa" href="${esc(a.href)}" target="_blank" rel="noopener">${inner}</a>`
+      : `<button class="qa" data-to="${esc(a.to)}">${inner}</button>`;
+  }).join('')}</div>`;
 }
 
 function facts(s) {
@@ -262,11 +253,127 @@ function staleDays(iso) {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
+/* One tunnel row. Split out so a row can be built once and then have its
+ * figures written into it, rather than being made again every four seconds. */
+function tunnelRow(t, i) {
+  /* direction says which way it is dialled, carrier says what carries it —
+     two fields, because they are two facts. Reading "direct" off the presence
+     of a carrier labelled every tunnel direct, since the server fills the
+     carrier in for both kinds. */
+  const kind = `${t.direction === 'direct' ? 'direct' : 'reverse'} `
+             + `${t.carrier || t.transport || ''}`.trim();
+  /* The name and what it has carried, and nothing else. This sits beside the
+     all-time figure now, in half the width it used to have, and the ping and
+     the uptime it also showed are on the tunnel's own card. A row that
+     repeats them here only makes both harder to read. */
+  return `<button class="tk-row" data-to="/t/${encodeURIComponent(t.name)}/metrics" style="--i:${i}"
+      data-name="${esc(t.name)}" title="${esc(kind)}">
+    <span class="tk-dot ${isUp(t) ? 'up' : 'dn'}"></span>
+    <span class="tk-nm"><b>${esc(t.name)}</b></span>
+    <span class="tk-bar"><i class="in"></i><i class="out"></i></span>
+    <span class="tk-fig"></span>
+  </button>`;
+}
+
+/* The figures inside a row, written in place.
+ *
+ * Kept apart from the markup above because these change on every poll and the
+ * markup does not. Rebuilding the row to move a number is what restarts the
+ * row's entrance animation, and twenty rows doing that together is the flicker
+ * this file exists to avoid. */
+function fillRow(el, t, peak) {
+  const inn = t.inBytes || 0, outt = t.outBytes || 0;
+  const io = inn + outt || 1;
+  const share = ((t.totalBytes || 0) / peak) * 100;
+  const bar = el.querySelectorAll('.tk-bar i');
+  if (bar[0]) bar[0].style.setProperty('--w', `${((inn / io) * share).toFixed(1)}%`);
+  if (bar[1]) bar[1].style.setProperty('--w', `${((outt / io) * share).toFixed(1)}%`);
+  const fig = el.querySelector('.tk-fig');
+  const text = bytes(t.totalBytes || 0);
+  if (fig && fig.textContent !== text) fig.textContent = text;
+  const dot = el.querySelector('.tk-dot');
+  if (dot) dot.className = `tk-dot ${isUp(t) ? 'up' : 'dn'}`;
+  el.title = `${el.title.split(' · ')[0]} · ${bytes(inn)} in · ${bytes(outt)} out`;
+}
+
 export function overview(ctx) {
   const view = $('#view');
   let fleet = null;
   let backup = null;
   let counted = false;   // the total has had its one run
+
+  /* The page is built once and then edited.
+   *
+   * It used to be written from innerHTML on every poll, which is four times a
+   * minute — and every one of those threw the whole page away and made it
+   * again. That is what the report of "the overview refreshes graphically
+   * every few seconds, and it is distracting" describes: not the data
+   * changing, but every entrance animation on the page restarting together,
+   * the counter running up from nothing again, and anything the reader had
+   * hovered or focused coming back as a different element. The tunnel cards
+   * were fixed this way already; this screen never was.
+   *
+   * So each region carries a signature of what it draws. When the signature is
+   * the same the region is left alone, and the figures that move on every poll
+   * — the total, the split, each row's bar — are written into the elements
+   * that are already there. */
+  view.innerHTML = `
+    <div class="ov">
+      <div class="ov-bar" id="ovBar"></div>
+
+      <div class="sectitle"><h3>This server</h3><div class="ln"></div></div>
+      <div class="ov-srv">
+        ${quickActions()}
+        <div id="ovFacts"></div>
+      </div>
+
+      <!-- Traffic beside where it went: one figure and its breakdown are one
+           thought, and reading them a page apart made the second look like a
+           separate report of the same thing. -->
+      <div class="ov-row">
+        <!-- Traffic: the one figure that only grows, with the month that made it. -->
+        <div class="tk">
+          <div class="tk-head">
+            <div class="tk-tot">
+              <span class="tk-num" id="ovTotal">—</span>
+              <span class="tk-cap">carried since this server was set up</span>
+            </div>
+            <div class="tk-chips" id="ovChips"></div>
+          </div>
+          <div class="tk-split" aria-hidden="true">
+            <i class="up"></i><i class="dn"></i>
+          </div>
+          <div id="ovDays"></div>
+        </div>
+
+        <div class="ov-where">
+          <div class="sectitle"><h3>Where it goes</h3><div class="ln"></div>
+            <span class="sec-n" id="ovCount">0</span></div>
+          <div class="tk-list" id="ovRows"></div>
+        </div>
+      </div>
+
+      ${footer()}
+    </div>`;
+
+  const ov = view.querySelector('.ov');
+  const el = id => view.querySelector('#' + id);
+  const sigs = new Map();
+  /* Replace a region only when what it draws has changed. */
+  const region = (id, sig, html) => {
+    if (sigs.get(id) === sig) return false;
+    sigs.set(id, sig);
+    el(id).innerHTML = html;
+    return true;
+  };
+
+  /* One listener for the page, bound once. Binding them after each paint is
+     what made a click open four screens: the old paint added a fresh listener
+     to every button it had just made, and nothing removed the last set. */
+  view.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-to]');
+    if (b && view.contains(b)) go(b.dataset.to);
+  });
 
   const paint = () => {
     const state = store.get();
@@ -283,58 +390,54 @@ export function overview(ctx) {
     const sent = Number(s.totalSentBytes) || 0, recv = Number(s.totalRecvBytes) || 0;
     const both = sent + recv || 1;
 
-    view.innerHTML = `
-      <div class="ov${counted ? ' settled' : ''}">
-        ${bad.length ? `<div class="ov-bar">${bad.map(t => `
-          <button class="ov-pill ${t.k}" data-to="${esc(t.to)}" title="${esc(t.s)}">
-            <span class="ov-dot"></span>${esc(t.b)}</button>`).join('')}</div>`
-        : `<div class="ov-bar"><span class="ov-pill ok"><span class="ov-dot"></span>
+    ov.classList.toggle('settled', counted);
+
+    region('ovBar', JSON.stringify([bad, up, tuns.length, onlineNodes, nodes.length]),
+      bad.length
+        ? bad.map(t => `<button class="ov-pill ${t.k}" data-to="${esc(t.to)}" title="${esc(t.s)}">
+             <span class="ov-dot"></span>${esc(t.b)}</button>`).join('')
+        : `<span class="ov-pill ok"><span class="ov-dot"></span>
              ${up} of ${tuns.length} tunnels up${nodes.length
-               ? ` · ${onlineNodes}/${nodes.length} servers connected` : ''}</span></div>`}
+               ? ` · ${onlineNodes}/${nodes.length} servers connected` : ''}</span>`);
 
-        <div class="sectitle"><h3>This server</h3><div class="ln"></div></div>
-        ${facts(s)}
+    region('ovFacts', JSON.stringify([s.hostname, s.version, s.os, s.location, s.isp,
+      s.ipv4, s.ipv6, s.uptime, s.congestion, s.proxyEnabled, s.proxyRunning,
+      s.proxyType, s.proxyPort]), facts(s));
 
-        <!-- Traffic beside where it went: one figure and its breakdown are one
-             thought, and reading them a page apart made the second look like a
-             separate report of the same thing. -->
-        <div class="ov-row">
-        <!-- Traffic: the one figure that only grows, with the month that made it. -->
-        <div class="tk">
-          <div class="tk-head">
-            <div class="tk-tot">
-              <span class="tk-num" id="ovTotal">—</span>
-              <span class="tk-cap">carried since this server was set up</span>
-            </div>
-            <div class="tk-chips">
-              <span class="tk-chip"><i class="up"></i>${esc(bytes(sent))} sent</span>
-              <span class="tk-chip"><i class="dn"></i>${esc(bytes(recv))} received</span>
-              <span class="tk-chip ghost">${up}/${tuns.length} tunnels</span>
-              ${nodes.length ? `<span class="tk-chip ghost">${onlineNodes}/${nodes.length} servers</span>` : ''}
-            </div>
-          </div>
-          <div class="tk-split" aria-hidden="true">
-            <i class="up" style="--w:${((sent / both) * 100).toFixed(1)}%"></i>
-            <i class="dn" style="--w:${((recv / both) * 100).toFixed(1)}%"></i>
-          </div>
-          ${dayBars()}
-        </div>
+    region('ovChips', JSON.stringify([sent, recv, up, tuns.length, onlineNodes, nodes.length]),
+      `<span class="tk-chip"><i class="up"></i>${esc(bytes(sent))} sent</span>
+       <span class="tk-chip"><i class="dn"></i>${esc(bytes(recv))} received</span>
+       <span class="tk-chip ghost">${up}/${tuns.length} tunnels</span>
+       ${nodes.length ? `<span class="tk-chip ghost">${onlineNodes}/${nodes.length} servers</span>` : ''}`);
 
-        <div class="ov-where">
-          <div class="sectitle"><h3>Where it goes</h3><div class="ln"></div>
-            <span class="sec-n">${tuns.length}</span></div>
-          ${tunnelRows(tuns)}
-        </div>
-        </div>
+    /* The split is two widths, so it is set rather than rebuilt. */
+    const split = view.querySelectorAll('.tk-split i');
+    if (split[0]) split[0].style.setProperty('--w', `${((sent / both) * 100).toFixed(1)}%`);
+    if (split[1]) split[1].style.setProperty('--w', `${((recv / both) * 100).toFixed(1)}%`);
 
-        ${footer()}
-      </div>`;
+    region('ovDays', JSON.stringify(dayTotals), dayBars());
+
+    const count = el('ovCount');
+    if (count && count.textContent !== String(tuns.length)) count.textContent = tuns.length;
+
+    /* Rows: which tunnels there are and in what order is the signature; what
+       they have carried is written in. Sorted by traffic, so the order can
+       change on its own — and when it does the list is rebuilt, which is
+       right, because a row that moved is a different row. */
+    const rows = [...tuns].sort((a, b) => (b.totalBytes || 0) - (a.totalBytes || 0));
+    const peak = Math.max(...rows.map(t => t.totalBytes || 0), 1);
+    const shape = JSON.stringify(rows.map(t => [t.name, t.state, t.direction, t.carrier, t.transport]));
+    if (!rows.length) {
+      region('ovRows', shape, `<div class="tk-empty">No tunnels yet. Add one from <b>Tunnels</b>.</div>`);
+    } else {
+      region('ovRows', shape, rows.map(tunnelRow).join(''));
+      const els = el('ovRows').querySelectorAll('.tk-row');
+      rows.forEach((t, i) => { if (els[i]) fillRow(els[i], t, peak); });
+    }
 
     const total = state.stats ? (Number(s.totalTrafficBytes) || 0) : null;
-    countTo($('#ovTotal', view), total, !counted && total > 0);
+    countTo(el('ovTotal'), total, !counted && total > 0);
     if (total > 0) counted = true;
-    view.querySelectorAll('[data-to]').forEach(b =>
-      b.addEventListener('click', () => go(b.dataset.to)));
   };
 
   const unsub = store.subscribe(paint);

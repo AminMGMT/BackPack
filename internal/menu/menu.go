@@ -35,6 +35,12 @@ func Run() {
 		tui.PressEnter()
 	}
 
+	// The same for the tunnels' own units: a tunnel created by an older version
+	// keeps that version's unit file, which is how servers stayed on systemd's
+	// default open-file ceiling long after the template had been raised.
+	// Nothing is restarted; each tunnel picks its unit up when it next starts.
+	manage.EnsureUnits()
+
 	// The watchdog, the Telegram bot and the alerts run in their own service so
 	// they survive the panel being stopped. Installing it here is also how an
 	// install that predates the service picks it up.

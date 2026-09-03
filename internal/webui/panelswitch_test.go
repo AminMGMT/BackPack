@@ -195,12 +195,33 @@ func TestBothPanelsOfferTheSwitch(t *testing.T) {
 		t.Error("the classic panel's menu offers no one-click way over to the new one")
 	}
 
+	// The new panel's own way back. It used to be in the header menu; that menu
+	// is gone — everything in it had another door — so the switch moved to
+	// Settings → Panel access, where which panel this browser gets belongs.
+	// What matters is that it exists somewhere the panel actually serves, not
+	// which file it is in.
 	loadExperimentalPanel()
-	menu, err := fs.ReadFile(panelRoot, "js/ui/menu.js")
+	found := false
+	err := fs.WalkDir(panelRoot, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(p, ".js") && !strings.HasSuffix(p, ".html") {
+			return nil
+		}
+		b, err := fs.ReadFile(panelRoot, p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), "/?panel=classic") {
+			found = true
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("the panel's menu is not embedded: %v", err)
+		t.Fatalf("walking the panel: %v", err)
 	}
-	if !strings.Contains(string(menu), "/?panel=classic") {
+	if !found {
 		t.Error("the new panel offers no way back to the finished one")
 	}
 }

@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -133,13 +134,22 @@ func systemChecks() []Check {
 	}
 
 	// Open-file limit — tunnels with many connections need a high ceiling.
-	if v := ulimitNofile(); v > 0 {
+	//
+	// The limit that matters is the one the tunnel processes run under, which
+	// is not the one this process has. Reading `ulimit -n` here reported the
+	// panel's own ceiling and told the operator to run Optimize and reboot —
+	// advice that could never change it, because Optimize writes
+	// /etc/security/limits.conf and that file applies to login sessions and not
+	// to systemd services. The check said 1024 before and 1024 after, for as
+	// many reboots as anybody cared to try.
+	if v, where := nofileForTunnels(); v > 0 {
 		if v >= 65536 {
-			out = append(out, Check{Group: g, Name: "Open file limit", Level: CheckOK, Detail: strconv.Itoa(v)})
+			out = append(out, Check{Group: g, Name: "Open file limit", Level: CheckOK,
+				Detail: strconv.Itoa(v) + " " + where})
 		} else {
 			out = append(out, Check{Group: g, Name: "Open file limit", Level: CheckWarn,
-				Detail: strconv.Itoa(v) + " — low for many connections",
-				Fix:    "run Optimize, then reboot for it to fully apply"})
+				Detail: strconv.Itoa(v) + " " + where + " — low for many connections",
+				Fix:    "restart this tunnel — its unit has been brought up to date; the ceiling comes from the unit, not from Optimize"})
 		}
 	}
 
@@ -430,14 +440,86 @@ func sysctlValue(key string) string {
 	return strings.TrimSpace(strings.ReplaceAll(string(out), "\t", " "))
 }
 
-// ulimitNofile returns the current open-file limit, or 0 if unknown.
-func ulimitNofile() int {
-	out, err := exec.Command("sh", "-c", "ulimit -n").Output()
+// nofileForTunnels returns the open-file ceiling a tunnel runs under, and a
+// short phrase saying where the figure came from. It returns 0 when there is
+// nothing to read.
+//
+// A running tunnel is the ground truth, so it is asked first: /proc/<pid>/limits
+// is what the kernel is actually enforcing on that process, whatever the unit
+// file says and whatever has been edited since it started. With no tunnel
+// running the unit is asked instead, which answers the same question one step
+// earlier — what the next one to start will get.
+func nofileForTunnels() (int, string) {
+	for _, t := range List() {
+		service := app.ServiceName(t.Name)
+		if !IsActive(service) {
+			continue
+		}
+		pid := mainPID(service)
+		if pid <= 0 {
+			continue
+		}
+		if v := procNofile(pid); v > 0 {
+			return v, "on " + t.Name
+		}
+	}
+	if v := unitNofile(); v > 0 {
+		return v, "for a tunnel service"
+	}
+	return 0, ""
+}
+
+// mainPID returns a unit's main process, or 0.
+func mainPID(service string) int {
+	out, err := exec.Command("systemctl", "show", "-p", "MainPID", "--value", service).Output()
 	if err != nil {
 		return 0
 	}
-	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
-	return n
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return pid
+}
+
+// procNofile reads the soft open-file limit the kernel is enforcing on a
+// process. The soft limit is the one that bites: it is what a socket runs out
+// against, and raising it to the hard limit is something a process has to ask
+// for rather than something it has.
+func procNofile(pid int) int {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/limits", pid))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "Max open files") {
+			continue
+		}
+		f := strings.Fields(strings.TrimPrefix(line, "Max open files"))
+		if len(f) == 0 {
+			return 0
+		}
+		if f[0] == "unlimited" {
+			return math.MaxInt32
+		}
+		n, _ := strconv.Atoi(f[0])
+		return n
+	}
+	return 0
+}
+
+// unitNofile returns the limit the tunnel unit template asks for, as systemd
+// has parsed it. Asking systemd rather than reading the template back means the
+// answer accounts for a unit that was edited by hand or overridden by a drop-in.
+func unitNofile() int {
+	for _, t := range List() {
+		out, err := exec.Command("systemctl", "show", "-p", "LimitNOFILESoft",
+			"--value", app.ServiceName(t.Name)).Output()
+		if err != nil {
+			continue
+		}
+		if n, _ := strconv.Atoi(strings.TrimSpace(string(out))); n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // listening reports whether anything is bound to a local TCP port.
