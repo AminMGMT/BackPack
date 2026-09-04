@@ -259,13 +259,15 @@ func Serve() error {
 	mux.HandleFunc("/icons/", handleIconPNG)
 	mux.HandleFunc("/sw.js", handleServiceWorker)
 
-	// Ready to reach the fleet, if this panel manages one. Nothing is
-	// contacted here and nothing can fail: the panel dials out when it has
-	// something to ask, so a server that is down costs the operation that
-	// wanted it and nothing else.
-	if node.Enabled() {
-		_ = srv.nodes.start()
-	}
+	// Ready to reach the fleet. Nothing is contacted here and nothing can
+	// fail: the panel dials out when it has something to ask, so a server that
+	// is down costs the operation that wanted it and nothing else.
+	//
+	// There is no switch for this any more. It guarded a listener that had to
+	// be opened before a server could connect; the panel dials out now, so with
+	// no servers in the fleet it does nothing at all, and turning "nothing at
+	// all" off was a setting that could only ever be in the way.
+	_ = srv.nodes.start()
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

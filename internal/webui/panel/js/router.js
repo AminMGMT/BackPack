@@ -12,6 +12,18 @@ const routes = [];
 let current = null;
 let onChange = () => {};
 
+/* The last page that was not a dialog.
+ *
+ * Every dialog route draws a page underneath it, and that page used to be a
+ * fixed default — the tunnels. So opening Health check from the overview drew
+ * the tunnels behind it, and closing left you on the tunnels: you pressed the
+ * cross on a dialog you opened from one page and arrived at another.
+ *
+ * Closing goes back to whatever this says instead. */
+let home = '/';
+export function setHome(path) { home = path; }
+export function getHome() { return home; }
+
 export function route(pattern, view) {
   const keys = [];
   const rx = new RegExp('^' + pattern

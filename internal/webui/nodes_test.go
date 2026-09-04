@@ -92,41 +92,35 @@ func post(t *testing.T, s *server, form string) *httptest.ResponseRecorder {
 	return w
 }
 
-// With the listener off there is no fleet, and nothing can be added to it.
-func TestTheFleetIsEmptyAndClosedUntilItIsTurnedOn(t *testing.T) {
+// A panel that manages nothing says so, and cannot be talked into acting on a
+// server that is not there.
+//
+// What used to be here also checked that the feature was off until switched on.
+// There is no switch: it guarded listeners the panel had to open, and the panel
+// dials out now — an empty fleet is already the off state.
+func TestAnEmptyFleetIsEmptyAndActsOnNothing(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
+	t.Cleanup(s.nodes.stop)
 
 	r := httptest.NewRequest("GET", "/api/nodes", nil)
 	w := httptest.NewRecorder()
 	s.handleNodes(w, r)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d", w.Code)
-	}
 	var state struct {
-		Enabled bool  `json:"enabled"`
-		Nodes   []any `json:"nodes"`
+		Nodes []any `json:"nodes"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &state)
-	if state.Enabled || len(state.Nodes) != 0 {
-		t.Errorf("a panel that has never used the feature reports enabled=%v with %d servers",
-			state.Enabled, len(state.Nodes))
+	if len(state.Nodes) != 0 {
+		t.Errorf("a panel that has never used the feature reports %d servers", len(state.Nodes))
 	}
 
-	// Nothing can be added before the feature is on.
-	if w := post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=x"); w.Code == http.StatusOK {
-		t.Error("a server was added with the feature turned off")
-	} else if !strings.Contains(w.Body.String(), "Managed servers") {
-		t.Errorf("unhelpful refusal: %q", strings.TrimSpace(w.Body.String()))
-	}
-
-	// And nothing can be pushed to a node that cannot exist.
+	// And nothing can be pushed to a server that does not exist.
 	body, _ := json.Marshal(map[string]any{"node": "kharej", "kind": "reverse"})
 	rq := httptest.NewRequest("POST", "/api/node/pair", strings.NewReader(string(body)))
 	wr := httptest.NewRecorder()
 	s.handleNodePair(wr, rq)
 	if wr.Code == http.StatusOK {
-		t.Error("a tunnel was paired with the listener off")
+		t.Error("a tunnel was paired with a server that is not in the fleet")
 	}
 }
 
@@ -143,16 +137,6 @@ func TestAddingAServerKeepsOnlyWhatAnswers(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
 	t.Cleanup(s.nodes.stop)
-
-	if w := post(t, s, "action=add&name=kharej&host=203.0.113.9&user=root&password=x"); w.Code == http.StatusOK {
-		t.Error("a server was added before the feature was turned on")
-	}
-	if w := post(t, s, "action=enable"); w.Code != http.StatusOK {
-		t.Fatalf("enable: %d %s", w.Code, w.Body.String())
-	}
-	if !node.LoadStore().Enabled {
-		t.Error("the choice was not persisted")
-	}
 
 	f := newFake()
 	withFleet(s, f)
@@ -221,7 +205,6 @@ func TestCredentialsCanBeChangedAndAreNeverSentBack(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
 	t.Cleanup(s.nodes.stop)
-	post(t, s, "action=enable")
 	f := newFake()
 	f.up["kharej"] = true
 	withFleet(s, f)

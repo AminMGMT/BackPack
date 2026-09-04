@@ -95,9 +95,12 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
  * it is the wider question: which machine, then which lines from it. Only drawn
  * for a tunnel this panel built across a managed server — the switch is absent
  * rather than disabled, since a control that cannot work is worse than none. */
-.panel .bar2 .ends{display:flex;gap:2px;background:var(--sunk);border-radius:11px;padding:3px;flex:none}
-.panel .bar2 .ends button{font:inherit;font-size:12px;font-weight:570;padding:7px 12px;border-radius:8px;
+/* These live in a dialog, and a dialog is appended to <body> rather than into
+   .panel — so scoping them to .panel meant no rule matched and the control
+   rendered as two bare browser buttons. */
+.dlg .bar2 .ends{display:flex;gap:2px;background:var(--sunk);border-radius:11px;padding:3px;flex:none}
+.dlg .bar2 .ends button{font:inherit;font-size:12px;font-weight:570;padding:7px 12px;border-radius:8px;
   border:0;background:transparent;color:var(--mu);cursor:pointer;max-width:170px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   transition:background .22s ease,color .22s ease}
-.panel .bar2 .ends button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.dlg .bar2 .ends button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.25)}

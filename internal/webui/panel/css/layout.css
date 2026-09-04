@@ -101,7 +101,47 @@
 /* ---- the page shell the preview wrapped everything in ---- */
 
 /* ============ the assembled panel ============ */
-.panel{container-type:inline-size;container-name:pg;background:var(--bg);color:var(--tx)}
+/* The panel is transparent and the ground is on the body, so the bars behind
+   it show through. Every surface on the page carries its own background, so
+   nothing that has to be read sits on the gradient directly. */
+.panel{container-type:inline-size;container-name:pg;background:transparent;color:var(--tx);
+  position:relative;z-index:1}
+
+/* ---- the ground ---------------------------------------------------------
+ *
+ * Bars across the full width: tallest at the edges, shortest in the middle, so
+ * the page has a horizon and the content sits in the dip of it. Each is a
+ * gradient of the accent fading upward.
+ *
+ * It is built on --ac, which is the variable the accent picker sets on <body>.
+ * That is the whole mechanism — pick a different accent, or switch between
+ * light and dark, and this repaints with it. No script watches for the change
+ * because nothing has to.
+ *
+ * The strength is deliberately low. The reference draws these at full colour on
+ * an empty page; this one has a panel over it, and a background loud enough to
+ * be admired is a background that competes with what it is behind.
+ */
+.bgbars{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;
+  display:flex;transform:translateZ(0);backface-visibility:hidden}
+.bgbars i{flex:1 0 0;min-width:0;height:100%;transform-origin:bottom;
+  transform:scaleY(var(--s));
+  background:linear-gradient(to top,
+    color-mix(in srgb,var(--ac) 24%,transparent),
+    color-mix(in srgb,var(--ac) 6%,transparent) 45%,
+    transparent 78%);
+  animation:pulseBar 2s ease-in-out var(--d) infinite alternate}
+@keyframes pulseBar{
+  0%{transform:scaleY(var(--s))}
+  100%{transform:scaleY(calc(var(--s) * .7))}
+}
+/* A light ground has far less contrast to spend, so the wash is lighter still. */
+body[data-t="light"] .bgbars i{
+  background:linear-gradient(to top,
+    color-mix(in srgb,var(--ac) 15%,transparent),
+    color-mix(in srgb,var(--ac) 4%,transparent) 45%,
+    transparent 78%)}
+@media (prefers-reduced-motion:reduce){ .bgbars i{animation:none} }
 .panel .inner2{padding:0 clamp(12px,3vw,24px) 26px}
 .panel .stickH{position:sticky;top:0;z-index:40;margin:0 calc(-1*clamp(12px,3vw,24px));
   padding:0 clamp(12px,3vw,24px);background:color-mix(in srgb,var(--bg) 90%,transparent);

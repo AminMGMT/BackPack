@@ -96,8 +96,16 @@ router.route('/servers', serversView);
 /* A screen that opens over the fleet keeps the fleet underneath: the route
    renders the dashboard first, then puts the dialog on top of it, so closing
    the dialog lands back on the cards rather than on an empty page. */
-function over(view, under = dashboard) {
+/* The pages a dialog can be opened over. Which one is drawn underneath is the
+   page you were on, not a guess — see router.setHome. */
+const PAGES = { '/': overview, '/tunnels': dashboard, '/servers': serversView };
+
+function over(view, fixed) {
   return ctx => {
+    /* Resolved per visit, not once. Assigning back into the parameter cached
+       the first answer in the closure, so the second time a dialog was opened
+       it drew whatever page had been behind it the first time. */
+    const under = fixed || PAGES[router.getHome()] || overview;
     /* Both halves are torn down, and that is the whole point of this.
      *
      * The page underneath subscribes to the store, and the subscription used to
@@ -123,7 +131,7 @@ router.route('/t/:name/edit',    over(editView));
 router.route('/t/:name/undo',    over(undoView));
 
 router.route('/add',         over(addView));
-router.route('/settings',    over(settingsView, overview));
+router.route('/settings',    over(settingsView));
 
 router.route('/alerts',      over(alertsView));
 router.route('/health',      over(healthView));
@@ -234,8 +242,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   const paintDock = path => {
     /* A dialog opened over a section leaves that section marked, because it is
-       still where you are — except Settings, which the dock offers itself. */
-    const at = ['/servers', '/tunnels', '/settings'].find(p => path.startsWith(p))
+       still where you are. Settings is one of those dialogs now: the overview
+       has a button for it, so the dock does not carry a second door to it. */
+    const at = ['/servers', '/tunnels'].find(p => path.startsWith(p))
       || (path.startsWith('/t/') ? '/tunnels' : '/');
     document.querySelectorAll('#dock [data-dock]').forEach(b => {
       const on = b.dataset.dock === at;
@@ -261,7 +270,13 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch(() => { /* the badge simply stays empty */ });
 
   mountStrip();
-  router.start(path => { closeScreen(); paintDock(path); });
+  router.start(path => {
+    /* A page you can come back to is remembered; a dialog is not, or closing
+       one would try to return to the one before it. */
+    if (PAGES[path]) router.setHome(path);
+    closeScreen();
+    paintDock(path);
+  });
 
   /* ?wide=0 goes back to the auto-filling square card, for comparison. */
   if (new URLSearchParams(location.search).get('wide') === '0') document.body.classList.remove('wide');

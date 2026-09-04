@@ -18,34 +18,97 @@ import { go } from '../router.js';
 
 /* ---- the rate chart behind a card ---------------------------------------- */
 /* The preview drew a fixed path; this is the same shape from real samples. */
-function sparkPaths(rates, w = 340, h = 126) {
-  if (!rates || rates.length < 2) return null;
-  const pts = rates.slice(-15);
-  const max = Math.max(...pts.map(p => p.in + p.out), 1);
-  const step = w / (pts.length - 1);
-  const xy = pts.map((p, i) => [
-    +(i * step).toFixed(1),
-    +(h - 8 - ((p.in + p.out) / max) * (h - 16)).toFixed(1),
-  ]);
-  const line = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x} ${y}`).join(' ');
-  return { line, area: `${line} L${w} ${h} L0 ${h} Z` };
+/* The metric field behind a card.
+ *
+ * The shape is the progress-metric-card design: a chart region taking the right
+ * of the card, behind the content, with a dotted ground fading in from the left
+ * and a wash of the accent colour behind the line. The content sits over it and
+ * does not take pointer events, so the card reads as one surface rather than a
+ * panel with a picture stuck to it.
+ *
+ * The accent is not decoration — it is the reading. It is the tunnel's state:
+ * green while it is connected, red while it is offline, and plain white while
+ * it is stopped or still trying, so the card says how it is before any number
+ * is read.
+ */
+const REGION_W = 62;      // % of the card the chart region takes
+
+/* Which view each card is in. Kept out here because a card is rebuilt whenever
+   its data changes, and a toggle that reset itself every few seconds would be
+   a toggle nobody could use. */
+const cardView = new Map();   // name -> 'curve' | 'bars'
+
+/* The rate series a card draws: what the tunnel was carrying at each sample. */
+function seriesOf(t) {
+  return (t.rates || []).slice(-24).map(p => ({ t: p.t, v: (p.in || 0) + (p.out || 0) }));
+}
+
+function statsOf(vals) {
+  if (!vals.length) return null;
+  const first = vals[0], last = vals[vals.length - 1];
+  const prev = vals.length > 1 ? vals[vals.length - 2] : first;
+  const sum = vals.reduce((a, b) => a + b, 0);
+  const net = last - first;
+  return {
+    net, step: last - prev,
+    pct: first ? (net / first) * 100 : 0,
+    peak: Math.max(...vals), low: Math.min(...vals), avg: sum / vals.length,
+  };
+}
+
+/* curve: an area under a line. bars: one column per sample.
+   Both are drawn to the same box so switching does not move anything. */
+function chartSVG(series, view, id) {
+  const w = 340, h = 150, pad = 10;
+  if (series.length < 2) return '';
+  const max = Math.max(...series.map(p => p.v), 1);
+  const y = v => h - pad - (v / max) * (h - pad * 2);
+
+  if (view === 'bars') {
+    /* Solid, and nothing behind them. The area gradient belongs to the line —
+       left under the bars it read as a shadow the columns were casting. */
+    const slot = w / series.length;
+    const bw = Math.max(2, slot * 0.62);
+    return series.map((p, i) => {
+      const top = y(p.v), x = slot * i + (slot - bw) / 2;
+      return `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" ` +
+             `height="${Math.max(1, h - pad - top).toFixed(1)}" rx="2" fill="var(--mc)" opacity=".8"/>`;
+    }).join('');
+  }
+  const step = w / (series.length - 1);
+  const line = series.map((p, i) => `${i ? 'L' : 'M'}${(i * step).toFixed(1)} ${y(p.v).toFixed(1)}`).join(' ');
+  return `<path d="${line} L${w} ${h} L0 ${h} Z" fill="url(#${id})"/>` +
+         `<path d="${line}" fill="none" stroke="var(--mc)" stroke-width="2" ` +
+         `stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
 }
 
 function field(t, idx) {
-  const p = sparkPaths(t.rates);
-  if (!p) return '';
-  const id = 'L' + idx;
-  return `<div class="field"><svg class="k" viewBox="0 0 340 126" preserveAspectRatio="none" style="height:126px">
-<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0%" stop-color="var(--spark)" stop-opacity=".2"/>
-<stop offset="100%" stop-color="var(--spark)" stop-opacity="0"/></linearGradient></defs>
-<path d="${p.area}" fill="url(#${id})"/>
-<path class="sparkpath" d="${p.line}" fill="none" stroke="var(--spark)" stroke-width="2"
- stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg></div>`;
+  const series = seriesOf(t);
+  if (series.length < 2) return '';
+  const id = 'L' + idx, gid = 'G' + idx;
+  const view = cardView.get(t.name) || 'curve';
+  return `<div class="mfield" style="width:${REGION_W}%">
+    <div class="mwash"></div>
+    <div class="mgrid"><svg aria-hidden="true"><defs>
+      <pattern id="${gid}" width="14" height="14" patternUnits="userSpaceOnUse">
+        <circle cx="1" cy="1" r="1" fill="currentColor"/></pattern></defs>
+      <rect width="100%" height="100%" fill="url(#${gid})"/></svg></div>
+    <svg class="mchart" viewBox="0 0 340 150" preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="var(--mc)" stop-opacity=".22"/>
+        <stop offset="100%" stop-color="var(--mc)" stop-opacity="0"/></linearGradient></defs>
+      ${chartSVG(series, view, id)}
+    </svg>
+  </div>`;
 }
 
 const RELAY_SVG = `<svg class="x" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/>
 <path d="M12 4v4"/><circle cx="12" cy="3" r="1.4"/><path d="M9 13.5h.01M15 13.5h.01"/></svg>`;
+
+const VIEW = {
+  curve: `<svg class="iB" viewBox="0 0 24 24"><path d="M3 17c4-1 5-9 9-9s5 5 9 4"/></svg>`,
+  bars:  `<svg class="iB" viewBox="0 0 24 24"><rect x="4" y="12" width="3.4" height="8" rx="1"/><rect x="10.3" y="7" width="3.4" height="13" rx="1"/><rect x="16.6" y="14" width="3.4" height="6" rx="1"/></svg>`,
+};
 
 const BTN = {
   edit:  `<svg class="iA" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>`,
@@ -69,20 +132,32 @@ function card(t, idx) {
   // ports arrives as one ", "-joined string, not a list — an empty one is
   // falsy and so used to fall through to a harmless [], which is why only a
   // tunnel that actually forwards a port ever hit this.
+  //
+  // Just the numbers. "port :8080" said the word and the colon and then the
+  // thing, and with three of them it said the colon three times.
   const ports = String(t.ports || '').split(',')
     .map(p => p.trim()).filter(Boolean)
-    .map(p => ':' + p.split('=')[0]).join(', ');
+    .map(p => p.split('=')[0]).join(', ');
   const [ip, port] = String(t.addr || '').split(':');
 
-  return `<div class="c7 ${off ? 'off' : ''}" data-name="${esc(t.name)}">
-${field(t, idx)}
+  const series = seriesOf(t);
+  const st = statsOf(series.map(p => p.v));
+  const view = cardView.get(t.name) || 'curve';
+
+  return `<div class="c7 ${off ? 'off' : ''} st-${esc(t.state || 'unknown')}" data-name="${esc(t.name)}">
 <div class="inner">
+${field(t, idx)}
   <div class="hd">
     <div class="fl">${flag(t.peerCountry) || flag(t.country) || '·'}</div>
     <div class="id">
       <b>${esc(t.name)}</b>
       <small>${esc([t.peerLocation, t.peerISP].filter(Boolean).join(' · ') || '—')}</small>
     </div>
+    ${st ? `<div class="vw" role="group" aria-label="Chart shape">
+      <button data-view="curve" class="${view === 'curve' ? 'on' : ''}" title="Line">${VIEW.curve}</button>
+      <button data-view="bars"  class="${view === 'bars'  ? 'on' : ''}" title="Bars">${VIEW.bars}</button>
+    </div>` : ''}
+    <span class="sp2"></span>
     <span class="stt"><span class="${dotCls}"></span>${label}</span>
   </div>
 
@@ -91,46 +166,49 @@ ${field(t, idx)}
     ${ports ? `<span class="q">${esc(ports)}</span>` : ''}
   </div>
 
-  <div class="mid">
-  <div class="ping">
-    <span class="n mono${hasPing ? '' : ' na'}">${hasPing ? t.ping : '—'}</span>
-    <span class="u">${hasPing ? 'ms' : 'no ping'}</span>
-    <span class="tail">${t.botRelay ? `<span class="relay">${RELAY_SVG} Bot Relay</span>` : ''}</span>
-  </div>
+  <!-- The headline is the ping: the one figure that says how this tunnel is
+       behaving right now. What it has carried is a total, and a total is a
+       fact about the past — it goes under, at the size of one. -->
+  <div class="headline">${hasPing ? t.ping : '—'}<em>${hasPing ? 'ms' : 'no ping'}</em></div>
+  <div class="hcap">${esc(bytes(t.totalBytes || 0))}${t.uptime ? ` · up ${esc(t.uptime)}` : ''}</div>
 
-  <div class="totals">
-    <span class="t"><i>↓</i><b>${bytes(t.inBytes || 0)}</b><em>total</em></span>
-    <span class="t"><i>↑</i><b>${bytes(t.outBytes || 0)}</b><em>total</em></span>
-  </div>
-
-  </div>
-
-  <div class="addr">
+  <div class="lines">
     <span class="ip">${esc(ip || '—')}</span><span class="sep"></span>
     <span class="pt">port ${esc(port || t.tunnelPort || '—')}</span>
   </div>
+</div>
 
-  <div class="spacer"></div>
+<!-- The bottom band: flush with the card's edge, opaque, and the chart above
+     stops where it starts. -->
+<div class="mfoot">
+  <span class="relaymark">${t.botRelay ? `<span class="relay" title="Bot Relay">${RELAY_SVG}</span>` : ''}</span>
+  <span class="sp2"></span>
+  ${st ? `<span class="mstats">
+      <span><b>${esc(speed(st.peak))}</b> peak</span><i>·</i>
+      <span><b>${esc(speed(st.low))}</b> low</span><i>·</i>
+      <span><b>${esc(speed(st.avg))}</b> avg</span>
+    </span>` : ''}
+</div>
 
-  <div class="foot">
-    <span class="upt">${t.uptime ? `up <b>${esc(t.uptime)}</b>` : ''}</span>
-    <span class="sp2"></span>
-    <button class="btn" data-act="edit"   title="Edit">${BTN.edit}</button>
-    <button class="btn" data-act="logs"   title="Logs">${BTN.logs}</button>
-    <button class="btn" data-act="detail" title="Metrics">${BTN.chart}</button>
-    <button class="btn" data-act="link"   title="Link test">${BTN.link}</button>
-    <button class="btn" data-act="speed"  title="Speed test">${BTN.speed}</button>
-    <button class="btn" data-act="more"   title="Start, stop, restart, delete">${BTN.more}</button>
-  </div>
+<div class="foot">
+  <span class="tot"><i>↓</i>${esc(bytes(t.inBytes || 0))}<i>↑</i>${esc(bytes(t.outBytes || 0))}</span>
+  <span class="sp2"></span>
+  <button class="btn" data-act="edit"   title="Edit">${BTN.edit}</button>
+  <button class="btn" data-act="logs"   title="Logs">${BTN.logs}</button>
+  <button class="btn" data-act="detail" title="Metrics">${BTN.chart}</button>
+  <button class="btn" data-act="link"   title="Link test">${BTN.link}</button>
+  <button class="btn" data-act="speed"  title="Speed test">${BTN.speed}</button>
+  <button class="btn" data-act="more"   title="Start, stop, restart, delete">${BTN.more}</button>
+</div>
 
-  <div class="card-more">
-    <button data-do="start"><span>▶</span>Start</button>
-    <button data-do="stop"><span>■</span>Stop</button>
-    <button data-do="restart"><span>↻</span>Restart</button>
-    <div class="sep2"></div>
-    <button class="danger" data-do="delete"><span>✕</span>Delete</button>
-  </div>
-</div></div>`;
+<div class="card-more">
+  <button data-do="start"><span>▶</span>Start</button>
+  <button data-do="stop"><span>■</span>Stop</button>
+  <button data-do="restart"><span>↻</span>Restart</button>
+  <div class="sep2"></div>
+  <button class="danger" data-do="delete"><span>✕</span>Delete</button>
+</div>
+</div>`;
 }
 
 /* New points into the line that is already there, rather than a new line.
@@ -138,15 +216,36 @@ ${field(t, idx)}
  * Setting d on an existing path moves it; replacing the path element restarts
  * the draw animation attached to it. Only one of those is what a fresh reading
  * means. */
+/* The chart moves on every poll and the rest of the card does not, so it is
+   redrawn into the element that is already there. Rebuilding the card for it
+   would restart the entrance animation four times a minute — the fault the
+   signature exists to avoid. */
 function updateSpark(el, t, idx) {
-  const p = sparkPaths(t.rates);
-  const svg = el.querySelector('.field svg');
-  if (!p) { el.querySelector('.field')?.remove(); return; }
+  const series = seriesOf(t);
+  const svg = el.querySelector('.mfield .mchart');
+  if (series.length < 2) { el.querySelector('.mfield')?.remove(); return; }
   if (!svg) return;
-  const line = svg.querySelector('path.sparkpath');
-  const area = svg.querySelector('path:not(.sparkpath)');
-  if (line) line.setAttribute('d', p.line);
-  if (area) area.setAttribute('d', p.area);
+  const id = svg.querySelector('linearGradient')?.id || ('L' + idx);
+  const defs = svg.querySelector('defs');
+  svg.innerHTML = (defs ? defs.outerHTML : '') +
+    chartSVG(series, cardView.get(t.name) || 'curve', id);
+  paintTrend(el, t);
+}
+
+/* The footer figures come from the same window as the chart, so they are
+   written whenever it is.
+ *
+ * The card's colour is its state and nothing else — green connected, red
+ * offline, plain white stopped or still trying. It used to be the direction of
+ * the traffic, which meant the same green stood for "up" on a tunnel that was
+ * down; one colour has to mean one thing. */
+function paintTrend(el, t) {
+  el.classList.remove('st-online', 'st-offline', 'st-stopped', 'st-unknown');
+  el.classList.add('st-' + (t.state || 'unknown'));
+  const st = statsOf(seriesOf(t).map(p => p.v));
+  if (!st) return;
+  const cells = el.querySelectorAll('.mstats b');
+  [st.peak, st.low, st.avg].forEach((v, i) => { if (cells[i]) cells[i].textContent = speed(v); });
 }
 
 const EMPTY = `<div class="emptybox">
@@ -169,7 +268,7 @@ const ACTION_DONE = {
 function cardSig(t) {
   return JSON.stringify([
     t.state, t.role, t.direction, t.transport, t.carrier, t.addr, t.ports,
-    t.ping, t.uptime, t.bytesIn, t.bytesOut, t.country, t.peerCountry,
+    t.ping, t.uptime, t.bytesIn, t.bytesOut, t.bytesTotal, t.country, t.peerCountry,
     t.peerLocation, t.peerISP, t.botRelay, t.botRelayPort, t.tunnelPort,
     t.kcpLossPercent, t.pool, t.preset, t.certType, t.certDomain, t.certExpiry,
     t.maxConnections, t.bandwidthMbps,
@@ -243,6 +342,19 @@ export function dashboard(ctx) {
   };
 
   const unsub = store.subscribe(paint);
+
+  /* The chart's shape is a per-card choice and is remembered, so a poll a
+     second later does not put it back. */
+  const offView = delegate(view, 'click', '[data-view]', (ev, btn) => {
+    ev.stopPropagation();
+    const card = btn.closest('.c7');
+    const name = card?.dataset.name;
+    if (!name) return;
+    cardView.set(name, btn.dataset.view);
+    card.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('on', b === btn));
+    const t = store.tunnel(name);
+    if (t) updateSpark(card, t, 0);
+  });
 
   const offAct = delegate(view, 'click', '[data-act]', async (ev, btn) => {
     const name = btn.closest('.c7')?.dataset.name;
@@ -330,6 +442,7 @@ export function dashboard(ctx) {
 
   ctx.setTeardown(() => {
     unsub();
+    offView();
     offAct();
     offDo();
     document.removeEventListener('click', closeSheets);

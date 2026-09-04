@@ -11,8 +11,11 @@
 .RX{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln)}
 
 /* V3 — heartbeat columns */
-.RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln)}
-.RZ .t4{background:var(--s1);padding:14px 15px 13px;display:flex;flex-direction:column;gap:9px}
+/* A chip, not a card: the same material but a lighter blur, because a small
+   surface that blurs as hard as a big one reads as thicker than it is. */
+.RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
+  -webkit-backdrop-filter:blur(12px) saturate(140%);backdrop-filter:blur(12px) saturate(140%)}
+.RZ .t4{background:var(--glass);padding:14px 15px 13px;display:flex;flex-direction:column;gap:9px}
 .RZ .head6{display:flex;align-items:baseline;gap:9px}
 .RZ .k{font-size:11px;color:var(--dim);font-weight:560}
 .RZ .v{font-size:24px;font-weight:660;letter-spacing:-.036em;font-variant-numeric:tabular-nums;line-height:1}

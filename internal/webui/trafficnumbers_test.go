@@ -153,8 +153,11 @@ func TestThePanelNeverComputesWithAFormattedFigure(t *testing.T) {
 
 	// The numeric fields are only useful if something reads them.
 	for rel, want := range map[string][]string{
-		"js/ui/strip.js":        {"upBps", "downBps"},
-		"js/views/overview.js":  {"totalSentBytes", "totalRecvBytes", "totalTrafficBytes", "totalBytes", "inBytes", "outBytes"},
+		"js/ui/strip.js": {"upBps", "downBps"},
+		// The overview draws this server's totals. The per-tunnel figures it also
+		// drew are on the tunnel cards, which is the screen those tunnels live
+		// on — two places drawing the same numbers is two places to keep right.
+		"js/views/overview.js":  {"totalSentBytes", "totalRecvBytes", "totalTrafficBytes"},
 		"js/views/dashboard.js": {"inBytes", "outBytes"},
 		"js/views/metrics.js":   {"inBytes", "outBytes"},
 	} {

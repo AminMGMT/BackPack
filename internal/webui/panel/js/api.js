@@ -58,14 +58,14 @@ export const tunnelOptions = () => get('/api/tunnel/options');
    never has to guess what changed. */
 export const nodes = () => get('/api/nodes');
 const nodePost = form => post('/api/nodes', new URLSearchParams(form));
-export const nodeListenerOn  = () => nodePost({ action: 'enable' });
-export const nodeListenerOff = () => nodePost({ action: 'disable' });
 export const nodeRemove = name => nodePost({ action: 'remove', name });
 /* Adding reaches the server while the operator waits, and installs Backpack on
    it if it has none, so this is the one node call that can take minutes. */
 export const nodeAdd = fields => nodePost({ action: 'add', ...fields });
 export const nodeCredentials = fields => nodePost({ action: 'credentials', ...fields });
 export const nodeUpgrade = name => nodePost({ action: 'upgrade', name });
+/* Ask one server again now, rather than waiting for its answer to go stale. */
+export const nodeRefresh = name => nodePost({ action: 'refresh', name });
 export const nodeUpgradeAll = () => nodePost({ action: 'upgradeall' });
 
 /* Both ends in one submission: this end is created here, and the other is

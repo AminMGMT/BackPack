@@ -38,6 +38,14 @@
 
 <body data-t="dark" class="wide">
 
+<!-- The ground the panel sits on.
+     Bars across the width, tallest at the edges and shortest in the middle,
+     each a gradient of the accent fading upward — so the page has a horizon
+     rather than a flat field. It is built on --ac, which is what the accent
+     picker sets, so choosing a different one repaints this with it and no
+     script is involved. Inert: it is behind everything and takes no pointer. -->
+<div class="bgbars" aria-hidden="true"><i style="--s:1.000;--d:0.0s"></i><i style="--s:0.882;--d:0.1s"></i><i style="--s:0.767;--d:0.2s"></i><i style="--s:0.658;--d:0.3s"></i><i style="--s:0.553;--d:0.4s"></i><i style="--s:0.456;--d:0.5s"></i><i style="--s:0.368;--d:0.6s"></i><i style="--s:0.300;--d:0.7s"></i><i style="--s:0.368;--d:0.8s"></i><i style="--s:0.456;--d:0.9s"></i><i style="--s:0.553;--d:1.0s"></i><i style="--s:0.658;--d:1.1s"></i><i style="--s:0.767;--d:1.2s"></i><i style="--s:0.882;--d:1.3s"></i><i style="--s:1.000;--d:1.4s"></i></div>
+
 <div id="boot">
   <div class="boot-stage">
     <div class="boot-mark">
@@ -115,10 +123,6 @@
         <button data-dock="/tunnels" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24"><path d="M4 12h4l3-7 3 14 3-7h3"/></svg>
           <span>Tunnels</span><span class="n" id="dock-t"></span>
-        </button>
-        <button data-dock="/settings" role="tab" aria-selected="false">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1 1.55V21a2 2 0 11-4 0v-.09A1.7 1.7 0 009 19.4a1.7 1.7 0 00-1.87.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09A1.7 1.7 0 004.6 9a1.7 1.7 0 00-.33-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.7 1.7 0 0019.4 9v0a1.7 1.7 0 001.55 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.55 1z"/></svg>
-          <span>Settings</span>
         </button>
       </div>
     </div>

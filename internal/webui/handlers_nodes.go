@@ -132,10 +132,7 @@ func (s *server) writeNodeStateWith(w http.ResponseWriter, warning string) {
 	}
 	wg.Wait()
 
-	out := map[string]any{
-		"enabled": run != nil,
-		"nodes":   rows,
-	}
+	out := map[string]any{"nodes": rows}
 	if warning != "" {
 		out["warning"] = warning
 	}
@@ -145,35 +142,7 @@ func (s *server) writeNodeStateWith(w http.ResponseWriter, warning string) {
 func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	switch r.FormValue("action") {
-	case "enable":
-		if err := s.nodes.start(); err != nil {
-			// Some ports came up and some did not. Reported rather than
-			// refused: the servers that can connect should be able to.
-			s.writeNodeStateWith(w, err.Error())
-			return
-		}
-		if err := node.SetEnabled(true); err != nil {
-			http.Error(w, "could not save: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.writeNodeState(w)
-
-	case "disable":
-		// The servers stay in the fleet. Turning it off is "stop reaching out",
-		// not "forget the fleet" — an operator who wanted the second one would
-		// remove the servers.
-		s.nodes.stop()
-		if err := node.SetEnabled(false); err != nil {
-			http.Error(w, "could not save: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.writeNodeState(w)
-
 	case "add":
-		if s.nodes.get() == nil {
-			http.Error(w, "turn Managed servers on first", http.StatusBadRequest)
-			return
-		}
 		name := strings.TrimSpace(r.FormValue("name"))
 		host := strings.TrimSpace(r.FormValue("host"))
 		user := strings.TrimSpace(r.FormValue("user"))
@@ -269,6 +238,27 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		}
 		// Read back what it is now, so the card does not keep showing the
 		// version it had before.
+		var info node.Info
+		if err := run.Call(name, node.OpHello, nil, &info); err == nil {
+			_ = node.NoteInfo(name, info)
+		}
+		s.writeNodeState(w)
+
+	case "refresh":
+		// Ask one server again, now.
+		//
+		// The runner keeps each answer for a short while so the fleet page does
+		// not open a connection per card per poll. That is right for a page
+		// that repaints itself and wrong for an operator who has just changed
+		// something on that machine and wants to know: this drops what is
+		// remembered and asks.
+		name := strings.TrimSpace(r.FormValue("name"))
+		run := s.nodes.get()
+		if run == nil {
+			http.Error(w, "managed servers are turned off", http.StatusBadRequest)
+			return
+		}
+		run.Forget(name)
 		var info node.Info
 		if err := run.Call(name, node.OpHello, nil, &info); err == nil {
 			_ = node.NoteInfo(name, info)

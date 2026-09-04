@@ -4,14 +4,99 @@
  */
 
 /* ===================== the card, final ===================== */
-.c7{background:var(--s1);border:1px solid var(--ln);border-radius:18px;position:relative;overflow:hidden;
-    display:flex;flex-direction:column;min-height:314px;
+/* Glass. See --glass in tokens.css for what the material is and why it is only
+   a hint of one. The top edge is brighter than the rest: light catching the
+   near face is what tells the eye this is a pane and not a painted rectangle. */
+.c7{background:var(--glass);-webkit-backdrop-filter:var(--glass-blur);
+    backdrop-filter:var(--glass-blur);
+    border:1px solid var(--ln);border-top-color:var(--glass-edge);
+    border-radius:28px;position:relative;overflow:hidden;
+    display:flex;flex-direction:column;min-height:344px;
+    box-shadow:var(--glass-lift);
     transition:border-color .3s var(--spring),transform .12s ease-out}
 .c7:hover{border-color:var(--ln2)}
 .c7.warn{border-color:color-mix(in srgb,var(--wr) 34%,transparent)}
 .c7.off{opacity:.78}
-.c7 .field{position:absolute;left:0;right:0;bottom:0;height:126px;pointer-events:none;opacity:.5}
-.c7 .inner{position:relative;display:flex;flex-direction:column;flex:1;padding:15px}
+.c7 .inner{position:relative;z-index:1;display:flex;flex-direction:column;flex:1;
+  padding:19px 22px 16px;pointer-events:none;overflow:hidden}
+/* Only the controls take the pointer; the rest of the content lets the card
+   through, so it reads as one surface rather than a panel with a picture on it. */
+.c7 .inner button,.c7 .inner a{pointer-events:auto}
+
+/* ---- the metric field ---------------------------------------------------
+ *
+ * The chart takes the right of the card, behind everything: a wash of the
+ * accent colour fading in from the right, a dotted ground fading in from the
+ * left, and the line over both. --mc is the accent, and it is the reading
+ * rather than decoration — see .tr-up / .tr-down / .tr-flat below.
+ */
+/* One colour, one meaning: the tunnel's state.
+ *
+ * Connected is the ok colour, offline is the error one, and stopped — or still
+ * trying, which is what "unknown" is — is plain, because neither of the other
+ * two would be true. It used to be the direction of the traffic, so the same
+ * green stood for "carrying more" on a tunnel that was down. */
+.c7{--mc:var(--tx)}
+.c7.st-online{--mc:var(--ok)}
+.c7.st-offline{--mc:var(--er)}
+.c7.st-stopped,.c7.st-unknown{--mc:var(--tx)}
+
+/* The chart lives in the content region, so it ends exactly where the bottom
+   band begins rather than running behind it. */
+.c7 .mfield{position:absolute;inset:0 0 0 auto;z-index:0;pointer-events:none}
+.c7 .mwash{position:absolute;inset:0;
+  background:linear-gradient(to left,color-mix(in srgb,var(--mc) 12%,transparent),transparent 75%)}
+.c7 .mgrid{position:absolute;inset:0;color:color-mix(in srgb,var(--tx) 13%,transparent);
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 55%);
+  mask-image:linear-gradient(to right,transparent,#000 55%)}
+.c7 .mgrid svg{width:100%;height:100%;display:block}
+.c7 .mchart{position:absolute;inset:auto 0 0;width:100%;height:62%;display:block;overflow:visible}
+
+/* The line and the columns are the metric, so they are the metric's colour.
+   Nothing here is stroked white on its own account. */
+.c7 .mchart path[stroke]{stroke:var(--mc)}
+
+/* ---- the headline -------------------------------------------------------
+ * The figure is the reason to look at the card, so it is the size of one. */
+/* Every card puts the same thing in the same place, whatever it has to say:
+   a tunnel with no ports and no location must line up with one that has both,
+   or a grid of them reads as a pile. Hence the fixed heights. */
+.c7 .headline{height:52px;margin-top:12px;display:flex;align-items:baseline;gap:8px;
+  font-size:46px;font-weight:560;line-height:1;letter-spacing:-.035em;
+  font-variant-numeric:tabular-nums;color:var(--tx)}
+.c7 .headline em{font-style:normal;font-size:14px;font-weight:560;letter-spacing:0;
+  color:var(--mu)}
+/* Vibrancy: over a translucent surface, flat grey at normal weight goes soft.
+   A little more colour and a little more weight is what keeps it readable. */
+.c7 .hcap{height:17px;margin-top:6px;font-size:11.5px;color:var(--mu);font-weight:520;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* The chart's shape, as a two-state control in the card's own idiom. */
+.c7 .vw{display:flex;gap:1px;background:var(--sunk);border-radius:9px;padding:2px;flex:none}
+.c7 .vw button{width:24px;height:20px;border:0;border-radius:7px;background:transparent;
+  color:var(--dim);cursor:pointer;display:grid;place-items:center;
+  transition:background .2s ease,color .2s ease}
+.c7 .vw button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.c7 .vw .iB{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+.c7 .vw button[data-view="bars"] .iB{fill:currentColor;stroke:none}
+
+/* ---- the footer band ----------------------------------------------------
+ * Opaque, so the chart never runs under the text: what changed on the left,
+ * the shape of the window on the right. */
+.c7 .mfoot{position:relative;z-index:1;display:flex;align-items:center;gap:10px;
+  min-height:38px;padding:9px 22px;background:var(--glass-solid);
+  border-top:1px solid color-mix(in srgb,var(--tx) 6%,transparent);
+  font-size:12px;color:var(--mu)}
+.c7 .mfoot .sp2{flex:1}
+/* Left of the band: the bot relay, when there is one, and nothing when there
+   is not. It used to carry the change since the last reading, which is a
+   number that moves every few seconds and told nobody anything. */
+.c7 .relaymark{display:flex;align-items:center;min-width:26px}
+.c7 .mstats{display:flex;align-items:center;gap:7px;font-size:11px;flex:none}
+.c7 .mstats b{color:var(--tx2);font-weight:600;font-variant-numeric:tabular-nums}
+.c7 .mstats i{font-style:normal;opacity:.4}
+@container pg (max-width:520px){ .c7 .mstats{display:none} }
 .c7 .hd{display:flex;align-items:center;gap:10px}
 .c7 .fl{width:30px;height:30px;border-radius:9px;background:var(--s3);border:1px solid var(--ln);
         display:grid;place-items:center;font-size:15px;flex:none}
@@ -27,30 +112,25 @@
 .c7 .dot.off{background:var(--faint);animation:none}
 @keyframes bp{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}
   70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
-.c7 .kind{display:flex;gap:6px;margin-top:11px;flex-wrap:wrap}
+.c7 .kind{display:flex;gap:6px;height:22px;margin-top:11px;overflow:hidden}
 .c7 .kind span{font-size:10.5px;font-weight:620;letter-spacing:.04em;text-transform:uppercase;
   padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;
   letter-spacing:0;font-weight:560;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.c7 .ping{display:flex;align-items:flex-end;gap:9px;margin-top:13px}
-.c7 .ping .n{font-size:44px;font-weight:640;letter-spacing:-.05em;line-height:1}
-.c7 .ping .n.na{color:var(--dim)}
-.c7 .ping .u{font-size:14px;color:var(--mu);font-weight:560;padding-bottom:4px}
-.c7 .ping .tail{margin-left:auto;padding-bottom:3px}
 .c7 .relay{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:620;
   padding:5px 9px 5px 7px;border-radius:8px;background:var(--sunk);border:1px solid var(--ln);color:var(--tx2)}
 .c7 .relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.c7 .totals{display:flex;align-items:baseline;gap:16px;margin-top:12px;font-size:13px}
-.c7 .totals .t{display:flex;align-items:baseline;gap:6px}
-.c7 .totals .t i{font-style:normal;font-size:12px;color:var(--dim)}
-.c7 .totals .t b{font-weight:640;letter-spacing:-.022em;font-variant-numeric:tabular-nums}
-.c7 .totals .t em{font-style:normal;font-size:11px;color:var(--mu);font-weight:560}
-.c7 .addr{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:11.5px;color:var(--dim)}
-.c7 .addr .ip,.c7 .addr .pt{font-variant-numeric:tabular-nums;color:var(--mu)}
-.c7 .addr .sep{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
-.c7 .spacer{flex:1;min-height:16px}
-.c7 .foot{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--mu)}
-.c7 .foot .upt b{color:var(--tx2);font-weight:600;font-variant-numeric:tabular-nums}
+.c7 .lines{display:flex;align-items:center;gap:7px;height:18px;margin-top:10px;
+  font-size:11.5px;color:var(--dim)}
+.c7 .lines .ip,.c7 .lines .pt{font-variant-numeric:tabular-nums;color:var(--mu)}
+.c7 .lines .sep{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
+/* The actions, flush with the bottom edge — the band is the end of the card,
+   not something sitting near it. */
+.c7 .foot{position:relative;z-index:1;display:flex;align-items:center;gap:9px;
+  min-height:52px;padding:0 18px 0 22px;background:var(--glass-solid);font-size:11.5px;color:var(--mu)}
+.c7 .foot .tot{display:flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums;
+  color:var(--tx2);font-weight:560}
+.c7 .foot .tot i{font-style:normal;color:var(--dim);font-weight:400}
 .c7 .foot .sp2{flex:1}
 .btn{width:30px;height:30px;border-radius:9px;border:1px solid var(--ln);background:var(--s1);color:var(--mu);
   cursor:pointer;display:grid;place-items:center;transition:background .25s ease,color .25s ease,transform .12s ease-out}
@@ -61,7 +141,7 @@
 .map{border:1px solid var(--ln);border-radius:14px;overflow:hidden;background:var(--s1)}
 
 /* The four service actions, in a sheet off the card's "more" button. */
-.c7 .card-more{position:absolute;right:12px;bottom:50px;z-index:6;min-width:150px;padding:4px;
+.c7 .card-more{position:absolute;right:16px;bottom:56px;z-index:6;min-width:150px;padding:4px;
   background:var(--s1);border:1px solid var(--ln2);border-radius:13px;box-shadow:var(--lift);
   transform-origin:bottom right;transform:scale(.94) translateY(4px);opacity:0;pointer-events:none;
   transition:transform .3s var(--spring),opacity .18s ease}

@@ -58,10 +58,16 @@ func TestTheOverviewIsNotRebuiltOnEveryPoll(t *testing.T) {
 	}
 
 	// The figures that move on every poll have to be written into the elements
-	// that are already there, which is what these do.
-	for _, want := range []string{"const region =", "function fillRow("} {
-		if !strings.Contains(src, want) {
-			t.Errorf("overview.js no longer has %q, so it has no way to update without rebuilding", want)
-		}
+	// that are already there.
+	if !strings.Contains(src, "const region =") {
+		t.Error("overview.js no longer has a region helper, so it has no way to update " +
+			"one part of the page without rebuilding all of it")
+	}
+	// The split bar moves on every poll and is set on the element it belongs to
+	// rather than re-rendered around it. fillRow did the same for the per-tunnel
+	// rows, which are on the tunnel cards now.
+	if !strings.Contains(src, "style.setProperty") {
+		t.Error("nothing on the overview is written in place any more, so every figure " +
+			"that changes costs a rebuild of the region around it")
 	}
 }

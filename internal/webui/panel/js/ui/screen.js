@@ -9,10 +9,13 @@
  * stripped on load and the view binds real listeners instead.
  */
 
+import * as router from '../router.js';
 import { $, el } from '../lib/dom.js';
 
 const tplCache = new Map();
 let active = null;
+/* Set while a close is in flight; see close() below. */
+let dismissing = false;
 
 /* The sheet is added when the screen opens and taken out again when it closes.
  * That is not tidiness — each preview was drawn on its own and every one of
@@ -74,10 +77,30 @@ export async function openScreen(name, { pick = '.dlg', bind } = {}) {
   document.body.classList.add('modal');
   requestAnimationFrame(() => scrim.classList.add('on'));
 
-  const close = () => closeScreen();
+  /* Closing goes back to the page it was opened over, so the cross and Escape
+     leave you where you were. It used only to pull the sheet off, which left
+     the address on the dialog's own route with whatever page happened to be
+     drawn underneath — and that page was a fixed default.
+     
+     The guard is not decoration. Several views hand this to setTeardown, and
+     the route change that closing causes runs teardown — so without it, close
+     called the navigation that called teardown that called close, until the
+     stack ran out. */
+  const close = () => {
+    if (dismissing) return;
+    dismissing = true;
+    try { router.go(router.getHome()); } finally { dismissing = false; }
+  };
   active = { scrim, name };
 
-  node.querySelectorAll('.x, .x9, .x2, [data-close]')
+  /* Only the controls that close, not everything wearing the class.
+   *
+   * .x is the close button, and it is also the class on the icon inside dozens
+   * of other buttons — Pause, Copy, Download, Run. Binding it by class alone
+   * put close on all of them: pressing one of those with the pointer over its
+   * icon shut the dialog instead of doing what it said, which is why several
+   * buttons looked like they did nothing. */
+  node.querySelectorAll('button.x, a.x, .x9, .x2, [data-close]')
       .forEach(b => b.addEventListener('click', close));
   wire(node, close);
   scrim.addEventListener('click', ev => { if (ev.target === scrim) close(); });
@@ -165,7 +188,14 @@ function wire(root, close) {
   });
 }
 
-function onKey(ev) { if (ev.key === 'Escape') closeScreen(); }
+/* Escape leaves the same way the cross does. It used to pull the sheet off and
+   leave the address on the dialog's route, so the next navigation went
+   somewhere unrelated. */
+function onKey(ev) {
+  if (ev.key !== 'Escape' || dismissing) return;
+  dismissing = true;
+  try { router.go(router.getHome()); } finally { dismissing = false; }
+}
 
 export function closeScreen() {
   if (!active) return;

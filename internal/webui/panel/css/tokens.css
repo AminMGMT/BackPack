@@ -16,7 +16,51 @@
 
   *{box-sizing:border-box;margin:0;padding:0}
   html{-webkit-text-size-adjust:100%}
-  body{min-height:100dvh;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
+  /* The material the cards are made of.
+   *
+   * A translucent surface over the page's own ground, blurred, so a card reads
+   * as a pane of something rather than a rectangle of paint. Following Apple's
+   * material rules: the surface is semi-transparent with a blur behind it, its
+   * top edge is a touch brighter than the rest — light catching the near face —
+   * and a bigger surface reads as thicker, so cards blur harder than chips.
+   *
+   * It is a hint and not an effect. At 82% the ground behind is a suggestion of
+   * depth; much below that and text starts sitting on whatever moves behind it,
+   * which is the point at which glass stops being a material and becomes a
+   * legibility problem.
+   *
+   * Bands inside a card use --glass-solid: the same material, denser. They are
+   * part of the same pane, not a second one stacked on it — stacking two
+   * translucent surfaces is what makes this look cheap and read badly.
+   */
+  body{
+    --glass:color-mix(in srgb,var(--s1) 82%,transparent);
+    --glass-solid:color-mix(in srgb,var(--s1) 94%,transparent);
+    --glass-blur:blur(20px) saturate(150%);
+    --glass-edge:color-mix(in srgb,var(--tx) 13%,transparent);
+    --glass-lift:0 2px 10px rgba(0,0,0,.04),0 12px 34px rgba(0,0,0,.16);
+    /* The two named series a tunnel has: down and up.
+       The accent, and the accent gone quiet — one measurement in two halves,
+       so they are one hue at two strengths rather than two unrelated colours.
+       Built on --ac and --mu, so they follow the accent the operator picked
+       and the theme they are in, the way everything else here does. */
+    --sc1:var(--ac);
+    --sc2:color-mix(in srgb,var(--ac) 38%,var(--mu));
+  }
+  /* Told to keep it simple: solid surfaces, no blur, no bright edge. */
+  @media (prefers-reduced-transparency:reduce){
+    body{--glass:var(--s1);--glass-solid:var(--s1);--glass-blur:none;
+         --glass-edge:var(--ln)}
+  }
+  @media (prefers-contrast:more){
+    body{--glass:var(--s1);--glass-solid:var(--s1);--glass-blur:none;
+         --glass-edge:var(--tx)}
+  }
+
+  /* The ground moved here from .panel: the panel is transparent now so the
+     bars behind it show through, and something still has to paint the page. */
+  body{min-height:100dvh;background:var(--bg);color:var(--tx);
+       font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
        -webkit-font-smoothing:antialiased;transition:background .35s ease,color .35s ease}
   body[data-t="dark"]{background:#070707;color:#fafafa;
     --bg:#070707;--s1:#111111;--s2:#181818;--s3:#1f1f1f;

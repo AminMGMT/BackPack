@@ -63,6 +63,62 @@ const RACK_SVG = `<svg class="sv-bg" viewBox="0 0 120 150" aria-hidden="true" fo
   </g>
 </svg>`;
 
+/* The ground every server card sits on.
+ *
+ * Two wide roads across, two down, a scatter of smaller streets, some blocks
+ * and a pin in the middle. The roads are drawn on rather than faded in — the
+ * same stroke-dashoffset trick the sparklines use — so the card is surveyed
+ * once as it arrives rather than switched on.
+ *
+ * It is not this server's map. It is texture behind an address; see nodeCard.
+ *
+ * Drawn at a fixed size and cropped by the card, the way a background image
+ * sits at its natural size rather than being stretched to the box.
+ *
+ * It was scaled to the card before, which was wrong twice. Stretched to the
+ * card's aspect it skewed every angle and thickened the roads along one axis;
+ * scaled uniformly to cover, it zoomed — the same street plan came out twice
+ * the size on a wide card as on a narrow one, so two cards side by side had
+ * visibly different ground. At a fixed size neither happens: every card shows
+ * the same streets at the same scale, and a wider one simply shows more of
+ * them. It is drawn larger than any card gets, so there is always more to
+ * show. */
+const MAP_SVG = `<svg width="680" height="340" viewBox="0 0 680 340" aria-hidden="true">
+  <g class="rd">
+    <line x1="0" y1="118" x2="680" y2="118" stroke-width="4" style="--i:0"/>
+    <line x1="0" y1="222" x2="680" y2="222" stroke-width="4" style="--i:1"/>
+    <line x1="204" y1="0" x2="204" y2="340" stroke-width="3" style="--i:2"/>
+    <line x1="476" y1="0" x2="476" y2="340" stroke-width="3" style="--i:3"/>
+  </g>
+  <g class="st">
+    <line x1="0" y1="66" x2="680" y2="66" style="--i:4"/>
+    <line x1="0" y1="170" x2="680" y2="170" style="--i:5"/>
+    <line x1="0" y1="274" x2="680" y2="274" style="--i:6"/>
+    <line x1="96"  y1="0" x2="96"  y2="340" style="--i:7"/>
+    <line x1="286" y1="0" x2="286" y2="340" style="--i:8"/>
+    <line x1="394" y1="0" x2="394" y2="340" style="--i:9"/>
+    <line x1="574" y1="0" x2="574" y2="340" style="--i:10"/>
+  </g>
+  <g class="bl">
+    <rect x="118" y="136" width="62" height="60" rx="3" style="--i:0"/>
+    <rect x="226" y="30"  width="46" height="46" rx="3" style="--i:1"/>
+    <rect x="500" y="240" width="60" height="52" rx="3" style="--i:2"/>
+    <rect x="512" y="76"  width="40" height="66" rx="3" style="--i:3"/>
+    <rect x="26"  y="188" width="34" height="38" rx="3" style="--i:4"/>
+    <rect x="304" y="248" width="54" height="30" rx="3" style="--i:5"/>
+    <rect x="596" y="150" width="44" height="44" rx="3" style="--i:6"/>
+    <rect x="42"  y="26"  width="38" height="26" rx="3" style="--i:7"/>
+  </g>
+  <g class="pin">
+    <path d="M340 128c-13 0-23 10-23 23 0 17 23 43 23 43s23-26 23-43c0-13-10-23-23-23z"/>
+    <circle cx="340" cy="151" r="8"/>
+  </g>
+</svg>`;
+
+const MAPICON_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true">
+  <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
+  <line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>`;
+
 const SHELL = `
 <div class="np7">
   <div class="sech2">
@@ -72,40 +128,40 @@ const SHELL = `
     <button class="sb primary" id="naddb">Add a server</button>
   </div>
 
-  <div class="row7">
-    <div class="t7">
-      <b>Managed servers</b>
-      <span id="lisub">Off.</span>
-    </div>
-    <button class="sw7" id="nsw" aria-pressed="false" aria-label="Managed servers"></button>
-  </div>
-
   <form class="addsv" id="addform" hidden autocomplete="off">
-    <div class="asv-h"><b>Add a server</b>
-      <span>The panel logs in over SSH. Nothing has to be run on that machine.</span></div>
-    <div class="asv-g">
-      <label>Name<input name="name" placeholder="kharej" autocomplete="off" required></label>
-      <label>Address<input name="host" placeholder="203.0.113.9" autocomplete="off" required></label>
-      <label>SSH port<input name="sshPort" type="number" min="1" max="65535" value="22"></label>
-      <label>Username<input name="user" value="root" autocomplete="off"></label>
-      <label class="wide">Password<input name="password" type="password"
-        placeholder="the root password for that server" autocomplete="new-password" required></label>
-    </div>
-    <div class="asv-f">
-      <span class="asv-note" id="asvnote">The password is kept on this server only, readable by root.</span>
-      <span class="sp"></span>
-      <button type="button" class="btn7" id="asvcancel">Cancel</button>
-      <button type="submit" class="btn7 solid" id="asvgo">Add it</button>
+    <div class="asv-map">${MAP_SVG}</div>
+    <div class="asv-body">
+      <div class="asv-h">
+        <span class="asv-ic">${MAPICON_SVG}</span>
+        <div>
+          <b>Add a server</b>
+          <span>The panel logs in over SSH — the four things ssh itself asks for.
+                Nothing has to be run on that machine.</span>
+        </div>
+      </div>
+
+      <div class="asv-g">
+        <label class="f1"><span>Name</span>
+          <input name="name" placeholder="kharej" autocomplete="off" required></label>
+        <label class="f2"><span>Address</span>
+          <input name="host" placeholder="203.0.113.9" autocomplete="off" required></label>
+        <label class="f3"><span>SSH port</span>
+          <input name="sshPort" type="number" min="1" max="65535" value="22"></label>
+        <label class="f4"><span>Username</span>
+          <input name="user" value="root" autocomplete="off"></label>
+        <label class="f5"><span>Password</span>
+          <input name="password" type="password" placeholder="that user's password"
+                 autocomplete="new-password" required></label>
+      </div>
+
+      <div class="asv-f">
+        <span class="asv-note" id="asvnote">Kept on this server only, readable by root.</span>
+        <span class="sp"></span>
+        <button type="button" class="btn7" id="asvcancel">Cancel</button>
+        <button type="submit" class="btn7 solid" id="asvgo">Add it</button>
+      </div>
     </div>
   </form>
-
-  <div class="behind7" id="behind" hidden>
-    <div class="t7">
-      <b id="behindt">Servers behind this panel</b>
-      <span id="behinds"></span>
-    </div>
-    <button class="btn7 solid" id="upall">Upgrade them</button>
-  </div>
 
   <div id="fleet" class="grid3"></div>
 
@@ -121,7 +177,6 @@ export function serversView(ctx) {
   view.innerHTML = SHELL;
 
   const root   = view;
-  const sw     = $('#nsw', root);
   const addB   = $('#naddb', root);
   const form   = $('#addform', root);
   const note   = $('#asvnote', root);
@@ -130,19 +185,7 @@ export function serversView(ctx) {
 
   /* ---- painting ---- */
   function paint(state) {
-    const on = !!state.enabled;
-    sw.classList.toggle('on', on);
-    sw.setAttribute('aria-pressed', String(on));
-    addB.disabled = !on;
-    addB.title = on ? '' : 'Turn managed servers on first';
-    if (!on) { form.hidden = true; }
-
     const nodes = state.nodes || [];
-    $('#lisub', root).textContent = on
-      ? (nodes.length
-          ? `Managing ${nodes.length === 1 ? '1 server' : nodes.length + ' servers'}.`
-          : 'On.')
-      : 'Off.';
     $('#nempty', root).hidden = !!(nodes.length || !form.hidden);
     $('#nCount', root).textContent = String(nodes.length);
 
@@ -155,48 +198,82 @@ export function serversView(ctx) {
 
   /* One server, as a card.
    *
-   * A card rather than a row because a server is not a line item: it has a
-   * name, an address, a machine underneath it and a job, and a row makes the
-   * operator read all of that sideways.
+   * The same card as a tunnel's, because they sit in the same grid and a
+   * fleet page whose cards are a different size and shape from the tunnels
+   * page reads as a different product. Same shell, same height, same bottom
+   * band of actions.
    *
-   * What it says is what the far machine reports about itself — its Backpack
-   * version, its system, how long it has been up — because that is the reason
-   * to look at this page when nothing is wrong. There is no port on it any
-   * more; nothing here listens.
+   * What differs is what is behind it. A tunnel card has its chart there; a
+   * server card has a map, because the thing a managed server has that a
+   * tunnel does not is a place. Clicking draws it — graph paper gives way to
+   * roads, blocks and a pin.
+   *
+   * The map is a drawing, not a map. It has no idea where the server is and
+   * does not pretend to: no tiles are fetched, nothing is geocoded, and the
+   * roads are the same roads on every card. It is texture behind an address,
+   * and saying so here is cheaper than somebody later believing it.
    */
   function nodeCard(n) {
     const i = n.info || {};
     const built = (n.tunnels || []).length;
     const dash = v => (v && v !== '-' ? v : '—');
+    const login = `${n.user}@${n.host}${n.sshPort && n.sshPort !== 22 ? ':' + n.sshPort : ''}`;
+    const mine = (store.get().stats?.version || '').trim();
+    const behind = n.online && i.version && mine && i.version !== mine;
 
-    const card = el('div', { class: 'sv7' + (n.online ? ' on7' : ''), html: RACK_SVG }, [
-      el('div', { class: 'sv-h' }, [
-        el('span', { class: 'sv-dot' }),
-        el('div', { class: 'sv-id' }, [
-          el('b', { text: n.name }),
-          el('em', { text: i.hostname || n.host }),
+    const card = el('div', {
+      class: 'mp7' + (n.online ? ' live' : ''),
+      'data-name': n.name,
+    }, [
+      el('div', { class: 'mp-field' }, [
+        el('div', { class: 'mp-map', html: MAP_SVG }),
+        el('div', { class: 'mp-wash' }),
+      ]),
+
+      el('div', { class: 'mp-in' }, [
+        el('div', { class: 'mp-top' }, [
+          el('span', { class: 'mp-ic', html: MAPICON_SVG }),
+          el('div', { class: 'mp-id' }, [
+            el('b', { text: n.name }),
+            el('small', { text: i.hostname || n.host }),
+          ]),
+          el('span', { class: 'mp-pill' }, [
+            el('i'), el('span', { text: n.online ? 'Reachable' : 'Unreachable' }),
+          ]),
         ]),
-        el('span', { class: 'sv-tag', text: n.online ? 'reachable' : 'unreachable' }),
+
+        el('div', { class: 'mp-addr' }, [
+          el('b', { text: dash(i.ipv4) !== '—' ? i.ipv4 : n.host }),
+          i.ipv6 && i.ipv6 !== '-' ? el('em', { text: i.ipv6 }) : null,
+        ]),
+
+        n.online ? null : el('div', { class: 'mp-why', text: n.why || 'It did not answer.' }),
+
+        el('div', { class: 'sp' }),
+
+        /* Two facts, in one strip above the actions: which Backpack is on that
+           machine, and how long it has been up. The system name and the tunnel
+           count were here too — the first is a thing you learn once, and the
+           second is on the tunnels page beside the tunnels it counts. */
+        el('div', { class: 'mp-facts' }, [
+          fact7('Backpack', dash(i.version)),
+          fact7('Uptime', dash(i.uptime)),
+        ]),
+
+        el('div', { class: 'mp-rule' }),
       ]),
-      el('div', { class: 'sv-addr' }, [
-        el('span', { text: dash(i.ipv4) !== '—' ? i.ipv4 : n.host }),
-        i.ipv6 && i.ipv6 !== '-' ? el('em', { text: i.ipv6 }) : null,
-      ]),
-      /* Why it cannot be reached, when it cannot. A server that is down and a
-         server whose password was changed are both "unreachable" and are not
-         the same problem, and this is the only place that can say which. */
-      n.online ? null : el('div', { class: 'sv-why' }, n.why || 'It did not answer.'),
-      el('div', { class: 'sv-facts' }, [
-        fact7('Backpack', dash(i.version)),
-        fact7('System', i.distro || (i.os && i.arch ? `${i.os}/${i.arch}` : dash(i.os))),
-        fact7('Tunnels', built ? String(built) : '—'),
-        fact7('Uptime', dash(i.uptime)),
-      ]),
-      el('div', { class: 'sv-f' }, [
-        el('span', { class: 'sub7', text: `${n.user}@${n.host}${n.sshPort && n.sshPort !== 22 ? ':' + n.sshPort : ''}` }),
+
+      el('div', { class: 'mp-foot' }, [
+        el('span', { class: 'mp-login', text: login }),
         el('span', { class: 'sp' }),
-        el('button', { class: 'btn7', text: 'Upgrade', title: 'Install the current release on this server' }),
-        el('button', { class: 'btn7', text: 'Login' }),
+        /* Upgrade only when there is something to upgrade to. A button that is
+           always there and usually does nothing is a button people stop
+           reading; this one appears when the panel has moved on and the server
+           has not, and says which version it would install. */
+        behind ? el('button', { class: 'btn7 solid', text: `Upgrade to ${mine}`,
+                                title: `That server is on ${i.version || 'an older build'}` }) : null,
+        el('button', { class: 'btn7', text: 'Refresh', title: 'Ask it again, now' }),
+        el('button', { class: 'btn7', text: 'Edit', title: 'Address, port, username, password' }),
         el('button', { class: 'btn7 warn', text: 'Remove' }),
       ]),
     ]);
@@ -208,22 +285,53 @@ export function serversView(ctx) {
     ]);
     card.append(confirm);
 
-    const [upB, loginB, rmB] = card.querySelectorAll('.sv-f button');
+    /* The tilt follows the pointer and springs back when it leaves. A surface
+       effect only: it moves nothing that has to be read or clicked. */
+    const clamp = v => Math.max(-1, Math.min(1, v));
+    card.addEventListener('mousemove', ev => {
+      const r = card.getBoundingClientRect();
+      /* Clamped, because a pointer just outside the card still fires this on
+         the way past, and an unclamped ratio turned eight degrees into forty. */
+      const dx = clamp((ev.clientX - (r.left + r.width / 2)) / (r.width / 2));
+      const dy = clamp((ev.clientY - (r.top + r.height / 2)) / (r.height / 2));
+      card.style.setProperty('--ry', `${(dx * 4).toFixed(2)}deg`);
+      card.style.setProperty('--rx', `${(-dy * 4).toFixed(2)}deg`);
+    });
+    card.addEventListener('mouseleave', () => {
+      card.style.setProperty('--rx', '0deg');
+      card.style.setProperty('--ry', '0deg');
+    });
 
-    upB.addEventListener('click', async () => {
+    const btns = [...card.querySelectorAll('.mp-foot button')];
+    const upB = behind ? btns.shift() : null;
+    const [refreshB, editB, rmB] = btns;
+
+    upB?.addEventListener('click', async () => {
       if (!await confirmBox({
-        title: `Upgrade ${n.name}?`,
-        body: 'The current release is installed there and its tunnels restart once. '
-            + 'It takes a couple of minutes, and this page waits for it.',
+        title: `Upgrade ${n.name} to ${mine}?`,
+        body: `It is on ${i.version}. The release is installed there and its tunnels `
+            + 'restart once. It takes a couple of minutes, and this page waits for it.',
         go: 'Upgrade' })) return;
       upB.disabled = true; upB.textContent = 'Upgrading…';
       try {
         paint(await api.nodeUpgrade(n.name));
-        toast(`${n.name} is on the current release.`);
-      } catch (e) { oops(e); upB.disabled = false; upB.textContent = 'Upgrade'; }
+        toast(`${n.name} is on ${mine}.`);
+      } catch (e) { oops(e); upB.disabled = false; upB.textContent = `Upgrade to ${mine}`; }
     });
 
-    loginB.addEventListener('click', () => openCredentials(n));
+    /* Ask it again, now. The fleet is polled and each answer stands for a
+       short while, so after changing something on that machine there is a gap
+       where the card still shows what it said before. */
+    refreshB.addEventListener('click', async () => {
+      refreshB.disabled = true; refreshB.textContent = 'Asking…';
+      try {
+        paint(await api.nodeRefresh(n.name));
+      } catch (e) { oops(e); } finally {
+        refreshB.disabled = false; refreshB.textContent = 'Refresh';
+      }
+    });
+
+    editB.addEventListener('click', () => openCredentials(n));
 
     rmB.addEventListener('click', () => card.classList.add('arm7'));
     const [go, cancel] = confirm.querySelectorAll('button');
@@ -237,38 +345,6 @@ export function serversView(ctx) {
     });
     return card;
   }
-
-  /* A release lands on this panel and every managed server is then a version
-     behind. Said once, above the fleet, with the one action that fixes it —
-     rather than as a badge on each card that has to be acted on one at a time.
-     Only for servers that answered: one that is unreachable is a different
-     problem and upgrading it is not the fix. */
-  function behind(nodes) {
-    const mine = (store.get().stats?.version || '').trim();
-    const old = nodes.filter(n => n.online && n.info?.version && mine && n.info.version !== mine);
-    const bar = $('#behind', root);
-    bar.hidden = !old.length;
-    if (!old.length) return;
-    $('#behindt', root).textContent = old.length === 1
-      ? `${old[0].name} is not on ${mine}`
-      : `${old.length} servers are not on ${mine}`;
-    $('#behinds', root).textContent = old.map(n => `${n.name} ${n.info.version}`).join(' · ');
-  }
-
-  $('#upall', root).addEventListener('click', async () => {
-    const b = $('#upall', root);
-    if (!await confirmBox({
-      title: 'Upgrade every server behind this panel?',
-      body: 'Each one installs the current release and its tunnels restart once. '
-          + 'They run together, and one that fails does not stop the others.',
-      go: 'Upgrade them' })) return;
-    b.disabled = true; b.textContent = 'Upgrading…';
-    try {
-      const state = await api.nodeUpgradeAll();
-      paint(state);
-      toast(state.warning ? state.warning : 'Every server is on the current release.');
-    } catch (e) { oops(e); } finally { b.disabled = false; b.textContent = 'Upgrade them'; }
-  });
 
   const fact7 = (k, v, warn) => el('div', { class: 'sv-fact' + (warn ? ' bad7' : '') }, [
     el('span', { text: k }), el('b', { text: v }),
@@ -348,15 +424,6 @@ export function serversView(ctx) {
       goB.textContent = 'Add it';
       note.textContent = 'The password is kept on this server only, readable by root.';
     }
-  });
-
-  /* ---- the toggle ---- */
-  sw.addEventListener('click', async () => {
-    const on = sw.classList.contains('on');
-    sw.disabled = true;
-    try {
-      paint(await (on ? api.nodeListenerOff() : api.nodeListenerOn()));
-    } catch (e) { oops(e); } finally { sw.disabled = false; }
   });
 
   /* ---- keeping the grid still ----

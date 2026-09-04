@@ -130,3 +130,54 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .dlg .chip2.o{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 .dlg .chip2.w{background:color-mix(in srgb,var(--wr) 16%,transparent);color:var(--wr)}
 .dlg .chip2 i{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* ---- the metric block ----------------------------------------------------
+ *
+ * Legend, chart, figures — read top to bottom. Two named series over a ruled
+ * ground, then the headline numbers with what each did since the reading
+ * before it.
+ */
+.dlg .mlegend{display:flex;gap:16px;align-items:center;margin:0 0 10px}
+.dlg .mlegend span{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--mu)}
+.dlg .mlegend i{width:10px;height:10px;border-radius:3px;flex:none}
+
+/* Gridlines behind, not under: they are a ruler, and a ruler that draws
+   attention is a worse ruler. */
+.dlg .chartbox .gl{stroke:color-mix(in srgb,var(--tx) 9%,transparent);stroke-width:1;
+  vector-effect:non-scaling-stroke}
+.dlg .chartbox .chg{stroke:var(--dim);stroke-width:1;stroke-dasharray:2 3;
+  vector-effect:non-scaling-stroke}
+.dlg .chartbox .ln{stroke-width:2;stroke-linecap:round;stroke-linejoin:round;
+  vector-effect:non-scaling-stroke}
+.dlg .chartbox .tk{font-size:9.5px;fill:var(--dim)}
+
+/* One figure a row, divided, each arriving a beat after the one above. */
+.dlg .mrows{margin:14px 0 4px}
+.dlg .mrow{display:flex;align-items:center;gap:10px;padding:13px 0;
+  border-top:1px solid var(--ln)}
+.dlg .mrow:first-child{border-top:0}
+.dlg .mrow .mk{display:flex;align-items:center;gap:9px;flex:1;min-width:0;
+  font-size:12.5px;color:var(--mu)}
+.dlg .mrow .mk span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dlg .mrow .mk svg{width:17px;height:17px;flex:none;fill:none;stroke:var(--dim);
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.dlg .mrow .mv{display:flex;align-items:center;gap:10px;flex:none;
+  font-size:17px;font-weight:620;letter-spacing:-.02em;color:var(--tx);
+  font-variant-numeric:tabular-nums}
+
+/* The trend badge: a round tint with an arrow, the colour of what it means. */
+.dlg .mtr{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  font-size:12px;font-weight:700;flex:none}
+.dlg .mtr.up{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
+.dlg .mtr.down{background:color-mix(in srgb,var(--er) 22%,transparent);color:var(--er)}
+.dlg .mtr.flat{background:color-mix(in srgb,var(--mu) 20%,transparent);color:var(--mu)}
+
+.dlg .mrow{animation:mrIn .38s var(--spring) both}
+.dlg .mrow:nth-child(2){animation-delay:.05s}
+.dlg .mrow:nth-child(3){animation-delay:.1s}
+@keyframes mrIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){ .dlg .mrow{animation:none} }
+
+/* The times under a chart, as type rather than as part of the drawing. */
+.dlg .mticks{display:flex;justify-content:space-between;margin-top:5px;
+  font-size:9.5px;color:var(--dim);font-variant-numeric:tabular-nums}

@@ -9,9 +9,6 @@
 
 .np7 .row7{display:flex;align-items:center;gap:12px;padding:12px 13px;border:1px solid var(--ln);
   border-radius:13px;background:var(--s2);margin-bottom:9px}
-.np7 .row7 .t7{flex:1;min-width:0}
-.np7 .row7 b{display:block;font-size:12.5px;font-weight:620;letter-spacing:-.01em}
-.np7 .row7 span{display:block;font-size:11px;color:var(--dim);margin-top:3px;line-height:1.5}
 
 .np7 .in7{width:74px;flex:none;font-size:12px;padding:8px 10px;border-radius:10px;text-align:center;
   border:1px solid var(--ln2);background:var(--sunk);color:var(--tx);outline:0;
@@ -28,13 +25,6 @@
 .np7 .btn7[disabled]{opacity:.4;cursor:default}
 .np7 .btn7.warn{border-color:color-mix(in srgb,var(--er) 45%,transparent);color:var(--er)}
 .np7 .btn7.warn:hover{background:color-mix(in srgb,var(--er) 10%,transparent)}
-
-.np7 .sw7{width:38px;height:22px;border-radius:11px;background:var(--ln2);border:0;cursor:pointer;flex:none;
-  position:relative;transition:background .26s var(--spring)}
-.np7 .sw7::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
-  background:var(--s1);transition:transform .26s var(--spring)}
-.np7 .sw7.on{background:var(--tx)}
-.np7 .sw7.on::after{transform:translateX(16px);background:var(--bg)}
 
 /* The setup command. It is the one thing on this screen that has to be read
    character by character, so it is monospaced, selectable, and allowed to wrap
@@ -58,50 +48,15 @@
   border:1px solid var(--ln);border-radius:17px;background:var(--s1);overflow:hidden;
   animation:sv-in .42s var(--spring) both;
   transition:border-color .22s ease,transform .22s var(--spring),box-shadow .22s ease}
-.panel .sv7::before{content:'';position:absolute;inset:0;pointer-events:none;
-  background:radial-gradient(120% 70% at 8% -10%,var(--sunk),transparent 62%)}
-.panel .sv7>*{position:relative}
-.panel .sv7:hover{border-color:var(--ln2);transform:translateY(-2px);box-shadow:var(--lift)}
 @keyframes sv-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-
-.panel .sv-h{display:flex;align-items:center;gap:10px;padding:15px 16px 0}
-.panel .sv-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--faint)}
-.panel .sv7.on7 .sv-dot{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
-.panel .sv-id{flex:1;min-width:0}
-.panel .sv-id b{display:block;font-size:14px;font-weight:640;letter-spacing:-.022em;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.panel .sv-id em{display:block;font-style:normal;font-size:11px;color:var(--dim);margin-top:2px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.panel .sv-tag{font-size:10.5px;font-weight:620;padding:3px 9px;border-radius:8px;flex:none;
-  border:1px solid var(--ln2);color:var(--mu)}
-.panel .sv7.on7 .sv-tag{border-color:color-mix(in srgb,var(--ok) 34%,transparent);color:var(--tx2)}
 
 /* The address, given the room it earns. */
 .panel .sv-addr{padding:14px 16px 15px;min-width:0}
-.panel .sv-addr span{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:17px;font-weight:600;letter-spacing:-.02em;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.panel .sv-addr em{display:block;font-style:normal;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:10.5px;color:var(--dim);margin-top:4px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-.panel .sv-facts{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--ln);
-  border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
 .panel .sv-fact{background:var(--s1);padding:10px 16px;min-width:0}
 .panel .sv-fact span{display:block;font-size:9.5px;font-weight:620;letter-spacing:.07em;
   text-transform:uppercase;color:var(--dim)}
 .panel .sv-fact b{display:block;font-size:12.5px;font-weight:600;margin-top:3px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-.panel .sv-f{display:flex;align-items:center;padding:11px 12px 11px 16px}
-.panel .sv-f .sp{flex:1}
-
-/* Removing asks inside the card. */
-.panel .sv7 .cf7{display:none;position:absolute;inset:0;border-radius:17px;background:var(--s1);
-  flex-direction:column;justify-content:center;gap:12px;padding:18px;z-index:2}
-.panel .sv7.arm7 .cf7{display:flex}
-.panel .sv7 .cf7 p{font-size:12px;line-height:1.6;color:var(--tx2)}
-.panel .sv7 .cf7 button{align-self:flex-start}
 
 .np7 .empty7{display:grid;place-items:center;gap:7px;text-align:center;padding:34px 24px}
 .np7 .empty7 svg{width:22px;height:22px;color:var(--faint)}
@@ -117,10 +72,6 @@
 /* Page-level. The dialog had a header and a scroll box of its own; a page has
    the section title above it and the window's own scrollbar. */
 .panel .np7{padding-bottom:8px}
-.panel .np7 .row7,
-.panel .np7 .nd7,
-.panel .np7 .cmd7,
-.panel .np7 .warn7{max-width:none}
 .panel .np7 .sech2 .sb[disabled]{opacity:.45;cursor:default}
 
 /* ---- the card a server is set up in ---------------------------------------
@@ -153,15 +104,10 @@
   -webkit-mask-image:linear-gradient(to left,#000 52%,transparent 100%);
   mask-image:linear-gradient(to left,#000 52%,transparent 100%);
   transition:opacity .3s ease,transform .5s var(--spring)}
-.panel .sv7:hover .sv-bg{opacity:.15;transform:translateX(-5px)}
 
 /* The one part of it that means anything: the top unit's light follows the
    card's state, so the shape alone says whether the server is there. */
 .panel .sv7.on7 .sv-bg .led{stroke:var(--ok);fill:var(--ok);fill-opacity:.55}
-
-/* A light ground has less contrast to spend. */
-body[data-t="light"] .panel .sv7 .sv-bg{opacity:.11}
-body[data-t="light"] .panel .sv7:hover .sv-bg{opacity:.16}
 
 @media (prefers-reduced-motion:reduce){
   .panel .sv7:hover .sv-bg{transform:none}
@@ -169,35 +115,66 @@ body[data-t="light"] .panel .sv7:hover .sv-bg{opacity:.16}
 
 /* ---- adding a server ------------------------------------------------------
  *
- * A form on the page rather than a dialog over it: the fleet behind it is the
- * context — what is already there, and under what names — and covering that up
- * to ask for a name is the wrong way round.
- *
- * It also replaces the block that used to show a command to copy. Nothing is
- * copied anywhere now; the panel logs in itself.
+ * The card a server is about to become. It is the same pane, the same map
+ * behind it and the same two-column facts grid — so the form is the shape of
+ * its own result rather than a dialog that happens to be nearby, and it sits on
+ * the page above the fleet it is joining rather than covering it.
  */
-.panel .addsv{background:var(--s1);border:1px solid var(--ln);border-radius:15px;
-  padding:15px 16px;margin:0 0 14px;display:grid;gap:13px}
-.panel .addsv.open7{margin-top:-6px}
+.panel .addsv{position:relative;overflow:hidden;
+  background:var(--glass);-webkit-backdrop-filter:var(--glass-blur);
+  backdrop-filter:var(--glass-blur);
+  border:1px solid var(--ln);border-top-color:var(--glass-edge);
+  border-radius:28px;margin:0 0 14px;box-shadow:var(--glass-lift)}
 
-.panel .asv-h b{display:block;font-size:13px;font-weight:640}
-.panel .asv-h span{display:block;font-size:11px;color:var(--dim);margin-top:3px}
+/* The map, quieter than on a card: this one is a promise, not a place yet. */
+.panel .asv-map{position:absolute;top:50%;left:50%;width:680px;height:340px;
+  margin:-170px 0 0 -340px;opacity:.5;pointer-events:none}
+.panel .asv-map svg{display:block}
+.panel .asv-map .rd line{stroke:color-mix(in srgb,var(--tx) 16%,transparent);stroke-linecap:square}
+.panel .asv-map .st line{stroke:color-mix(in srgb,var(--tx) 7%,transparent);stroke-width:1.5}
+.panel .asv-map .bl rect{fill:color-mix(in srgb,var(--mu) 18%,transparent);stroke:none}
+.panel .asv-map .pin{display:none}
+.panel .addsv::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(to bottom,color-mix(in srgb,var(--s1) 30%,transparent),
+    var(--glass-solid) 62%)}
 
-.panel .asv-g{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-@container pg (max-width:760px){ .panel .asv-g{grid-template-columns:repeat(2,minmax(0,1fr))} }
-@container pg (max-width:420px){ .panel .asv-g{grid-template-columns:1fr} }
-.panel .asv-g .wide{grid-column:1/-1}
+.panel .asv-body{position:relative;z-index:1;display:grid;gap:14px;padding:19px 22px 17px}
 
-.panel .asv-g label{display:block;font-size:10.5px;font-weight:620;letter-spacing:.06em;
-  text-transform:uppercase;color:var(--dim);min-width:0}
+.panel .asv-h{display:flex;align-items:flex-start;gap:11px}
+.panel .asv-ic{width:30px;height:30px;border-radius:9px;background:var(--s3);
+  border:1px solid var(--ln);display:grid;place-items:center;flex:none}
+.panel .asv-ic svg{width:15px;height:15px;fill:none;stroke:var(--ok);stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+.panel .asv-h b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em}
+.panel .asv-h span{display:block;font-size:11.5px;color:var(--mu);margin-top:3px;
+  line-height:1.5;max-width:52ch}
+
+/* Address and password get the room; the port and the username are usually
+   22 and root and are filled in already, so they take a quarter each. */
+.panel .asv-g{display:grid;gap:10px;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  grid-template-areas:"n n h h" "p u w w"}
+.panel .asv-g .f1{grid-area:n} .panel .asv-g .f2{grid-area:h}
+.panel .asv-g .f3{grid-area:p} .panel .asv-g .f4{grid-area:u}
+.panel .asv-g .f5{grid-area:w}
+@container pg (max-width:640px){
+  .panel .asv-g{grid-template-columns:repeat(2,minmax(0,1fr));
+    grid-template-areas:"n n" "h h" "p u" "w w"}
+}
+
+.panel .asv-g label{display:block;min-width:0}
+.panel .asv-g label > span{display:block;font-size:10px;font-weight:620;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim)}
 .panel .asv-g input{display:block;width:100%;margin-top:5px;box-sizing:border-box;
-  background:var(--s2);border:1px solid var(--ln);border-radius:10px;
-  padding:9px 11px;font:inherit;font-size:12.5px;color:var(--tx);
-  text-transform:none;letter-spacing:normal}
-.panel .asv-g input:focus{outline:none;border-color:var(--ac)}
+  background:var(--sunk);border:1px solid var(--ln);border-radius:11px;
+  padding:10px 12px;font:inherit;font-size:12.5px;color:var(--tx);
+  transition:border-color .2s ease,background .2s ease}
+.panel .asv-g input::placeholder{color:var(--faint)}
+.panel .asv-g input:focus{outline:none;border-color:var(--ac);background:var(--s2)}
 
 .panel .asv-f{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .panel .asv-note{font-size:10.5px;color:var(--dim);flex:1 1 220px;min-width:0}
+.panel .asv-f .sp{flex:1}
 
 /* Why a server cannot be reached, on the card that says it cannot.
    "Down" and "the password was changed" are both unreachable and are not the
@@ -216,9 +193,154 @@ body[data-t="light"] .panel .sv7:hover .sv-bg{opacity:.16}
  * server out of date at once, so it is one fact and one action, not a badge to
  * be dealt with card by card. */
 .panel .behind7{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-  background:var(--s1);border:1px solid var(--ln);border-radius:15px;
+  background:var(--glass);border:1px solid var(--ln);border-top-color:var(--glass-edge);
+  -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);border-radius:15px;
   padding:12px 15px;margin:0 0 14px}
 .panel .behind7 .t7{flex:1 1 240px;min-width:0}
 .panel .behind7 b{display:block;font-size:12.5px;font-weight:640}
 .panel .behind7 span{display:block;font-size:10.5px;color:var(--dim);margin-top:3px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ===================== the server card ===================== *
+ *
+ * The same card as a tunnel's — same shell, same 28px, same height, same
+ * bottom band — because they sit in the same grid and a fleet page whose cards
+ * were a different size read as a different product.
+ *
+ * What differs is what is behind it. A tunnel card has its chart there; this
+ * has a map, because the thing a managed server has that a tunnel does not is
+ * a place. Clicking draws it: graph paper gives way to roads, blocks and a pin.
+ *
+ * The map is a drawing and knows nothing about where the server is — see the
+ * note over MAP_SVG.
+ */
+/* Everything at once, compactly. It used to hide the facts behind a click,
+   which meant a fleet page told you nothing about the fleet until you had
+   clicked every card on it. */
+/* The same pane, the same size and the same material as a tunnel card. They
+   are the two things this panel is made of and a fleet page whose cards were a
+   different shape read as a different product. */
+.panel .mp7{position:relative;overflow:hidden;user-select:none;
+  background:var(--glass);-webkit-backdrop-filter:var(--glass-blur);
+  backdrop-filter:var(--glass-blur);
+  border:1px solid var(--ln);border-top-color:var(--glass-edge);
+  border-radius:28px;
+  display:flex;flex-direction:column;min-height:344px;
+  box-shadow:var(--glass-lift);
+  transform:perspective(1000px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
+  transition:border-color .3s var(--spring),transform .35s var(--spring)}
+.panel .mp7:hover{border-color:var(--ln2)}
+.panel .mp7:not(.live){opacity:.86}
+
+/* ---- what is behind it ---- */
+.panel .mp-field{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+/* Centred and clipped, at its own size. The field's overflow does the
+   cropping; nothing scales. */
+.panel .mp-map{position:absolute;top:50%;left:50%;width:680px;height:340px;
+  margin:-170px 0 0 -340px}
+.panel .mp-map svg{display:block}
+.panel .mp-map .rd line{stroke:color-mix(in srgb,var(--tx) 22%,transparent);stroke-linecap:square}
+.panel .mp-map .st line{stroke:color-mix(in srgb,var(--tx) 9%,transparent);stroke-width:1.5}
+.panel .mp-map .bl rect{fill:color-mix(in srgb,var(--mu) 26%,transparent);
+  stroke:color-mix(in srgb,var(--mu) 18%,transparent);stroke-width:1}
+.panel .mp-map .pin path{fill:var(--ok);stroke:none;
+  filter:drop-shadow(0 0 10px color-mix(in srgb,var(--ok) 45%,transparent))}
+.panel .mp-map .pin circle{fill:var(--s1);stroke:none}
+.panel .mp7:not(.live) .mp-map .pin path{fill:var(--er);
+  filter:drop-shadow(0 0 10px color-mix(in srgb,var(--er) 40%,transparent))}
+
+/* Surveyed once, as the card arrives: the roads are drawn on rather than faded
+   in, the way the sparklines are. Not on every open — the map is the ground
+   now, and ground that redraws itself whenever it is looked at is a fidget. */
+.panel .mp-map line{stroke-dasharray:400;stroke-dashoffset:400;
+  animation:mpDraw .7s ease-out forwards;animation-delay:calc(.1s + var(--i) * .05s)}
+@keyframes mpDraw{to{stroke-dashoffset:0}}
+.panel .mp-map .bl rect{opacity:0;transform:scale(.85);transform-origin:center;
+  animation:mpPop .4s var(--spring) forwards;animation-delay:calc(.3s + var(--i) * .05s)}
+@keyframes mpPop{to{opacity:1;transform:scale(1)}}
+.panel .mp-map .pin{opacity:0;transform:translateY(-14px);
+  animation:mpDrop .45s var(--spring) forwards;animation-delay:.25s}
+@keyframes mpDrop{to{opacity:1;transform:none}}
+
+/* A wash over the field, so nothing under the text is ever at full strength. */
+/* The map is behind the text, so it is faded where the text sits. Built from
+   the material rather than the solid colour, or it would plug the glass. */
+.panel .mp-wash{position:absolute;inset:0;
+  background:linear-gradient(to top,var(--glass-solid) 6%,
+    color-mix(in srgb,var(--s1) 45%,transparent) 40%,transparent 76%)}
+
+/* ---- what it says ---- */
+.panel .mp-in{position:relative;z-index:1;display:flex;flex-direction:column;flex:1;
+  padding:19px 22px 0;pointer-events:none}
+.panel .mp-top{display:flex;align-items:center;gap:10px}
+.panel .mp-ic{width:30px;height:30px;border-radius:9px;background:var(--s3);
+  border:1px solid var(--ln);display:grid;place-items:center;flex:none}
+.panel .mp-ic svg{width:15px;height:15px;fill:none;stroke:var(--ok);stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round;transition:filter .3s ease}
+.panel .mp7:hover .mp-ic svg{filter:drop-shadow(0 0 7px color-mix(in srgb,var(--ok) 55%,transparent))}
+.panel .mp7:not(.live) .mp-ic svg{stroke:var(--dim);filter:none}
+.panel .mp-id{flex:1;min-width:0}
+.panel .mp-id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  transition:transform .3s var(--spring)}
+.panel .mp7:hover .mp-id b{transform:translateX(3px)}
+.panel .mp-id small{display:block;font-size:11px;color:var(--dim);font-weight:520;margin-top:1px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .mp-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;
+  background:color-mix(in srgb,var(--tx) 5%,transparent);flex:none;
+  font-size:10px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);
+  transition:background .2s ease}
+.panel .mp7:hover .mp-pill{background:color-mix(in srgb,var(--tx) 8%,transparent)}
+.panel .mp-pill i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
+.panel .mp7.live .mp-pill i{background:var(--ok);animation:bp 2.6s ease-out infinite}
+
+.panel .mp-addr{height:42px;margin-top:11px}
+.panel .mp-addr b{display:block;font-size:22px;font-weight:600;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;color:var(--tx);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .mp-addr em{display:block;font-style:normal;font-size:10.5px;color:var(--dim);margin-top:3px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .mp-why{margin-top:8px;font-size:11px;color:var(--wr);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .mp-in .sp{flex:1;min-height:10px}
+/* Two facts in one strip, sitting on the band below it. */
+.panel .mp-facts{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin-bottom:12px;
+  background:var(--ln);border:1px solid var(--ln);border-radius:12px;overflow:hidden}
+.panel .mp-facts .sv-fact{padding:9px 13px}
+.panel .mp-facts .sv-fact span{font-size:9.5px}
+.panel .mp-facts .sv-fact b{font-size:12px;margin-top:3px}
+.panel .mp-rule{height:1px;transform:scaleX(.35);transform-origin:left;
+  background:linear-gradient(to right,color-mix(in srgb,var(--ok) 50%,transparent),
+    color-mix(in srgb,var(--ok) 28%,transparent),transparent);
+  transition:transform .4s ease-out}
+.panel .mp7:hover .mp-rule{transform:scaleX(1)}
+.panel .mp7:not(.live) .mp-rule{background:linear-gradient(to right,
+  color-mix(in srgb,var(--er) 45%,transparent),transparent)}
+
+/* The bottom band, flush with the edge, like a tunnel card's. */
+.panel .mp-foot{position:relative;z-index:1;display:flex;align-items:center;gap:7px;
+  min-height:52px;padding:0 18px 0 22px;background:var(--glass-solid);
+  font-size:11.5px;color:var(--mu)}
+.panel .mp-foot .sp{flex:1}
+.panel .mp-login{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+  color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+@container pg (max-width:420px){ .panel .mp-login{display:none} }
+
+/* Arming a removal covers the card rather than growing it.
+ *
+ * Its rules were written against the card this replaced, so when that card went
+ * they went with it — and a sheet with no position is a block in the flex
+ * column, which is why the card stood 47px taller than a tunnel's. */
+.panel .mp7 .cf7{display:none;position:absolute;inset:0;z-index:3;border-radius:27px;
+  background:var(--s1);flex-direction:column;justify-content:center;gap:12px;padding:22px}
+.panel .mp7.arm7 .cf7{display:flex}
+.panel .mp7 .cf7 p{font-size:12px;line-height:1.6;color:var(--tx2)}
+.panel .mp7 .cf7 button{align-self:flex-start}
+
+@media (prefers-reduced-motion:reduce){
+  .panel .mp7{transform:none!important}
+  .panel .mp7{transition:none}
+  .panel .mp-map line,.panel .mp-map .bl rect,.panel .mp-map .pin{animation:none!important;
+    stroke-dashoffset:0!important;opacity:1!important;transform:none!important}
+}

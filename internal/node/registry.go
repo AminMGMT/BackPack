@@ -52,10 +52,12 @@ type Node struct {
 }
 
 // Store is the whole persisted state.
+//
+// There is no "enabled" here any more. It existed to say whether the panel
+// should open its listeners; the panel dials out now, so an empty fleet is
+// already the off state and a switch for it was one more thing to be wrong.
 type Store struct {
-	// Enabled is whether the panel manages other servers at all.
-	Enabled bool   `json:"enabled,omitempty"`
-	Nodes   []Node `json:"nodes,omitempty"`
+	Nodes []Node `json:"nodes,omitempty"`
 }
 
 // storeMu serialises read-modify-write cycles. Two writes landing together
@@ -90,17 +92,6 @@ func update(fn func(*Store) error) error {
 	}
 	return SaveStore(s)
 }
-
-// SetEnabled records whether the panel manages other servers.
-func SetEnabled(on bool) error {
-	return update(func(s *Store) error {
-		s.Enabled = on
-		return nil
-	})
-}
-
-// Enabled reports whether the fleet feature is on.
-func Enabled() bool { return LoadStore().Enabled }
 
 // nameRx is deliberately strict. A node name reaches a systemd unit name and a
 // config path on the far machine, so anything that could be read as a path
