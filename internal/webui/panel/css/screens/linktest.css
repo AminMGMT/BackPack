@@ -192,11 +192,6 @@ body[data-t="light"]{--field:#ffffff}
   margin-left:auto;margin-right:auto}
 .dlg .why0{padding:14px 18px 0;font-size:11.5px;color:var(--dim);line-height:1.65}
 .dlg .why0 b{color:var(--mu);font-weight:620}
-.dlg .sc8{display:flex;gap:2px;padding:3px;border-radius:11px;background:var(--sunk);width:max-content;
-  margin-bottom:18px;flex-wrap:wrap}
-.dlg .sc8 button{font:inherit;font-size:11.5px;padding:7px 12px;border-radius:8px;border:0;background:transparent;
-  color:var(--mu);cursor:pointer;font-weight:600}
-.dlg .sc8 button.on{background:var(--s1);color:var(--tx)}
 @media (prefers-reduced-motion:reduce){.dlg .pr8 .c8.now{animation:none}}
 
 /* the probe strip is a tally: the server reports totals, not twelve timings */

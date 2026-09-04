@@ -62,7 +62,6 @@ body[data-accent] .boot-mark .arc { stroke: var(--ac); }
 
 /* the meter bars on the server strip — load, not status */
 body[data-accent] .RZ .cols i.now { background: var(--ac); opacity: 1; }
-body[data-accent] .meter-bar i { background: var(--ac); }
 
 /* the rule under a section title */
 body[data-accent] .sectitle .ln {

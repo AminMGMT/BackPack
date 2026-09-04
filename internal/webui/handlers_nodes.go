@@ -3,7 +3,6 @@ package webui
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"sort"
@@ -11,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/node"
 )
@@ -381,71 +379,6 @@ func privateHost(host string) bool {
 		return strings.EqualFold(host, "localhost")
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
-}
-
-// nodeDialAddr is the address to put in the setup command.
-func nodeDialAddr(port int, r *http.Request) string {
-	host := panelHost(r)
-	if host == "" {
-		host = "<this-server>"
-	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
-}
-
-// suggestNodePort picks a free port for the listener.
-//
-// One port serves the whole fleet — it is a listener, and every managed server
-// dials the same one, the way every browser dials the same 443. There is no
-// per-server port to allocate.
-//
-// What matters is which port it is. A fixed, well-known default is the first
-// thing an automated scan looks for and the first thing a filter learns to drop,
-// and on the network this project exists for that is not a theoretical cost. So
-// the suggestion is random and high: five digits, above everything with a
-// registered name, and checked to be free before it is offered.
-func suggestNodePort() int {
-	for i := 0; i < 200; i++ {
-		p := 20000 + rand.Intn(40000) // 20000–59999, always five digits
-		if !manage.PortInUse(strconv.Itoa(p)) {
-			return p
-		}
-	}
-	return 0
-}
-
-// setupCommand is the line an operator pastes on a bare server.
-//
-// It installs Backpack and enrols the machine in one go, because those are one
-// intention. Handing over two lines means the second one is run on the wrong
-// server, or run before the first has finished, or not run at all — and the
-// symptom of the last is a panel with a server that never appears and nothing
-// anywhere saying why.
-//
-// The installer is fetched straight from GitHub rather than proxied through
-// this panel: the archive and its checksum have to arrive from the same place
-// for verifying one against the other to prove anything, and a panel in the
-// middle would be a second thing to trust.
-func setupCommand(addr, key string) string {
-	return fmt.Sprintf(
-		"bash <(curl -fsSL https://raw.githubusercontent.com/%s/%s/main/install.sh) "+
-			"node --panel %s --key %s",
-		app.RepoOwner, app.RepoName, addr, key)
-}
-
-// handleNodeTunnels lists the tunnels on one node.
-func (s *server) handleNodeTunnels(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(r.URL.Query().Get("node"))
-	hub := s.nodes.get()
-	if hub == nil {
-		http.Error(w, "managed servers are turned off", http.StatusBadRequest)
-		return
-	}
-	var out []node.TunnelState
-	if err := hub.Call(name, node.OpList, nil, &out); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"node": name, "tunnels": out})
 }
 
 // pairRequest is one submission of the setup form that builds both ends.

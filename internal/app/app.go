@@ -58,11 +58,6 @@ const (
 	// proxy, so a node can be its own backend instead of running a separate one.
 	ProxyService = "backpack-proxy.service"
 
-	// NodeService is the systemd unit that keeps a managed server connected to
-	// the panel that manages it. It is present only on a server that has been
-	// enrolled as a node, and does nothing on the panel itself.
-	NodeService = "backpack-node.service"
-
 	// SocksInternalPort is the localhost port the built-in SOCKS5 proxy listens
 	// on. It is reachable from a peer only when exposed over a tunnel.
 	SocksInternalPort = 1080

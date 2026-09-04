@@ -81,16 +81,6 @@ const (
 	OpReceive = "receive"
 )
 
-// The operations a node may ask of the panel. These travel the other way, at
-// the start of a session, and are the only two the panel answers.
-const (
-	// OpEnroll trades a single-use enrolment token for a node key.
-	OpEnroll = "enroll"
-
-	// OpAuth presents an existing node key.
-	OpAuth = "auth"
-)
-
 // Request is one operation. Body is the operation's own arguments, left as raw
 // JSON so that a panel and a node running different versions can pass a field
 // neither of them shares an opinion about.
@@ -159,24 +149,6 @@ type ApplyResult struct {
 	// rewritten, which is the difference between "added" and "updated" in the
 	// panel's own wording.
 	Created bool `json:"created"`
-}
-
-// enrollRequest is a node's first words on a fresh install.
-type enrollRequest struct {
-	Token string `json:"token"`
-	Info  Info   `json:"info"`
-}
-
-// enrollResult hands back the credential the node keeps.
-type enrollResult struct {
-	NodeKey string `json:"nodeKey"`
-	Name    string `json:"name"`
-}
-
-// authRequest is a node's first words on every connection after that.
-type authRequest struct {
-	NodeKey string `json:"nodeKey"`
-	Info    Info   `json:"info"`
 }
 
 // errUnknownOp is what a node answers to anything not on the list.

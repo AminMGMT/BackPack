@@ -924,7 +924,7 @@
   /* Latin text inside a Persian page — addresses, tags, log lines, ports —
      keeps its own direction, or "127.0.0.1:8080" is reordered on screen. */
   [dir="rtl"] .hm b,[dir="rtl"] .waddr,[dir="rtl"] .logbox,[dir="rtl"] code,
-  [dir="rtl"] .updbar b,[dir="rtl"] #rtok{direction:ltr;text-align:left;unicode-bidi:plaintext}
+  [dir="rtl"] .updbar b{direction:ltr;text-align:left;unicode-bidi:plaintext}
   [dir="rtl"] .logfilter{text-align:right}
 
   /* ---------- narrow screens ----------
@@ -1489,27 +1489,13 @@
     <div class="acc">
       <button class="acch" id="acch-security" aria-expanded="false" aria-controls="accb-security" onclick="toggleAcc('security')">
         <svg class="ic" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        <span data-i18n>Security</span><span class="accnote" data-i18n>Two-factor, devices, read-only token</span>
+        <span data-i18n>Security</span><span class="accnote" data-i18n>Signed-in devices</span>
         <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="accb" id="accb-security" hidden>
-        <label class="tg" style="margin-bottom:8px"><input type="checkbox" id="tfa" onchange="saveSecurity()">
-          Two-factor login — a code through the Telegram bot after the password</label>
-        <label class="tg" style="margin-bottom:8px"><input type="checkbox" id="lnotif" onchange="saveSecurity()">
-          Message me on every panel login</label>
-        <div class="msg" id="tfamsg"></div>
         <p class="acclabel" data-i18n>Signed-in devices</p>
         <div id="seslist" class="msg" data-i18n data-i18n-ph-only>Loading…</div>
         <button class="btn-sm" onclick="revokeOthers()" style="margin-top:6px" data-i18n>Sign out other devices</button>
-        <p class="acclabel" data-i18n>Remote access</p>
-        <p style="margin-bottom:10px">A read-only token for a peer panel or a Prometheus scraper
-        (<code style="margin:0">/metrics</code>). It can look, never change.</p>
-        <div class="msg" id="rtok" style="word-break:break-all;font-family:ui-monospace,Menlo,monospace;font-size:11px"></div>
-        <div class="upd">
-          <span class="umsg" id="rtmsg"></span>
-          <button class="btn-sm" onclick="remoteToken('generate')" data-i18n>Generate</button>
-          <button class="btn-sm" onclick="remoteToken('revoke')" data-i18n>Revoke</button>
-        </div>
       </div>
     </div>
 
@@ -2216,7 +2202,7 @@ const FA={
   "Everything is closed until you open it — one section at a time.":
     "همه بخش‌ها بسته‌اند تا بازشان کنی — هر بار یکی.",
   "Update":"به‌روزرسانی","Panel access":"دسترسی پنل","Port & password":"پورت و رمز عبور",
-  "Security":"امنیت","Two-factor, devices, read-only token":"ورود دو مرحله‌ای، دستگاه‌ها، توکن فقط‌خواندنی",
+  "Security":"امنیت",
   "Interface":"رابط کاربری","This panel, or the new one":"همین پنل، یا پنل جدید",
   // the direct tunnel's forged-source carrier
   "What the packets look like":"بسته‌ها چه شکلی دیده می‌شوند",
@@ -2243,7 +2229,7 @@ const FA={
   "Staying on this panel.":"روی همین پنل می‌مانید.","Could not save.":"ذخیره نشد.",
   "Telegram bot":"ربات تلگرام","Backup":"پشتیبان‌گیری",
   "Port":"پورت","Password":"رمز عبور","Restore points":"نقاط بازیابی",
-  "Signed-in devices":"دستگاه‌های واردشده","Remote access":"دسترسی از راه دور",
+  "Signed-in devices":"دستگاه‌های واردشده",
   "Check":"بررسی","Save":"ذخیره","Close":"بستن","Channel":"کانال",
   "Save password":"ذخیره رمز عبور","Generate":"ساخت","Revoke":"ابطال",
   "Sign out other devices":"خروج از سایر دستگاه‌ها",
@@ -5116,27 +5102,11 @@ async function loadAlerts(){
   box.innerHTML=h;
   setAlertBadge(st.active?st.active.length:0);
 }
-// ---- settings: security / remote access / restore points ----
-async function loadSecurity(){
-  try{
-    const s=await (await fetch('/api/security')).json();
-    $('tfa').checked=!!s.twoFA; $('lnotif').checked=!!s.loginNotify;
-    $('tfa').disabled=!s.telegramReady&&!s.twoFA;
-    $('lnotif').disabled=!s.telegramReady&&!s.loginNotify;
-    $('tfamsg').textContent=s.telegramReady?'' :
-      'Needs the Telegram bot — it is what delivers the messages.';
-  }catch(e){}
-  loadSessions();
-}
-async function saveSecurity(){
-  const m=$('tfamsg');
-  try{
-    const body=new URLSearchParams({twoFA:$('tfa').checked?'1':'0',loginNotify:$('lnotif').checked?'1':'0'});
-    const r=await fetch('/api/security',{method:'POST',body});
-    if(!r.ok){ m.textContent=await r.text(); loadSecurity(); return; }
-    m.textContent='Saved.';
-  }catch(e){ m.textContent='Could not save.'; }
-}
+// ---- settings: signed-in devices / restore points ----
+// Two-factor login, the new-sign-in message and the read-only remote token were
+// here. They are gone from the panel and from the server, so what remains under
+// Security is the list of sessions — which is what /api/security's other half
+// always was.
 // ---- settings: which panel this server opens ----
 // The new panel is a second UI being built alongside this one; see
 // internal/webui/panel.go. Turning it on only changes where "/" goes.
@@ -5203,22 +5173,6 @@ async function saveAutoBackup(){
     m.textContent=$('abk').checked
       ? 'On — the monitoring service saves one archive a week (newest 10 kept).' : 'Off.';
   }catch(e){ m.textContent='Could not save.'; }
-}
-async function loadRemoteToken(){
-  try{
-    const t=await (await fetch('/api/remotetoken')).json();
-    $('rtok').textContent=t.token||'';
-    $('rtmsg').textContent=t.token?'Treat it like a password.':'No token — remote access is off.';
-  }catch(e){}
-}
-async function remoteToken(action){
-  if(action==='revoke'&&!confirm('Revoke the token? Every peer and scraper using it loses access.')) return;
-  try{
-    const body=new URLSearchParams({action});
-    const t=await (await fetch('/api/remotetoken',{method:'POST',body})).json();
-    $('rtok').textContent=t.token||'';
-    $('rtmsg').textContent=t.token?'Generated — copy it to the other side.':'Revoked.';
-  }catch(e){ $('rtmsg').textContent='Failed.'; }
 }
 async function loadChannel(){
   try{ $('chsel').value=(await (await fetch('/api/channel')).json()).channel||'stable'; }catch(e){}
@@ -5641,13 +5595,12 @@ function openSettings(){
   $('pport').value=location.port||'80'; $('ppmsg').textContent='The panel restarts on the new port.'; $('ppbtn').disabled=false;
   $('bkmsg').textContent=''; $('bkmsg').className='msg';
   $('tgmsg').textContent=''; $('tgtoken').value='';
-  $('tfamsg').textContent=''; $('rtmsg').textContent='';
   $('chmsg').textContent='';
   $('certmsg').textContent=''; $('certmsg').className='msg'; $('certbtn').disabled=false;
   // Everything is still loaded up front: the summaries on the closed headers
   // are drawn from it, so deferring the loads would leave them blank until a
   // section was opened — which is the moment they stop being useful.
-  loadTelegram(); loadSecurity(); loadRemoteToken(); loadRestorePoints(); loadChannel(); loadAutoBackup();
+  loadTelegram(); loadSessions(); loadRestorePoints(); loadChannel(); loadAutoBackup();
   loadPanelCert(); loadPanelUI();
   ACC_SECTIONS.forEach(closeAcc);
   // A newer release is the one thing worth opening straight to.

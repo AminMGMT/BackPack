@@ -59,14 +59,6 @@
 
 /* the source-mapping table */
 .map{border:1px solid var(--ln);border-radius:14px;overflow:hidden;background:var(--s1)}
-.map .mr{display:grid;grid-template-columns:190px 1fr 1fr;gap:14px;padding:11px 15px;border-bottom:1px solid var(--ln);
-  font-size:12.5px;align-items:baseline}
-.map .mr:last-child{border-bottom:0}
-.map .mr.h{background:var(--s2);font-size:10.5px;font-weight:660;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
-.map .mr .a{color:var(--tx2);font-weight:560}
-.map .mr .b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--tx)}
-.map .mr .c{color:var(--mu);font-size:11.5px;line-height:1.5}
-.map .mr .c em{font-style:normal;color:var(--wr)}
 
 /* The four service actions, in a sheet off the card's "more" button. */
 .c7 .card-more{position:absolute;right:12px;bottom:50px;z-index:6;min-width:150px;padding:4px;

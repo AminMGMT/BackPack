@@ -68,8 +68,6 @@ export const nodeCredentials = fields => nodePost({ action: 'credentials', ...fi
 export const nodeUpgrade = name => nodePost({ action: 'upgrade', name });
 export const nodeUpgradeAll = () => nodePost({ action: 'upgradeall' });
 
-export const nodeTunnels = name =>
-  get('/api/node/tunnels?node=' + encodeURIComponent(name));
 /* Both ends in one submission: this end is created here, and the other is
    derived from it and applied on the node. See handleNodePair. */
 export const nodePair = body => post('/api/node/pair', body);
@@ -89,7 +87,6 @@ export const tunnelSuggest = () => get('/api/tunnel/suggest?what=port');
 /* ---- CLI: 1 Setup Iran / 2 Setup Kharej ---------------------------------- */
 export const tunnelCreate = payload => post('/api/tunnel/create', payload);
 export const directOptions  = () => get('/api/direct/options');
-export const directDefaults = () => get('/api/direct/defaults');
 export const directCreate   = payload => post('/api/direct/create', payload);
 
 /* ---- CLI: Manage → Health Check / Link Test / Speed Test ------------------ */

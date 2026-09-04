@@ -188,4 +188,3 @@ export function closeScreen() {
   }, 320);
 }
 
-export const screenOpen = () => !!active;

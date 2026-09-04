@@ -108,10 +108,6 @@
 .panel .tk-bar i.out{background:var(--ln3)}
 .panel .tk-fig{font-size:12px;font-weight:620;font-variant-numeric:tabular-nums;
   text-align:right;min-width:72px}
-.panel .tk-png{font-size:11px;color:var(--mu);font-variant-numeric:tabular-nums;
-  text-align:right;min-width:56px}
-.panel .tk-upt{font-size:11px;color:var(--dim);text-align:right;min-width:70px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ---- the traffic pair ----------------------------------------------------
    One figure and its breakdown are one thought. They used to be a page apart,

@@ -438,30 +438,6 @@ func askL3Token(cfg *l3Spec) bool {
 
 // ---------------------------------------------------------------- summaries
 
-func summariseDirect(cfg directSpec) {
-	fmt.Println()
-	tui.Rule()
-	tui.Title("About to create")
-	tui.Info("Kind        : direct tunnel, forwarded ports")
-	tui.Info("This machine: " + sideLabel(cfg.Side))
-	tui.Info("Transport   : " + cfg.Transport)
-	if cfg.Side == sideIran {
-		tui.Info("Dials       : " + cfg.Addr)
-		tui.Info("Exposes     : " + strings.Join(cfg.Ports, ", "))
-		tui.Info("UDP         : " + onOff(cfg.AcceptUDP))
-		tui.Info("Tuning      : " + presetLabel(cfg.Preset) + fmt.Sprintf(", %d session(s)", cfg.Sessions))
-		if cfg.MaxConnections > 0 || cfg.BandwidthMbps > 0 {
-			tui.Info("Limits      : " + limitsLabel(cfg.MaxConnections, cfg.BandwidthMbps))
-		}
-	} else {
-		tui.Info("Listens on  : " + cfg.Addr)
-	}
-	tui.Info("Config file : " + app.ConfigPath(cfg.Name))
-	tui.Rule()
-	fmt.Println()
-	remindOtherSide(cfg.Side, cfg.Token)
-}
-
 func summariseL3(cfg l3Spec) {
 	fmt.Println()
 	tui.Rule()

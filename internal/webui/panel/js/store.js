@@ -60,7 +60,7 @@ export function startPolling() {
 
 function onVisible() { if (!document.hidden) { loadStats(); loadTunnels(); } }
 
-export function stopPolling() {
+function stopPolling() {
   timers.forEach(clearInterval);
   timers = [];
   document.removeEventListener('visibilitychange', onVisible);

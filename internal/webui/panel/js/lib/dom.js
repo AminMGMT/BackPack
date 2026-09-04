@@ -49,9 +49,6 @@ export function delegate(root, event, selector, handler) {
   return () => root.removeEventListener(event, onEvent);
 }
 
-export const reduceMotion = () =>
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
 /* The preview drew every dialog's subtitle with its own server's name and its
  * own version — "ubuntu-4gb-nbg1-2 · v1.7.5" — and a screen that does not
  * overwrite it shows the operator somebody else's machine. `tail` is whatever

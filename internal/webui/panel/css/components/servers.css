@@ -7,7 +7,6 @@
  * between them; nothing else uses this class.
  */
 
-
 .np7 .row7{display:flex;align-items:center;gap:12px;padding:12px 13px;border:1px solid var(--ln);
   border-radius:13px;background:var(--s2);margin-bottom:9px}
 .np7 .row7 .t7{flex:1;min-width:0}
@@ -17,7 +16,6 @@
 .np7 .in7{width:74px;flex:none;font-size:12px;padding:8px 10px;border-radius:10px;text-align:center;
   border:1px solid var(--ln2);background:var(--sunk);color:var(--tx);outline:0;
   font-variant-numeric:tabular-nums;transition:border-color .2s ease}
-.np7 .in7.wide7{width:150px;text-align:left;font-variant-numeric:normal}
 .np7 .in7:focus{border-color:var(--ln3)}
 .np7 .in7::placeholder{color:var(--faint)}
 
@@ -44,25 +42,6 @@
    half-copied. */
 .np7 .cmd7{border:1px solid var(--ln2);border-radius:13px;background:var(--sunk);
   padding:11px 13px 12px;margin:0 0 9px}
-.np7 .cmd7 .ch7{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.np7 .cmd7 .ch7 b{font-size:11.5px;font-weight:620}
-.np7 .cmd7 .ch7 em{font-style:normal;color:var(--mu)}
-.np7 .cmd7 .sp{flex:1}
-.np7 .cmd7 code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:11.5px;line-height:1.65;color:var(--tx2);word-break:break-all;user-select:all}
-.np7 .cmd7 .ch7{flex-wrap:wrap}
-.np7 .cmd7 .ch7 .sub7{display:block;font-size:10.5px;color:var(--dim);
-  flex-basis:100%;order:3;margin-top:1px}
-.np7 .alt7{margin-top:9px;font-size:10.5px;color:var(--dim);line-height:1.6}
-.np7 .alt7 code{margin-top:6px;font-size:11px}
-.np7 .lnk7{font:inherit;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;
-  color:var(--mu);text-decoration:underline;text-underline-offset:2px}
-.np7 .lnk7:hover{color:var(--tx)}
-
-.np7 .wait7{display:flex;align-items:center;gap:7px;margin-top:9px;font-size:11px;color:var(--dim)}
-.np7 .wait7 i{width:7px;height:7px;border-radius:50%;background:var(--wr);flex:none;
-  animation:pulse7 1.5s ease-in-out infinite}
-.np7 .wait7.done7 i{background:var(--ok);animation:none}
 @keyframes pulse7{0%,100%{opacity:.35}50%{opacity:1}}
 
 .np7 .hd7{font-size:10.5px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;
@@ -83,7 +62,6 @@
   background:radial-gradient(120% 70% at 8% -10%,var(--sunk),transparent 62%)}
 .panel .sv7>*{position:relative}
 .panel .sv7:hover{border-color:var(--ln2);transform:translateY(-2px);box-shadow:var(--lift)}
-.panel .sv7.pend7{border-style:dashed}
 @keyframes sv-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
 .panel .sv-h{display:flex;align-items:center;gap:10px;padding:15px 16px 0}
@@ -115,9 +93,6 @@
 .panel .sv-fact b{display:block;font-size:12.5px;font-weight:600;margin-top:3px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-.panel .sv-wait{padding:14px 16px 16px;font-size:11.5px;color:var(--dim);line-height:1.6;
-  border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
-
 .panel .sv-f{display:flex;align-items:center;padding:11px 12px 11px 16px}
 .panel .sv-f .sp{flex:1}
 
@@ -127,12 +102,6 @@
 .panel .sv7.arm7 .cf7{display:flex}
 .panel .sv7 .cf7 p{font-size:12px;line-height:1.6;color:var(--tx2)}
 .panel .sv7 .cf7 button{align-self:flex-start}
-
-.np7 .warn7{display:flex;gap:9px;padding:11px 12px;border-radius:12px;margin:0 0 9px;
-  border:1px solid color-mix(in srgb,var(--wr) 34%,transparent);
-  background:color-mix(in srgb,var(--wr) 8%,transparent)}
-.np7 .warn7 svg{width:14px;height:14px;color:var(--wr);flex:none;margin-top:1px}
-.np7 .warn7 p{font-size:11px;line-height:1.6;color:var(--tx2)}
 
 .np7 .empty7{display:grid;place-items:center;gap:7px;text-align:center;padding:34px 24px}
 .np7 .empty7 svg{width:22px;height:22px;color:var(--faint)}
@@ -161,42 +130,6 @@
    above it that has nothing to do with where the result lands.
 */
 .panel .sv7.draft7{border-style:dashed;border-color:var(--ln2)}
-.panel .sv7.draft7:hover{transform:none;box-shadow:none}
-.panel .sv7.cmd7c{border-style:solid;border-color:color-mix(in srgb,var(--wr) 34%,transparent)}
-
-.panel .sv-x{font:inherit;font-size:18px;line-height:1;width:26px;height:26px;flex:none;
-  border:0;border-radius:8px;background:transparent;color:var(--dim);cursor:pointer;
-  transition:background .18s ease,color .18s ease}
-.panel .sv-x:hover{background:var(--sunk);color:var(--tx)}
-
-.panel .df-body{padding:14px 16px 4px;display:grid;gap:11px}
-.panel .df-f{display:grid;gap:5px}
-.panel .df-f span{font-size:10.5px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;
-  color:var(--dim)}
-.panel .df-f input{font:inherit;font-size:13px;padding:9px 11px;border-radius:10px;
-  border:1px solid var(--ln2);background:var(--sunk);color:var(--tx);outline:0;
-  transition:border-color .2s ease}
-.panel .df-f input:focus{border-color:var(--ln3)}
-.panel .df-f input::placeholder{color:var(--faint)}
-.panel .df-hint{font-size:11px;color:var(--dim);line-height:1.6}
-
-.panel .df-cmd{padding:13px 16px 14px;border-top:1px solid var(--ln)}
-.panel .df-ch{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.panel .df-ch b{font-size:11.5px;font-weight:620}
-.panel .df-ch .sp{flex:1}
-.panel .df-cmd code,.panel .np7 .alt7 code{display:block;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.65;
-  color:var(--tx2);word-break:break-all;user-select:all}
-.panel .np7 .alt7{margin-top:9px;font-size:10.5px;color:var(--dim);line-height:1.6}
-.panel .np7 .alt7 code{margin-top:6px}
-.panel .np7 .lnk7{font:inherit;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;
-  color:var(--mu);text-decoration:underline;text-underline-offset:2px}
-.panel .np7 .lnk7:hover{color:var(--tx)}
-
-.panel .np7 .wait7{display:flex;align-items:center;gap:7px;padding:11px 16px 14px;
-  font-size:11px;color:var(--dim);border-top:1px solid var(--ln)}
-.panel .np7 .wait7 i{width:7px;height:7px;border-radius:50%;background:var(--wr);flex:none;
-  animation:pulse7 1.5s ease-in-out infinite}
 @keyframes pulse7{0%,100%{opacity:.35}50%{opacity:1}}
 
 .panel .sv-fact.bad7 b{color:var(--er)}
@@ -221,7 +154,6 @@
   mask-image:linear-gradient(to left,#000 52%,transparent 100%);
   transition:opacity .3s ease,transform .5s var(--spring)}
 .panel .sv7:hover .sv-bg{opacity:.15;transform:translateX(-5px)}
-.panel .sv7.pend7 .sv-bg{opacity:.045}
 
 /* The one part of it that means anything: the top unit's light follows the
    card's state, so the shape alone says whether the server is there. */

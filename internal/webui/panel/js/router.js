@@ -66,4 +66,3 @@ export function start(handler) {
   resolve();
 }
 
-export const currentPath = () => parse().path;

@@ -224,7 +224,6 @@ func Serve() error {
 	// building both ends of a tunnel in a single submission. See
 	// handlers_nodes.go.
 	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
-	mux.HandleFunc("/api/node/tunnels", srv.requireAuth(srv.handleNodeTunnels))
 	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
 	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
 	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))

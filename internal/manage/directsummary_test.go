@@ -53,30 +53,9 @@ func TestReminderShowsTheToken(t *testing.T) {
 	}
 }
 
-// The summary is what the operator confirms against, so everything they were
-// asked for has to be in it.
-func TestSummaryShowsWhatWasAsked(t *testing.T) {
-	cfg := directSpec{
-		Name: "demo", Side: sideIran, Transport: "stealth",
-		Addr: "203.0.113.9:8443", Token: "the-token",
-		Ports: []string{"443", "8080=80"}, AcceptUDP: true,
-		MaxConnections: 50, BandwidthMbps: 200, Sessions: 4, Preset: PresetThroughput,
-	}
-	out := capture(t, func() { summariseDirect(cfg) })
-
-	for _, want := range []string{
-		"203.0.113.9:8443", // where it dials
-		"443",              // the ports
-		"stealth",          // the transport
-		"the-token",        // the token, for the other machine
-		"50 connections",   // the caps, in words
-		"200 Mbit/s",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("the summary is missing %q:\n%s", want, out)
-		}
-	}
-}
+// The direct wizard's own summary went with the wizard: a direct tunnel is
+// built on the layer-3 engine now, so summariseL3 is what runs before every
+// one of them. What was here checked a function nothing called.
 
 // The layer-3 summary has its own set, including the ping that proves it.
 func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
