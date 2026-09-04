@@ -423,6 +423,9 @@ func (c *WsTransport) localDialer(tunnelCon *websocket.Conn, remoteAddr string, 
 		tunnelCon.Close()
 		return
 	}
+	// The last hop worked, so any run of failures recorded for the panel
+	// ends here. See localdial.go.
+	ReportLocalDialOK()
 	c.logger.Debugf("connected to local address %s successfully", remoteAddr)
 
 	handlers.WSConnectionHandler(c.state.Ctx(), tunnelCon, localConnection, c.logger, c.state.Usage(), int(port), c.config.Sniffer)

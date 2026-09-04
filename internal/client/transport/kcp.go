@@ -583,6 +583,9 @@ func (c *KcpTransport) localDialer(stream *smux.Stream, remoteAddr string) {
 		return
 	}
 
+	// The last hop worked, so any run of failures recorded for the panel
+	// ends here. See localdial.go.
+	ReportLocalDialOK()
 	c.logger.Debugf("connected to local address %s successfully", remoteAddr)
 
 	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(stream), localConnection, c.logger, c.state.Usage(), int(port), c.config.Sniffer)

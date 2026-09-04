@@ -15,12 +15,23 @@ export const UP = 'online';
 
 export const isUp = t => !!t && t.state === UP;
 
-export const stateLabel = t => ({
+/* A tunnel that is online and delivering into nothing.
+ *
+ * The state is still "online" and that is not a mistake: the tunnel is up, and
+ * calling it offline would send somebody to restart a service that is running
+ * and working. What is wrong is one hop further on — the service it forwards
+ * to, on the other machine, is refusing every connection. The server sends the
+ * sentence; this is the one place that decides what to do with it. */
+export const serviceDown = t => !!(t && t.serviceDown);
+
+export const stateLabel = t => (serviceDown(t) ? 'No service' : ({
   online: 'Online',
   offline: 'Offline',
   stopped: 'Stopped',
-}[t && t.state] || 'Unknown');
+}[t && t.state] || 'Unknown'));
 
 /* Three shades, because there are three things to say: it works, it is up but
- * unanswered, it is not up at all. */
-export const stateTone = t => (isUp(t) ? 'ok' : (t && t.state === 'offline' ? 'warn' : 'off'));
+ * unanswered, it is not up at all. A tunnel whose far service is missing takes
+ * the middle one — it is up, and it is not carrying anything. */
+export const stateTone = t =>
+  (serviceDown(t) ? 'warn' : (isUp(t) ? 'ok' : (t && t.state === 'offline' ? 'warn' : 'off')));

@@ -187,9 +187,10 @@ func (s *server) handleTunnelEdit(w http.ResponseWriter, r *http.Request) {
 // somebody leaves it that way. Starting only this end cannot bring it up at
 // all. So the card's buttons reach across, exactly as its Edit does.
 //
-// Delete is the exception and stays one — see the delete branch above. There is
-// deliberately no operation that removes a tunnel on a node, because a delete
-// here is not consent to one there.
+// Delete is still not carried by this. It reaches across only when it was asked
+// to, as its own question with its own answer — see the delete branch above. A
+// delete here has never implied one there, and the difference between the two
+// is that this one has no undo.
 func (s *server) alsoOnNode(name, action string) map[string]any {
 	out := map[string]any{"status": "ok"}
 	op := map[string]string{
@@ -308,15 +309,40 @@ func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
 		err = manage.Restart(name)
 	case "delete":
 		// Read before the delete, which is what forgets it.
-		onNode, paired := manage.NodeFor(name)
+		pair, paired := manage.PairFor(name)
+		// The far end is its own question, asked separately, and answered here
+		// only if it was answered there. Absent means no — a delete of this end
+		// has never implied one of the other, and it still does not.
+		alsoFar := paired && r.FormValue("alsoFarEnd") == "1"
+
 		err = manage.Delete(name)
 		if err == nil && paired {
-			writeJSON(w, map[string]any{
-				"status": "ok",
-				"node":   onNode,
-				"note": "Removed from this server. The other end is still on " + onNode +
-					" — this panel cannot delete a tunnel there, so remove it on that machine.",
-			})
+			out := map[string]any{"status": "ok", "node": pair.Node}
+			switch {
+			case !alsoFar:
+				out["note"] = "Removed from this server. The other end is still on " +
+					pair.Node + " — it was not asked to be removed, so remove it there when you want it gone."
+			default:
+				peer := pair.PeerName
+				if peer == "" {
+					peer = name
+				}
+				hub := s.nodes.get()
+				if hub == nil || !hub.IsOnline(pair.Node) {
+					out["status"] = "partial"
+					out["peerError"] = pair.Node + " could not be reached, so its end is still there"
+					out["peerHint"] = "Remove " + peer + " on " + pair.Node + " when it is back."
+					break
+				}
+				if derr := hub.Call(pair.Node, node.OpDelete, node.NameRequest{Name: peer}, nil); derr != nil {
+					out["status"] = "partial"
+					out["peerError"] = "this end is gone; " + pair.Node + " refused: " + derr.Error()
+					out["peerHint"] = "Remove " + peer + " on " + pair.Node + " by hand."
+					break
+				}
+				out["note"] = "Removed from both servers."
+			}
+			writeJSON(w, out)
 			return
 		}
 	default:

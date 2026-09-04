@@ -22,7 +22,7 @@ import (
 // when what it draws has changed, and the figures that move on every poll are
 // written into the elements already on the page.
 func TestTheOverviewIsNotRebuiltOnEveryPoll(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	b, err := fs.ReadFile(panelRoot, "js/views/overview.js")
 	if err != nil {

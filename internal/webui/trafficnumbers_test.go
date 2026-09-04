@@ -120,7 +120,7 @@ func TestTheNumberAndTheStringAgree(t *testing.T) {
 
 // And the panel must not go back to computing with the prose.
 func TestThePanelNeverComputesWithAFormattedFigure(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	sources := map[string]string{}
 	for _, rel := range []string{

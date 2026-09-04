@@ -72,32 +72,6 @@ func TestAMomentIsPreciseEnoughToIdentifyAnEntry(t *testing.T) {
 	}
 }
 
-// The panel must not offer an undo it has nothing for, and must say what the
-// undo costs before doing it.
-func TestTheUndoListSaysWhatItCosts(t *testing.T) {
-	page := string(dashboardHTML)
-
-	body := page[strings.Index(page, "async function loadConfHistory("):]
-	if end := strings.Index(body, "\nasync function "); end > 0 {
-		body = body[:end]
-	}
-	if !strings.Contains(body, "if(!list.length) return;") {
-		t.Error("an empty history still renders a section, which offers an undo that " +
-			"does not exist")
-	}
-
-	restore := page[strings.Index(page, "async function restoreConf("):]
-	if end := strings.Index(restore, "\n// "); end > 0 {
-		restore = restore[:end]
-	}
-	if !strings.Contains(restore, "confirm(") {
-		t.Error("restoring does not confirm, and it restarts the tunnel")
-	}
-	if !strings.Contains(restore, "drop for a moment") {
-		t.Error("the confirmation does not say that connections drop")
-	}
-}
-
 func readSourceFile(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(name)

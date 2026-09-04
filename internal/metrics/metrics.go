@@ -61,6 +61,33 @@ type Snapshot struct {
 	// live count would look like a leak; the two together, with the throughput
 	// that caused it, are what make the number explainable.
 	Pool *PoolStats `json:"pool,omitempty"`
+
+	// LocalService is the last hop, when it is failing.
+	//
+	// Everything else here describes the tunnel, and the tunnel can be
+	// perfectly healthy while carrying nothing: the client delivers each
+	// connection to the service it forwards to, and if nothing is listening
+	// there, every one of them dies one step past the end. The control channel
+	// stays up, the peer is reported, the panel shows green, and the only place
+	// the truth appears is the client's log.
+	//
+	// So the client writes it down. Absent means the last hop is working, or
+	// has not been tried.
+	LocalService *LocalServiceState `json:"local_service,omitempty"`
+}
+
+// LocalServiceState is what the client knows about the service it forwards to.
+type LocalServiceState struct {
+	// Addr is the address being dialled, so the operator is told which one.
+	Addr string `json:"addr"`
+	// Why is the shape of the failure in one word — "refused", "timeout" or
+	// "unreachable" — because the fix differs: a refusal is a service that is
+	// not there, a timeout is usually a firewall on the same machine.
+	Why string `json:"why"`
+	// Failures is how many connections have died this way since the last one
+	// that worked, and Since is when the run started.
+	Failures uint64    `json:"failures"`
+	Since    time.Time `json:"since"`
 }
 
 // PoolStats is the state of the client's connection pool.
@@ -108,6 +135,44 @@ func ClearPeer() {
 	peerAddr.Store(nil)
 	connected.Store(&no)
 }
+
+// The last hop, published by the client transports. One tunnel runs per
+// process, so like the peer above this needs no key.
+var localService atomic.Pointer[LocalServiceState]
+
+// ReportLocalDialFailure records that a connection could not be handed to the
+// service being forwarded to. Called by the client transports, through the one
+// reporter that also logs it.
+//
+// Consecutive failures to the same address accumulate rather than replacing
+// each other: "refused 400 connections since 15:13" is a different statement
+// from "one refusal", and the difference is whether the operator is looking at
+// a service that is down or a client that tried once during a restart.
+func ReportLocalDialFailure(addr, why string) {
+	for {
+		old := localService.Load()
+		next := &LocalServiceState{Addr: addr, Why: why, Failures: 1, Since: time.Now()}
+		if old != nil && old.Addr == addr && old.Why == why {
+			next.Failures = old.Failures + 1
+			next.Since = old.Since
+		}
+		if localService.CompareAndSwap(old, next) {
+			return
+		}
+	}
+}
+
+// ReportLocalDialSuccess clears the run. The next snapshot says nothing about
+// the last hop, which is what a working one should say.
+func ReportLocalDialSuccess() {
+	if localService.Load() != nil {
+		localService.Store(nil)
+	}
+}
+
+// SnapshotLocalService is what the next snapshot would record about the last
+// hop, or nil when it is working. Exported for the same reason SnapshotPeer is.
+func SnapshotLocalService() *LocalServiceState { return localService.Load() }
 
 // SnapshotPeer is what the next snapshot would record as the peer, or "" if
 // there is none. Read-only, and exported so an engine in another package can be
@@ -230,6 +295,7 @@ func (c *Collector) Snapshot() Snapshot {
 	if live, target, configured, mbps := PoolState(); configured > 0 {
 		s.Pool = &PoolStats{Live: live, Target: target, Configured: configured, Mbps: mbps}
 	}
+	s.LocalService = localService.Load()
 	if c.transport == "kcp" {
 		// kcp-go keeps these counters process-wide. A tunnel runs as its own
 		// process, so they describe exactly this tunnel.

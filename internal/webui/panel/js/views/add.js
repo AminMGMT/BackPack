@@ -597,16 +597,27 @@ export function addView(ctx) {
           new CustomEvent('step', { detail: { at, of: steps.length } })), 0);
       }
 
-      /* Random asks the server for a free port; the CLI line is built from what
-         has been chosen so the other side can be set up over SSH. */
-      [...root.querySelectorAll('button')]
-        .filter(b => /^random$/i.test(b.textContent.trim()))
-        .forEach(b => b.addEventListener('click', async () => {
-          try {
-            const r = await api.tunnelSuggest();
-            const field = b.closest('div')?.querySelector('input');
-            if (field && r.port) field.value = r.port;
-          } catch (e) { oops(e); }
+      /* Random asks the server for a port that is free on THIS machine, which
+         is the right answer for exactly one field: the tunnel port, which this
+         side binds.
+       *
+       * It used to be bound to every button labelled Random, and one of those
+       * sat beside Forwarded ports — a field whose own hint says the value is
+       * forwarded to the same port on the kharej machine. A port chosen for
+       * being free here is, by construction, one nothing is listening on
+       * there, so the button could only ever produce a tunnel that comes up,
+       * reports a peer, and refuses every connection at the last hop. */
+      [...root.querySelectorAll('.withb')]
+        .filter(w => w.querySelector('input[name="tunnelPort"]'))
+        .forEach(wrap => wrap.querySelectorAll('button').forEach(b => {
+          if (!/^random$/i.test(b.textContent.trim())) return;
+          b.addEventListener('click', async () => {
+            try {
+              const r = await api.tunnelSuggest();
+              const field = wrap.querySelector('input[name="tunnelPort"]');
+              if (field && r.port) field.value = r.port;
+            } catch (e) { oops(e); }
+          });
         }));
 
       [...root.querySelectorAll('button')]

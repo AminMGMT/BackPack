@@ -9,7 +9,14 @@
 import { el } from '../lib/dom.js';
 import { svg, paintIcons } from '../lib/icons.js';
 
-export function confirmBox({ title, body, lines = [], go = 'Confirm', danger = false, icon }) {
+/* defaultNo puts the safe answer under the cursor and under Enter.
+ *
+ * The default here is to confirm, which is right for a question somebody
+ * opened on purpose. It is wrong for one the panel raises on its own — a second
+ * question, about a second machine, that the operator did not go looking for.
+ * There the reflex to press Enter has to mean "no". */
+export function confirmBox({ title, body, lines = [], go = 'Confirm', danger = false, icon,
+                             defaultNo = false }) {
   return new Promise(resolve => {
     const scrim = el('div', { class: 'cfZ' }, el('div', { class: 'veilZ' }));
     const box = el('div', { class: 'boxZ' + (danger ? ' danger' : '') }, [
@@ -24,17 +31,20 @@ export function confirmBox({ title, body, lines = [], go = 'Confirm', danger = f
         el('button', { on: { click: () => done(false) } }, 'Cancel'),
         el('button', { class: 'go', on: { click: () => done(true) } }, go),
       ]),
-      el('div', { class: 'escZ', html: '<kbd>Esc</kbd> cancels · <kbd>Enter</kbd> confirms' }),
+      el('div', { class: 'escZ', html: defaultNo
+        ? '<kbd>Esc</kbd> and <kbd>Enter</kbd> both leave it alone'
+        : '<kbd>Esc</kbd> cancels · <kbd>Enter</kbd> confirms' }),
     ]);
     scrim.append(box);
     document.body.append(scrim);
     paintIcons(scrim);
     scrim.classList.add('on');
-    requestAnimationFrame(() => box.querySelector('.go').focus());
+    requestAnimationFrame(() =>
+      box.querySelector(defaultNo ? '.actZ button' : '.go').focus());
 
     const key = ev => {
       if (ev.key === 'Escape') done(false);
-      if (ev.key === 'Enter') done(true);
+      if (ev.key === 'Enter') done(!defaultNo);
     };
     function done(answer) {
       document.removeEventListener('keydown', key);

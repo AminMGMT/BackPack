@@ -8,7 +8,7 @@
  */
 
 import { $, delegate, esc } from '../lib/dom.js';
-import { isUp, stateLabel, stateTone } from '../lib/tstate.js';
+import { isUp, stateLabel, stateTone, serviceDown } from '../lib/tstate.js';
 import { bytes, speed, kindLabel, flag } from '../lib/format.js';
 import * as store from '../store.js';
 import * as api from '../api.js';
@@ -85,14 +85,10 @@ function chartSVG(series, view, id) {
 function field(t, idx) {
   const series = seriesOf(t);
   if (series.length < 2) return '';
-  const id = 'L' + idx, gid = 'G' + idx;
+  const id = 'L' + idx;
   const view = cardView.get(t.name) || 'curve';
   return `<div class="mfield" style="width:${REGION_W}%">
     <div class="mwash"></div>
-    <div class="mgrid"><svg aria-hidden="true"><defs>
-      <pattern id="${gid}" width="14" height="14" patternUnits="userSpaceOnUse">
-        <circle cx="1" cy="1" r="1" fill="currentColor"/></pattern></defs>
-      <rect width="100%" height="100%" fill="url(#${gid})"/></svg></div>
     <svg class="mchart" viewBox="0 0 340 150" preserveAspectRatio="none" aria-hidden="true">
       <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="var(--mc)" stop-opacity=".22"/>
@@ -166,6 +162,10 @@ ${field(t, idx)}
     ${ports ? `<span class="q">${esc(ports)}</span>` : ''}
   </div>
 
+  <!-- Said in full, on the card, because it is the one failure where every
+       other reading on this card is green and correct. -->
+  ${serviceDown(t) ? `<div class="nosvc">${esc(t.serviceDown)}</div>` : ''}
+
   <!-- The headline is the ping: the one figure that says how this tunnel is
        behaving right now. What it has carried is a total, and a total is a
        fact about the past — it goes under, at the size of one. -->
@@ -206,6 +206,13 @@ ${field(t, idx)}
   <button data-do="stop"><span>■</span>Stop</button>
   <button data-do="restart"><span>↻</span>Restart</button>
   <div class="sep2"></div>
+  <!-- Offered only while the other end is unknown. Everything the fleet does
+       for a tunnel is gated on knowing where that end lives, and a tunnel not
+       built through the fleet has never had a way to say. -->
+  ${t.node
+    ? `<button data-do="unlink"><span>⛓</span>Unlink from ${esc(t.node)}</button>`
+    : `<button data-do="adopt"><span>⛓</span>Link to a server…</button>`}
+  <div class="sep2"></div>
   <button class="danger" data-do="delete"><span>✕</span>Delete</button>
 </div>
 </div>`;
@@ -241,7 +248,7 @@ function updateSpark(el, t, idx) {
  * down; one colour has to mean one thing. */
 function paintTrend(el, t) {
   el.classList.remove('st-online', 'st-offline', 'st-stopped', 'st-unknown');
-  el.classList.add('st-' + (t.state || 'unknown'));
+  el.classList.add('st-' + (serviceDown(t) ? 'offline' : (t.state || 'unknown')));
   const st = statsOf(seriesOf(t).map(p => p.v));
   if (!st) return;
   const cells = el.querySelectorAll('.mstats b');
@@ -267,7 +274,7 @@ const ACTION_DONE = {
  */
 function cardSig(t) {
   return JSON.stringify([
-    t.state, t.role, t.direction, t.transport, t.carrier, t.addr, t.ports,
+    t.state, t.serviceDown, t.role, t.direction, t.transport, t.carrier, t.addr, t.ports,
     t.ping, t.uptime, t.bytesIn, t.bytesOut, t.bytesTotal, t.country, t.peerCountry,
     t.peerLocation, t.peerISP, t.botRelay, t.botRelayPort, t.tunnelPort,
     t.kcpLossPercent, t.pool, t.preset, t.certType, t.certDomain, t.certExpiry,
@@ -401,6 +408,23 @@ export function dashboard(ctx) {
     const action = btn.dataset.do;
     cardEl.querySelector('.card-more').classList.remove('on');
 
+    if (action === 'adopt') { await linkToServer(name); store.refresh(); return; }
+    if (action === 'unlink') {
+      const t = store.tunnel(name);
+      const ok = await confirmBox({
+        title: `Unlink <q>${esc(name)}</q> from ${esc(t && t.node || '')}?`,
+        body: 'Nothing is deleted or stopped on either machine. This panel simply '
+            + 'stops treating them as two ends of one tunnel, so edits, start and stop, '
+            + 'the far journal and the speed test go back to reaching this end only.',
+        go: 'Unlink',
+      });
+      if (!ok) return;
+      try { await api.unlinkTunnel(name); toast('Unlinked.'); } catch (e) { oops(e); }
+      store.refresh();
+      return;
+    }
+
+    const extra = {};
     if (action === 'delete') {
       const ok = await confirmBox({
         title: `Delete <q>${esc(name)}</q>?`,
@@ -412,10 +436,28 @@ export function dashboard(ctx) {
         go: 'Delete', danger: true,
       });
       if (!ok) return;
+
+      /* The far end is a second machine and therefore a second question.
+         Asked only when there is one, asked after this end is settled, and
+         answered "leave it" by every reflex — Esc, Enter and the button under
+         the cursor — because saying nothing must not delete something
+         somewhere else. */
+      const t = store.tunnel(name);
+      if (t && t.node) {
+        const far = t.peerName || name;
+        const alsoFar = await confirmBox({
+          title: `Also delete <q>${esc(far)}</q> on ${esc(t.node)}?`,
+          body: `${name} is gone from this server either way. This is about the other `
+              + `half of it, on a different machine. There is no undo for that one either.`,
+          lines: [{ text: `${t.node}: ${far}` }],
+          go: 'Delete there too', danger: true, defaultNo: true,
+        });
+        if (alsoFar) extra.alsoFarEnd = '1';
+      }
     }
     cardEl.style.opacity = '.5';
     try {
-      const r = await api.tunnelAction(name, action);
+      const r = await api.tunnelAction(name, action, extra);
       /* A tunnel built across a managed server is one tunnel in two places, and
          the button reaches both. When only one end moved, that is the thing
          worth saying — "Tunnel stopped" over a far end still dialling is the
@@ -424,9 +466,10 @@ export function dashboard(ctx) {
         toast(r.peerHint || r.peerError || 'Only this end changed.', true);
       } else {
         /* The server says what actually happened when it is not simply "both
-           ends": a delete is the one action that does not cross, because a node
-           has no operation that removes a tunnel. Appending "Both ends" to it
-           told the operator the far end was gone when it is still there. */
+           ends". A delete crosses only when it was asked to, so what happened
+           to the far end is the server's to report, not something to append
+           here — saying "Both ends" over a far end still running is the message
+           that costs somebody an afternoon. */
         toast(r && r.note
           ? `${ACTION_DONE[action] || 'Done.'} ${r.note}`
           : (ACTION_DONE[action] || 'Done.')
@@ -446,5 +489,96 @@ export function dashboard(ctx) {
     offAct();
     offDo();
     document.removeEventListener('click', closeSheets);
+  });
+}
+
+/* Linking a tunnel to the server that holds its other end.
+ *
+ * Two steps, because they are two different questions. Which server is the
+ * operator's to answer and the panel cannot guess it. Which tunnel on that
+ * server the panel can often demonstrate — a reverse client aimed at this
+ * machine's address, on this tunnel's port, is this tunnel's other half and
+ * nothing about the names has to agree — so it says so, and still asks.
+ *
+ * It never links on its own. A pairing decides where the next edit is sent,
+ * and a wrong one sends it to a tunnel somebody else is using.
+ */
+async function linkToServer(name) {
+  /* Asked for here rather than read from the store: the store carries what the
+     tunnels screen polls, and the fleet is not part of that. Reading it from
+     there returned undefined every time, which reads as an empty fleet — so the
+     one thing this screen needs the fleet for said there was none. */
+  let servers = [];
+  try {
+    servers = ((await api.nodes()).nodes || []).map(n => n.name);
+  } catch (e) { oops(e); return; }
+  if (!servers.length) {
+    toast('No servers in the fleet yet — add one on Servers first.', true);
+    return;
+  }
+
+  const server = servers.length === 1 ? servers[0] : await pickOne(
+    'Which server holds the other end?', servers.map(s => ({ value: s, label: s })));
+  if (!server) return;
+
+  let list;
+  try {
+    list = (await api.adoptCandidates(name, server)).tunnels || [];
+  } catch (e) { oops(e); return; }
+
+  if (!list.length) {
+    toast(`${server} has no tunnels on it.`, true);
+    return;
+  }
+  /* The demonstrated ones first, and labelled with what the match rests on, so
+     the operator confirming can see whether it was shown or merely guessed. */
+  list.sort((a, b) => (b.certain ? 1 : 0) - (a.certain ? 1 : 0));
+  const peer = await pickOne(
+    `Which tunnel on ${server} is the other end of ${name}?`,
+    list.map(t => ({
+      value: t.name,
+      label: t.name + (t.role ? ` · ${t.role}` : ''),
+      note: t.why || 'no shared address — pick it only if you know',
+      strong: !!t.certain,
+    })));
+  if (!peer) return;
+
+  try {
+    await api.adoptTunnel(name, server, peer);
+    toast(`${name} is linked to ${peer} on ${server}.`);
+  } catch (e) { oops(e); }
+}
+
+/* A one-of-many chooser, built on the confirm box's scrim so it looks like the
+   rest of the panel's questions rather than a browser prompt. */
+function pickOne(title, options) {
+  return new Promise(resolve => {
+    const scrim = document.createElement('div');
+    scrim.className = 'cfZ pickZ';
+    scrim.innerHTML = `<div class="veilZ"></div><div class="boxZ">
+      <h2>${esc(title)}</h2>
+      <div class="pickL">${options.map(o => `
+        <button class="pickI${o.strong ? ' strong' : ''}" data-v="${esc(o.value)}">
+          <b>${esc(o.label)}</b>${o.note ? `<span>${esc(o.note)}</span>` : ''}
+        </button>`).join('')}</div>
+      <div class="actZ"><button class="pickX">Cancel</button></div>
+    </div>`;
+    document.body.append(scrim);
+    requestAnimationFrame(() => scrim.classList.add('on'));
+
+    const done = v => {
+      document.removeEventListener('keydown', key);
+      scrim.classList.remove('on');
+      setTimeout(() => scrim.remove(), 280);
+      resolve(v);
+    };
+    const key = ev => { if (ev.key === 'Escape') done(null); };
+    document.addEventListener('keydown', key);
+    scrim.addEventListener('click', ev => {
+      if (ev.target === scrim) return done(null);
+      const b = ev.target.closest('.pickI');
+      if (b) return done(b.dataset.v);
+      if (ev.target.closest('.pickX')) done(null);
+    });
   });
 }

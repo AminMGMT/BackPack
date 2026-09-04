@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,8 +37,33 @@ type fakeServer struct {
 	ran     []string
 	prefix  string // printed before the answer, like a login banner
 	failing bool   // the binary is not there
+	old     bool   // the binary is there and predates "node exec"
 	refuse  string // the far side answers, and says no
 }
+
+// oldNodeUsage is verbatim what Backpack v1.7.6 and earlier print when asked to
+// run a subcommand they do not have. It is reproduced here rather than
+// summarised because the point of the test is that this exact output — a whole
+// screen of another machine's help, on stderr, with a non-zero exit — is what a
+// panel meets when it reaches a server that has not been upgraded yet.
+const oldNodeUsage = `unknown command "exec"
+
+backpack node — connect this server to a Backpack panel
+
+  backpack node setup --panel <host:port> --key <setup-key>
+        Register this server with a panel and start the agent.
+        The panel shows this line ready to paste, on Nodes → Add server.
+
+  backpack node status
+        Show whether this server is managed, and by which panel.
+
+  backpack node run
+        Run the agent in the foreground. This is what the service executes;
+        there is no reason to run it by hand.
+
+  backpack node remove
+        Stop being managed. Tunnels already on this server keep running.
+`
 
 func newFakeServer(t *testing.T, user, pass string) *fakeServer {
 	t.Helper()
@@ -115,12 +141,17 @@ func (s *fakeServer) handle(c net.Conn, cfg *ssh.ServerConfig) {
 
 				s.mu.Lock()
 				s.ran = append(s.ran, payload.Command)
-				failing, prefix, refuse := s.failing, s.prefix, s.refuse
+				failing, isOld, prefix, refuse := s.failing, s.old, s.prefix, s.refuse
 				s.mu.Unlock()
 
 				if failing {
 					fmt.Fprintln(ch.Stderr(), "sh: backpack: command not found")
 					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ S uint32 }{127}))
+					return
+				}
+				if isOld {
+					fmt.Fprint(ch.Stderr(), oldNodeUsage)
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ S uint32 }{2}))
 					return
 				}
 				if prefix != "" {
@@ -293,7 +324,7 @@ func TestAMissingBinaryIsNamed(t *testing.T) {
 	if err == nil {
 		t.Fatal("a server with no Backpack answered successfully")
 	}
-	if !strings.Contains(err.Error(), "not installed") {
+	if !errors.Is(err, ErrNeedsInstall) {
 		t.Errorf("the operator is not told what to do about it: %v", err)
 	}
 }
@@ -430,3 +461,119 @@ func TestARefusalFromTheFarSideArrivesAsItself(t *testing.T) {
 }
 
 func TestMain(m *testing.M) { os.Exit(m.Run()) }
+
+// A server running an older Backpack has to be recognised as one.
+//
+// This is the bug report "adding a server says I have to make it a node like
+// before". The panel reaches a new server by running `backpack node exec` on
+// it over SSH. A server that has never had Backpack answers "command not
+// found", which the panel understands and fixes by installing. A server that
+// has Backpack v1.7.6 on it answers something else entirely: the binary is
+// there, it runs, and it rejects the subcommand — printing a screen of its own
+// help to stderr and exiting 2.
+//
+// That is not a failure, it is the ordinary state of every server in a fleet
+// the day the panel is upgraded. It was treated as a hard error: the add was
+// refused, the server was taken back out, and the operator was shown the far
+// machine's help text for a command that no longer exists, telling them to go
+// and run `backpack node setup` — the very flow this release removed.
+func TestAnOlderBackpackIsRecognisedAsOneToUpgrade(t *testing.T) {
+	isolateStore(t)
+	srv := newFakeServer(t, "root", "hunter2")
+	srv.old = true
+	host, port := srv.addr()
+	Add("kharej", host, port, "root", "hunter2")
+
+	r := NewSSHRunner(nil)
+	defer r.Close()
+	err := r.Call("kharej", OpHello, nil, nil)
+	if err == nil {
+		t.Fatal("a server running an older Backpack answered successfully")
+	}
+
+	// The same condition the missing case raises, because the panel does the
+	// same thing about both: it installs, which is also how it upgrades.
+	if !errors.Is(err, ErrNeedsInstall) {
+		t.Errorf("an out-of-date Backpack is not recognised as one to install over, "+
+			"so this server is refused instead of upgraded.\ngot: %v", err)
+	}
+}
+
+// And whatever the far machine printed does not become the panel's message.
+//
+// runOver returns the far side's stderr as the error, which is right for a
+// short refusal and badly wrong for a program that answers with its usage: a
+// screen of another machine's help was rendered into the add form, most of it
+// describing commands this version does not have.
+func TestTheFarMachinesHelpTextIsNotShownToTheOperator(t *testing.T) {
+	isolateStore(t)
+	srv := newFakeServer(t, "root", "hunter2")
+	srv.old = true
+	host, port := srv.addr()
+	Add("kharej", host, port, "root", "hunter2")
+
+	r := NewSSHRunner(nil)
+	defer r.Close()
+	err := r.Call("kharej", OpHello, nil, nil)
+	if err == nil {
+		t.Fatal("a server running an older Backpack answered successfully")
+	}
+	said := err.Error()
+
+	for _, leaked := range []string{"node setup", "--setup-key", "node run", "Nodes → Add server"} {
+		if strings.Contains(said, leaked) {
+			t.Errorf("the far machine's help text reached the operator (%q):\n%s", leaked, said)
+		}
+	}
+	if lines := strings.Count(said, "\n"); lines > 2 {
+		t.Errorf("the message is %d lines of another machine's output:\n%s", lines+1, said)
+	}
+}
+
+// Deleting a tunnel on a managed server is an operation the far side has.
+//
+// It deliberately did not: a delete on the panel's machine is not consent to
+// one somewhere else, and there is no undo. What changed is who decides — the
+// panel asks about the far end as its own question now, with the safe answer
+// under every reflex, and sends this only when the answer was yes.
+func TestTheFarSideCanBeAskedToDelete(t *testing.T) {
+	isolateStore(t)
+	srv := newFakeServer(t, "root", "hunter2")
+	host, port := srv.addr()
+	Add("kharej", host, port, "root", "hunter2")
+
+	r := NewSSHRunner(nil)
+	defer r.Close()
+
+	var got struct {
+		Op   string          `json:"op"`
+		Body json.RawMessage `json:"body"`
+	}
+	if err := r.Call("kharej", OpDelete, NameRequest{Name: "test-kharej"}, &got); err != nil {
+		t.Fatalf("the far side refused a delete: %v", err)
+	}
+	if got.Op != OpDelete {
+		t.Errorf("the far side was asked for %q, not a delete", got.Op)
+	}
+	if !strings.Contains(string(got.Body), "test-kharej") {
+		t.Errorf("the delete did not name the tunnel: %s", got.Body)
+	}
+}
+
+// And the list carries what identifies a tunnel as one half of a pair, so the
+// panel can work out which tunnel over there is the other end of one here
+// without a round trip per candidate.
+func TestTheListSaysWhereEachTunnelMeetsItsPeer(t *testing.T) {
+	for _, f := range []string{"Role", "TunnelPort", "ServerHost"} {
+		if !hasField(TunnelState{}, f) {
+			t.Errorf("TunnelState has no %s, so a tunnel on a managed server cannot "+
+				"be recognised as the other end of one here", f)
+		}
+	}
+}
+
+func hasField(v any, name string) bool {
+	rt := reflect.TypeOf(v)
+	_, ok := rt.FieldByName(name)
+	return ok
+}

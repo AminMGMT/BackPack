@@ -26,9 +26,14 @@
 /* ---- the metric field ---------------------------------------------------
  *
  * The chart takes the right of the card, behind everything: a wash of the
- * accent colour fading in from the right, a dotted ground fading in from the
- * left, and the line over both. --mc is the accent, and it is the reading
- * rather than decoration — see .tr-up / .tr-down / .tr-flat below.
+ * accent colour fading in from the right, and the line over it. --mc is the
+ * accent, and it is the reading rather than decoration — see .tr-up /
+ * .tr-down / .tr-flat below.
+ *
+ * There was a dotted ground under the line as well. It read as texture rather
+ * than as a scale — the dots are not spaced to any value, so they measured
+ * nothing — and against a dark card a field of light dots is the brightest
+ * thing on it, competing with the line that is the actual reading.
  */
 /* One colour, one meaning: the tunnel's state.
  *
@@ -46,10 +51,6 @@
 .c7 .mfield{position:absolute;inset:0 0 0 auto;z-index:0;pointer-events:none}
 .c7 .mwash{position:absolute;inset:0;
   background:linear-gradient(to left,color-mix(in srgb,var(--mc) 12%,transparent),transparent 75%)}
-.c7 .mgrid{position:absolute;inset:0;color:color-mix(in srgb,var(--tx) 13%,transparent);
-  -webkit-mask-image:linear-gradient(to right,transparent,#000 55%);
-  mask-image:linear-gradient(to right,transparent,#000 55%)}
-.c7 .mgrid svg{width:100%;height:100%;display:block}
 .c7 .mchart{position:absolute;inset:auto 0 0;width:100%;height:62%;display:block;overflow:visible}
 
 /* The line and the columns are the metric, so they are the metric's colour.
@@ -117,6 +118,13 @@
   padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;
   letter-spacing:0;font-weight:560;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The tunnel is up and its far service is not there. Said in words on the card
+   because every other reading on it is green and correct — the shape of this
+   failure is that nothing else looks wrong. */
+.c7 .nosvc{margin-top:10px;padding:8px 10px;border-radius:9px;font-size:11.5px;line-height:1.5;
+  background:color-mix(in srgb, var(--wr) 12%, transparent);
+  border:1px solid color-mix(in srgb, var(--wr) 34%, transparent);
+  color:var(--tx2)}
 .c7 .relay{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:620;
   padding:5px 9px 5px 7px;border-radius:8px;background:var(--sunk);border:1px solid var(--ln);color:var(--tx2)}
 .c7 .relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

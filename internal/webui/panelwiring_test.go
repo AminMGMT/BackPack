@@ -34,7 +34,7 @@ var genericVerbs = map[string]bool{
 }
 
 func TestEveryControlInThePanelIsWiredToSomething(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	// Every line of the panel's own script, which is where a handler has to be.
 	var js strings.Builder

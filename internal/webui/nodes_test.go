@@ -304,7 +304,7 @@ func TestPairingsAreForgottenWithTheirServer(t *testing.T) {
 // builds. A rule about where two ids live is cheap; discovering this from a bug
 // report is not.
 func TestTheNodePickerReachesBothKindsOfTunnel(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	raw, err := fs.ReadFile(panelRoot, "views/add.html")
 	if err != nil {
@@ -437,5 +437,109 @@ func TestTheCarryForwardNeverBlocksAnEdit(t *testing.T) {
 
 	if got := peerConnOnNode(s.nodes.get(), "kharej-de", "fr-relay-kharej"); got != nil {
 		t.Errorf("an unreachable node produced settings out of nowhere: %+v", got)
+	}
+}
+
+// installingRunner is a fake that starts out too old to answer and is fixed by
+// the install, which is what a real server in an existing fleet does.
+type installingRunner struct {
+	*fakeRunner
+	installed int
+	// installWorks is whether the install actually brings the server up to a
+	// version this panel can talk to. A published release that is still the old
+	// one leaves it exactly where it was.
+	installWorks bool
+}
+
+func (r *installingRunner) Install(name string) (string, error) {
+	r.installed++
+	if r.installWorks {
+		r.up[name] = true
+	}
+	return "installed", nil
+}
+
+func (r *installingRunner) Call(name, op string, body, out any) error {
+	r.calls = append(r.calls, name+":"+op)
+	if !r.up[name] {
+		return node.ErrOffline{
+			Name: name,
+			Why:  "the Backpack on that server is too old to be managed from this panel",
+			Err:  node.ErrNeedsInstall,
+		}
+	}
+	if v, ok := r.answers[op]; ok && out != nil {
+		b, _ := json.Marshal(v)
+		return json.Unmarshal(b, out)
+	}
+	return nil
+}
+
+// A server already running an older Backpack is upgraded, not refused.
+//
+// This is the bug report: the panel reached a server in the operator's fleet,
+// found a Backpack that did not understand `node exec`, and treated it as a
+// server that could not be reached — refusing the add and printing the far
+// machine's own help, which told them to run `backpack node setup`, a command
+// this release removed. Every server in an existing fleet is in that state the
+// day the panel is upgraded, so this is the ordinary path, not an edge.
+func TestAServerRunningAnOlderBackpackIsUpgradedNotRefused(t *testing.T) {
+	isolateFleet(t)
+	s := newFleetServer()
+	t.Cleanup(s.nodes.stop)
+
+	r := &installingRunner{fakeRunner: newFake(), installWorks: true}
+	r.answers[node.OpHello] = node.Info{Version: "v1.7.7", OS: "Ubuntu 24.04"}
+	s.nodes.run = r
+
+	w := post(t, s, "action=add&name=germany&host=91.107.245.145&user=root&password=x")
+	if w.Code != http.StatusOK {
+		t.Fatalf("a server running an older Backpack was refused: %d %s", w.Code, w.Body.String())
+	}
+	if r.installed != 1 {
+		t.Errorf("the panel installed %d times, want once — an out-of-date server "+
+			"has to be brought up to this release over the same connection", r.installed)
+	}
+	got := node.List()
+	if len(got) != 1 {
+		t.Fatalf("the fleet holds %d servers after a successful add", len(got))
+	}
+	if got[0].Info.Version != "v1.7.7" {
+		t.Errorf("the upgraded version was not recorded: %+v", got[0].Info)
+	}
+}
+
+// And when the install does not help, the operator is told that plainly rather
+// than being handed the far machine's output.
+//
+// This is the real shape of it on the day of a release: install.sh fetches the
+// latest published release, so until this version is published the install
+// succeeds and changes nothing. Failing is correct; failing at length in
+// somebody else's words is not.
+func TestAnUpgradeThatDoesNotHelpSaysSoInOneSentence(t *testing.T) {
+	isolateFleet(t)
+	s := newFleetServer()
+	t.Cleanup(s.nodes.stop)
+
+	r := &installingRunner{fakeRunner: newFake(), installWorks: false}
+	s.nodes.run = r
+
+	w := post(t, s, "action=add&name=germany&host=91.107.245.145&user=root&password=x")
+	if w.Code == http.StatusOK {
+		t.Fatal("a server that still cannot answer was added anyway")
+	}
+	if len(node.List()) != 0 {
+		t.Errorf("a server that never answered was left in the fleet: %+v", node.List())
+	}
+
+	said := w.Body.String()
+	for _, leaked := range []string{"node setup", "--setup-key", "Nodes → Add server"} {
+		if strings.Contains(said, leaked) {
+			t.Errorf("the operator is being told to use a flow that no longer exists (%q):\n%s",
+				leaked, said)
+		}
+	}
+	if lines := strings.Count(strings.TrimSpace(said), "\n"); lines > 1 {
+		t.Errorf("the failure is %d lines long:\n%s", lines+1, said)
 	}
 }

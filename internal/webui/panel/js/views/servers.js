@@ -417,6 +417,14 @@ export function serversView(ctx) {
       form.hidden = true; form.reset();
       paint(state);
       toast(`${fields.name} is managed from here now.`);
+      /* A server joining the fleet often already holds the far end of tunnels
+         this panel has been managing alone — every tunnel built before there
+         was a fleet is in that position. The panel can demonstrate which ones,
+         and offers them; it links nothing on its own, because a pairing decides
+         where the operator's next edit is sent. */
+      if (state.pairSuggestions && state.pairSuggestions.length) {
+        await offerPairs(state.pairSuggestions);
+      }
     } catch (e) {
       oops(e);
     } finally {
@@ -476,4 +484,29 @@ export function serversView(ctx) {
   tick();
   timer = setInterval(tick, 6000);
   ctx.setTeardown(() => clearInterval(timer));
+}
+
+/* Offering the pairings a new server made possible.
+ *
+ * One question per tunnel rather than one for all of them: they are separate
+ * facts, the operator may know one to be wrong, and "link 3 tunnels" is not
+ * something anybody can check before pressing it. Declining is free — the link
+ * stays available from the tunnel's own menu afterwards.
+ */
+async function offerPairs(suggestions) {
+  for (const s of suggestions) {
+    const ok = await confirmBox({
+      title: `Is <q>${esc(s.name)}</q> the same tunnel as <q>${esc(s.peerName)}</q>?`,
+      body: `${s.why}. Linking them lets this panel carry edits across, start and `
+          + `stop both halves together, read that server's journal for it, and run the `
+          + `speed test end to end. Nothing is changed on either machine.`,
+      lines: [{ text: `${s.node}: ${s.peerName}` }],
+      go: 'Link them', icon: 'check',
+    });
+    if (!ok) continue;
+    try {
+      await api.adoptTunnel(s.name, s.node, s.peerName);
+      toast(`${s.name} is linked to ${s.peerName} on ${s.node}.`);
+    } catch (e) { oops(e); }
+  }
 }

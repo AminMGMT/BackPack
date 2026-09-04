@@ -107,3 +107,24 @@ body.modal #grid{transform:scale(.988)}
 .dlg .bt.primary{background:var(--tx);color:var(--bg);border-color:var(--tx)}
 .dlg .bt:disabled{opacity:.4;cursor:default}
 @media (prefers-reduced-transparency:reduce){.scrim .veil{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--bg)}}
+
+/* The one-of-many chooser, on the confirm box's own scrim.
+ *
+ * It exists because two of the questions the panel asks are not yes/no: which
+ * server holds a tunnel's other end, and which tunnel on it. A browser prompt
+ * would have answered both and looked like nothing else here. */
+.dlg .pickZ .boxZ,
+.pickZ .boxZ{text-align:left;max-width:460px}
+.pickZ .pickL{display:flex;flex-direction:column;gap:6px;margin:14px 0 4px;
+  max-height:min(48vh,360px);overflow-y:auto}
+.pickZ .pickI{display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  width:100%;padding:11px 13px;border-radius:11px;cursor:pointer;text-align:left;
+  border:1px solid var(--ln);background:var(--sunk);color:var(--tx);
+  transition:background .18s ease,border-color .18s ease}
+.pickZ .pickI:hover{background:var(--s2);border-color:var(--ln2)}
+.pickZ .pickI b{font-size:13px;font-weight:620}
+.pickZ .pickI span{font-size:11.5px;line-height:1.5;color:var(--dim)}
+/* A match the panel could demonstrate, rather than one it is only offering. */
+.pickZ .pickI.strong{border-color:color-mix(in srgb,var(--ok) 42%,transparent);
+  background:color-mix(in srgb,var(--ok) 9%,var(--sunk))}
+.pickZ .pickI.strong span{color:var(--tx2)}

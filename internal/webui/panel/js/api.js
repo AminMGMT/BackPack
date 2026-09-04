@@ -37,8 +37,21 @@ export const stats   = () => get('/api/stats');
 export const tunnels = () => get('/api/tunnels');
 
 /* ---- CLI: Manage → Manage Tunnels ---------------------------------------- */
-export const tunnelAction = (name, action) =>
-  post('/api/tunnel/action', new URLSearchParams({ name, action }));
+export const tunnelAction = (name, action, extra = {}) =>
+  post('/api/tunnel/action', new URLSearchParams({ name, action, ...extra }));
+
+/* Linking a tunnel that already exists to the server holding its other end.
+   The GET lists what that server has, with the ones that could be this
+   tunnel's other half marked; the POST records the operator's choice. */
+export const adoptCandidates = (name, node) =>
+  get('/api/tunnel/adopt?name=' + encodeURIComponent(name) + '&node=' + encodeURIComponent(node));
+export const adoptTunnel = (name, node, peerName) =>
+  post('/api/tunnel/adopt', new URLSearchParams({ name, node, peerName }));
+export const unlinkTunnel = async name => {
+  const r = await fetch('/api/tunnel/adopt?name=' + encodeURIComponent(name), { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text() || r.statusText);
+  return r.json();
+};
 export const restartAll = () =>
   post('/api/tunnel/action', new URLSearchParams({ action: 'restartall' }));
 export const tunnelSettings = name =>

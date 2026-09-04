@@ -52,6 +52,18 @@ const (
 	// remove. The panel asks for it the same way it asks for anything else.
 	OpLogs = "logs"
 
+	// OpDelete removes one tunnel from this server: its service, its unit and
+	// its configuration, exactly as the CLI's delete does.
+	//
+	// It did not exist, deliberately: deleting a tunnel on the panel's own
+	// machine is not consent to deleting one somewhere else, and a delete has
+	// no undo. What changed is not that reasoning but who acts on it — the
+	// panel now asks about the far end as its own question, separately from
+	// the one it asks about this end, and only sends this when the answer was
+	// yes. An operator who says nothing still gets what they got before: this
+	// end gone, the other end named and left alone.
+	OpDelete = "delete"
+
 	// OpStart, OpStop and OpRestart drive one tunnel's service. Nothing is
 	// written by any of them.
 	//
@@ -139,6 +151,34 @@ type TunnelState struct {
 	Service string `json:"service,omitempty"`
 	Active  bool   `json:"active"`
 	Enabled bool   `json:"enabled"`
+
+	// Role, TunnelPort and ServerHost are what identify this tunnel as one
+	// half of a pair.
+	//
+	// A tunnel has two ends and nothing in either configuration names the
+	// other by name — the operator is free to call them anything. What does
+	// tie them together is the address they meet at: a reverse client dials
+	// its server's host and port, and that port is exactly the one the server
+	// binds. So a client over there whose ServerHost is this machine and whose
+	// TunnelPort is this tunnel's port is this tunnel's other end, and no
+	// amount of renaming changes that.
+	//
+	// They are carried on the list rather than fetched per tunnel because the
+	// alternative is one SSH round trip per candidate to answer a question
+	// about all of them.
+	Role       string `json:"role,omitempty"`       // server | client
+	TunnelPort string `json:"tunnelPort,omitempty"` // the port the pair meets on
+	ServerHost string `json:"serverHost,omitempty"` // client-side only: who it dials
+
+	// ServiceDown is set when this server's end of the tunnel is delivering
+	// connections into nothing — the service it forwards to is not listening.
+	//
+	// It crosses the wire because only this end can see it. The panel runs on
+	// the other machine, where the tunnel looks perfectly healthy and is: the
+	// control channel is up, the peer is there, the traffic counters move.
+	// Without this the operator's only route to the fact was to open the far
+	// server's journal and read it.
+	ServiceDown string `json:"serviceDown,omitempty"`
 }
 
 // ApplyResult says what an apply did.

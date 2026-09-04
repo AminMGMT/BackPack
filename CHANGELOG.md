@@ -2,6 +2,192 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.7.7 — 2026-09-04
+
+Managed servers are reached over SSH now, and the panel that drives them is the
+only panel. Those are the same change told twice. The old node model was an
+agent Backpack installed on the far server, listening on a port of its own,
+speaking a protocol of its own — and it was the reason adding a server took
+minutes, reported three tunnels where there was one, and built tunnels that did
+not carry traffic. What it was really doing was reimplementing, badly, something
+every one of these servers already runs. So it is gone: a server is added with
+an address, a port, a username and a password, and Backpack logs in the way you
+would. There is no agent, no port to open, and nothing to install before the
+first connection.
+
+The rebuilt panel replaces the classic one rather than sitting beside it. It was
+served at /panel/ behind a per-server setting for as long as it was unfinished,
+with an escape hatch back to the single-file dashboard; that scaffolding, and
+the 350 KB dashboard it protected, are both removed. The panel answers at "/".
+
+The rest is what a week of using it turned up. Every figure the overview showed
+was formatted before it was totalled, so the totals were wrong in a way no
+screenshot could reveal. The open-file-limit health check measured the wrong
+process and advised a fix that could not work. The speed test blamed the far
+server for a connection this one refused. A layer-3 tunnel whose far side had
+nothing listening on the mapped port said nothing at all about it. None of these
+announce themselves; each was found by running the thing and reading what it
+claimed against what was true.
+
+### Changed
+
+- **Managed servers speak SSH.** Adding one asks for the four things an SSH
+  login needs — address, port (22 unless yours differs), username (usually
+  root) and password — and the host key is trusted on first use and pinned
+  after. Backpack installs itself on the far server over that connection,
+  reports its version, system and uptime on the server card, and upgrades it
+  from the panel with one click when a release lands. **The node agent, its
+  listening port and its wire protocol are removed**; a server enrolled the old
+  way must be added again.
+
+- **The panel is served at "/".** /panel/ redirects there, so a bookmark, a
+  pinned tab or a link somebody was sent keeps working. The Interface setting
+  that chose between the two panels, the /api/panelui endpoint behind it and the
+  ?panel=classic escape hatch are gone with the panel they switched to.
+
+- **Reverse tunnels are built through managed servers only.** The panel used to
+  offer "I will set the other one up myself" and a setup link to paste on the
+  far server; both are removed. A tunnel to a server that is not in the fleet is
+  made from the CLI menu, and the panel shows its card like any other.
+
+- **IP spoofing and SNI spoofing are CLI-only.** They stay available from the
+  menu and stay fully supported; what they no longer have is a place in the
+  panel's Add tunnel, where they were the two carriers most likely to be picked
+  without understanding what they do to a route.
+
+### Fixed
+
+- **Every traffic figure on the overview was computed from a formatted string.**
+  "1.2 TB" parsed back as 1.2, so totals across tunnels were arithmetic on
+  numbers that had lost their units — the all-time traffic, the per-tunnel
+  shares and the split between directions were all wrong together, and
+  consistently wrong, which is why they looked right. The API sends the raw byte
+  counts beside the formatted ones now, and the panel computes with those.
+
+- **The open-file-limit health check measured the panel, not the tunnels.** It
+  read the limit of whichever process happened to answer, reported 1024, and
+  told the operator to run Optimize and reboot — which changed nothing, because
+  the tunnel services carried no LimitNOFILE at all. It reads the limit of the
+  tunnel's own process now, and the unit files set one.
+
+- **The speed test blamed the far server for a local refusal.** A connection
+  this machine refused was reported as the other end needing its receiver turned
+  on, sending operators to a server that was working. A locally refused
+  connection is now named as one.
+
+- **A layer-3 tunnel whose far side has nothing listening now says so.** Every
+  signal an operator can see said the tunnel was healthy — a session on both
+  ends, a completed MTU probe, clean pings, rekeys on schedule — and all of it
+  was true; the service behind the forwarded port simply was not there. That
+  failure was logged at debug, so the log was silent about the one thing that
+  was wrong. It is a warning now, repeated at most once a minute, and the
+  recovery is reported too.
+
+- **A pck listener could not start without a default route.** The listening side
+  has no peer to route toward, so it probed 1.1.1.1 to find its egress
+  interface, and a machine using policy routing, an IPv6-only default or a
+  private segment failed with an error naming an address the operator had never
+  configured. The listener falls back to the first usable interface; the dialling
+  side, which does have a real peer to reach, is unchanged.
+
+- **Enrolling a server could no longer half-finish.** A shutdown or a dropped
+  network during enrolment could leave the far server holding credentials this
+  one had discarded, unreachable from either side. Enrolment is claimed,
+  acknowledged and given a grace period, and a shutdown waits for it rather than
+  cutting it short.
+
+- **The "Random" button no longer offered a random forwarded port.** It sat
+  beside Forwarded ports as well as Tunnel port, and asks the server for a port
+  that is free *on this machine* — right for the port this side binds, and the
+  opposite of right for a forwarded one, which the field's own hint says goes to
+  the same port on the kharej machine. A port chosen for being free here is by
+  construction one nothing is listening on there, so the button could only build
+  a tunnel that comes up, reports a peer, shows green and refuses every
+  connection at the last hop. It is offered for the tunnel port alone, and bound
+  to that field rather than to every button carrying the label.
+
+- **A tunnel delivering into nothing no longer reads as healthy.** When the
+  service on the far machine is not listening, every connection crosses a
+  working tunnel and dies one hop past the end of it — and every reading the
+  panel had said so: control channel up, peer connected, counters moving, all
+  true. The client records the failing last hop in its metrics snapshot now
+  instead of only logging it, the far end reports it to the panel over the same
+  SSH connection the fleet already uses, and the card says which address is not
+  answering and how many connections have been lost since. The state stays
+  "online", because the tunnel is: restarting it would fix nothing, and the
+  watchdog reads that field.
+
+- **A server already running an older Backpack is upgraded, not refused.**
+  Adding one reached it, found a Backpack that did not understand the panel's
+  command, and reported it as a server that could not be reached — printing the
+  far machine's own help into the add form, which told the operator to run
+  `backpack node setup`, the flow this release removes. Every server in an
+  existing fleet is in that state the day the panel is upgraded, so this was the
+  ordinary path rather than an edge. A binary that is too old is now recognised
+  as one to install over, the same as one that is missing, and the install is
+  what upgrades it. The panel no longer repeats whatever the far machine
+  printed.
+
+- **Creating a tunnel with an unknown preset is refused by name.** It used to be
+  accepted and silently ignored, so the tunnel was built on defaults nobody
+  chose.
+
+- **Closing a dialog returns to the screen it was opened from.** Every dialog
+  drew the tunnels list underneath it, so closing one opened from the overview
+  left you somewhere you had not been.
+
+### Added
+
+- **A tunnel that already exists can be linked to the server holding its other
+  end.** Everything the fleet does for a tunnel — carrying an edit across,
+  starting and stopping both halves together, reading the far server's journal,
+  standing the speed test's receiver up over there — is gated on a record of
+  where that other half lives, and that record could only ever be written at the
+  moment the panel built both ends at once. So a tunnel made any other way, or
+  made before its server joined the fleet, was permanently outside it: **this is
+  why the speed test still did nothing on an existing tunnel after its server
+  was added.** The tunnel's own menu links it now, and unlinks it again.
+
+  The match is demonstrated rather than guessed. A reverse client dials its
+  server's host and port, and that port is the one the server binds — so a
+  tunnel on the far machine aimed at this one, on this tunnel's port, is this
+  tunnel's other end whatever either of them is called. Those are marked; the
+  rest are offered unmarked and never claimed. Nothing is linked without the
+  operator saying so, because a pairing decides where their next edit is sent.
+
+- **A server joining the fleet says which tunnels it already holds the far end
+  of.** The same matching, run once when the server is added, asked one tunnel
+  at a time. It offers and never links.
+
+- **Deleting a tunnel can now remove the far end too, as its own question.** It
+  never crossed before, on the reasoning that a delete here is not consent to
+  one there — which is right, and unchanged. What changed is that the panel asks
+  the second question instead of leaving the operator to go and do it by hand:
+  a separate dialog, after this end is settled, naming the other machine, with
+  the safe answer under the cursor and under Enter. Saying nothing still leaves
+  the far end alone.
+
+### Security
+
+- **golang.org/x/crypto updated to v0.56.0**, which closes the SSH
+  source-address advisory reported against v0.54.0 and a second client-side one
+  fixed in the same series. golang.org/x/net and golang.org/x/text move with it.
+
+### Removed
+
+- **Remote access, two-factor authentication and new-sign-in notifications**,
+  from the settings screen and from the code behind them. None of the three did
+  anything useful in their current state.
+
+- **The on/off switch on managed servers**, which guarded a listener that no
+  longer exists — the panel dials out, so with no servers in the fleet it does
+  nothing at all, and turning "nothing at all" off could only ever be in the way.
+
+- **The classic dashboard** (internal/webui/assets/dashboard.html) and the 57
+  tests that pinned its markup. What those guarded about the rebuilt panel — the
+  setup and edit forms matching the structures they post into, field by field in
+  both directions — is guarded there instead.
+
 ## v1.7.6 — 2026-09-03
 
 IP spoofing was a reverse transport that could not work, and this release makes

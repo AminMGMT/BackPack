@@ -25,9 +25,6 @@ import (
 //go:embed assets/login.html
 var loginHTML []byte
 
-//go:embed assets/dashboard.html
-var dashboardHTML []byte
-
 const sessionCookie = "backpack_session"
 
 // sessionTTL is how long a signed-in browser stays signed in. It was written
@@ -197,10 +194,11 @@ func Serve() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
 	mux.HandleFunc("/logout", srv.handleLogout)
-	mux.HandleFunc("/", srv.requireAuth(srv.handleDashboard))
-	// The rebuilt panel, opt-in and served from its own subtree so the
-	// dashboard above is untouched by it. See panel.go.
-	mux.HandleFunc(panelPrefix, srv.requireAuth(srv.handleExperimentalPanel))
+	// The panel, and everything it loads. Registered at "/", so it is also
+	// the catch-all for anything no other route claims. See panel.go.
+	mux.HandleFunc("/", srv.requireAuth(srv.handlePanel))
+	// Where the panel answered while there were two of them.
+	mux.HandleFunc(panelPrefix, srv.requireAuth(srv.handleOldPanelPath))
 	// Read-only endpoints also accept the remote access token, so a peer panel
 	// or a Prometheus scraper can watch without holding a browser session.
 	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
@@ -225,13 +223,15 @@ func Serve() error {
 	// handlers_nodes.go.
 	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
 	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
+	// Linking a tunnel that already exists to the server holding its other
+	// end. See handlers_adopt.go.
+	mux.HandleFunc("/api/tunnel/adopt", srv.requireAuth(srv.handleTunnelAdopt))
 	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
 	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
 	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
 	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
 	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
 	mux.HandleFunc("/api/panelport", srv.requireAuth(srv.handlePanelPort))
-	mux.HandleFunc("/api/panelui", srv.requireAuth(srv.handlePanelUI))
 	mux.HandleFunc("/api/panelcert", srv.requireAuth(srv.handlePanelCert))
 	mux.HandleFunc("/api/backup/export", srv.requireAuth(srv.handleBackupExport))
 	mux.HandleFunc("/api/backup/import", srv.requireAuth(srv.handleBackupImport))
@@ -401,32 +401,12 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	// ?panel=classic is the way out of a new panel that has stopped
-	// responding, and ?panel=next the way in without going through Settings.
-	// Both record the choice; see choosePanel in panel.go.
-	if choice := r.URL.Query().Get("panel"); choice != "" {
-		s.choosePanel(w, r, choice)
-		return
-	}
-	if Load().ExperimentalPanel {
-		http.Redirect(w, r, panelPrefix, http.StatusSeeOther)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(dashboardHTML)
-}
-
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, GatherSystem())
 }
 
 func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, GatherTunnels())
+	writeJSON(w, gatherTunnels(s.nodes.get()))
 }
 
 func (s *server) handleLogs(w http.ResponseWriter, r *http.Request) {

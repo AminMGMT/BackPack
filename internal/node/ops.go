@@ -110,6 +110,22 @@ func Execute(req Request) Response {
 		}
 		return okBody(LogsResult{Name: lr.Name, Text: manage.Logs(lr.Name, lines)})
 
+	case OpDelete:
+		var nr NameRequest
+		if err := json.Unmarshal(req.Body, &nr); err != nil {
+			return failf("malformed delete request")
+		}
+		if _, ok := manage.Find(nr.Name); !ok {
+			// Already gone is the outcome that was asked for. Reported as
+			// success so a retry after a half-finished delete does not look
+			// like a new failure.
+			return okBody(TunnelState{Name: nr.Name})
+		}
+		if err := manage.Delete(nr.Name); err != nil {
+			return failf("%v", err)
+		}
+		return okBody(TunnelState{Name: nr.Name})
+
 	case OpStart, OpStop, OpRestart:
 		var nr NameRequest
 		if err := json.Unmarshal(req.Body, &nr); err != nil {
@@ -280,13 +296,23 @@ func localTunnels() []TunnelState {
 		if manage.IsDirectKind(t) {
 			kind = "direct"
 		}
-		out = append(out, TunnelState{
+		st := TunnelState{
 			Name:    t.Name,
 			Kind:    kind,
 			Service: t.Service,
 			Active:  manage.IsActive(t.Service),
 			Enabled: manage.IsEnabled(t.Service),
-		})
+		}
+		// The one thing this end knows and the panel's end cannot.
+		if h := manage.TunnelHealth(t); h.ServiceDown != nil {
+			st.ServiceDown = h.Detail
+		}
+		// What makes this tunnel identifiable as one half of a pair. Read from
+		// the same place the edit form reads it, so the two cannot disagree.
+		if set, err := manage.TunnelSettingsOf(t.Name); err == nil {
+			st.Role, st.TunnelPort, st.ServerHost = set.Role, set.TunnelPort, set.ServerHost
+		}
+		out = append(out, st)
 	}
 	return out
 }

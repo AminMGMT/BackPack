@@ -19,7 +19,7 @@ import (
 // The risk in that change is stranding a screen. These check that nothing was
 // removed without somewhere to go.
 func TestTheOverviewOffersTheQuickActions(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	b, err := fs.ReadFile(panelRoot, "js/views/overview.js")
 	if err != nil {
@@ -57,7 +57,7 @@ func TestTheOverviewOffersTheQuickActions(t *testing.T) {
 
 // Nothing the menu held may be left without a route.
 func TestNothingTheHeaderMenuHeldWasStranded(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	if _, err := fs.ReadFile(panelRoot, "js/ui/menu.js"); err == nil {
 		// The menu is allowed to exist; what is not allowed is losing the
@@ -77,11 +77,11 @@ func TestNothingTheHeaderMenuHeldWasStranded(t *testing.T) {
 		t.Error("there is no way to log out of the panel")
 	}
 
-	// Maintenance and the classic-panel switch lost their only entrance when
-	// the menu went, so both have to be somewhere the panel serves.
+	// Maintenance lost its only entrance when the menu went, so it has to be
+	// somewhere the panel serves. (The classic-panel switch was checked here
+	// too, until there stopped being a second panel to switch to.)
 	for _, want := range []struct{ what, needle string }{
 		{"the Maintenance screen", "/maintenance"},
-		{"the switch back to the classic panel", "/?panel=classic"},
 	} {
 		found := false
 		err := fs.WalkDir(panelRoot, ".", func(p string, d fs.DirEntry, err error) error {

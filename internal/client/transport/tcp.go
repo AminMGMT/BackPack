@@ -542,6 +542,9 @@ func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port i
 		return
 	}
 
+	// The last hop worked, so any run of failures recorded for the panel
+	// ends here. See localdial.go.
+	ReportLocalDialOK()
 	c.logger.Debugf("connected to local address %s successfully", resolvedAddr)
 
 	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(tcpConn), localConnection, c.logger, c.state.Usage(), port, c.config.Sniffer)

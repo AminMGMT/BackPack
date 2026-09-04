@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -103,9 +104,16 @@ func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) writeNodeState(w http.ResponseWriter) { s.writeNodeStateWith(w, "") }
+func (s *server) writeNodeState(w http.ResponseWriter) { s.writeNodeStateWith(w, nil) }
 
-func (s *server) writeNodeStateWith(w http.ResponseWriter, warning string) {
+// writeNodeWarning is the fleet state with one thing to say about it.
+func (s *server) writeNodeWarning(w http.ResponseWriter, warning string) {
+	s.writeNodeStateWith(w, map[string]any{"warning": warning})
+}
+
+// writeNodeStateWith is the fleet state plus whatever the action that produced
+// it has to add.
+func (s *server) writeNodeStateWith(w http.ResponseWriter, extra map[string]any) {
 	run := s.nodes.get()
 
 	// Every card asks whether its server is up, and asking means a connection.
@@ -133,8 +141,8 @@ func (s *server) writeNodeStateWith(w http.ResponseWriter, warning string) {
 	wg.Wait()
 
 	out := map[string]any{"nodes": rows}
-	if warning != "" {
-		out["warning"] = warning
+	for k, v := range extra {
+		out[k] = v
 	}
 	writeJSON(w, out)
 }
@@ -178,7 +186,7 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		// case, not a failure: it is a server the operator has just bought. The
 		// panel installs it rather than sending them to a terminal on it, which
 		// is the whole point of managing it from here.
-		if err != nil && strings.Contains(err.Error(), "not installed") {
+		if errors.Is(err, node.ErrNeedsInstall) {
 			inst, ok := s.nodes.get().(interface{ Install(string) (string, error) })
 			if ok && r.FormValue("install") != "0" {
 				if _, ierr := inst.Install(name); ierr != nil {
@@ -195,6 +203,13 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = node.NoteInfo(name, info)
+		// A server joining the fleet may already hold the far end of tunnels
+		// this panel has been managing alone. Offered, never linked — see
+		// suggestPairsOn.
+		if sugg := s.suggestPairsOn(s.nodes.get(), name); len(sugg) > 0 {
+			s.writeNodeStateWith(w, map[string]any{"pairSuggestions": sugg})
+			return
+		}
 		s.writeNodeState(w)
 
 	case "credentials":
@@ -302,7 +317,7 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		wg.Wait()
 		if len(failed) > 0 {
 			sort.Strings(failed)
-			s.writeNodeStateWith(w, "could not upgrade "+strings.Join(failed, ", "))
+			s.writeNodeWarning(w, "could not upgrade "+strings.Join(failed, ", "))
 			return
 		}
 		s.writeNodeState(w)

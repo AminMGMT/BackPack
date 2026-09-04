@@ -14,6 +14,7 @@ import (
 	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/node"
 	"github.com/backpack/backpack/internal/sysstat"
 	"github.com/backpack/backpack/internal/utils/network"
 	psnet "github.com/shirou/gopsutil/v4/net"
@@ -161,6 +162,15 @@ type TunnelInfo struct {
 	// TunnelPort is the port clients dial, pulled out of the bind address
 	// because ":1231" is what matters and "0.0.0.0:1231" is noise.
 	TunnelPort string `json:"tunnelPort"`
+
+	// ServiceDown says the tunnel is up and delivering into nothing: the
+	// service it forwards to, on the machine at the other end, is refusing
+	// every connection.
+	//
+	// State stays "online", because the tunnel is. This is the sentence beside
+	// it that says why nothing works anyway — the reading an operator used to
+	// have to go and find in the far machine's journal.
+	ServiceDown string `json:"serviceDown,omitempty"`
 
 	// Node is the managed server holding this tunnel's other end, when this
 	// panel built both. Empty for a tunnel whose far end was set up by hand,
@@ -460,7 +470,12 @@ func fillNetwork(s *SystemStats, tunnels []manage.Tunnel) {
 //	offline  — the service is active but the peer is unreachable (e.g. the other
 //	           side was stopped); a client stuck reconnecting shows here
 //	online   — active and reachable
-func GatherTunnels() []TunnelInfo {
+func GatherTunnels() []TunnelInfo { return gatherTunnels(nil) }
+
+// gatherTunnels takes the fleet runner so a paired tunnel can be asked about
+// its far end. nil means "do not ask", which is what every caller without a
+// fleet wants and what the tests use.
+func gatherTunnels(run node.Runner) []TunnelInfo {
 	tunnels := manage.List()
 	out := make([]TunnelInfo, len(tunnels))
 
@@ -571,6 +586,16 @@ func GatherTunnels() []TunnelInfo {
 				// never on ping.
 				if info.State == "online" && resolvable && !datagram && info.Ping < 0 {
 					info.State = "offline"
+				}
+				if d := health[t.Name].ServiceDown; d != nil && info.State == "online" {
+					info.ServiceDown = health[t.Name].Detail
+				}
+				// This side is the listening end of a reverse tunnel, so the
+				// forwarded service is on the far machine and only that machine
+				// can see it refusing. Ask the server holding it — from cache,
+				// never blocking this poll. See farservice.go.
+				if info.ServiceDown == "" && info.State == "online" && paired {
+					info.ServiceDown = farService.lookup(run, pair.Node, pair.PeerName)
 				}
 			}
 			if snapErr == nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -47,6 +48,13 @@ var _ Runner = (*SSHRunner)(nil)
 type ErrOffline struct {
 	Name string
 	Why  string
+
+	// Err is what actually went wrong, kept so a caller can ask what kind of
+	// unreachable this is. It used to be flattened into Why and thrown away,
+	// which left the add handler matching on the words in the sentence — and
+	// a handler that keys on prose breaks silently the moment the prose is
+	// reworded, with no build error and no failing test to say so.
+	Err error
 }
 
 func (e ErrOffline) Error() string {
@@ -55,6 +63,13 @@ func (e ErrOffline) Error() string {
 	}
 	return fmt.Sprintf("%s could not be reached: %s", e.Name, e.Why)
 }
+
+func (e ErrOffline) Unwrap() error { return e.Err }
+
+// ErrNeedsInstall means the far server cannot answer this panel because the
+// Backpack on it is missing or too old. Both are fixed the same way, by
+// installing over the same SSH connection, so both carry this.
+var ErrNeedsInstall = errors.New("backpack must be installed on that server")
 
 // SSHRunner drives managed servers over SSH.
 type SSHRunner struct {
@@ -116,7 +131,7 @@ func (r *SSHRunner) Call(name, op string, body, out any) error {
 	resp, err := r.exec(context.Background(), name, t, Request{Op: op, Body: mustJSON(body)})
 	if err != nil {
 		r.note(name, false, err.Error())
-		return ErrOffline{Name: name, Why: err.Error()}
+		return ErrOffline{Name: name, Why: err.Error(), Err: err}
 	}
 	r.note(name, true, "")
 	if !resp.OK {
@@ -189,15 +204,62 @@ func lastLine(s string) string {
 	return s
 }
 
-// backpackMissing turns the shell's word for "no such command" into the thing
-// the operator has to do about it.
+// backpackMissing turns "this server cannot answer the panel" into the thing
+// the operator has to do about it, which is the same thing in both of the ways
+// it happens.
+//
+// A server that has never had Backpack fails in the shell: "command not found".
+// A server that has an older Backpack fails inside the binary — it runs, does
+// not recognise `node exec`, and prints its own usage. The second is not an
+// exotic case: it is the state of every server in a fleet on the day the panel
+// is upgraded, and it used to be reported as a hard failure, with the far
+// machine's help text for commands this version no longer has rendered straight
+// into the add form. It told the operator to go and run `backpack node setup`,
+// which is exactly the flow that was removed.
+//
+// Both mean the same thing to the panel — the Backpack over there is not one
+// this panel can talk to — and both are answered the same way, by installing,
+// which is also how a server is upgraded. So both are named the same, and the
+// add handler's install path covers both.
 func backpackMissing(err error) error {
 	msg := err.Error()
-	if strings.Contains(msg, "not found") || strings.Contains(msg, "No such file") {
-		return fmt.Errorf("Backpack is not installed on that server — add it from the " +
-			"fleet page, or run the installer there once")
+	switch {
+	case strings.Contains(msg, "not found"), strings.Contains(msg, "No such file"):
+		return errNotInstalled("Backpack is not installed on that server")
+	case outdatedBackpack(msg):
+		return errNotInstalled("the Backpack on that server is too old to be managed " +
+			"from this panel")
 	}
 	return err
+}
+
+// errNotInstalled is one sentence, with the same ending for every reason.
+//
+// The far machine's own output is deliberately dropped rather than appended: a
+// program that answers with a screen of usage produces an error that is mostly
+// instructions for commands that do not exist, and pasting that into a form
+// field tells the operator to do the wrong thing at length.
+func errNotInstalled(what string) error {
+	return fmt.Errorf("%s — the panel can install it over this same SSH connection: %w",
+		what, ErrNeedsInstall)
+}
+
+// outdatedBackpack recognises a binary that ran and did not understand.
+//
+// It is matched on the shape of the answer rather than on a version, because
+// the panel has no version to read: asking for one is itself a command the old
+// binary would reject. What every version before this one has in common is that
+// an unknown subcommand is refused by name, and that the whole of `backpack
+// node`'s help follows it.
+func outdatedBackpack(msg string) bool {
+	if strings.Contains(msg, `unknown command "exec"`) {
+		return true
+	}
+	// Older still, or built differently: the usage arrives without the line
+	// above it. Two markers rather than one, so an unrelated message that
+	// happens to contain the word "backpack" is not read as this.
+	return strings.Contains(msg, "backpack node") &&
+		(strings.Contains(msg, "node setup") || strings.Contains(msg, "--setup-key"))
 }
 
 // IsOnline reports whether a server answered recently, asking it if the last

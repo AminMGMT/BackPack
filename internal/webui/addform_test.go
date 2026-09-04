@@ -37,7 +37,7 @@ import (
 // wireDrawerControls in js/views/add.js, which is the code this mirrors.
 func formNames(t *testing.T) map[string]bool {
 	t.Helper()
-	loadExperimentalPanel()
+	loadPanel()
 	raw, err := fs.ReadFile(panelRoot, "views/add.html")
 	if err != nil {
 		t.Fatalf("reading add.html: %v", err)
@@ -151,7 +151,7 @@ func TestTheSetupFormMatchesWhatTheServerAccepts(t *testing.T) {
 // The edit form is the more dangerous of the two: a setup form that will not
 // submit is noticed immediately, and a save that quietly does nothing is not.
 func TestTheEditFormMatchesWhatTheServerAccepts(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 	raw, err := fs.ReadFile(panelRoot, "views/edit.html")
 	if err != nil {
 		t.Fatalf("reading edit.html: %v", err)

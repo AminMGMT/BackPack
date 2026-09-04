@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,8 +43,17 @@ const localDialQuiet = 30 * time.Second
 
 var localDial = &localDialReporter{last: map[string]time.Time{}}
 
-// Report logs a failed dial to the forwarded service, explaining what it means.
+// Report logs a failed dial to the forwarded service, explaining what it means,
+// and records it where something other than a reader of the log can find it.
+//
+// The recording is not rate-limited with the logging. Suppressing repeats keeps
+// the log readable; suppressing the count would make "refused four hundred
+// connections" indistinguishable from "refused one", and that difference is the
+// whole reading — a service that is down against a client that tried once while
+// it restarted.
 func (r *localDialReporter) Report(logger *logrus.Logger, addr string, err error) {
+	metrics.ReportLocalDialFailure(addr, whyLocalDialFailed(err))
+
 	r.mu.Lock()
 	if t, seen := r.last[addr]; seen && time.Since(t) < localDialQuiet {
 		r.mu.Unlock()
@@ -54,6 +64,24 @@ func (r *localDialReporter) Report(logger *logrus.Logger, addr string, err error
 
 	logger.Error(localDialMessage(addr, err))
 }
+
+// whyLocalDialFailed is the failure in one word, matching the three cases the
+// message below distinguishes. The fix differs by case: a refusal is a service
+// that is not listening, a timeout is usually a firewall on the same machine.
+func whyLocalDialFailed(err error) string {
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "refused"
+	case isTimeout(err):
+		return "timeout"
+	default:
+		return "unreachable"
+	}
+}
+
+// ReportLocalDialOK records that the last hop is working again. Called on every
+// successful dial, so a run of failures ends the moment one connection lands.
+func ReportLocalDialOK() { metrics.ReportLocalDialSuccess() }
 
 // localDialMessage builds the explanation. Split out so it can be tested
 // without a logger.

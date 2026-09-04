@@ -20,7 +20,7 @@ import (
 // derives it from the tunnel just written, through exactly the same code.
 
 func TestThePanelNoLongerHandsOutSetupLinks(t *testing.T) {
-	loadExperimentalPanel()
+	loadPanel()
 
 	api, err := fs.ReadFile(panelRoot, "js/api.js")
 	if err != nil {

@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
@@ -16,6 +17,27 @@ type Health struct {
 	Connected bool   // the tunnel actually has its peer connection up
 	State     string // "online" | "offline" | "stopped"
 	Detail    string // human-readable explanation
+
+	// ServiceDown is set when the tunnel is up and the service it forwards to
+	// is not: every connection is delivered and then refused one hop past the
+	// end of the tunnel.
+	//
+	// It is deliberately not a State. The tunnel really is online — the control
+	// channel is held, the peer is there, and restarting it would fix nothing
+	// and drop whatever else it carries. The watchdog reads State and must go
+	// on reading "online" here. What was missing is that an operator reading
+	// the same answer had no way to tell this apart from a tunnel that works,
+	// and the only record of it was a line in the client's log on the other
+	// machine.
+	ServiceDown *ServiceDownDetail
+}
+
+// ServiceDownDetail names the last hop that is failing.
+type ServiceDownDetail struct {
+	Addr     string    // the address the client is dialling
+	Why      string    // "refused" | "timeout" | "unreachable"
+	Failures uint64    // connections lost this way since the last that worked
+	Since    time.Time // when the run started
 }
 
 // TunnelHealth reports the live health of one tunnel. "offline" means the
@@ -107,6 +129,11 @@ func tunnelHealthWith(t Tunnel, pairs [][2]string) Health {
 		if h.Connected {
 			h.State = "online"
 			h.Detail = "peer connected"
+			// A tunnel that is up and delivering into nothing.
+			if d := serviceDown(app.ConfigDir, t.Name); d != nil {
+				h.ServiceDown = d
+				h.Detail = serviceDownDetail(d)
+			}
 		} else {
 			h.State = "offline"
 			if t.Role == "server" {
@@ -148,6 +175,43 @@ func datagramPeer(dir, name string) (connected, known bool) {
 		return false, false // too old to mean anything either way
 	}
 	return snap.Peer != "", true
+}
+
+// serviceDown reads what the client wrote about its last hop, when that hop is
+// failing and the record is recent enough to describe now.
+//
+// Only the dialling side has this to say: it is the end that hands each
+// connection to the service being forwarded to. On the listening side the
+// snapshot carries nothing here and this returns nil, which is correct — that
+// machine genuinely does not know.
+func serviceDown(dir, name string) *ServiceDownDetail {
+	snap, err := metrics.Read(dir, name)
+	if err != nil || snap.LocalService == nil {
+		return nil
+	}
+	if time.Since(snap.Taken) > datagramPeerWindow {
+		return nil // too old to describe now
+	}
+	ls := snap.LocalService
+	return &ServiceDownDetail{
+		Addr: ls.Addr, Why: ls.Why, Failures: ls.Failures, Since: ls.Since,
+	}
+}
+
+// serviceDownDetail is the sentence shown beside a tunnel in this state. It
+// says which machine, which address and how many connections, because those
+// three are what separate "the service is down" from "one connection lost a
+// race during a restart".
+func serviceDownDetail(d *ServiceDownDetail) string {
+	what := "is not answering"
+	switch d.Why {
+	case "refused":
+		what = "is not listening"
+	case "timeout":
+		what = "is not answering — a firewall on that machine, or a wedged service"
+	}
+	return fmt.Sprintf("the tunnel is up, but %s on the far server %s: %d connection(s) refused since %s",
+		d.Addr, what, d.Failures, d.Since.Format("15:04"))
 }
 
 // WaitServiceActive waits up to timeout for a service to report active,
