@@ -14,7 +14,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/xtaci/kcp-go/v5 v5.6.72
 	github.com/xtaci/smux v1.5.27
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.14.0
