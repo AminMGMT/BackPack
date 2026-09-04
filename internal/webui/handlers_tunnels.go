@@ -263,7 +263,7 @@ func (s *server) afterEdit(name string, r *http.Request) map[string]any {
 		out["status"] = "partial"
 		out["peerError"] = err.Error()
 		out["peerHint"] = "This end changed and " + nodeName + " did not. " +
-			"Save again once it is back, or paste this tunnel's setup link there."
+			"Save again once it is back."
 		return out
 	}
 	out["peer"] = map[string]any{"updated": true}

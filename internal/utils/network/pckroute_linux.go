@@ -114,6 +114,29 @@ func discoverEgress(dst net.IP, ifaceName, gatewayMAC string) (*pckEgress, error
 	return e, nil
 }
 
+// firstUsableIface names an interface a pck listener could answer from: up, not
+// loopback, and holding an ordinary IPv4 address.
+//
+// It is the fallback for a server whose route lookup found nothing — see
+// newPckConn. Deliberately the first rather than the best: with no route table
+// to consult there is nothing to rank them by, and an operator who needs a
+// particular one sets pck_interface.
+func firstUsableIface() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, in := range ifaces {
+		if in.Flags&net.FlagUp == 0 || in.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if firstIPv4Of(&in) != nil {
+			return in.Name
+		}
+	}
+	return ""
+}
+
 // firstIPv4Of returns an interface's first ordinary IPv4 address.
 func firstIPv4Of(iface *net.Interface) net.IP {
 	addrs, err := iface.Addrs()

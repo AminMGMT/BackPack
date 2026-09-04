@@ -382,6 +382,18 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 		return s, fmt.Errorf("%s", why)
 	}
 
+	// A preset this build does not know is a refusal, not a default.
+	//
+	// ApplyPreset falls back to Turbo for anything it does not recognise, which
+	// is right for a config already on disk — it must keep loading — and wrong
+	// for a form. Asking for "balanced" and getting Turbo without a word is the
+	// kind of quiet substitution that is only discovered later, by wondering why
+	// a tunnel behaves like a profile nobody chose. The edit path has always
+	// refused it; creating did not, and the two are the same question.
+	if p := strings.TrimSpace(n.Preset); p != "" && !validPreset(p) {
+		return s, fmt.Errorf("unknown preset %q — choose balance, turbo or aggressive", p)
+	}
+
 	// Caught here rather than silently applied, for the reason given in the edit
 	// path: on a kernel-stack transport this profile's knobs would be written and
 	// then ignored.

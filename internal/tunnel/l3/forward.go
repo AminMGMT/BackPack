@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +39,11 @@ const (
 	// down this is what turns a hang into a refusal.
 	forwardDialTimeout = 10 * time.Second
 
+	// deadBackendRepeat is how often a mapping whose backend keeps refusing
+	// repeats itself. The first failure is said at once; after that a port
+	// under load would otherwise write a line per connection.
+	deadBackendRepeat = time.Minute
+
 	// udpFlowIdle is how long a UDP flow with no traffic is kept before its
 	// socket is released. UDP has no close, so a timer is the only way.
 	udpFlowIdle = 2 * time.Minute
@@ -70,6 +76,21 @@ type Forwarder struct {
 		refused  atomic.Uint64
 		active   atomic.Int64
 	}
+
+	// reach records, per mapping, whether its backend is currently answering,
+	// so the log can report the transition rather than the traffic.
+	reach struct {
+		sync.Mutex
+		state map[string]*backendState
+	}
+}
+
+// backendState is what one mapping's backend has been doing lately: whether it
+// was answering the last time anyone tried, and when we last said so.
+type backendState struct {
+	down     bool
+	said     time.Time
+	failures uint64
 }
 
 // NewForwarder builds the forwarder for a configuration, or returns nil when
@@ -195,13 +216,67 @@ func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Map
 	backend, err := dialBackend(ctx, "tcp", m.Targets, cursor)
 	if err != nil {
 		f.stats.refused.Add(1)
-		f.log.Debugf("l3: no backend for %s: %v", m.Listen, err)
+		f.noteBackend(m, err)
 		return
 	}
 	defer backend.Close()
+	f.noteBackend(m, nil)
 	f.stats.accepted.Add(1)
 
 	pipe(ctx, local, backend)
+}
+
+// noteBackend reports what the forwarded port is actually doing, which is the
+// one thing a healthy-looking tunnel cannot show on its own.
+//
+// A layer-3 tunnel whose far side has nothing listening on the mapped port
+// looks perfect from every angle an operator can see: both ends log a session,
+// the MTU probe crosses and comes back, ping is clean, rekeys land. The tunnel
+// really is fine — it is the service behind it that is not there. Meanwhile
+// every connection through the port dies on the dial.
+//
+// That failure used to be logged at debug, so the operator was left comparing
+// a green tunnel against a dead port with nothing in between to explain it.
+// It is said out loud now, and said again when the backend comes back, because
+// the recovery is the half that tells them their fix worked.
+func (f *Forwarder) noteBackend(m portmap.Mapping, err error) {
+	f.reach.Lock()
+	defer f.reach.Unlock()
+	if f.reach.state == nil {
+		f.reach.state = make(map[string]*backendState)
+	}
+	st := f.reach.state[m.Listen]
+	if st == nil {
+		st = &backendState{}
+		f.reach.state[m.Listen] = st
+	}
+
+	if err == nil {
+		if st.down {
+			f.log.Infof("l3: %s is answering again on %s, after %d refused connection(s)",
+				strings.Join(m.Targets, ", "), m.Listen, st.failures)
+		}
+		st.down, st.failures = false, 0
+		return
+	}
+
+	st.failures++
+	if st.down && time.Since(st.said) < deadBackendRepeat {
+		return
+	}
+	first := !st.down
+	st.down, st.said = true, time.Now()
+	if first {
+		// Named in full the first time: the address here is the far end of the
+		// tunnel, and a service listening only on loopback or on the public
+		// address is the usual reason nothing answers on it.
+		f.log.Warnf("l3: nothing is answering %s, so connections to %s are being refused: %v. "+
+			"The tunnel itself is up — check that the service is listening on %s at the far end.",
+			strings.Join(m.Targets, ", "), m.Listen, err, strings.Join(m.Targets, ", "))
+		return
+	}
+	f.log.Warnf("l3: %s still not answering — %d connections to %s refused so far",
+		strings.Join(m.Targets, ", "), st.failures, m.Listen)
 }
 
 // dialBackend tries the mapping's backends in turn, starting one further along
@@ -301,6 +376,10 @@ func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping) error {
 		flow, err := f.udpFlowFor(ctx, &flows, conn, client, m, &cursor)
 		if err != nil {
 			f.stats.refused.Add(1)
+			// Left at debug deliberately: this path also reports the
+			// connection limit, and a UDP dial is connectionless and
+			// practically never refuses, so a "nothing is answering"
+			// warning here would usually name the wrong cause.
 			f.log.Debugf("l3: no udp backend for %s: %v", m.Listen, err)
 			continue
 		}

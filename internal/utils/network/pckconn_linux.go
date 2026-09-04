@@ -152,6 +152,25 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 		toward = net.IPv4(1, 1, 1, 1).To4()
 	}
 	egress, err := discoverEgress(toward, carrier.Interface, carrier.GatewayMAC)
+	if err != nil && server && carrier.Interface == "" {
+		// A server refusing to start because it has no route to 1.1.1.1.
+		//
+		// That address is not a peer and nothing is ever sent to it; it is a
+		// stand-in used to find the default route. So a box with no default
+		// route — policy routing in another table, an IPv6-only default, a
+		// private network, a namespace — could not run a pck listener at all,
+		// and the reason it gave named an address the operator never
+		// configured.
+		//
+		// The client keeps the strict behaviour, because its target is a real
+		// peer: no route to that is a fault worth stopping for. The server's
+		// replies go back to whoever reached it, so any interface that could
+		// carry them will do, and an interface chosen wrongly is recoverable
+		// with pck_interface where refusing to start is not.
+		if name := firstUsableIface(); name != "" {
+			egress, err = discoverEgress(toward, name, carrier.GatewayMAC)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

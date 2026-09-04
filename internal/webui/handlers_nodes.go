@@ -470,7 +470,7 @@ func (s *server) handleNodePair(w http.ResponseWriter, r *http.Request) {
 		resp["status"] = "partial"
 		resp["peerError"] = perr.Error()
 		resp["peerHint"] = "This end was created. The other end was not — " +
-			"open the tunnel's setup link and paste it on " + req.Node + ", or try again once it is back."
+			"try again once " + req.Node + " is back, and this end will be mirrored onto it."
 	} else {
 		resp["peer"] = peer
 		// Recorded only once both ends exist. A pairing written before the push
