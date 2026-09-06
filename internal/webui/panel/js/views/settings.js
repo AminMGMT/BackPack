@@ -209,6 +209,11 @@ export function settingsView(ctx) {
         if (uScheme) uScheme.textContent = sch;
         if (uHost) uHost.textContent = host;
         if (uPort) uPort.textContent = snap.port ? ':' + snap.port : '';
+        /* The path the panel is served under. It is part of the address now,
+           and the half nobody can reconstruct — an operator reading this line
+           to write the address down has to see all of it. */
+        const uPath = root.querySelector('#uPath');
+        if (uPath) uPath.textContent = api.base() + '/';
         const lock = root.querySelector('#lockw');
         if (lock) lock.className = 'lockw ' + (certMode === 'acme' ? 'safe' : certMode === 'self' ? 'warn' : 'off');
         const note = root.querySelector('#uNote');

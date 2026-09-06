@@ -163,6 +163,22 @@ claimed against what was true.
 
 ### Added
 
+- **Update from a file you downloaded yourself.** The download is the step most
+  likely to fail on the networks this project exists for — the mirrors help and
+  do not always work. **Update → Install from a downloaded file** takes the
+  release archive from `/root` instead: fetch
+  `backpack_linux_<arch>.tar.gz` from the releases page on any machine that can
+  reach GitHub, `scp` it over, and choose it. The menu line says what it found,
+  including the version, which is read by running the binary inside the archive
+  rather than guessed from the filename.
+
+  Everything after the download is the ordinary update and not a special case:
+  verified against `SHA256SUMS` when one is beside it, a restore point taken
+  first, every service restarted and health-checked, and rolled back on its own
+  if a tunnel does not come back. The archive is deleted once the new version is
+  running and healthy — and left alone when it is not, because it is the thing
+  you would retry from.
+
 - **A tunnel that already exists can be linked to the server holding its other
   end.** Everything the fleet does for a tunnel — carrying an edit across,
   starting and stopping both halves together, reading the far server's journal,
@@ -193,6 +209,25 @@ claimed against what was true.
   the far end alone.
 
 ### Security
+
+- **The panel is served under an unguessable path, and answers nowhere else.**
+  A panel on a known port at `/` is found by the sweeps within hours of being
+  started and answers login attempts from strangers from then on. It now lives
+  under a random 14-character segment — `http://your-ip:7777/x7Kq2p9wRt4mNs/` —
+  and every other address on that port, `/` and `/login` included, is a plain
+  404 that says nothing about a panel being there.
+
+  This is not authentication and does not replace the password. It changes who
+  ever reaches the prompt.
+
+  **The address moves on upgrade**, for existing installs as well as new ones,
+  so a bookmark will stop working. The new one is printed by the CLI's **Web
+  Panel** screen, shown on the panel's own Panel access settings, and written to
+  the journal when the panel starts.
+
+  **Web Panel → Panel path** shows the address and moves it: a new random one
+  (for the day the old one ends up in a chat or a screenshot), one you choose,
+  or back to the root for anyone who wants the panel found by a port scan.
 
 - **A managed server could put script into the panel.** The panel lists a
   server's tunnels by reading that server's config directory, and those names

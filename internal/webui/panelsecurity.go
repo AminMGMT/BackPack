@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -156,4 +157,61 @@ const noncePlaceholder = "__CSP_NONCE__"
 // withNonce stamps this request's nonce into a page.
 func withNonce(page []byte, r *http.Request) []byte {
 	return bytes.ReplaceAll(page, []byte(noncePlaceholder), []byte(cspNonce(r)))
+}
+
+// The panel's base path.
+//
+// Everything the panel serves lives under one unguessable segment, so the panel
+// answers at http://host:7777/x7Kq2p9wRt4mNs/ and at nothing else. Anything
+// outside it gets a 404 — not a redirect, which would hand the path back to
+// whoever asked.
+//
+// This is not authentication and is not a substitute for the password. It
+// changes who ever reaches the password prompt. A panel on a known port at "/"
+// is found by the sweeps within hours of being started and answers login
+// attempts from strangers from then on; behind a path nobody can guess, those
+// sweeps get a 404 and stop.
+//
+// It wraps the mux rather than being threaded through the routes, so every
+// handler keeps the path it already had and nothing inside has to know.
+
+// withBasePath serves next under prefix, and serves nothing anywhere else.
+func withBasePath(prefix string, next http.Handler) http.Handler {
+	if prefix == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == prefix:
+			// The bare prefix is the panel's front door; the trailing slash is
+			// what makes the page's relative assets resolve inside it.
+			http.Redirect(w, r, prefix+"/", http.StatusMovedPermanently)
+			return
+		case strings.HasPrefix(r.URL.Path, prefix+"/"):
+			// Compared before stripping, and stripped from both fields, so a
+			// handler reading either sees the path it was written for.
+			r2 := *r
+			u := *r.URL
+			u.Path = strings.TrimPrefix(r.URL.Path, prefix)
+			if u.RawPath != "" {
+				u.RawPath = strings.TrimPrefix(u.RawPath, prefix)
+			}
+			r2.URL = &u
+			next.ServeHTTP(w, &r2)
+			return
+		}
+		// Everything else. The wording is the stock one on purpose: a panel
+		// that answered "wrong path" would confirm there is a panel here.
+		http.NotFound(w, r)
+	})
+}
+
+// basePlaceholder is what the shipped HTML carries where the base path goes,
+// stamped in at serve time beside the CSP nonce.
+const basePlaceholder = "__BASE_PATH__"
+
+// withBase stamps the base path into a page. "" is a panel at the root, and
+// leaves every URL in the page exactly as it was written.
+func withBase(page []byte, prefix string) []byte {
+	return bytes.ReplaceAll(page, []byte(basePlaceholder), []byte(prefix))
 }

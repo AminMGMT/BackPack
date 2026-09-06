@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -439,8 +440,12 @@ func panelHeader(cfg webui.Config) {
 		if cfg.TLSDomain != "" {
 			host = cfg.TLSDomain
 		}
-		fmt.Printf("  %sWeb Panel%s   %s%s://%s:%d%s\n", tui.Gray, tui.Reset,
-			tui.Bold+tui.White, cfg.Scheme(), host, cfg.Port, tui.Reset)
+		// The whole address, path included. The panel is served under an
+		// unguessable segment, so this screen is where an operator finds it —
+		// it is on the machine they already have a shell on, which is the one
+		// place it can be read without being findable by anybody else.
+		fmt.Printf("  %sWeb Panel%s   %s%s%s\n", tui.Gray, tui.Reset,
+			tui.Bold+tui.White, cfg.URL(host), tui.Reset)
 		fmt.Printf("  %sLogin code%s  %s%s%s\n", tui.Gray, tui.Reset, tui.Bold+tui.Red, cfg.Password, tui.Reset)
 	} else {
 		fmt.Printf("  %sStatus%s      %s○ stopped%s %s(use Restart panel to start it)%s\n",
@@ -464,6 +469,7 @@ func webPanelMenu() {
 			{Title: "Change panel port", Desc: fmt.Sprintf("current: %d", cfg.Port)},
 			{Title: "Regenerate login code", Desc: "new random 8-digit code"},
 			{Title: "Set a custom password", Desc: "replace the login code with your own"},
+			{Title: "Panel path", Desc: panelPathDesc(cfg)},
 			{Title: "Certificate", Desc: panelCertDesc(cfg)},
 			{Title: "Restart panel", Desc: "also starts it when stopped"},
 			{Title: "Stop panel", Desc: "disable the web UI"},
@@ -482,8 +488,10 @@ func webPanelMenu() {
 		case 2:
 			setCustomPassword()
 		case 3:
-			panelCertMenu(cfg)
+			panelPathMenu(cfg)
 		case 4:
+			panelCertMenu(cfg)
+		case 5:
 			if _, err := webui.EnsureRunning(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else if err := manage.RestartService(app.WebUIService); err != nil {
@@ -492,7 +500,7 @@ func webPanelMenu() {
 				tui.Success("Web panel restarted.")
 			}
 			tui.PressEnter()
-		case 5:
+		case 6:
 			if err := webui.Disable(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else {
@@ -502,6 +510,76 @@ func webPanelMenu() {
 		default:
 			return
 		}
+	}
+}
+
+// panelPathDesc is the menu line for the panel's path.
+func panelPathDesc(cfg webui.Config) string {
+	if p := cfg.PathPrefix(); p != "" {
+		return "served under " + p + "/"
+	}
+	return "served at the root — anyone scanning the port finds it"
+}
+
+// panelPathMenu shows the path the panel is served under and lets it be moved.
+//
+// The path is what a port sweep hits instead of a login page. It is not
+// authentication and rotating it on a schedule buys nothing — what this is for
+// is the day it stops being unguessable, because it was pasted into a chat or
+// left on a screenshot. Then the old one is worth throwing away, and this is
+// how, without editing JSON on a server.
+func panelPathMenu(cfg webui.Config) {
+	tui.Clear()
+	tui.Title("Panel path")
+	tui.Info("The panel answers under this path and nowhere else. Every other " +
+		"address on this port is a 404 that says nothing about a panel being here.")
+	fmt.Println()
+
+	host := cachedServerIP()
+	if cfg.TLSDomain != "" {
+		host = cfg.TLSDomain
+	}
+	fmt.Printf("  %sAddress%s  %s%s%s\n\n", tui.Gray, tui.Reset,
+		tui.Bold+tui.White, cfg.URL(host), tui.Reset)
+
+	switch tui.ChooseOpt("Choose:", []tui.Option{
+		{Title: "Keep it", Desc: "nothing changes"},
+		{Title: "Generate a new one", Desc: "the current address stops working"},
+		{Title: "Set my own", Desc: "letters, digits, - and _"},
+		{Title: "Serve at the root", Desc: "no path — the panel is found by any scan"},
+	}) {
+	case 1:
+		c, err := webui.RegenerateBasePath()
+		if err != nil {
+			tui.Error("Failed: " + err.Error())
+		} else {
+			tui.Success("The panel is now at " + c.URL(host))
+			tui.Warn("The old address no longer works. Write this one down.")
+		}
+		tui.PressEnter()
+	case 2:
+		p := strings.TrimSpace(tui.Prompt("Path segment: "))
+		if p == "" {
+			return
+		}
+		c, err := webui.SetBasePath(p)
+		if err != nil {
+			tui.Error("Failed: " + err.Error())
+		} else {
+			tui.Success("The panel is now at " + c.URL(host))
+		}
+		tui.PressEnter()
+	case 3:
+		if !tui.Confirm("Serve the panel at the root, where any scan of this port finds it?", false) {
+			return
+		}
+		c, err := webui.SetBasePath("/")
+		if err != nil {
+			tui.Error("Failed: " + err.Error())
+		} else {
+			tui.Success("The panel is now at " + c.URL(host))
+		}
+		tui.PressEnter()
 	}
 }
 
@@ -579,7 +657,7 @@ func panelCertMenu(cfg webui.Config) {
 	if cfg.TLSDomain != "" {
 		host = cfg.TLSDomain
 	}
-	tui.Warn(fmt.Sprintf("The address changed — use %s://%s:%d", cfg.Scheme(), host, cfg.Port))
+	tui.Warn(fmt.Sprintf("The address changed — use %s", cfg.URL(host)))
 	if cfg.HTTPS && cfg.TLSDomain != "" {
 		tui.Warn("The first request takes a few seconds while the certificate is issued.")
 	}
@@ -948,6 +1026,7 @@ func updateMenu() {
 
 		idx := tui.ChooseOpt("Choose:", []tui.Option{
 			{Title: "Check for updates", Desc: "install the latest release — safely, with automatic rollback"},
+			{Title: "Install from a downloaded file", Desc: localUpdateDesc()},
 			{Title: "Restore points", Desc: "go back to a previous version if something went wrong"},
 			{Title: "Release channel", Desc: "stable releases only, or also test pre-releases"},
 		})
@@ -955,13 +1034,94 @@ func updateMenu() {
 		case 0:
 			runUpdate()
 		case 1:
-			restorePointMenu()
+			runLocalUpdate()
 		case 2:
+			restorePointMenu()
+		case 3:
 			channelMenu()
 		default:
 			return
 		}
 	}
+}
+
+// localUpdateDesc says whether there is a file to install, on the menu line, so
+// the answer is visible before the option is chosen.
+func localUpdateDesc() string {
+	if u, ok := manage.FindLocalUpdate(); ok {
+		if u.Version != "" {
+			return "found " + u.Version + " in " + filepath.Dir(u.Path)
+		}
+		return "found " + filepath.Base(u.Path) + " in " + filepath.Dir(u.Path)
+	}
+	return "put " + manage.LocalAssetName() + " in /root first"
+}
+
+// runLocalUpdate installs a release the operator downloaded themselves.
+//
+// This exists because the download is the step that fails on the networks this
+// project is for. Everything after it is the ordinary update — the same
+// snapshot, health check and automatic rollback — so what is different here is
+// only where the file came from.
+func runLocalUpdate() {
+	tui.Clear()
+	tui.Title("Install from a downloaded file")
+	fmt.Println()
+
+	u, ok := manage.FindLocalUpdate()
+	if !ok {
+		tui.Error("No " + manage.LocalAssetName() + " found.")
+		fmt.Println()
+		tui.Info("Download it from the releases page on any machine that can reach")
+		tui.Info("GitHub, copy it to this server, and choose this again:")
+		fmt.Println()
+		fmt.Printf("  %sscp %s root@this-server:/root/%s\n\n", tui.Gray, manage.LocalAssetName(), tui.Reset)
+		tui.Info("Looked in: " + strings.Join(manage.LocalUpdateSearchedIn(), ", "))
+		tui.Info("The name has to be exactly that — it says which architecture the")
+		tui.Info("binary inside is built for, and this server runs " + runtime.GOARCH + ".")
+		tui.PressEnter()
+		return
+	}
+
+	fmt.Printf("  %sFile%s     %s\n", tui.Gray, tui.Reset, u.Path)
+	fmt.Printf("  %sSize%s     %.1f MB\n", tui.Gray, tui.Reset, float64(u.Size)/(1<<20))
+	fmt.Printf("  %sAdded%s    %s\n", tui.Gray, tui.Reset, u.When.Format("2006-01-02 15:04"))
+	if u.Version != "" {
+		fmt.Printf("  %sVersion%s  %s%s%s  (this server runs %s)\n",
+			tui.Gray, tui.Reset, tui.Bold+tui.White, u.Version, tui.Reset, app.Version)
+	} else {
+		fmt.Printf("  %sVersion%s  %sunknown — the binary inside did not answer%s\n",
+			tui.Gray, tui.Reset, tui.Gray, tui.Reset)
+	}
+	if u.Checksums != "" {
+		fmt.Printf("  %sChecksum%s %s\n", tui.Gray, tui.Reset, u.Checksums)
+	} else {
+		fmt.Printf("  %sChecksum%s %sno SHA256SUMS beside it — it will be installed unverified%s\n",
+			tui.Gray, tui.Reset, tui.Gray, tui.Reset)
+	}
+	fmt.Println()
+
+	// Said plainly rather than refused. Reinstalling the same version is a
+	// reasonable thing to want — a binary that was corrupted, a rollback being
+	// undone — and going backwards is sometimes the whole point.
+	if u.Version != "" && u.Version == app.Version {
+		tui.Warn("That is the version already running. Installing it again is fine.")
+	}
+
+	tui.Info("A restore point is taken first. If a tunnel does not come back, the")
+	tui.Info("update rolls itself back on its own.")
+	fmt.Println()
+	if !tui.Confirm("Install it?", true) {
+		return
+	}
+
+	fmt.Println()
+	if err := manage.ApplyLocalUpdate(u, func(l string) { tui.Info("• " + l) }); err != nil {
+		tui.Error(err.Error())
+	} else {
+		tui.Success("Done.")
+	}
+	tui.PressEnter()
 }
 
 // channelMenu picks between stable releases and pre-releases.

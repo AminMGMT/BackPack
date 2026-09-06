@@ -64,7 +64,7 @@ func (s *server) handlePanel(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// The shell carries one inline script; the nonce in this response's
 		// CSP is what lets it run. See withNonce in panelsecurity.go.
-		w.Write(withNonce(panelIndex, r))
+		w.Write(withNonce(withBase(panelIndex, basePrefix()), r))
 	default:
 		panelServer.ServeHTTP(w, r)
 	}

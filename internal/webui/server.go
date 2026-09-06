@@ -162,6 +162,12 @@ type server struct {
 	nodes *fleet
 }
 
+// basePrefix is the path the panel is served under, read from disk for the same
+// reason password() is: it is what the pages have to be stamped with, and a
+// copy captured at startup would be wrong for exactly one request after a
+// change — the one that made it.
+func basePrefix() string { return Load().PathPrefix() }
+
 // password always reads the current password from disk, so a change made from
 // the CLI or the web UI takes effect immediately — no restart, no stale cache.
 func (s *server) password() string {
@@ -269,10 +275,24 @@ func Serve() error {
 	// all" off was a setting that could only ever be in the way.
 	_ = srv.nodes.start()
 
+	// Said once, at startup, into the journal.
+	//
+	// The panel answers under an unguessable path and nowhere else, so an
+	// operator whose bookmark stopped working after an upgrade needs somewhere
+	// to read the new one. The CLI's Web Panel screen shows it; this is the
+	// other place, for anyone who reaches for the log first.
+	if p := cfg.PathPrefix(); p != "" {
+		log.Printf("panel listening on :%d under %s/ — it answers nowhere else", cfg.Port, p)
+	} else {
+		log.Printf("panel listening on :%d at the root", cfg.Port)
+	}
+
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      withPanelSecurity(mux),
+		Addr: addr,
+		// The base path is outermost: a request that is not under it is a 404
+		// before anything else looks at it.
+		Handler:      withBasePath(cfg.PathPrefix(), withPanelSecurity(mux)),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -386,11 +406,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(1 * time.Second)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(withNonce(loginHTML, r))
+		w.Write(withNonce(withBase(loginHTML, basePrefix()), r))
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(withNonce(loginHTML, r))
+	w.Write(withNonce(withBase(loginHTML, basePrefix()), r))
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {

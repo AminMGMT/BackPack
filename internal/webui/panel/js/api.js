@@ -13,8 +13,22 @@
  * many of them survive on screens that were supposed to have been wired up.
  */
 
+/* Where this panel is served from.
+ *
+ * The whole panel lives under one unguessable path segment, so every address
+ * it asks for has to carry it. It is read from the document rather than
+ * assumed, because the server is what decides it — and it is applied here,
+ * once, because this is the only file that talks to the server. A view that
+ * built its own URL would be the one that breaks. */
+const BASE = document.documentElement.dataset.base || '';
+
+/* at() turns a route into an address on this panel. Every path in this file is
+   written as the route the Go server registers, and this is what puts it where
+   the panel actually answers. */
+const at = path => BASE + path;
+
 async function get(path) {
-  const r = await fetch(path, { cache: 'no-store' });
+  const r = await fetch(at(path), { cache: 'no-store' });
   if (!r.ok) throw new Error(await r.text() || r.statusText);
   return r.json();
 }
@@ -26,7 +40,7 @@ async function post(path, body) {
     opts.headers = { 'Content-Type': 'application/json' };
     opts.body = JSON.stringify(body);
   }
-  const r = await fetch(path, opts);
+  const r = await fetch(at(path), opts);
   if (!r.ok) throw new Error(await r.text() || r.statusText);
   const text = await r.text();
   return text ? JSON.parse(text) : {};
@@ -48,7 +62,7 @@ export const adoptCandidates = (name, node) =>
 export const adoptTunnel = (name, node, peerName) =>
   post('/api/tunnel/adopt', new URLSearchParams({ name, node, peerName }));
 export const unlinkTunnel = async name => {
-  const r = await fetch('/api/tunnel/adopt?name=' + encodeURIComponent(name), { method: 'DELETE' });
+  const r = await fetch(at('/api/tunnel/adopt?name=' + encodeURIComponent(name)), { method: 'DELETE' });
   if (!r.ok) throw new Error(await r.text() || r.statusText);
   return r.json();
 };
@@ -190,3 +204,7 @@ export const setChannel   = beta =>
 
 /* ---- alerts -------------------------------------------------------------- */
 export const alerts = () => get('/api/alerts');
+
+/* The panel's own base, for the few places that build an address outside the
+   fetch helpers above — a link, a form action. */
+export const base = () => BASE;

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
@@ -17,6 +18,22 @@ import (
 type Config struct {
 	Password string `json:"password"` // 8-digit login password
 	Port     int    `json:"port"`
+
+	// BasePath is the secret path segment the whole panel lives under, so it
+	// answers at http://host:7777/<BasePath>/ and at nothing else.
+	//
+	// It is not authentication and does not pretend to be — the password is
+	// still what lets anybody in. What it changes is who ever reaches the
+	// password prompt. A panel on a known port at "/" is found by anything that
+	// sweeps the internet within hours of being started, and from then on it is
+	// answering login attempts from strangers forever. Behind a path nobody can
+	// guess, those sweeps get a 404 and go away, and the login page is seen by
+	// people who were told where it is.
+	//
+	// Generated on first use and on upgrade, so every panel has one; see
+	// EnsureBasePath. "/" turns it off for an operator who wants the panel at
+	// the root, which is the only way to get that now.
+	BasePath string `json:"base_path,omitempty"`
 
 	// HTTPS, when set, serves the panel over TLS instead of plain HTTP.
 	//
@@ -70,11 +87,27 @@ func Save(c Config) error {
 }
 
 // EnsurePassword returns the config, generating and saving an 8-digit password
-// if none exists yet.
+// and a base path if either is missing.
+//
+// The base path is generated here rather than only on a fresh install, so a
+// panel that has been running at "/" for a year gets one on the next upgrade.
+// That does move the address: the CLI's Web Panel screen prints the whole URL,
+// including the path, which is where an operator whose bookmark stopped working
+// is told to look — and the address is on the machine they already have a shell
+// on, which is the one place it can be found without being findable by anybody
+// else.
 func EnsurePassword() (Config, error) {
 	c := Load()
+	changed := false
 	if c.Password == "" {
 		c.Password = randomDigits(8)
+		changed = true
+	}
+	if c.BasePath == "" {
+		c.BasePath = randomPathSegment()
+		changed = true
+	}
+	if changed {
 		if err := Save(c); err != nil {
 			return c, err
 		}
@@ -82,10 +115,114 @@ func EnsurePassword() (Config, error) {
 	return c, nil
 }
 
+// PathPrefix is the panel's base path as a URL prefix: "/x7Kq2p" or "" when the
+// panel is at the root. Always without a trailing slash, so callers build
+// addresses by appending.
+func (c Config) PathPrefix() string {
+	p := strings.Trim(strings.TrimSpace(c.BasePath), "/")
+	if p == "" {
+		return ""
+	}
+	return "/" + p
+}
+
+// URL is where this panel answers, given the host to reach it at.
+func (c Config) URL(host string) string {
+	return fmt.Sprintf("%s://%s:%d%s/", c.Scheme(), host, c.Port, c.PathPrefix())
+}
+
+// basePathAlphabet leaves out the characters that are misread when a URL is
+// copied off a terminal by hand: no 0/O, no 1/l/I. What is left is still 57
+// bits over 14 characters, which is not a space anybody sweeps.
+const basePathAlphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+// randomPathSegment returns a path segment nobody can guess.
+func randomPathSegment() string {
+	const n = 14
+	b := make([]byte, n)
+	for i := range b {
+		d, err := rand.Int(rand.Reader, big.NewInt(int64(len(basePathAlphabet))))
+		if err != nil {
+			// Refusing to guess is the only safe answer: a predictable path is
+			// worse than none, because it reads as a secret and is not one.
+			return ""
+		}
+		b[i] = basePathAlphabet[d.Int64()]
+	}
+	return string(b)
+}
+
+// validBasePath reports whether a base path is one the panel can serve. A path
+// segment, nothing else: no slashes, no dots, nothing that has to be escaped.
+func validBasePath(s string) bool {
+	s = strings.Trim(strings.TrimSpace(s), "/")
+	if s == "" {
+		return true // the root, which is how it is turned off
+	}
+	if len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // RegeneratePassword creates a new 8-digit password and restarts the panel.
 func RegeneratePassword() (Config, error) {
 	c := Load()
 	c.Password = randomDigits(8)
+	if err := Save(c); err != nil {
+		return c, err
+	}
+	manage.RestartService(app.WebUIService)
+	return c, nil
+}
+
+// RegenerateBasePath moves the panel to a new unguessable path and restarts it.
+//
+// The path is not a secret that has to be rotated on a schedule — it is not
+// authentication and nothing is signed with it. What it is for is the case
+// where it stopped being unguessable: pasted into a chat, screenshotted, typed
+// on a machine that was not the operator's. Then the old one is worth throwing
+// away, and there has to be a way to do it that does not involve editing JSON.
+//
+// The restart is what makes it take effect; the running server read its path
+// once, at startup.
+func RegenerateBasePath() (Config, error) {
+	c := Load()
+	p := randomPathSegment()
+	if p == "" {
+		return c, fmt.Errorf("could not generate a path")
+	}
+	c.BasePath = p
+	if err := Save(c); err != nil {
+		return c, err
+	}
+	manage.RestartService(app.WebUIService)
+	return c, nil
+}
+
+// SetBasePath persists a path the operator chose, or "/" to put the panel back
+// at the root, and restarts it.
+func SetBasePath(path string) (Config, error) {
+	c := Load()
+	if !validBasePath(path) {
+		return c, fmt.Errorf("a path is one segment of letters, digits, - and _ — " +
+			"or / to serve the panel at the root")
+	}
+	trimmed := strings.Trim(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		// "/" asks for the root, and "" would be read as "none set" and
+		// regenerated on the next start. They have to be told apart.
+		c.BasePath = "/"
+	} else {
+		c.BasePath = trimmed
+	}
 	if err := Save(c); err != nil {
 		return c, err
 	}

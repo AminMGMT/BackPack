@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,7 @@ func TestPWAAssets(t *testing.T) {
 		Name      string `json:"name"`
 		ShortName string `json:"short_name"`
 		StartURL  string `json:"start_url"`
+		Scope     string `json:"scope"`
 		Display   string `json:"display"`
 		Icons     []struct {
 			Src, Sizes, Type, Purpose string
@@ -81,8 +83,16 @@ func TestPWAAssets(t *testing.T) {
 	if m.Name == "" || m.ShortName == "" {
 		t.Error("manifest needs both name and short_name")
 	}
-	if m.StartURL != "/" || m.Display != "standalone" {
+	// Relative, not "/". The panel is served under an unguessable base path, so
+	// every address in the manifest resolves against the manifest's own URL and
+	// moves with it. An absolute "/" pointed every installed app at the root,
+	// which is now the one place the panel does not answer.
+	if m.StartURL != "./" || m.Display != "standalone" {
 		t.Errorf("start_url %q display %q", m.StartURL, m.Display)
+	}
+	if m.Scope != "./" {
+		t.Errorf("scope %q — an absolute scope leaves the installed app pointing "+
+			"outside the path the panel is served under", m.Scope)
 	}
 	var big, maskable bool
 	for _, ic := range m.Icons {
@@ -92,8 +102,9 @@ func TestPWAAssets(t *testing.T) {
 		if ic.Purpose == "maskable" {
 			maskable = true
 		}
-		// Every icon the manifest names must actually be served.
-		if w := get(ic.Src); w.Code != 200 {
+		// Every icon the manifest names must actually be served. The paths are
+		// relative to the manifest, which sits beside them at the panel's root.
+		if w := get("/" + strings.TrimPrefix(ic.Src, "./")); w.Code != 200 {
 			t.Errorf("manifest icon %s: status %d", ic.Src, w.Code)
 		}
 	}

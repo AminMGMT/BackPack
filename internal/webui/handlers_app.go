@@ -38,13 +38,17 @@ func (s *server) handleChannel(w http.ResponseWriter, r *http.Request) {
 // home screen as an app, which is why the dashboard's install prompt sends the
 // operator to the CLI's Panel certificate screen first.
 
+// The manifest's paths are all relative to the manifest's own URL, so the whole
+// document moves with the panel when it is served under a base path — and none
+// of it has to know what that path is. An absolute "/" here would have pointed
+// every installed app at the root, where the panel no longer answers.
 var manifestJSON = []byte(`{
-  "id": "/",
+  "id": "./",
   "name": "Backpack Panel",
   "short_name": "Backpack",
   "description": "Live tunnel and server monitoring for Backpack.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait-primary",
@@ -52,10 +56,10 @@ var manifestJSON = []byte(`{
   "theme_color": "#0a0a0b",
   "categories": ["utilities", "productivity"],
   "icons": [
-    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }`)
 

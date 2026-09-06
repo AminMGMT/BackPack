@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0b">
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="manifest" href="__BASE_PATH__/manifest.json">
+<link rel="icon" href="__BASE_PATH__/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="__BASE_PATH__/icon.svg">
 <title>Backpack · Login</title>
 <style>
   :root{
@@ -91,7 +91,7 @@
     </div>
     <h1>Backpack</h1>
     <div class="sub" id="sub">Enter your access password</div>
-    <form method="post" action="/login">
+    <form method="post" action="__BASE_PATH__/login">
       <label class="sr-only" for="pw" id="pwlabel">Access password</label>
       <div class="field">
         <input id="pw" name="password" type="password" maxlength="128"

@@ -413,6 +413,25 @@ func verifyChecksum(path, want string) error {
 // extractBinary pulls the `backpack` executable out of the release archive and
 // atomically replaces the installed binary.
 func extractBinary(archive string) error {
+	// Written next to the target so the final rename is atomic: the file being
+	// replaced is the one running every tunnel on this machine.
+	tmp := app.BinPath + ".new"
+	if err := extractBinaryTo(archive, tmp); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, app.BinPath)
+}
+
+// extractBinaryTo pulls the `backpack` binary out of a release archive and
+// writes it to dest.
+//
+// Split out from extractBinary so the same reader serves the install and the
+// look: an archive the operator downloaded by hand is extracted to a temporary
+// file and asked what version it is, before anything on this machine is
+// touched. One implementation means the file that is inspected and the file
+// that is installed cannot be found by different rules.
+func extractBinaryTo(archive, dest string) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -436,19 +455,15 @@ func extractBinary(archive string) error {
 		if hdr.Typeflag != tar.TypeReg || filepath.Base(hdr.Name) != "backpack" {
 			continue
 		}
-		// Write next to the target so the final rename is atomic.
-		tmp := app.BinPath + ".new"
-		out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+		out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
 		if err != nil {
 			return err
 		}
 		if _, err := io.Copy(out, tr); err != nil {
 			out.Close()
-			os.Remove(tmp)
 			return err
 		}
-		out.Close()
-		return os.Rename(tmp, app.BinPath)
+		return out.Close()
 	}
 	return fmt.Errorf("no `backpack` binary found inside the archive")
 }
