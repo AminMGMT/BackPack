@@ -93,5 +93,66 @@ func validatePortSpecs(ports []string) error {
 			return fmt.Errorf("invalid port entry %q — use forms like 443, 400-450, 443=1.1.1.1:443", strings.TrimSpace(p))
 		}
 	}
+	return validateDistinctPortBindings(ports)
+}
+
+type portBindings struct {
+	wildcard bool
+	hosts    map[string]bool
+}
+
+// validateDistinctPortBindings rejects entries that would try to listen on
+// the same socket. Different destinations for one exposed port belong in the
+// supported `backend1|backend2` form; listing the port twice starts two
+// listeners, and the second one can only fail after the service restarts.
+func validateDistinctPortBindings(ports []string) error {
+	seen := map[int]*portBindings{}
+	for _, spec := range ports {
+		local := strings.TrimSpace(strings.SplitN(spec, "=", 2)[0])
+		host, first, last := "*", 0, 0
+
+		if h, p, err := net.SplitHostPort(local); err == nil {
+			host = normalizedListenHost(h)
+			first, _ = strconv.Atoi(p)
+			last = first
+		} else if strings.Contains(local, "-") {
+			bounds := strings.SplitN(local, "-", 2)
+			first, _ = strconv.Atoi(strings.TrimSpace(bounds[0]))
+			last, _ = strconv.Atoi(strings.TrimSpace(bounds[1]))
+		} else {
+			first, _ = strconv.Atoi(local)
+			last = first
+		}
+
+		for port := first; port <= last; port++ {
+			binding := seen[port]
+			if binding == nil {
+				binding = &portBindings{hosts: map[string]bool{}}
+				seen[port] = binding
+			}
+			if host == "*" {
+				if binding.wildcard || len(binding.hosts) > 0 {
+					return fmt.Errorf("forwarded port %d is listed more than once", port)
+				}
+				binding.wildcard = true
+				continue
+			}
+			if binding.wildcard || binding.hosts[host] {
+				return fmt.Errorf("forwarded port %s:%d is listed more than once", host, port)
+			}
+			binding.hosts[host] = true
+		}
+	}
 	return nil
+}
+
+func normalizedListenHost(host string) string {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "*"
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
 }
