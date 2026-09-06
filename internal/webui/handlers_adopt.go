@@ -30,13 +30,32 @@ func thisServerHosts() []string {
 	return out
 }
 
-// farEndsOn asks one managed server what tunnels it has.
+// farEndsOn asks one managed server what tunnels it has, and keeps only the
+// answers this panel is willing to believe.
+//
+// A tunnel name over there is a filename in that server's config directory, and
+// that server chose it. On Linux a filename holds anything but "/" and NUL, so
+// a name can carry quotes, angle brackets or a script tag — and the panel puts
+// these names on screen, into confirmations and into a stored pairing. The
+// escaping at the sink is what stops that being an injection; this is the
+// second half, which is that data crossing a trust boundary is checked when it
+// arrives rather than trusted because the far side produced it.
+//
+// A name this panel would refuse to create is a name it will not adopt either.
+// Dropping the row rather than the whole answer is deliberate: one oddly named
+// tunnel on a server must not make its other tunnels unpairable.
 func farEndsOn(run node.Runner, server string) ([]node.TunnelState, error) {
 	var states []node.TunnelState
 	if err := run.Call(server, node.OpList, nil, &states); err != nil {
 		return nil, err
 	}
-	return states, nil
+	kept := states[:0]
+	for _, st := range states {
+		if manage.ValidName(st.Name) {
+			kept = append(kept, st)
+		}
+	}
+	return kept, nil
 }
 
 // candidatesFor ranks a server's tunnels against one local tunnel.

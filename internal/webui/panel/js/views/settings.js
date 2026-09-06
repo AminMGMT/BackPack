@@ -389,7 +389,7 @@ export function settingsView(ctx) {
           }
           if (port) {
             if (!await confirmBox({
-              title: `Move the panel to port ${port}?`,
+              title: `Move the panel to port ${esc(port)}?`,
               body: 'You will be redirected to the new address.',
               go: 'Move',
             })) return;

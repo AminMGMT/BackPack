@@ -194,6 +194,26 @@ claimed against what was true.
 
 ### Security
 
+- **A managed server could put script into the panel.** The panel lists a
+  server's tunnels by reading that server's config directory, and those names
+  are filenames — on Linux anything but `/` and NUL is legal in one. The name
+  went into a confirmation dialog that assigned it to `innerHTML`, and the
+  panel's own policy allowed inline script, so `<img src=x onerror=…>` as a
+  filename on a fleet member ran in the operator's session, on the origin that
+  holds every other server's root password. The Add-a-server flow rendered it
+  with no click at all. Three things stop it now, each holding on its own: the
+  name is refused on arrival if it is one the panel would not create itself,
+  it is not stored if it somehow arrives, and the dialog escapes whatever it is
+  given. Found by a review of this release; reproduced in a browser before and
+  after.
+
+- **The panel's Content-Security-Policy no longer allows inline script.**
+  `script-src` carried `'unsafe-inline'`, which is what made an injected
+  attribute executable — the policy permitted exactly what it exists to stop. It
+  names a per-response nonce instead. The panel's view templates carry inline
+  `onclick` from the preview they were drawn as, and none of it ever reaches the
+  document; the two pages that do ship an inline script are handed the nonce.
+
 - **golang.org/x/crypto updated to v0.56.0**, which closes the SSH
   source-address advisory reported against v0.54.0 and a second client-side one
   fixed in the same series. golang.org/x/net and golang.org/x/text move with it.

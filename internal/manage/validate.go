@@ -23,6 +23,16 @@ func validName(name string) bool {
 	return nameRe.MatchString(name)
 }
 
+// ValidName is validName for callers outside this package.
+//
+// It exists for one job: checking a name that arrived from another machine.
+// Names created here go through the wizard or the panel form and are checked
+// on the way in, so nothing local needs this. A name read off a managed
+// server's config directory is a filename that server chose, and on Linux a
+// filename may hold anything but "/" and NUL — quotes, angle brackets, a whole
+// script tag. Nothing downstream of that read was treating it as foreign.
+func ValidName(name string) bool { return validName(name) }
+
 // parsePorts splits a comma-separated port specification into individual
 // entries, trimming whitespace and dropping empties. Mapping forms such as
 // "443=1.1.1.1:443", ranges "443-450", and plain "443" are all passed through

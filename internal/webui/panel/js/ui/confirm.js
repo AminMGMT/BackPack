@@ -6,7 +6,7 @@
  * preview: .cfZ / .boxZ.
  */
 
-import { el } from '../lib/dom.js';
+import { el, esc } from '../lib/dom.js';
 import { svg, paintIcons } from '../lib/icons.js';
 
 /* defaultNo puts the safe answer under the cursor and under Enter.
@@ -21,11 +21,29 @@ export function confirmBox({ title, body, lines = [], go = 'Confirm', danger = f
     const scrim = el('div', { class: 'cfZ' }, el('div', { class: 'veilZ' }));
     const box = el('div', { class: 'boxZ' + (danger ? ' danger' : '') }, [
       el('div', { class: 'icZ', html: svg(icon || (danger ? 'warn' : 'check')) }),
+      /* title and lines both land in innerHTML, so both are escaped here.
+       *
+       * They were not, and the callers were left to remember. Every one of them
+       * did remember for the title — `<q>${esc(name)}</q>` — and none of them
+       * did for the lines, which is what a convention that lives in the callers
+       * rather than the sink always ends up looking like.
+       *
+       * It stopped being only untidy once a line could hold a name from another
+       * machine. The panel lists a managed server's tunnels by reading its
+       * config directory, and those names are filenames: on Linux anything but
+       * "/" and NUL is legal in one, and nothing between that directory and
+       * this element filtered them. A server in the fleet could put markup in a
+       * filename and have it run here, in the operator's session, on the origin
+       * that holds every other server's root password.
+       *
+       * title takes markup on purpose — the callers wrap the variable and pass
+       * the tags — so it is escaped one level down, around the value, not here.
+       * A line is a value and nothing else, so it is escaped whole. */
       el('h2', { html: title }),
       el('p', { text: body }),
       lines.length
         ? el('div', { class: 'listZ' },
-            lines.map(l => el('div', { html: svg(l.icon || 'logs') + `<code>${l.text}</code>` })))
+            lines.map(l => el('div', { html: svg(l.icon || 'logs') + `<code>${esc(l.text)}</code>` })))
         : null,
       el('div', { class: 'actZ' }, [
         el('button', { on: { click: () => done(false) } }, 'Cancel'),

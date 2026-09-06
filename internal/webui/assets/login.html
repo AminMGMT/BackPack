@@ -96,7 +96,7 @@
       <div class="field">
         <input id="pw" name="password" type="password" maxlength="128"
                placeholder="Password" autofocus autocomplete="current-password" required>
-        <button type="button" class="toggle" id="toggle" aria-label="Show code" aria-pressed="false" onclick="togglePw()">
+        <button type="button" class="toggle" id="toggle" aria-label="Show code" aria-pressed="false">
           <svg class="ic" viewBox="0 0 24 24" id="eye"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
@@ -104,7 +104,7 @@
     </form>
     <div class="foot">TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
   </div>
-<script>
+<script nonce="__CSP_NONCE__">
   // The accent chosen in the panel applies here too. Signing in is the first
   // thing anyone sees, and a login screen in a colour the panel does not use
   // reads as a different product. The table is duplicated rather than shared
@@ -127,8 +127,13 @@
       :'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
     i.focus();
   }
+  /* Bound here rather than as onclick= on the button. The panel's CSP names a
+     per-response nonce instead of allowing inline script, and a nonce covers
+     script elements only — never an attribute handler. That is the point of
+     it, and it means this page cannot keep one either. */
+  document.getElementById('toggle').addEventListener('click', togglePw);
 </script>
-<script>
+<script nonce="__CSP_NONCE__">
 // The language the panel was left in. The login page has no settings of its
 // own — it follows the choice already made, so a Persian reader is not shown an
 // English door to a Persian panel.

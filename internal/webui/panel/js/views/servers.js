@@ -308,7 +308,7 @@ export function serversView(ctx) {
 
     upB?.addEventListener('click', async () => {
       if (!await confirmBox({
-        title: `Upgrade ${n.name} to ${mine}?`,
+        title: `Upgrade ${esc(n.name)} to ${esc(mine)}?`,
         body: `It is on ${i.version}. The release is installed there and its tunnels `
             + 'restart once. It takes a couple of minutes, and this page waits for it.',
         go: 'Upgrade' })) return;

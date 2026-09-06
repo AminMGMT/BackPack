@@ -80,15 +80,30 @@ func savePairs(f pairFile) error {
 
 // NoteNodePair records that a tunnel's other end lives on a node, and what it
 // is called there.
+//
+// PeerName is the one field here that the far machine chose, and this file
+// outlives the connection it came over: what is written now is read back on
+// every poll and put on screen long afterwards. So it is checked against the
+// same rule a name created here has to pass, and dropped rather than stored
+// when it fails.
+//
+// The pairing itself is still kept when that happens. The tunnel really does
+// have its other end on that server — losing the whole record over a name
+// would take the fleet's edits, logs and speed test with it — and every use of
+// PeerName already falls back to the local name when it is empty.
 func NoteNodePair(tunnel, node, peerName string) error {
 	tunnel, node = strings.TrimSpace(tunnel), strings.TrimSpace(node)
 	if tunnel == "" || node == "" {
 		return nil
 	}
+	peerName = strings.TrimSpace(peerName)
+	if peerName != "" && !validName(peerName) {
+		peerName = ""
+	}
 	pairMu.Lock()
 	defer pairMu.Unlock()
 	f := loadPairs()
-	f.Pairs[tunnel] = Pair{Node: node, PeerName: strings.TrimSpace(peerName)}
+	f.Pairs[tunnel] = Pair{Node: node, PeerName: peerName}
 	return savePairs(f)
 }
 

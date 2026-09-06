@@ -386,11 +386,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(1 * time.Second)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write(loginHTML)
+		w.Write(withNonce(loginHTML, r))
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(loginHTML)
+	w.Write(withNonce(loginHTML, r))
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {

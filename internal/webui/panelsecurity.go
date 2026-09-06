@@ -1,6 +1,10 @@
 package webui
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 	"time"
 )
@@ -77,11 +81,31 @@ func withPanelSecurity(next http.Handler) http.Handler {
 		// The pages are self-contained: no CDN, no external fonts, no remote
 		// images. frame-ancestors is X-Frame-Options for browsers that have
 		// moved on from it.
+		//
+		// script-src carries a per-response nonce instead of 'unsafe-inline'.
+		//
+		// 'unsafe-inline' is what makes an injected string executable: a name
+		// that reaches the DOM carrying onerror= runs, and the policy that is
+		// supposed to be the last line under a missed escape permits exactly
+		// the thing the escape was there to stop. A nonce does not — it admits
+		// the two script blocks this panel actually ships, which are handed the
+		// value below, and nothing else. Attribute handlers are never covered
+		// by a nonce, which is the point: there is no way to spell one that
+		// this policy allows.
+		//
+		// The templates in panel/views carry inline onclick from the preview
+		// they were drawn as, and none of it survives — screen.js rewrites the
+		// calls into data-fn and strips every remaining on* attribute before
+		// the markup reaches the document. See loadTemplate there.
+		//
+		// style-src keeps 'unsafe-inline': the panel sets element.style
+		// throughout, and a style attribute is not script.
+		nonce := newCSPNonce()
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+			"default-src 'self'; script-src 'self' 'nonce-"+nonce+"'; style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "+
 				"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), cspNonceKey{}, nonce)))
 	})
 }
 
@@ -93,4 +117,43 @@ func panelServerLimits(srv *http.Server) {
 	srv.ReadHeaderTimeout = 10 * time.Second
 	srv.IdleTimeout = 90 * time.Second
 	srv.MaxHeaderBytes = 32 << 10
+}
+
+// The per-response script nonce.
+//
+// Generated fresh for every request and passed down on the context, so the two
+// pages that carry an inline script can stamp it into the tag they serve. A
+// nonce that were reused across responses would be one an attacker could read
+// from an earlier page and reuse, which is a nonce in name only.
+type cspNonceKey struct{}
+
+// newCSPNonce returns 16 random bytes, base64. crypto/rand, because the whole
+// value of the nonce is that it cannot be guessed before the response carrying
+// it is read.
+func newCSPNonce() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Unreachable in practice; crypto/rand does not fail on the platforms
+		// this runs on. If it ever did, an empty nonce fails closed — the
+		// inline script would not run and the panel would visibly not work,
+		// which is the right way round for a security control.
+		return ""
+	}
+	return base64.RawStdEncoding.EncodeToString(b[:])
+}
+
+// cspNonce is the nonce for this request, or "" outside the handler chain.
+func cspNonce(r *http.Request) string {
+	n, _ := r.Context().Value(cspNonceKey{}).(string)
+	return n
+}
+
+// noncePlaceholder is what the shipped HTML carries where the nonce goes. The
+// pages are embedded files, not templates: one replace at serve time keeps
+// them readable on disk and editable without a build step.
+const noncePlaceholder = "__CSP_NONCE__"
+
+// withNonce stamps this request's nonce into a page.
+func withNonce(page []byte, r *http.Request) []byte {
+	return bytes.ReplaceAll(page, []byte(noncePlaceholder), []byte(cspNonce(r)))
 }
