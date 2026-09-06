@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -59,6 +60,27 @@ func sameHost(a, b net.Addr) bool {
 
 // netControl holds the control channel for the transports that use a plain
 // network connection (tcp, tcpmux, udp, kcp).
+// controlWriteTimeout bounds a write on the control channel.
+//
+// Every byte this channel carries is one byte: a heartbeat, a request for a
+// pool connection, a shutdown notice. None of them is worth waiting on, and
+// waiting on one is what took a tunnel down for a quarter of an hour at a time.
+//
+// A write goes into the kernel's send buffer and returns; when the peer stops
+// absorbing anything the buffer fills and the write blocks until the kernel
+// stops retransmitting, which is around fifteen minutes on Linux defaults. For
+// that whole window the server believes it has a control channel: it refuses
+// the client's attempts to make a new one because one is "already
+// established", it cannot ask for pool connections because the request reaches
+// nobody, and it drops every user connection with the queue full. The tunnel is
+// down and nothing but a restart by hand clears it.
+//
+// Ten seconds is far longer than a healthy path needs for one byte and far
+// shorter than a broken one takes to admit it. Past that the channel is treated
+// as gone, which is what it is — the transport restarts, and the client's next
+// claim is accepted instead of refused.
+const controlWriteTimeout = 10 * time.Second
+
 type netControl struct {
 	mu   sync.RWMutex
 	conn net.Conn
@@ -205,3 +227,22 @@ func (t *tunnelStatus) get() string {
 	defer t.mu.RUnlock()
 	return t.s
 }
+
+// writeControl sends one control byte on a websocket control channel, bounded
+// the same way and for the same reason as SendBinaryByteWithin.
+//
+// The websocket transports had the same unbounded write as the others: a
+// heartbeat into a peer that had stopped reading blocked until the kernel gave
+// up, and for that whole time the server held a control channel it could not
+// use and would not replace.
+func writeControl(conn *websocket.Conn, payload []byte) error {
+	if conn == nil {
+		return errNoControlChannel
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err == nil {
+		defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	}
+	return conn.WriteMessage(websocket.BinaryMessage, payload)
+}
+
+var errNoControlChannel = errors.New("no control channel")

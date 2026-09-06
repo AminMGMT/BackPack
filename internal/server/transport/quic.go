@@ -397,18 +397,18 @@ func (s *QuicTransport) channelHandler(g *quicGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
+			_ = utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout)
 			return
 
 		case <-g.reqNewConnChan:
-			if err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan); err != nil {
+			if err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Chan, controlWriteTimeout); err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
 				return
 			}
 
 		case <-ticker.C:
-			if err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB); err != nil {
+			if err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_HB, controlWriteTimeout); err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()
 				return
@@ -572,7 +572,7 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
 				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 			default: // channel is full, discard the connection
-				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.RemoteAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

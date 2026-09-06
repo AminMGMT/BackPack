@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 )
 
 func SendBinaryString(conn interface{}, message string) error {
@@ -151,8 +152,12 @@ func SendBinaryByte(conn interface{}, message byte) error {
 
 	switch c := conn.(type) {
 	case net.Conn:
+		// "failed to write", because that is what happened. It said "failed to
+		// read" here, on the write path, so a control channel that could not be
+		// written to reported itself as a read error with a write error inside
+		// it — a line nobody could act on.
 		if _, err := c.Write(messageBuf[:]); err != nil {
-			return fmt.Errorf("failed to read message from net.Conn: %w", err)
+			return fmt.Errorf("failed to write message to net.Conn: %w", err)
 		}
 
 	default:
@@ -161,6 +166,37 @@ func SendBinaryByte(conn interface{}, message byte) error {
 
 	// Successful
 	return nil
+}
+
+// SendBinaryByteWithin is SendBinaryByte with a bound on how long it may take.
+//
+// A one-byte write looks instant and is not. It lands in the kernel's send
+// buffer, and when the peer has stopped absorbing anything — a path that has
+// black-holed, a machine that went away without closing — the buffer fills and
+// the write blocks. Nothing returns an error until the kernel gives up
+// retransmitting, which on Linux defaults is on the order of fifteen minutes.
+//
+// For a heartbeat on the control channel that is not a delay, it is the whole
+// failure: the server goes on believing it has a control channel, refuses the
+// client's attempts to establish a new one because one is "already
+// established", cannot ask for pool connections because the request never
+// reaches anybody, and drops every user connection with the queue full — for
+// as long as the kernel takes. The tunnel is down and the only thing that
+// clears it is a restart by hand.
+//
+// A control channel that cannot take one byte within a few seconds is not a
+// control channel. This says so while it is still worth saying.
+func SendBinaryByteWithin(conn net.Conn, message byte, timeout time.Duration) error {
+	if conn == nil {
+		return fmt.Errorf("no connection")
+	}
+	// A deadline that cannot be set is not a reason to refuse to write: the
+	// conn may not support one, and the unbounded write is still better than
+	// no write at all.
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err == nil {
+		defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	}
+	return SendBinaryByte(conn, message)
 }
 
 func ReceiveBinaryByte(conn net.Conn) (byte, error) {

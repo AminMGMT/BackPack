@@ -96,6 +96,31 @@ claimed against what was true.
   acknowledged and given a grace period, and a shutdown waits for it rather than
   cutting it short.
 
+- **A tunnel could be held down by a peer that stopped reading, until somebody
+  restarted it by hand.** The server writes one byte at a time on its control
+  channel — a heartbeat, a request for a pool connection — and those writes had
+  no bound. A write lands in the kernel's send buffer and returns; when the path
+  to the client goes and the buffer fills, it blocks until the kernel stops
+  retransmitting, which is around fifteen minutes on Linux defaults. For that
+  whole window the server still believed it had a control channel, so it refused
+  every attempt by the client to establish a new one ("a control channel is
+  already established"), could not ask for pool connections because the request
+  reached nobody, and dropped every user connection with the queue full —
+  thousands of lines a second. Nothing it could do would recover it. Control
+  writes are bounded at ten seconds now, on all seven transports: past that the
+  channel is treated as gone, the transport restarts, and the client's next
+  claim is accepted.
+
+- **"the queue is full, dropping a client from ..." named the wrong machine.**
+  It printed the local address of the accepted connection, so every one of those
+  lines carried the server's own address and the forwarded port — which reads as
+  the server connecting to itself, and sends anyone debugging it in the opposite
+  direction from the problem. It names the client now.
+
+- **A failed control write reported itself as a read.** "failed to read message
+  from net.Conn: write tcp ...: write: connection timed out" was the wire
+  helper's error text on the write path.
+
 - **The "Random" button no longer offered a random forwarded port.** It sat
   beside Forwarded ports as well as Tunnel port, and asks the server for a port
   that is free *on this machine* — right for the port this side binds, and the

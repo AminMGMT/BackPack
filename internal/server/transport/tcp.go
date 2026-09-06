@@ -292,7 +292,7 @@ func (s *TcpTransport) channelHandler(g *tcpGen) {
 
 	// RTT measurment
 	rtt := time.Now()
-	err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_RTT)
+	err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_RTT, controlWriteTimeout)
 	if err != nil {
 		s.logger.Error("failed to send RTT signal, attempting to restart server...")
 		go s.Restart()
@@ -302,11 +302,11 @@ func (s *TcpTransport) channelHandler(g *tcpGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
+			_ = utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout)
 			return
 
 		case <-g.reqNewConnChan:
-			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
+			err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Chan, controlWriteTimeout)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -314,7 +314,7 @@ func (s *TcpTransport) channelHandler(g *tcpGen) {
 			}
 
 		case <-ticker.C:
-			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB)
+			err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_HB, controlWriteTimeout)
 			if err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()
@@ -539,7 +539,7 @@ func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
 	select {
 	case g.tunnelChannel <- conn:
 	default: // The channel is full, do nothing
-		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.LocalAddr().String())
+		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.RemoteAddr().String())
 		conn.Close()
 	}
 }
@@ -721,7 +721,12 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 
 			default: // channel is full, discard the connection
-				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
+				// The client that was dropped, not this machine. It used to
+				// print LocalAddr here — so every one of these lines named the
+				// server's own address and port, which reads as the server
+				// connecting to itself thousands of times a second and sends
+				// anybody debugging it in the wrong direction entirely.
+				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.RemoteAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

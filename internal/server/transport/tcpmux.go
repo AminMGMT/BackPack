@@ -341,11 +341,11 @@ func (s *TcpMuxTransport) channelHandler(g *tcpMuxGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
+			_ = utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout)
 			return
 
 		case <-g.reqNewConnChan:
-			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
+			err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Chan, controlWriteTimeout)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -353,7 +353,7 @@ func (s *TcpMuxTransport) channelHandler(g *tcpMuxGen) {
 			}
 
 		case <-ticker.C:
-			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB)
+			err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_HB, controlWriteTimeout)
 			if err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()
@@ -564,7 +564,7 @@ func (s *TcpMuxTransport) deliverTunnelConn(g *tcpMuxGen, conn net.Conn) {
 	select {
 	case g.tunnelChannel <- session: // ok
 	default:
-		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.LocalAddr().String())
+		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.RemoteAddr().String())
 		session.Close()
 	}
 }
@@ -743,7 +743,7 @@ func (s *TcpMuxTransport) acceptLocalConn(g *tcpMuxGen, listener net.Listener, r
 				}
 
 			default: // channel is full, discard the connection
-				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.RemoteAddr().String())
 				s.limits.release()
 				conn.Close()
 			}

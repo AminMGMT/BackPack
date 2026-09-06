@@ -339,7 +339,7 @@ func (s *UdpTransport) channelHandler(g *udpGen) {
 
 	// RTT measurment
 	rtt := time.Now()
-	err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_RTT)
+	err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_RTT, controlWriteTimeout)
 	if err != nil {
 		s.logger.Error("failed to send RTT signal, attempting to restart server...")
 		go s.Restart()
@@ -349,11 +349,11 @@ func (s *UdpTransport) channelHandler(g *udpGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Closed)
+			_ = utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout)
 			return
 
 		case <-g.reqNewConnChan:
-			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_Chan)
+			err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Chan, controlWriteTimeout)
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -361,7 +361,7 @@ func (s *UdpTransport) channelHandler(g *udpGen) {
 			}
 
 		case <-ticker.C:
-			err := utils.SendBinaryByte(s.controlChannel.Get(), utils.SG_HB)
+			err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_HB, controlWriteTimeout)
 			if err != nil {
 				s.logger.Error("failed to send heartbeat signal")
 				go s.Restart()

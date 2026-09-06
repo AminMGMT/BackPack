@@ -244,10 +244,10 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
+			_ = writeControl(s.controlChannel.Get(), []byte{utils.SG_Closed})
 			return
 		case <-g.reqNewConnChan:
-			err := s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Chan})
+			err := writeControl(s.controlChannel.Get(), []byte{utils.SG_Chan})
 			if err != nil {
 				s.logger.Error("failed to send request new connection signal. ", err)
 				go s.Restart()
@@ -255,7 +255,7 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 			}
 
 		case <-ticker.C:
-			err := s.controlChannel.Get().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
+			err := writeControl(s.controlChannel.Get(), []byte{utils.SG_HB})
 			if err != nil {
 				s.logger.Errorf("failed to send heartbeat signal. Error: %v.", err)
 				go s.Restart()
@@ -625,7 +625,7 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
 
 			default: // channel is full, discard the connection
-				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
+				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.RemoteAddr().String())
 				s.limits.release()
 				conn.Close()
 			}
