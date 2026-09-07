@@ -223,10 +223,22 @@ func latestTag() (string, error) {
 // normVersion strips a leading "v" so v1.3.0 and 1.3.0 compare equal.
 func normVersion(v string) string { return strings.TrimPrefix(strings.TrimSpace(v), "v") }
 
-// parseVer turns "v1.3.0" into [1 3 0]; missing or non-numeric parts become 0.
-func parseVer(v string) [3]int {
-	var out [3]int
-	for i, part := range strings.SplitN(normVersion(v), ".", 3) {
+// verParts is how many components a version is compared on.
+//
+// Four, not three. A three-part parse read "1.7.7.5" as [1 7 7] — the fourth
+// component fell inside the last split and was thrown away with everything
+// after the first non-digit — so a point release was indistinguishable from the
+// version it followed. Nothing detected it as an update: not the CLI's check,
+// not the panel's banner, and not the "Upgrade to" button on a managed server's
+// card, because all three ask this. A version that cannot be told apart from
+// its predecessor is one that cannot be shipped.
+const verParts = 4
+
+// parseVer turns "v1.3.0" into [1 3 0 0]; missing or non-numeric parts become
+// 0, so "1.7.7" and "1.7.7.0" compare equal and "1.7.7.5" sorts above both.
+func parseVer(v string) [verParts]int {
+	var out [verParts]int
+	for i, part := range strings.SplitN(normVersion(v), ".", verParts) {
 		j := 0
 		for j < len(part) && part[j] >= '0' && part[j] <= '9' {
 			j++
@@ -241,7 +253,7 @@ func parseVer(v string) [3]int {
 // backwards, and any published newer release is detected automatically.
 func newerVersion(remote, local string) bool {
 	r, l := parseVer(remote), parseVer(local)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < verParts; i++ {
 		if r[i] != l[i] {
 			return r[i] > l[i]
 		}

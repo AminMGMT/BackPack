@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.7.7 — 2026-09-04
+## v1.7.7.5 — 2026-09-07
 
 Managed servers are reached over SSH now, and the panel that drives them is the
 only panel. Those are the same change told twice. The old node model was an
@@ -162,6 +162,13 @@ claimed against what was true.
   left you somewhere you had not been.
 
 ### Added
+
+- **A four-part version is compared on all four parts.** Versions were read as
+  three numbers, so `1.7.7.5` parsed as `[1 7 7]` — the fourth component fell
+  inside the last split and was dropped — and was therefore indistinguishable
+  from `1.7.7`. Nothing could see a point release as an update: not the CLI's
+  check, not the panel's banner, and not the **Upgrade to** button on a managed
+  server's card, because all three ask the same function.
 
 - **Update from a file you downloaded yourself.** The download is the step most
   likely to fail on the networks this project exists for — the mirrors help and
