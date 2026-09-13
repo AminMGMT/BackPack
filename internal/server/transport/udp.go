@@ -15,6 +15,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// udpPayloadQueue is how many datagrams may wait for the goroutine that will
+// forward them — per forwarded flow, and per pooled tunnel connection.
+//
+// It was 100_000. A Go channel allocates its whole buffer the moment it is
+// made, so at 24 bytes for a slice header that reserved 2.3 MB for every
+// connection the moment it was seen, whether or not it went on to carry a
+// single byte. A pool of 64 idle connections was 145 MB of a 153 MB heap on a
+// tunnel that was forwarding nothing at all.
+//
+// 256 is the depth the forwarded-UDP path already settled on for the same job
+// (see udpFlowQueue): deep enough to absorb the pause while a flow waits to be
+// paired with a tunnel connection — dropping there costs the opening packet of
+// a session, which reads as "UDP does not work" rather than as one lost packet
+// — and bounded, so a peer that floods a stalled flow cannot grow the process
+// without limit.
+const udpPayloadQueue = 256
+
 // udpGen is the state of a single run of the transport: the context that ends
 // when the run does, and the channels its goroutines pass work over. Restart
 // builds a fresh set for the next run, so carrying them here keeps a goroutine
@@ -34,15 +51,15 @@ type UdpTransport struct {
 	parentctx context.Context
 	// The current run. Replaced by Restart while the previous run's
 	// goroutines are still reading it, so it lives behind a lock.
-	run               runState
-	logger            *logrus.Logger
-	tunnelChannel     chan *TunnelUDPConn
+	run    runState
+	logger *logrus.Logger
+	// The run's channels and its usage monitor are deliberately not fields: they
+	// belong to one generation, and a field outlives the generation that made
+	// it. See Start.
 	activeConnections map[string]*TunnelUDPConn
 	activeMu          sync.Mutex
-	reqNewConnChan    chan struct{}
 	controlChannel    netControl
 	restartMutex      sync.Mutex
-	usageMonitor      *web.Usage
 	rtt               int64 // for Fun!
 }
 
@@ -73,16 +90,10 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 		config:            config,
 		parentctx:         parentCtx,
 		logger:            logger,
-		tunnelChannel:     make(chan *TunnelUDPConn, config.ChannelSize),
 		activeConnections: map[string]*TunnelUDPConn{},
 		activeMu:          sync.Mutex{},
-		reqNewConnChan:    make(chan struct{}, config.ChannelSize),
 		rtt:               0,
 	}
-
-	// Built after the transport exists, because it needs a getter for the
-	// status rather than a pointer into it.
-	server.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, server.status.get, logger)
 
 	// The first run is installed the same way every later one is, so there is
 	// only one path that ever writes it.
@@ -91,15 +102,25 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 	return server
 }
 
-// Start brings up the first run. Every later one comes from Restart, which
-// builds its own generation and hands it straight to start — so the fields read
-// here are written once, by the constructor, before any other goroutine exists.
+// Start brings up the first run, building its generation exactly the way
+// Restart builds every later one.
+//
+// It used to take the first generation's channels from fields on the transport,
+// and Restart never replaced those fields — it only built fresh channels for
+// the new generation. So the first run's tunnel channel stayed reachable from
+// the struct for the life of the process, and with it every TunnelUDPConn left
+// queued in it, each holding a payload channel of its own. Measured with a pool
+// of 64: 145 MB still held after the client had gone and the run had been torn
+// down, released only by restarting the server. Building the generation here
+// leaves nothing behind to pin it.
 func (s *UdpTransport) Start() {
+	ctx := s.run.context()
 	s.start(&udpGen{
-		ctx:            s.run.context(),
-		tunnelChannel:  s.tunnelChannel,
-		reqNewConnChan: s.reqNewConnChan,
-		usageMonitor:   s.usageMonitor,
+		ctx:            ctx,
+		tunnelChannel:  make(chan *TunnelUDPConn, s.config.ChannelSize),
+		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
+		usageMonitor: web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx,
+			s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
 	})
 }
 
@@ -471,7 +492,7 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 			}
 
 			// Initialize the payload channel for the new connection
-			payloadChan := make(chan []byte, 100_000)
+			payloadChan := make(chan []byte, udpPayloadQueue)
 
 			// Create a new TunnelUDPConn
 			tunnelConn := TunnelUDPConn{
@@ -659,8 +680,8 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 
 				mu.Unlock()
 
-				// Create a new payload channel for this connection, Buffer up to 100,000 packets for the connection
-				payloadChan := make(chan []byte, 100_000)
+				// Create a new payload channel for this connection
+				payloadChan := make(chan []byte, udpPayloadQueue)
 
 				// Build the UDP connection object
 				newUDPConn := LocalUDPConn{
@@ -748,6 +769,16 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 					// Send the target addr over the connection
 					if _, err := tunnelConn.listener.WriteTo([]byte(localConn.remoteAddr), tunnelConn.addr); err != nil {
 						s.logger.Errorf("%v", err)
+						// Release the lock and drop the connection whole before
+						// reaching for the next one. Leaving with neither done
+						// held the mutex for good — keepAlive takes it with
+						// TryLock, so that connection could never be pinged
+						// again — and left the entry in activeConnections with
+						// its payload channel never closed, so a tunnel
+						// connection that failed a single write was lost to the
+						// run rather than replaced.
+						tunnelConn.mu.Unlock()
+						s.dropTunnelConn(tunnelConn)
 						continue loop
 					}
 
@@ -777,18 +808,39 @@ func (s *UdpTransport) udpCopy(g *udpGen, udpLocal *LocalUDPConn, udpTunnel *Tun
 	// Wait until one of the directions is done (connection closed or idle)
 	<-done
 
-	// Remove local connection from active connections and close the channel
+	// Remove local connection from active connections and close the channel.
+	// Only if the entry is still this flow: the source address may already have
+	// been recycled by a newer one, and deleting that would leave it in the
+	// table's place with nothing reading its payload — the same stale-entry
+	// failure the timeout path in handleLoop is careful to avoid.
+	key := udpLocal.addr.String()
 	mu.Lock()
-	close(udpLocal.payload)
-	delete(*activeConnections, udpLocal.addr.String())
+	if (*activeConnections)[key] == udpLocal {
+		close(udpLocal.payload)
+		delete(*activeConnections, key)
+	}
 	mu.Unlock()
 
-	// Remove tunnel connection from active connections and close the channel
-	s.activeMu.Lock()
-	close(udpTunnel.payload)
-	delete(s.activeConnections, udpTunnel.addr.String())
-	s.activeMu.Unlock()
+	// Remove tunnel connection from active connections and close the channel.
+	s.dropTunnelConn(udpTunnel)
+}
 
+// dropTunnelConn takes a tunnel connection out of the active set and closes its
+// payload channel, under the lock every other reader and writer of that map
+// holds — so closing here cannot race a send into it.
+//
+// Only when the entry is still this connection. A peer that came back under the
+// same address has a newer one recorded there, and removing that would strand
+// it: every later datagram from the address would be filed against a channel no
+// goroutine reads.
+func (s *UdpTransport) dropTunnelConn(conn *TunnelUDPConn) {
+	key := conn.addr.String()
+	s.activeMu.Lock()
+	if s.activeConnections[key] == conn {
+		close(conn.payload)
+		delete(s.activeConnections, key)
+	}
+	s.activeMu.Unlock()
 }
 
 func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn) {
