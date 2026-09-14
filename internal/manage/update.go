@@ -27,6 +27,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/optimize"
 	"github.com/backpack/backpack/internal/socks"
 )
 
@@ -547,6 +548,27 @@ func ApplyUpdate(logf func(string)) error {
 	if InstallPath() == "" {
 		_ = os.MkdirAll(app.ConfigDir, 0755)
 		_ = os.WriteFile(app.InstallPathFile, []byte(app.InstallDir+"\n"), 0644)
+	}
+
+	// Re-apply the kernel tuning, but only where it was applied before.
+	//
+	// Nothing else rewrites /etc/sysctl.d/99-backpack.conf, so a value this
+	// program wrote and later regretted would otherwise outlive every update —
+	// which is exactly what happened with ip_local_port_range: servers tuned
+	// before the fix kept "1024 65535", and with it the chance of losing a
+	// service's port to an outgoing connection, however many versions they
+	// installed afterwards.
+	//
+	// Gated on the file existing, because installing a new version is not
+	// consent to have the kernel tuned. A machine that never ran Optimize is
+	// left exactly as it is; one that did gets the values this version believes
+	// in, which is the only way a fix to that file ever reaches it.
+	//
+	// Before the restarts below on purpose: the tunnels should come back up on
+	// the corrected settings rather than inherit the old ones for a while.
+	if optimize.WasApplied() {
+		logf("Re-applying kernel tuning (Optimize was run on this server)...")
+		optimize.ApplyQuiet(ReservedPorts())
 	}
 
 	logf("Restarting services...")

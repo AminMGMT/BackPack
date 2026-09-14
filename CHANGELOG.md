@@ -103,6 +103,25 @@ teardown to pin. They are left as they are.
 
 ### Fixed
 
+- **Updating now repairs the kernel tuning an older version wrote.** Nothing
+  rewrites `/etc/sysctl.d/99-backpack.conf` after it is first written, so a
+  value this program wrote and later regretted outlived every update — which is
+  what kept `ip_local_port_range = 1024 65535` on servers tuned before the fix
+  below, however many versions they installed afterwards. An update now
+  re-applies the tuning, with the values this version believes in.
+
+  Only where Optimize was run before: the file existing is the consent. A
+  machine that never ran it is left exactly as it is, because installing a new
+  version is not a request to have the kernel tuned. It happens before the
+  services restart, so the tunnels come back up on the corrected settings rather
+  than inheriting the old ones.
+
+- **Health Check now reports a widened ephemeral port range.** Updating does not
+  rewrite `/etc/sysctl.d/99-backpack.conf`, so a server set up before the fix
+  below still carries `1024 65535` and has no way to know — the symptom appears
+  weeks later on a service that cannot bind its own port. Health Check reads the
+  live range and says so, with the one action that fixes it.
+
 - **Optimize widened the ephemeral port range over every service port on the
   machine.** It set `net.ipv4.ip_local_port_range` to `1024 65535`, on the
   reasoning that more ephemeral ports means more concurrent connections. What it

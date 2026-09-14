@@ -63,7 +63,11 @@ var sysctls = [][2]string{
 	{"net.ipv4.ip_forward", "1"},
 }
 
-const sysctlFile = "/etc/sysctl.d/99-backpack.conf"
+// sysctlFile is where the tuning is persisted, and the one durable trace that
+// Optimize has run here. A var rather than a const so a test can point it at a
+// temp directory instead of writing to /etc — the same way node.StorePath and
+// manage.NodePairPath are overridden.
+var sysctlFile = "/etc/sysctl.d/99-backpack.conf"
 
 const limitsFile = "/etc/security/limits.d/99-backpack.conf"
 
@@ -131,6 +135,21 @@ func Apply(logf func(string), reserve []int) {
 
 	verifyBBR(logf)
 	logf("Optimization complete.")
+}
+
+// WasApplied reports whether Optimize has ever run on this machine, by the one
+// durable trace it leaves: the sysctl file it owns.
+//
+// It exists so an update can repair what an older Optimize wrote without
+// applying tuning to a machine that never asked for it. Installing a new
+// version is not consent to have the kernel retuned; rewriting a file this
+// program put there, to values this version believes in, is a different thing
+// and is the only way a server set up before a fix ever receives it — nothing
+// else rewrites that file, so the old values would otherwise outlive every
+// update.
+func WasApplied() bool {
+	_, err := os.Stat(sysctlFile)
+	return err == nil
 }
 
 // ApplyQuiet runs Apply discarding output — used by the Best Performance flow.

@@ -90,6 +90,33 @@ func listenPortsOf(spec string) []int {
 	return out
 }
 
+// The kernel's own ephemeral range, which is what a machine should have unless
+// somebody had a reason to change it.
+const (
+	ephemeralDefaultLow  = 32768
+	ephemeralDefaultHigh = 60999
+)
+
+// ephemeralRangeIsWide reads an ip_local_port_range value and reports whether it
+// reaches past the kernel's default in either direction.
+//
+// Both ends matter and for the same reason. A lower floor swallows the service
+// ports between 1024 and 32768; a higher ceiling swallows 61000-65535, which is
+// where a panel node's 62050 and 62051 live — the ports this check exists for.
+// A range narrower than the default is somebody's deliberate choice and is left
+// alone.
+func ephemeralRangeIsWide(v string) (lo, hi int, wide bool) {
+	f := strings.Fields(strings.TrimSpace(v))
+	if len(f) != 2 {
+		return 0, 0, false
+	}
+	lo, hi = portNumber(f[0]), portNumber(f[1])
+	if lo == 0 || hi == 0 || hi < lo {
+		return 0, 0, false
+	}
+	return lo, hi, lo < ephemeralDefaultLow || hi > ephemeralDefaultHigh
+}
+
 // portNumber parses a port, returning 0 for anything that is not one.
 func portNumber(s string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(s))

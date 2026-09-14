@@ -133,6 +133,27 @@ func systemChecks() []Check {
 			Detail: "disabled", Fix: "run Optimize (needed for some forwarding setups)"})
 	}
 
+	// The ephemeral port range decides whether the services on this machine can
+	// keep their own ports.
+	//
+	// Older versions of Optimize widened it to "1024 65535", which puts every
+	// service port inside the range the kernel hands out as the source port of
+	// outgoing connections — and a port held that way cannot be bound by the
+	// service that owns it. Updating does not rewrite the sysctl file, so a
+	// server set up before the fix still carries the wide range and has no way
+	// to know. This is what tells it.
+	if v := sysctlValue("net.ipv4.ip_local_port_range"); v != "" {
+		if lo, hi, wide := ephemeralRangeIsWide(v); wide {
+			out = append(out, Check{Group: g, Name: "Ephemeral port range", Level: CheckWarn,
+				Detail: fmt.Sprintf("%d-%d — services on ports in this range can lose them "+
+					"to an outgoing connection", lo, hi),
+				Fix: "run Optimize from the main menu — it restores 32768-60999"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Ephemeral port range", Level: CheckOK,
+				Detail: fmt.Sprintf("%d-%d", lo, hi)})
+		}
+	}
+
 	// Open-file limit — tunnels with many connections need a high ceiling.
 	//
 	// The limit that matters is the one the tunnel processes run under, which
