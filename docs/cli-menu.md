@@ -21,7 +21,7 @@ long form. For *how to set a tunnel up*, use the
 | 3 | **Manage** | Everything about existing tunnels, plus the diagnostics. [↓](#3-manage) |
 | 4 | **Backup & Restore** | The whole configuration as one `.tar.gz`. [↓](#4-backup--restore) |
 | 5 | **Web Panel** | The monitoring dashboard — port, login, certificate. [↓](#5-web-panel) |
-| 6 | **Optimize** | Applies system-wide kernel/network tuning: BBR + fq, socket-buffer ceilings, file-descriptor limits. Answer yes and it prints each change. A reboot is recommended for the file-limit changes. |
+| 6 | **Optimize** | Applies system-wide kernel/network tuning: BBR + fq, socket-buffer ceilings, file-descriptor limits. Answer yes and it prints each change. A reboot is recommended for the file-limit changes. It also keeps the kernel's own ephemeral port range (`32768 60999`) rather than widening it, and reserves the ports your tunnels listen on — see [what it does to ports](#optimize-and-your-service-ports) |
 | 7 | **Telegram Bot** | Reports, alerts and control from Iran. [↓](#7-telegram-bot) |
 | 8 | **Update** | Verified update with automatic rollback. [↓](#8-update) |
 | 9 | **Uninstall** | Removes everything Backpack installed. |
@@ -317,6 +317,54 @@ The shard counts must match on both ends. [More](../tutorial/udp-kcp-fec.md)
 | Setting | What it is |
 |---|---|
 | **Zero-copy forwarding (experimental)** | Lets the kernel move bytes directly between the two sockets. The fastest path here and the least proven — try it on a spare tunnel first. Linux only, plain `tcp` only, and only when the tunnel has no bandwidth limit; anything else quietly keeps the buffered path. Purely local, so the two ends need not agree. |
+
+---
+
+## Optimize and your service ports
+
+Optimize tunes the kernel for a machine carrying a lot of connections. One of
+the things it deliberately does **not** do is widen the ephemeral port range,
+and it is worth knowing why.
+
+The ephemeral range is the set of ports the kernel hands out as the *source*
+port of outgoing connections. On Linux it is `32768 60999` by default, and
+Optimize leaves it there. Widening it — which this used to do, to `1024 65535` —
+means every service port on the machine is inside the range something can be
+given, and **a port held as the source of an outgoing connection cannot be bound
+by the service that owns it**.
+
+That failure is unusually hard to read, because the port is taken by a
+connection rather than a listener:
+
+```
+$ ss -tlnp | grep 62050        # what everyone runs
+                               # → nothing at all
+
+$ ss -tnp | grep 62050         # what is actually there
+ESTAB 127.0.0.1:62050 127.0.0.1:46877 users:(("some-process",pid=...))
+```
+
+So the service fails to start with `address already in use`, and the usual
+command to find the culprit shows an empty result. It is intermittent by nature
+— it depends on which source port the kernel happened to pick — which is why it
+can appear weeks after everything was set up, and clear when whatever held the
+port is restarted.
+
+Optimize also writes the ports your tunnels listen on into
+`net.ipv4.ip_local_reserved_ports`, so a tunnel port that *does* fall inside the
+range can never be taken this way either.
+
+**If a service on your server cannot bind its port**, check the range first:
+
+```bash
+cat /proc/sys/net/ipv4/ip_local_port_range      # expect: 32768   60999
+grep -r ip_local_port_range /etc/sysctl.d/
+ss -tnp | grep <the port>                       # -tnp, not -tlnp
+```
+
+A range wider than the default, from any source, puts every service above
+`32768` at risk. Reserve those ports in `ip_local_reserved_ports` or put the
+range back.
 
 ---
 
