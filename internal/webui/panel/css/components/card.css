@@ -25,15 +25,16 @@
 
 /* ---- the metric field ---------------------------------------------------
  *
- * The chart takes the right of the card, behind everything: a wash of the
- * accent colour fading in from the right, and the line over it. --mc is the
- * accent, and it is the reading rather than decoration — see .tr-up /
- * .tr-down / .tr-flat below.
+ * The chart takes the right of the card, behind everything: a dotted ground,
+ * a wash of the accent colour fading in from the right, and the line over it.
+ * --mc is the accent, and it is the reading rather than decoration — see
+ * .tr-up / .tr-down / .tr-flat below.
  *
- * There was a dotted ground under the line as well. It read as texture rather
- * than as a scale — the dots are not spaced to any value, so they measured
- * nothing — and against a dark card a field of light dots is the brightest
- * thing on it, competing with the line that is the actual reading.
+ * The dotted ground was taken out once for competing with the line, and it is
+ * back under the condition that made it a problem: it is masked from the left,
+ * so it exists under the chart and fades out before it reaches the text. It
+ * still measures nothing — the dots are not spaced to any value — so it stays
+ * faint enough to read as ground rather than as a scale.
  */
 /* One colour, one meaning: the tunnel's state.
  *
@@ -51,10 +52,29 @@
 .c7 .mfield{position:absolute;inset:0 0 0 auto;z-index:0;pointer-events:none}
 .c7 .mwash{position:absolute;inset:0;
   background:linear-gradient(to left,color-mix(in srgb,var(--mc) 12%,transparent),transparent 75%)}
+/* The dotted ground. Drawn as a background rather than an SVG pattern on
+   purpose: tokens.css sets svg{fill:none} for the icon set, and a CSS
+   declaration beats a presentation attribute, so a <rect fill="url(#pattern)">
+   here would be painted with no fill at all. */
+.c7 .mgrid{position:absolute;inset:0;color:var(--tx);opacity:.13;
+  background-image:radial-gradient(currentColor 1px,transparent 1px);
+  background-size:14px 14px;
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 55%);
+  mask-image:linear-gradient(to right,transparent,#000 55%)}
 .c7 .mchart{position:absolute;inset:auto 0 0;width:100%;height:62%;display:block;overflow:visible}
 
+/* Nothing in the chart is stroked on its own account.
+ *
+ * tokens.css sets svg{stroke:currentColor} for the icon set, and fill and
+ * stroke both inherit in SVG — so the area path, which asks only for a fill,
+ * was inheriting a stroke and outlining itself in the card's text colour. That
+ * outline is the closing edge of the filled shape: down the right, across the
+ * bottom, back up the left. It looked like an axis and was a mistake. The bars
+ * had the same outline for the same reason. */
+.c7 .mchart{stroke:none}
 /* The line and the columns are the metric, so they are the metric's colour.
-   Nothing here is stroked white on its own account. */
+   This rule beats the presentation attribute, and the one above, for the two
+   elements that are meant to carry a stroke. */
 .c7 .mchart path[stroke]{stroke:var(--mc)}
 
 /* ---- the headline -------------------------------------------------------
@@ -98,6 +118,51 @@
 .c7 .mstats b{color:var(--tx2);font-weight:600;font-variant-numeric:tabular-nums}
 .c7 .mstats i{font-style:normal;opacity:.4}
 @container pg (max-width:520px){ .c7 .mstats{display:none} }
+
+/* ---- the trend, and the window it is measured over ----------------------
+ *
+ * The figure is how much the window moved end to end. It is deliberately not
+ * in the accent colour: the accent is the tunnel's state and nothing else, so
+ * a card cannot be allowed to go green because traffic rose while it was down.
+ * The arrow carries the direction; the colour stays out of it. */
+.c7 .trend{display:inline-flex;align-items:center;gap:3px;flex:none;
+  font-size:11px;font-weight:620;color:var(--mu);font-variant-numeric:tabular-nums}
+.c7 .trend svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.4;
+  stroke-linecap:round;stroke-linejoin:round}
+@container pg (max-width:430px){ .c7 .trend{display:none} }
+
+/* The window sits at the end of the kind row, which is the one line on the
+   card with space to spare. It was in the footer band first, and that was
+   wrong for a reason worth keeping written down: the band already held
+   peak/low/avg, and the extra control pushed all three off the card — the
+   page-level container query that would have hidden them measures the page,
+   not the card, so a wide window full of narrow cards never triggered it.
+   A <button> rather than a wrapped <span>, because .kind styles its spans as
+   chips and this is a control, not a label. The menu is a child of the card:
+   .inner clips, and a dropdown clipped by its own row is not a dropdown. */
+.c7 .per{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:4px;
+  padding:3px 7px;border:0;border-radius:7px;background:transparent;font:inherit;
+  font-size:10.5px;font-weight:580;color:var(--dim);cursor:pointer;white-space:nowrap;
+  transition:background .2s ease,color .2s ease}
+.c7 .per:hover{background:var(--sunk);color:var(--tx2)}
+.c7 .per svg{width:9px;height:9px;fill:none;stroke:currentColor;stroke-width:2.4;
+  stroke-linecap:round;stroke-linejoin:round}
+.c7 .permenu{position:absolute;right:16px;top:92px;z-index:6;min-width:142px;padding:4px;
+  background:var(--s1);border:1px solid var(--ln2);border-radius:13px;box-shadow:var(--lift);
+  transform-origin:top right;transform:scale(.94) translateY(-4px);opacity:0;pointer-events:none;
+  transition:transform .3s var(--spring),opacity .18s ease}
+.c7 .permenu.on{transform:none;opacity:1;pointer-events:auto}
+.c7 .permenu button{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;padding:8px 10px;border:0;background:transparent;border-radius:9px;
+  font:inherit;font-size:12px;color:var(--tx);text-align:left;cursor:pointer}
+.c7 .permenu button:hover{background:var(--sunk)}
+.c7 .permenu button.on{font-weight:640}
+.c7 .permenu button.on::after{content:'';width:5px;height:5px;border-radius:50%;
+  background:var(--mc);flex:none}
+/* What the window is drawn from, said once, so "Past 30 days" on a chart of
+   daily totals is not mistaken for a per-second reading. */
+.c7 .permenu i{display:block;padding:7px 10px 5px;font-style:normal;font-size:10px;
+  font-weight:620;letter-spacing:.05em;text-transform:uppercase;color:var(--faint)}
 .c7 .hd{display:flex;align-items:center;gap:10px}
 .c7 .fl{width:30px;height:30px;border-radius:9px;background:var(--s3);border:1px solid var(--ln);
         display:grid;place-items:center;font-size:15px;flex:none}
@@ -116,8 +181,12 @@
 .c7 .kind{display:flex;gap:6px;height:22px;margin-top:11px;overflow:hidden}
 .c7 .kind span{font-size:10.5px;font-weight:620;letter-spacing:.04em;text-transform:uppercase;
   padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
+/* min-width:0 so the ports chip can actually give way. A flex item will not
+   shrink below its content without it, so a tunnel forwarding several ports
+   would push the window control off the row instead of ellipsising itself. */
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;
-  letter-spacing:0;font-weight:560;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  letter-spacing:0;font-weight:560;min-width:0;max-width:100%;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
 /* The tunnel is up and its far service is not there. Said in words on the card
    because every other reading on it is green and correct — the shape of this
    failure is that nothing else looks wrong. */

@@ -38,9 +38,84 @@ const REGION_W = 62;      // % of the card the chart region takes
    a toggle nobody could use. */
 const cardView = new Map();   // name -> 'curve' | 'bars'
 
-/* The rate series a card draws: what the tunnel was carrying at each sample. */
+/* Which window each card draws, kept out here for the same reason: a card is
+   rebuilt whenever any figure on it changes, so a choice held in the markup
+   would be lost within seconds of being made. */
+const cardPeriod = new Map(); // name -> period key
+
+/* The windows a card can draw.
+ *
+ * `live` is the rate history the panel already holds — the engine writes a
+ * metrics snapshot every 30 seconds and seriesOf takes the last 24 of them, so
+ * it is about twelve minutes. Everything longer is the history the monitor
+ * writes, and it is fetched only when it is asked for: the dashboard polls
+ * every six seconds, and putting a per-tunnel history request on that path
+ * would be one fetch per tunnel per poll for a figure nobody had asked to see.
+ *
+ * The unit changes with the window, and has to. live and 24h are rates — what
+ * the tunnel was carrying at that moment. The day windows are totals, because
+ * a total is what an hourly bucket adds up to; drawing them as a rate would
+ * put a per-day number on an axis that means per-second. */
+const PERIODS = [
+  { key: 'live', label: 'Live',          unit: 'rate',  note: 'Last ~12 minutes' },
+  { key: '24h',  label: 'Past 24 hours', unit: 'rate',  note: 'Speed, 5-minute samples' },
+  { key: '7d',   label: 'Past 7 days',   unit: 'total', note: 'Total per day', days: 7 },
+  { key: '30d',  label: 'Past 30 days',  unit: 'total', note: 'Total per day', days: 30 },
+];
+
+const periodOf = name =>
+  PERIODS.find(p => p.key === cardPeriod.get(name)) || PERIODS[0];
+
+/* Fetched history, per tunnel and window. The store behind it moves every five
+   minutes, so a reading kept for one is fresh by definition and a card that is
+   left open does not re-ask on every repaint. */
+const HIST_TTL = 5 * 60 * 1000;
+const histCache = new Map(); // `${name}|${key}` -> { at, points }
+
+async function loadPeriod(name, key) {
+  const p = PERIODS.find(x => x.key === key);
+  if (!p || p.unit === undefined || key === 'live') return;
+  const ck = name + '|' + key;
+  const got = histCache.get(ck);
+  if (got && Date.now() - got.at < HIST_TTL) return;
+
+  const data = await api.history(name, p.days);
+  /* Nothing sampled yet is not an error — the monitor writes the first points
+     five minutes after it starts. An empty series is cached so the card stops
+     asking, and the card falls back to the live window. */
+  const points = data.collecting ? []
+    : p.unit === 'rate'
+      ? (data.series || []).map(s => ({ t: s.t, v: (s.in || 0) + (s.out || 0) }))
+      : (data.days || []).map((d, i) => ({ t: i, v: (d.in || 0) + (d.out || 0) }));
+  histCache.set(ck, { at: Date.now(), points });
+}
+
+/* Rates are quoted in bits the way a link is sold; totals are bytes the way a
+   quota is. The window decides which, so the footer figures and the chart can
+   never disagree about what they are counting. */
+const fmtOf = name => (periodOf(name).unit === 'total' ? bytes : speed);
+
+/* The series a card draws: what the tunnel was carrying across the chosen
+   window. A window whose history has not arrived — or has nothing in it yet —
+   falls back to the live samples rather than blanking the chart, because an
+   empty card says less than a short one. */
 function seriesOf(t) {
-  return (t.rates || []).slice(-24).map(p => ({ t: p.t, v: (p.in || 0) + (p.out || 0) }));
+  const p = periodOf(t.name);
+  if (p.key !== 'live') {
+    const got = histCache.get(t.name + '|' + p.key);
+    if (got && got.points.length >= 2) return got.points;
+  }
+  return (t.rates || []).slice(-24).map(r => ({ t: r.t, v: (r.in || 0) + (r.out || 0) }));
+}
+
+/* Whether what is on screen is the window that was asked for. The footer says
+   so when it is not, so a card showing twelve minutes under a heading that
+   says thirty days is never left to be read as thirty days. */
+function periodReady(t) {
+  const p = periodOf(t.name);
+  if (p.key === 'live') return true;
+  const got = histCache.get(t.name + '|' + p.key);
+  return !!(got && got.points.length >= 2);
 }
 
 function statsOf(vals) {
@@ -88,6 +163,7 @@ function field(t, idx) {
   const id = 'L' + idx;
   const view = cardView.get(t.name) || 'curve';
   return `<div class="mfield" style="width:${REGION_W}%">
+    <div class="mgrid"></div>
     <div class="mwash"></div>
     <svg class="mchart" viewBox="0 0 340 150" preserveAspectRatio="none" aria-hidden="true">
       <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
@@ -100,6 +176,28 @@ function field(t, idx) {
 
 const RELAY_SVG = `<svg class="x" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/>
 <path d="M12 4v4"/><circle cx="12" cy="3" r="1.4"/><path d="M9 13.5h.01M15 13.5h.01"/></svg>`;
+
+/* The direction the window moved, end to end. Three states rather than two:
+   a reading that barely moved is flat, and an arrow that commits to up or down
+   on a half-percent drift is noise wearing the clothes of a measurement. */
+const TREND = {
+  up:   `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`,
+  down: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>`,
+  flat: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>`,
+};
+const CHEV = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+
+/* Under this, the window is flat. Matches the reference design's own dead
+   zone: without one, a card twitches between up and down forever. */
+const NEUTRAL_PCT = 0.5;
+
+function trendHTML(st) {
+  if (!st) return '';
+  const flat = Math.abs(st.pct) < NEUTRAL_PCT;
+  const icon = flat ? TREND.flat : st.net >= 0 ? TREND.up : TREND.down;
+  return `<span class="trend" title="Change across the window drawn">` +
+         `${icon}${Math.abs(st.pct).toFixed(1)}%</span>`;
+}
 
 const VIEW = {
   curve: `<svg class="iB" viewBox="0 0 24 24"><path d="M3 17c4-1 5-9 9-9s5 5 9 4"/></svg>`,
@@ -139,6 +237,8 @@ function card(t, idx) {
   const series = seriesOf(t);
   const st = statsOf(series.map(p => p.v));
   const view = cardView.get(t.name) || 'curve';
+  const per = periodOf(t.name);
+  const fmt = fmtOf(t.name);
 
   return `<div class="c7 ${off ? 'off' : ''} st-${esc(t.state || 'unknown')}" data-name="${esc(t.name)}">
 <div class="inner">
@@ -159,12 +259,15 @@ ${field(t, idx)}
       <button data-view="bars"  class="${view === 'bars'  ? 'on' : ''}" title="Bars">${VIEW.bars}</button>
     </div>` : ''}
     <span class="sp2"></span>
+    ${trendHTML(st)}
     <span class="stt"><span class="${dotCls}"></span>${label}</span>
   </div>
 
   <div class="kind">
     <span>${dir}</span><span>${esc(carrier)}</span>
     ${ports ? `<span class="q">${esc(ports)}</span>` : ''}
+    ${st ? `<button type="button" class="per" data-per-open aria-haspopup="true"
+      title="What the chart covers">${esc(per.label)}${CHEV}</button>` : ''}
   </div>
 
   <!-- Said in full, on the card, because it is the one failure where every
@@ -189,9 +292,9 @@ ${field(t, idx)}
   <span class="relaymark">${t.botRelay ? `<span class="relay" title="Bot Relay">${RELAY_SVG}</span>` : ''}</span>
   <span class="sp2"></span>
   ${st ? `<span class="mstats">
-      <span><b>${esc(speed(st.peak))}</b> peak</span><i>·</i>
-      <span><b>${esc(speed(st.low))}</b> low</span><i>·</i>
-      <span><b>${esc(speed(st.avg))}</b> avg</span>
+      <span><b>${esc(fmt(st.peak))}</b> peak</span><i>·</i>
+      <span><b>${esc(fmt(st.low))}</b> low</span><i>·</i>
+      <span><b>${esc(fmt(st.avg))}</b> avg</span>
     </span>` : ''}
 </div>
 
@@ -205,6 +308,12 @@ ${field(t, idx)}
   <button class="btn" data-act="speed"  title="Speed test">${BTN.speed}</button>
   <button class="btn" data-act="more"   title="Start, stop, restart, delete">${BTN.more}</button>
 </div>
+
+${st ? `<div class="permenu">
+  <i>Chart window</i>
+  ${PERIODS.map(o => `<button data-per="${o.key}" class="${o.key === per.key ? 'on' : ''}"
+    title="${esc(o.note)}">${esc(o.label)}</button>`).join('')}
+</div>` : ''}
 
 <div class="card-more">
   <button data-do="start"><span>▶</span>Start</button>
@@ -256,8 +365,24 @@ function paintTrend(el, t) {
   el.classList.add('st-' + (serviceDown(t) ? 'offline' : (t.state || 'unknown')));
   const st = statsOf(seriesOf(t).map(p => p.v));
   if (!st) return;
+  const fmt = fmtOf(t.name);
   const cells = el.querySelectorAll('.mstats b');
-  [st.peak, st.low, st.avg].forEach((v, i) => { if (cells[i]) cells[i].textContent = speed(v); });
+  [st.peak, st.low, st.avg].forEach((v, i) => { if (cells[i]) cells[i].textContent = fmt(v); });
+
+  /* The trend moves with the chart, so it is written here rather than left to
+     the next rebuild — a percentage describing a window the card has already
+     stopped drawing is worse than none. */
+  const tr = el.querySelector('.trend');
+  if (tr) {
+    const flat = Math.abs(st.pct) < NEUTRAL_PCT;
+    tr.innerHTML = (flat ? TREND.flat : st.net >= 0 ? TREND.up : TREND.down) +
+                   Math.abs(st.pct).toFixed(1) + '%';
+  }
+  const lbl = el.querySelector('[data-per-open]');
+  if (lbl) {
+    const p = periodOf(t.name);
+    lbl.innerHTML = esc(p.label) + (periodReady(t) ? '' : ' ·') + CHEV;
+  }
 }
 
 const EMPTY = `<div class="emptybox">
@@ -366,6 +491,39 @@ export function dashboard(ctx) {
     card.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('on', b === btn));
     const t = store.tunnel(name);
     if (t) updateSpark(card, t, 0);
+  });
+
+  /* The window the chart covers, on the same terms as its shape: remembered
+     per card, and the menu closes whatever else was open. */
+  const offPerOpen = delegate(view, 'click', '[data-per-open]', (ev, btn) => {
+    ev.stopPropagation();
+    const card = btn.closest('.c7');
+    const menu = card?.querySelector('.permenu');
+    if (!menu) return;
+    const was = menu.classList.contains('on');
+    view.querySelectorAll('.permenu.on,.card-more.on').forEach(m => m.classList.remove('on'));
+    menu.classList.toggle('on', !was);
+  });
+
+  const offPerPick = delegate(view, 'click', '[data-per]', async (ev, btn) => {
+    ev.stopPropagation();
+    const card = btn.closest('.c7');
+    const name = card?.dataset.name;
+    const key = btn.dataset.per;
+    if (!name) return;
+
+    cardPeriod.set(name, key);
+    card.querySelector('.permenu')?.classList.remove('on');
+    card.querySelectorAll('[data-per]').forEach(b => b.classList.toggle('on', b === btn));
+
+    /* Drawn from what is already held first, so the card answers the click at
+       once, and again when the history lands. A window that turns out to hold
+       nothing keeps the live line rather than emptying the card. */
+    const before = store.tunnel(name);
+    if (before) updateSpark(card, before, 0);
+    try { await loadPeriod(name, key); } catch (e) { oops(e); }
+    const after = store.tunnel(name);
+    if (after && card.isConnected) updateSpark(card, after, 0);
   });
 
   const offAct = delegate(view, 'click', '[data-act]', async (ev, btn) => {
@@ -485,12 +643,15 @@ export function dashboard(ctx) {
     store.refresh();
   });
 
-  const closeSheets = () => view.querySelectorAll('.card-more.on').forEach(s => s.classList.remove('on'));
+  const closeSheets = () =>
+    view.querySelectorAll('.card-more.on,.permenu.on').forEach(s => s.classList.remove('on'));
   document.addEventListener('click', closeSheets);
 
   ctx.setTeardown(() => {
     unsub();
     offView();
+    offPerOpen();
+    offPerPick();
     offAct();
     offDo();
     document.removeEventListener('click', closeSheets);
