@@ -17,7 +17,7 @@ import { toast, oops } from '../ui/toast.js';
 import { confirmBox } from '../ui/confirm.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
-import { bytes } from '../lib/format.js';
+import { bytes, flag } from '../lib/format.js';
 
 const ago = ts => {
   if (!ts) return 'never';
@@ -200,9 +200,12 @@ export function serversView(ctx) {
        behind all of it — on a card tall enough that a fleet of four did not
        fit on a screen. They are facts of one or two words each; a row of them
        reads faster than a layout of them. */
-    const meta = [
+    /* Address, version and uptime, separated by the same drawn dot a tunnel
+       card uses between its address and its port. The country is not repeated
+       as text: it is the flag in the tile, which is where a tunnel card puts
+       it too. */
+    const lines = [
       dash(i.ipv4) !== '—' ? i.ipv4 : n.host,
-      i.country || i.city || '',
       i.version ? 'v' + String(i.version).replace(/^v/, '') : '',
     ].filter(Boolean);
 
@@ -212,19 +215,22 @@ export function serversView(ctx) {
     }, [
       el('div', { class: 'mp-in' }, [
         el('div', { class: 'mp-top' }, [
+          el('div', { class: 'mp-fl', text: flag(i.country) || '·' }),
           el('div', { class: 'mp-id' }, [
             el('b', { text: n.name }),
             el('small', { text: i.hostname || n.host }),
           ]),
-          el('span', { class: 'mp-pill' }, [
-            el('i'),
-            el('span', { text: n.pending ? 'Checking' : (n.online ? 'Reachable' : 'Unreachable') }),
+          el('span', { class: 'stt' }, [
+            el('span', { class: dotClass(n), 'data-dot': '' }),
+            el('span', { 'data-state': '', text: stateWord(n) }),
           ]),
         ]),
 
-        el('div', { class: 'mp-meta' },
-          meta.map((v, k) => el('span', { class: k ? 'q' : 'a', text: v }))
-            .concat([el('span', { class: 'q', 'data-up': '', text: dash(i.uptime) })])),
+        el('div', { class: 'mp-lines' },
+          lines.flatMap((v, k) => (k ? [el('span', { class: 'sep' }), el('span', { text: v })]
+                                     : [el('span', { text: v })]))
+            .concat([el('span', { class: 'sep' }),
+                     el('span', { 'data-up': '', text: dash(i.uptime) })])),
 
         n.online || n.pending ? null
           : el('div', { class: 'mp-why', text: n.why || 'It did not answer.' }),
@@ -254,8 +260,6 @@ export function serversView(ctx) {
          * every managed server sits at the far end of the route that matters,
          * so the one thing worth saying here is how that route behaves. */
         el('div', { class: 'mp-net', 'data-net': '' }, netText(n)),
-
-        el('div', { class: 'mp-rule' }),
       ]),
 
       el('div', { class: 'mp-foot' }, [
@@ -357,19 +361,39 @@ export function serversView(ctx) {
    * on every poll, and they are written into the elements already on the card
    * rather than the card being made again around them. */
   const meter7 = (key, label, pct, caption) => {
-    const v = pctOf(pct);
-    return el('div', { class: 'mp-m' + hotness(v), 'data-m': key }, [
+    const m = meterFace(pct);
+    return el('div', { class: 'mp-m' + m.cls, 'data-m': key }, [
       el('div', { class: 'mp-mh' }, [
         el('span', { text: label }),
-        el('b', { text: v.toFixed(0) + '%' }),
+        el('b', { text: m.text }),
       ]),
-      el('div', { class: 'mp-bar' }, el('i', { style: `width:${v.toFixed(1)}%` })),
-      el('em', { text: caption || '' }),
+      el('div', { class: 'mp-bar' }, el('i', { style: `width:${m.width}` })),
+      el('em', { text: m.known ? (caption || '') : '' }),
     ]);
   };
 
+  /* A reading, or the absence of one.
+   *
+   * A server that did not answer has no processor figure, and drawing that as
+   * 0% is a reading — a wrong one, stated as confidently as a right one. The
+   * old card hid the meters entirely for such a server; hiding them is not an
+   * option now, because the values are written into elements that have to
+   * already be there, so the meter stays and says it does not know. */
+  function meterFace(pct) {
+    const known = pct !== undefined && pct !== null && pct !== '' && !isNaN(Number(pct));
+    if (!known) return { known: false, cls: ' unk', text: '—', width: '0%' };
+    const v = pctOf(pct);
+    return { known: true, cls: hotness(v), text: v.toFixed(0) + '%', width: v.toFixed(1) + '%' };
+  }
+
   const pctOf = v => Math.max(0, Math.min(100, Number(v) || 0));
   const hotness = v => (v >= 90 ? ' hot' : v >= 75 ? ' warm' : '');
+
+  /* Status, in the tunnel card's words and its shape: a dot and a word, not a
+     pill. Two treatments for one idea across two pages of the same product is
+     the thing that makes a panel read as two products. */
+  const stateWord = n => (n.pending ? 'Checking' : n.online ? 'Reachable' : 'Unreachable');
+  const dotClass = n => 'dot' + (n.pending ? ' off' : n.online ? '' : ' off');
 
   /* What to say about the path to a server.
    *
@@ -402,17 +426,25 @@ export function serversView(ctx) {
     const up = card.querySelector('[data-up]');
     if (up) up.textContent = (i.uptime && i.uptime !== '-') ? i.uptime : '—';
 
+    // Reachability moves on its own schedule — a pending row becomes a live one
+    // a moment after the page draws — so the dot and its word are written here
+    // rather than being a reason to rebuild the card.
+    const dot = card.querySelector('[data-dot]');
+    if (dot) dot.className = dotClass(n);
+    const word = card.querySelector('[data-state]');
+    if (word) word.textContent = stateWord(n);
+
     const set = (key, pct, caption) => {
       const m = card.querySelector(`[data-m="${key}"]`);
       if (!m) return;
-      const v = pctOf(pct);
-      m.className = 'mp-m' + hotness(v);
+      const face = meterFace(pct);
+      m.className = 'mp-m' + face.cls;
       const b = m.querySelector('.mp-mh b');
-      if (b) b.textContent = v.toFixed(0) + '%';
+      if (b) b.textContent = face.text;
       const bar = m.querySelector('.mp-bar i');
-      if (bar) bar.style.width = v.toFixed(1) + '%';
+      if (bar) bar.style.width = face.width;
       const cap = m.querySelector('em');
-      if (cap) cap.textContent = caption || '';
+      if (cap) cap.textContent = face.known ? (caption || '') : '';
     };
     set('cpu', i.cpuPercent,
       i.cpuCores ? `${i.cpuCores} core${i.cpuCores === 1 ? '' : 's'}` : '');

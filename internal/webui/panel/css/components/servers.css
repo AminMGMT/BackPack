@@ -224,36 +224,36 @@
 .panel .mp-in{position:relative;z-index:1;display:flex;flex-direction:column;flex:1;
   padding:19px 22px 0;pointer-events:none}
 .panel .mp-top{display:flex;align-items:center;gap:10px}
+/* The tile a card opens with, and the flag in it — the same 30px square, the
+   same 9px corner and the same ground a tunnel card uses. The two pages are
+   the two halves of one panel, so they open the same way. */
+.panel .mp-fl{width:30px;height:30px;border-radius:9px;background:var(--s3);
+  border:1px solid var(--ln);display:grid;place-items:center;font-size:15px;flex:none}
 .panel .mp-id{flex:1;min-width:0}
 .panel .mp-id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  transition:transform .3s var(--spring)}
-.panel .mp7:hover .mp-id b{transform:translateX(3px)}
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel .mp-id small{display:block;font-size:11px;color:var(--dim);font-weight:520;margin-top:1px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.panel .mp-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;
-  background:color-mix(in srgb,var(--tx) 5%,transparent);flex:none;
-  font-size:10px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);
-  transition:background .2s ease}
-.panel .mp7:hover .mp-pill{background:color-mix(in srgb,var(--tx) 8%,transparent)}
-.panel .mp-pill i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
-.panel .mp7.live .mp-pill i{background:var(--ok);animation:bp 2.6s ease-out infinite}
-/* Not yet asked. The dot stays still: a pulse is the card saying it is hearing
-   from the server, which is the one thing a pending row cannot claim. */
-.panel .mp7.pend .mp-pill i{background:var(--faint);animation:none}
 
-/* Address, place, version, uptime — one line, wrapping only when it must.
-   The address leads because it is what gets copied into a tunnel; the rest are
-   qualifiers and are set back. */
-.panel .mp-meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px 8px;margin-top:10px}
-.panel .mp-meta span{font-size:12px;min-width:0;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.panel .mp-meta .a{font-weight:620;font-variant-numeric:tabular-nums;color:var(--tx);
-  font-size:14px;letter-spacing:-.02em}
-.panel .mp-meta .q{color:var(--dim);font-weight:520}
-/* A dot between the qualifiers, drawn rather than typed, so nothing has to
-   decide where the separators go when a field is missing. */
-.panel .mp-meta .q + .q::before{content:"·";margin-right:8px;color:var(--faint)}
+/* Status: a dot and a word, mirroring .c7 .stt rather than inventing a second
+   shape for the same idea. Scoped under .mp7 because the originals are scoped
+   under .c7 — the same way .mp-foot already mirrors .foot. */
+.panel .mp7 .stt{display:inline-flex;align-items:center;gap:6px;font-size:11px;
+  font-weight:600;color:var(--mu);flex:none}
+.panel .mp7 .dot{width:7px;height:7px;border-radius:50%;flex:none;display:block;
+  background:var(--ok);animation:bp 2.6s ease-out infinite}
+/* Unreachable, and not-yet-asked, both stand still. A pulse is the card saying
+   it is hearing from the server, which is the one thing neither can claim. */
+.panel .mp7 .dot.off{background:var(--faint);animation:none}
+
+/* Address, version, uptime — one line, at the size and colour a tunnel card
+   states its address and port, with the same drawn separator. Fixed height for
+   the same reason that card fixes its rows: a grid whose cells set their own
+   height reads as a pile. */
+.panel .mp-lines{display:flex;align-items:center;gap:7px;height:18px;margin-top:10px;
+  font-size:11.5px;color:var(--mu);font-variant-numeric:tabular-nums;overflow:hidden}
+.panel .mp-lines span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .mp-lines .sep{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
 .panel .mp-why{margin-top:8px;font-size:11px;color:var(--wr);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel .mp-in .sp{flex:1;min-height:10px}
@@ -262,14 +262,6 @@
 .panel .mp-net{margin:10px 0 11px;font-size:11px;color:var(--mu);font-weight:520;
   font-variant-numeric:tabular-nums;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.panel .mp-rule{height:1px;transform:scaleX(.35);transform-origin:left;
-  background:linear-gradient(to right,color-mix(in srgb,var(--ok) 50%,transparent),
-    color-mix(in srgb,var(--ok) 28%,transparent),transparent);
-  transition:transform .4s ease-out}
-.panel .mp7:hover .mp-rule{transform:scaleX(1)}
-.panel .mp7:not(.live) .mp-rule{background:linear-gradient(to right,
-  color-mix(in srgb,var(--er) 45%,transparent),transparent)}
-
 /* The bottom band, flush with the edge, like a tunnel card's. */
 .panel .mp-foot{position:relative;z-index:1;display:flex;align-items:center;gap:7px;
   min-height:52px;padding:0 18px 0 22px;background:var(--glass-solid);
@@ -290,7 +282,7 @@
 @media (prefers-reduced-motion:reduce){
   .panel .mp7{transition:none}
   .panel .mp-bar i{transition:none}
-  .panel .mp7.live .mp-pill i{animation:none}
+  .panel .mp7 .dot{animation:none}
 }
 
 /* What the machine is doing right now.
@@ -302,6 +294,9 @@
 .panel .mp-m{--mm:var(--ok);display:flex;flex-direction:column;gap:5px;min-width:0}
 .panel .mp-m.warm{--mm:var(--wr)}
 .panel .mp-m.hot{--mm:var(--er)}
+/* No reading to draw. The meter keeps its place so the card does not change
+   shape when an answer arrives, and says nothing rather than saying zero. */
+.panel .mp-m.unk .mp-mh b{color:var(--dim);font-weight:560}
 .panel .mp-mh{display:flex;align-items:baseline;gap:6px}
 .panel .mp-mh span{font-size:9.5px;font-weight:640;letter-spacing:.06em;
   text-transform:uppercase;color:var(--dim)}
