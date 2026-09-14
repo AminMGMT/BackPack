@@ -103,6 +103,32 @@ teardown to pin. They are left as they are.
 
 ### Fixed
 
+- **A tunnel could refuse its own client for good, saying the token was in use
+  by somebody else.** Reported from the field: three weeks of ordinary service,
+  then every reconnection refused with "the server already has a control channel
+  from somebody else" on a tunnel that had exactly one client, and no way back
+  except restarting the service by hand.
+
+  The server can hold a control channel whose peer is already gone. Nothing on
+  that side reads the control channel with a deadline, and the client sends
+  nothing unprompted, so there is no inbound signal to time out on; the only
+  liveness check is the heartbeat write, and a one-byte write into a
+  dead-but-unreset socket lands in the send buffer and reports success. The
+  client does keep a read deadline, so it notices in seconds, re-dials — and was
+  refused, because a control channel was still set.
+
+  A second claim that proves the token now adopts the tunnel by rebuilding the
+  run, which is what the `udp`, `kcp`, `quic`, `ws` and `wsmux` transports have
+  always done; `tcp` and `tcpmux` were the two that refused instead. The token
+  check moved ahead of it, so a peer that cannot present the token still gets no
+  further than a refusal and cannot use this to disturb a working tunnel.
+
+  Two clients genuinely sharing one token now take the tunnel from each other
+  rather than one of them failing forever. That is the same trade the other five
+  transports already make, and it is the better one: sharing a token is a
+  configuration mistake somebody will notice and fix, where a tunnel that
+  refuses its only client looks like the tunnel being broken.
+
 - **A managed server's processor reading was arithmetic, not a measurement.**
   The card jumped between 0%, 100% and 50% on every poll while the machine sat
   idle. `sysstat.Get` reads the processor with a zero interval — the delta since

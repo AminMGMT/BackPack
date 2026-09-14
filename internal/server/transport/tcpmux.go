@@ -510,18 +510,6 @@ func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
 // admitControlChannel verifies a peer claiming the control channel, answers it,
 // and offers it as the candidate for channelHandshake to publish.
 func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann announcement) {
-	// One control channel per run. Without this a second claimant would be
-	// buffered on a channel nobody reads any more, holding its connection open
-	// until the next restart.
-	if s.controlChannel.IsSet() {
-		// Warn, not Debug. Two clients dialling one server with the same
-		// token is an operational fault somebody has to fix, and at debug
-		// level nobody ever saw it — the second client just failed forever.
-		s.logger.Warnf("a control channel is already established; refusing the claim from %s", conn.RemoteAddr())
-		refuseControl(conn, utils.RefusedInUse)
-		return
-	}
-
 	if !tokenMatches(ann.payload, s.config.Token) {
 		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
 			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
@@ -538,6 +526,18 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 	if err := utils.SendBinaryTransportString(conn, ack, ann.signal); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
 		conn.Close()
+		return
+	}
+
+	// A control claim while one is already established means the client
+	// restarted on its own and re-dialed, while this run never noticed because
+	// the old connection has not failed a read yet. Now that the token has
+	// proved the claim genuine, adopt the new client by rebuilding the run.
+	// See the same passage in tcp.go for why refusing it was wrong.
+	if s.controlChannel.IsSet() {
+		s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
+		conn.Close()
+		go s.Restart()
 		return
 	}
 

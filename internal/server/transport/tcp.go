@@ -492,18 +492,6 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 // admitControlChannel verifies a peer claiming the control channel, answers it,
 // and offers it as the candidate for channelHandshake to publish.
 func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announcement) {
-	// One control channel per run. Without this a second claimant would be
-	// buffered on a channel nobody reads any more, holding its connection open
-	// until the next restart.
-	if s.controlChannel.IsSet() {
-		// Warn, not Debug. Two clients dialling one server with the same
-		// token is an operational fault somebody has to fix, and at debug
-		// level nobody ever saw it — the second client just failed forever.
-		s.logger.Warnf("a control channel is already established; refusing the claim from %s", conn.RemoteAddr())
-		refuseControl(conn, utils.RefusedInUse)
-		return
-	}
-
 	if !tokenMatches(ann.payload, s.config.Token) {
 		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
 			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
@@ -525,10 +513,41 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 		return
 	}
 
+	// A control claim while one is already established means the client
+	// restarted on its own and re-dialed, while this run never noticed because
+	// the old connection has not failed a read yet. Now that the token has
+	// proved the claim genuine, adopt the new client by rebuilding the run —
+	// the listener it is retrying against comes back up as part of that
+	// restart. The same fix the udp, kcp, quic and websocket transports carry.
+	//
+	// This used to refuse the claim with RefusedInUse and keep the old channel,
+	// which is only right when there really are two clients. The far more
+	// common case is one client whose path died silently: nothing on this side
+	// reads the control channel with a deadline, and a heartbeat written into a
+	// dead-but-unreset socket lands in the send buffer and reports success — so
+	// the server can hold a channel that has been gone for a long time. The
+	// client, which does keep a read deadline, notices in seconds and re-dials
+	// into a refusal it can do nothing about. The operator sees "the server
+	// already has a control channel from somebody else" for a tunnel that has
+	// exactly one client, and the tunnel stays down until somebody restarts the
+	// service by hand.
+	//
+	// The token is what makes this safe to do: a peer that cannot present it
+	// gets no further than the check above, so this cannot be used to knock a
+	// tunnel over from outside.
+	if s.controlChannel.IsSet() {
+		s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
+		conn.Close()
+		go s.Restart()
+		return
+	}
+
 	select {
 	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce}:
 	default:
-		s.logger.Warn("a control channel is already established, discarding duplicate")
+		// channelHandshake has not begun reading in this run yet: a genuine
+		// duplicate racing the first claim, rather than a re-dial.
+		s.logger.Warn("control channel handshake already in progress, discarding duplicate")
 		conn.Close()
 	}
 }
