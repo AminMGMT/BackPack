@@ -210,9 +210,58 @@
   backdrop-filter:var(--glass-blur);
   border:1px solid var(--ln);border-top-color:var(--glass-edge);
   border-radius:28px;
-  display:flex;flex-direction:column;min-height:228px;
+  display:flex;flex-direction:column;min-height:396px;
   box-shadow:var(--glass-lift);
   transition:border-color .3s var(--spring)}
+
+/* ---- the gauge behind the card -------------------------------------------
+ *
+ * Two rings of dots: the outer one is the processor, the inner one memory, and
+ * the lit share of each is the share in use. It is a reading, not a ground —
+ * the street map that used to sit here went because it measured nothing, and
+ * dots arranged on a circle would have been the same mistake in a new shape.
+ *
+ * --rc is reachability, which outranks load: a machine nobody can reach has no
+ * interesting processor, so the whole gauge takes the error colour and the card
+ * says what is wrong with it before it says how busy it is. */
+.panel .mp7{--rc:var(--er)}
+.panel .mp7.live{--rc:var(--ok)}
+.panel .mp7.pend{--rc:var(--mu)}
+
+.panel .mp-ring{position:absolute;left:50%;top:174px;transform:translate(-50%,-50%);
+  z-index:0;pointer-events:none;line-height:0}
+.panel .mp-ring svg{width:200px;height:200px;display:block;overflow:visible}
+/* tokens.css sets svg{fill:none;stroke:currentColor} for the icon set, and a
+   CSS declaration beats a presentation attribute — so these have to say what
+   they are or they render as invisible outlines. */
+.panel .mp-ring circle{fill:currentColor;stroke:none;color:var(--tx);opacity:.10;
+  transition:color .4s ease,opacity .4s ease}
+.panel .mp-ring circle.on{color:var(--rc);opacity:.85}
+/* Surveyed once on arrival, dot by dot, rather than switched on — the same
+   staggered entrance the roads on the old map used.
+   transform-box is what makes that a scale of the dot rather than of the
+   drawing: an SVG transform is about the user-space origin by default, so
+   without this every dot grows out of the top-left corner of the svg and a
+   ring mid-entrance is a comet of dots piled in the corner. */
+.panel .mp7 .mp-ring circle{animation:mp-dot .45s var(--spring) both;
+  animation-delay:calc(var(--i) * 9ms);
+  transform-box:fill-box;transform-origin:center}
+@keyframes mp-dot{from{transform:scale(0);opacity:0}}
+
+/* The gradient that keeps the rings out of the words. Strongest where the card
+   is empty, gone by the time the readings start. */
+.panel .mp-fade{position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:linear-gradient(to bottom,transparent 0%,transparent 26%,
+    color-mix(in srgb,var(--s1) 55%,transparent) 42%,
+    color-mix(in srgb,var(--s1) 85%,transparent) 56%,var(--glass-solid) 70%)}
+
+/* The processor figure, in the middle of the ring that draws it. */
+.panel .mp-gauge{position:absolute;left:0;right:0;top:174px;z-index:1;
+  transform:translateY(-50%);text-align:center;pointer-events:none}
+.panel .mp-gauge b{display:block;font-size:46px;font-weight:580;line-height:1;
+  letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:var(--tx)}
+.panel .mp-gauge span{display:block;margin-top:7px;font-size:9.5px;font-weight:640;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
 .panel .mp7:hover{border-color:var(--ln2)}
 .panel .mp7:not(.live){opacity:.86}
 /* Drawn from what was written down, not from an answer. Full strength — the
@@ -245,6 +294,10 @@
 /* Unreachable, and not-yet-asked, both stand still. A pulse is the card saying
    it is hearing from the server, which is the one thing neither can claim. */
 .panel .mp7 .dot.off{background:var(--faint);animation:none}
+/* Unreachable says so in the colour this panel says it in everywhere else.
+   It used to be the same grey as "not asked yet", which made a server that had
+   dropped off the network look like one the page had simply not got to. */
+.panel .mp7 .dot.down{background:var(--er);animation:none}
 
 /* Address, version, uptime — one line, at the size and colour a tunnel card
    states its address and port, with the same drawn separator. Fixed height for
@@ -283,6 +336,7 @@
   .panel .mp7{transition:none}
   .panel .mp-bar i{transition:none}
   .panel .mp7 .dot{animation:none}
+  .panel .mp7 .mp-ring circle{animation:none;transition:none}
 }
 
 /* What the machine is doing right now.

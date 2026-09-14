@@ -213,6 +213,16 @@ export function serversView(ctx) {
       class: 'mp7' + (n.online ? ' live' : '') + (n.pending ? ' pend' : ''),
       'data-name': n.name,
     }, [
+      /* The gauge, behind everything. The fade over it is what keeps the rings
+         from running into the words: they are strongest where the card is
+         empty and gone by the time the readings start. */
+      el('div', { class: 'mp-ring', html: ringSVG(i) }),
+      el('div', { class: 'mp-fade' }),
+      el('div', { class: 'mp-gauge' }, [
+        el('b', { 'data-gauge': '', text: meterFace(i.cpuPercent).text }),
+        el('span', { text: 'CPU' }),
+      ]),
+
       el('div', { class: 'mp-in' }, [
         el('div', { class: 'mp-top' }, [
           el('div', { class: 'mp-fl', text: flag(i.country) || '·' }),
@@ -372,6 +382,57 @@ export function serversView(ctx) {
     ]);
   };
 
+  /* The two rings behind the card, and what they are.
+   *
+   * They are a gauge, not a ground. The card that came before this one carried
+   * a street map, and it went because it was texture: it knew nothing about
+   * where the server was, so it measured nothing and only cost height. Dots
+   * arranged on a circle would be exactly the same mistake drawn differently,
+   * so these are spaced to a value — the outer ring is the processor and the
+   * inner one is memory, and the share of each ring that is lit is the share
+   * of that resource in use.
+   *
+   * Which makes the card readable across a room: a fleet page of mostly dark
+   * rings is a fleet with headroom, and a full bright one is the server that
+   * is about to become somebody's evening.
+   *
+   * The colour is the server's reachability, which is the one thing that
+   * outranks load — a machine nobody can reach has no interesting processor.
+   * See --rc in servers.css.
+   *
+   * Every dot carries data-r and its index so paintLive can light them without
+   * the card being rebuilt; the readings move on every poll and rebuilding is
+   * what the fleet grid exists to avoid. */
+  /* Sized to the gap rather than to the card. The band between the address row
+     and the meters is what is free — roughly 80px to 250px down a card — and a
+     ring drawn any larger than that puts its top dots behind the server's own
+     name, which is the one thing on the card that must never be competed with. */
+  const RING = { box: 200, cx: 100, cy: 100, dot: 3 };
+  const RINGS = [
+    { key: 'cpu', count: 48, radius: 88 },
+    { key: 'mem', count: 36, radius: 71 },
+  ];
+
+  function ringDots(ring, pct) {
+    const face = meterFace(pct);
+    const lit = face.known ? Math.round((ring.count * pctOf(pct)) / 100) : 0;
+    let out = '';
+    for (let k = 0; k < ring.count; k++) {
+      // From the top, clockwise, so a ring filling up reads the way a dial does.
+      const a = (k / ring.count) * 2 * Math.PI - Math.PI / 2;
+      const x = (RING.cx + ring.radius * Math.cos(a)).toFixed(2);
+      const y = (RING.cy + ring.radius * Math.sin(a)).toFixed(2);
+      out += `<circle class="d${k < lit ? ' on' : ''}" data-r="${ring.key}"`
+           + ` cx="${x}" cy="${y}" r="${RING.dot}" style="--i:${k}"/>`;
+    }
+    return out;
+  }
+
+  const ringSVG = i =>
+    `<svg viewBox="0 0 ${RING.box} ${RING.box}" aria-hidden="true">`
+    + RINGS.map(r => ringDots(r, r.key === 'cpu' ? i.cpuPercent : i.memPercent)).join('')
+    + '</svg>';
+
   /* A reading, or the absence of one.
    *
    * A server that did not answer has no processor figure, and drawing that as
@@ -393,7 +454,12 @@ export function serversView(ctx) {
      pill. Two treatments for one idea across two pages of the same product is
      the thing that makes a panel read as two products. */
   const stateWord = n => (n.pending ? 'Checking' : n.online ? 'Reachable' : 'Unreachable');
-  const dotClass = n => 'dot' + (n.pending ? ' off' : n.online ? '' : ' off');
+  /* Three states, not two. Reachable is the ok colour and unreachable is the
+     error one — a server that is down should say so in the colour everything
+     else in this panel says it in, rather than going quietly grey.
+     "Checking" is neither: it is the card drawn from what was written down
+     before anyone asked, so it stays neutral and claims nothing. */
+  const dotClass = n => 'dot' + (n.pending ? ' off' : n.online ? '' : ' down');
 
   /* What to say about the path to a server.
    *
@@ -450,6 +516,24 @@ export function serversView(ctx) {
       i.cpuCores ? `${i.cpuCores} core${i.cpuCores === 1 ? '' : 's'}` : '');
     set('mem', i.memPercent,
       i.memTotal ? `${bytes(i.memUsed || 0)} / ${bytes(i.memTotal)}` : '');
+
+    /* The rings are the same two readings, so they are written here too — and
+       here only. A ring rebuilt on every poll would restart the dots' entrance
+       and make the card flicker, which is the fault this whole split exists to
+       avoid. A server with no answer lights nothing rather than lighting zero:
+       an unlit ring is "nothing known", and that is what is true. */
+    const light = (key, pct) => {
+      const dots = card.querySelectorAll(`[data-r="${key}"]`);
+      if (!dots.length) return;
+      const known = meterFace(pct).known;
+      const lit = known ? Math.round((dots.length * pctOf(pct)) / 100) : 0;
+      dots.forEach((d, k) => d.classList.toggle('on', k < lit));
+    };
+    light('cpu', i.cpuPercent);
+    light('mem', i.memPercent);
+
+    const gauge = card.querySelector('[data-gauge]');
+    if (gauge) gauge.textContent = meterFace(i.cpuPercent).text;
 
     const net = card.querySelector('[data-net]');
     if (net) net.textContent = netText(n);

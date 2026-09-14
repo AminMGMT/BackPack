@@ -146,12 +146,18 @@ func TestAnUnmeasuredPathIsNotReportedAsTotalLoss(t *testing.T) {
 	}
 }
 
-// The decorative map is gone, and nothing is left behind referring to it.
+// Whatever is behind the card measures something.
 //
-// It was texture behind an address — honest, in its own note, about knowing
-// nothing of where the server was — and it cost the card the height that kept a
-// fleet of four from fitting on one screen.
-func TestTheServerCardCarriesNoDecorativeGround(t *testing.T) {
+// The street map that used to sit here was texture — honest, in its own note,
+// about knowing nothing of where the server was — and it cost the card the
+// height that kept a fleet of four from fitting on one screen.
+//
+// What is behind it now is a gauge: two rings of dots, the outer the processor
+// and the inner memory, with the lit share of each ring the share in use. That
+// is the whole reason it is allowed to be there, so this guards the property
+// rather than the shape — dots arranged on a circle that were always fully lit
+// would be the same mistake drawn differently.
+func TestTheServerCardsGroundIsAGauge(t *testing.T) {
 	loadPanel()
 
 	js, err := fs.ReadFile(panelRoot, "js/views/servers.js")
@@ -163,6 +169,23 @@ func TestTheServerCardCarriesNoDecorativeGround(t *testing.T) {
 	}
 	if strings.Contains(string(js), "RACK_SVG") {
 		t.Error("the rack drawing is still here and nothing uses it")
+	}
+
+	// The rings are driven by the readings, and by the live writer rather than
+	// by a rebuild — the fleet grid exists to leave unchanged cards alone.
+	if !strings.Contains(string(js), `data-r=`) {
+		t.Error("the ring dots carry no hook, so nothing can light them from a reading")
+	}
+	live := blockOf(t, string(js), "function paintLive(", "\n  }")
+	for _, want := range []struct{ what, needle string }{
+		{"the processor ring", "light('cpu'"},
+		{"the memory ring", "light('mem'"},
+		{"the figure in the middle of it", "[data-gauge]"},
+	} {
+		if !strings.Contains(live, want.needle) {
+			t.Errorf("paintLive never writes %s, so it is decoration rather than a reading",
+				want.what)
+		}
 	}
 
 	css, err := fs.ReadFile(panelRoot, "css/components/servers.css")
