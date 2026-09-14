@@ -50,7 +50,7 @@ it.
 | **Listen on IPv6 as well** `[y/N]` | binds `::`, which accepts IPv4 too on a dual-stack host — "as well", not "instead" |
 | **Tunnel name** | names the service (`backpack-<name>`) and the config file |
 | **Security token** | a 64-char token is suggested; the client needs the identical string |
-| **Exposed ports** | `443`, `443=127.0.0.1:2096`, `443=a:1\|b:2`, comma separated. Setup prints the resolved targets |
+| **Exposed ports** | `443`, `443=127.0.0.1:2096`, `443=a:1\|b:2`, `10000-10009`, `85.11.12.13:443=127.0.0.1:2096`, comma separated. Setup prints the resolved targets. [Every form](port-mappings.md) |
 | **Carry UDP as well as TCP** `[y/N]` | off by default. [Forwarded UDP](forwarded-udp.md) |
 | **TLS certificate** | wss/wssmux only — self-signed, Let's Encrypt, or existing files |
 | **Simple token auth** `[y/N]` | wss/wssmux only — for a TLS-terminating proxy in front |

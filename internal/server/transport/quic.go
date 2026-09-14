@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -437,76 +436,34 @@ func (s *QuicTransport) channelHandler(g *quicGen) {
 func (s *QuicTransport) parsePortMappings(g *quicGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
-
-		var localAddr, remoteAddr string
-
-		if len(parts) == 1 {
-			localPortOrRange := strings.TrimSpace(parts[0])
-			remoteAddr = localPortOrRange
-
-			if strings.Contains(localPortOrRange, "-") {
-				rangeParts := strings.Split(localPortOrRange, "-")
-				if len(rangeParts) != 2 {
-					s.logger.Fatalf("invalid port range format: %s", localPortOrRange)
-				}
-
-				startPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
-				if err != nil || startPort < 1 || startPort > 65535 {
-					s.logger.Fatalf("invalid start port in range: %s", rangeParts[0])
-				}
-
-				endPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
-				if err != nil || endPort < 1 || endPort > 65535 || endPort < startPort {
-					s.logger.Fatalf("invalid end port in range: %s", rangeParts[1])
-				}
-
-				for port := startPort; port <= endPort; port++ {
-					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(g, localAddr, strconv.Itoa(port))
-					time.Sleep(1 * time.Millisecond) // for wide port ranges
-				}
-				continue
-			}
-
-			port, err := strconv.Atoi(localPortOrRange)
-			if err != nil || port < 1 || port > 65535 {
-				s.logger.Fatalf("invalid port format: %s", localPortOrRange)
-			}
-			localAddr = fmt.Sprintf(":%d", port)
-		} else if len(parts) == 2 {
-			localPortOrRange := strings.TrimSpace(parts[0])
-			remoteAddr = strings.TrimSpace(parts[1])
-
-			if strings.Contains(localPortOrRange, "-") {
-				rangeParts := strings.Split(localPortOrRange, "-")
-				if len(rangeParts) != 2 {
-					s.logger.Fatalf("invalid port range format: %s", localPortOrRange)
-				}
-
-				startPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
-				if err != nil || startPort < 1 || startPort > 65535 {
-					s.logger.Fatalf("invalid start port in range: %s", rangeParts[0])
-				}
-
-				endPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
-				if err != nil || endPort < 1 || endPort > 65535 || endPort < startPort {
-					s.logger.Fatalf("invalid end port in range: %s", rangeParts[1])
-				}
-
-				for port := startPort; port <= endPort; port++ {
-					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(g, localAddr, remoteAddr)
-					time.Sleep(1 * time.Millisecond) // for wide port ranges
-				}
-				continue
-			}
-
-			localAddr = listenAddrFor(localPortOrRange)
-		} else {
+		if len(parts) > 2 {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
 
-		go s.localListener(g, localAddr, remoteAddr)
+		// The left-hand side may name a local address as well as a port or a
+		// range, so one machine can serve different exposed ports on different
+		// local IPs. See expandListenSpec.
+		listens, err := expandListenSpec(parts[0])
+		if err != nil {
+			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+		}
+
+		var remoteAddr string
+		if len(parts) == 2 {
+			remoteAddr = strings.TrimSpace(parts[1])
+		}
+
+		for _, l := range listens {
+			// A mapping that named no destination forwards each port to itself.
+			target := remoteAddr
+			if target == "" {
+				target = l.port
+			}
+			go s.localListener(g, l.addr, target)
+			if len(listens) > 1 {
+				time.Sleep(1 * time.Millisecond) // for wide port ranges
+			}
+		}
 	}
 }
 

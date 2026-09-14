@@ -64,6 +64,10 @@ A panel bound to the kharej machine's **public** IP instead of `127.0.0.1` will
 refuse the tunnel's connection. Check with `ss -tlnp | grep <port>` on the kharej
 server, and map it explicitly if needed: `443=<that IP>:443`.
 
+That table is the common cases. Port ranges, several backends behind one port,
+and binding a listener to one IP on a server with two public addresses are all
+in the full reference: [Port mappings](../docs/port-mappings.md).
+
 ## 4. The firewall
 
 On the **Iran** server, open:

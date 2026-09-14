@@ -104,10 +104,14 @@ Identical to the reverse tunnel, so a config moves across unchanged:
 | `127.0.0.1:443=8443` | bind to one local address on Iran only |
 | `10000-10009` | a range, each to the same port |
 | `10000-10009=20000-20009` | a range, preserving the offset |
+| `85.11.12.13:10000-10009` | a range bound to one local address |
 | `443=10.0.0.1:80\|10.0.0.2:80` | two backends, load-balanced |
 
 A target with no host of its own means the **loopback of the kharej machine**,
 which is where the real service almost always listens.
+
+Full reference, including what a bind address does and does not fix on a
+multi-homed server: [Port mappings](port-mappings.md).
 
 ### Which transport
 

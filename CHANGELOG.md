@@ -51,7 +51,44 @@ takes each session off the channel the moment it arrives instead of holding it
 there until a forwarded connection needs one, so there is nothing queued at
 teardown to pin. They are left as they are.
 
+### Added
+
+- **A forwarded port can name the local address it binds to, on every reverse
+  transport.** `85.11.12.13:443=127.0.0.1:2053` pins that listener to one IP
+  instead of to every interface, so a multi-homed server can carry the control
+  channel on one public address and the exposed ports on another — including
+  when both want the same port number, which bound to the wildcard is the same
+  socket and fails with `address already in use`. `bind_addr` takes the same
+  form for the control channel itself.
+
+  A single port already accepted an address; what is new is that a **range** may
+  carry one too, and that any of it is written down. The form was documented
+  only for the direct and layer-3 tunnels, both of which describe it as
+  "identical to the reverse tunnel" — a reference to a page that did not exist.
+  There is one now: [Port mappings](docs/port-mappings.md), linked from the docs
+  index, the CLI reference and both tunnel pages.
+
+  Worth stating plainly, because the request that prompted this expected more of
+  it: binding does **not** fix asymmetric routing on a host with two NICs. An
+  accepted socket already replies from the address the request arrived on,
+  whatever the listener was bound to — what breaks there is the egress route
+  lookup, which is a kernel routing decision and needs `ip rule` and a per-NIC
+  table regardless.
+
 ### Fixed
+
+- **A port range refused to start when it named a bind address.**
+  `10.0.0.5:443-450` died at startup with "invalid start port in range". Every
+  transport tested for `-` before it looked for a host, so the whole string
+  reached `strconv.Atoi` and failed — and each of the seven had its own copy of
+  that parsing, the same forty lines seven times over, so the bug was in all of
+  them and a fix had to be made in all of them. They share one helper now, which
+  splits the host off before it reads the ports; the change removes about two
+  hundred lines net.
+
+  The helper is tested against real sockets rather than only against its own
+  output: two listeners on one port number and two addresses have to coexist,
+  which is the conflict the bind address exists to avoid.
 
 - **A layer-3 tunnel with `paths` set came up and carried nothing.** Any value
   above one — the option spreads the udp carrier over several sockets, for a

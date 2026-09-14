@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -469,86 +468,34 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
-
-		var localAddr, remoteAddr string
-
-		// Check if only a single port or a port range is provided (no "=" present)
-		if len(parts) == 1 {
-			localPortOrRange := strings.TrimSpace(parts[0])
-			remoteAddr = localPortOrRange // If no remote addr is provided, use the local port as the remote port
-
-			// Check if it's a port range
-			if strings.Contains(localPortOrRange, "-") {
-				rangeParts := strings.Split(localPortOrRange, "-")
-				if len(rangeParts) != 2 {
-					s.logger.Fatalf("invalid port range format: %s", localPortOrRange)
-				}
-
-				// Parse and validate start and end ports
-				startPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
-				if err != nil || startPort < 1 || startPort > 65535 {
-					s.logger.Fatalf("invalid start port in range: %s", rangeParts[0])
-				}
-
-				endPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
-				if err != nil || endPort < 1 || endPort > 65535 || endPort < startPort {
-					s.logger.Fatalf("invalid end port in range: %s", rangeParts[1])
-				}
-
-				// Create listeners for all ports in the range
-				for port := startPort; port <= endPort; port++ {
-					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(g, localAddr, strconv.Itoa(port)) // Use port as the remoteAddr
-					time.Sleep(1 * time.Millisecond)                     // for wide port ranges
-				}
-				continue
-			} else {
-				// Handle single port case
-				port, err := strconv.Atoi(localPortOrRange)
-				if err != nil || port < 1 || port > 65535 {
-					s.logger.Fatalf("invalid port format: %s", localPortOrRange)
-				}
-				localAddr = fmt.Sprintf(":%d", port)
-			}
-		} else if len(parts) == 2 {
-			// Handle "local=remote" format
-			localPortOrRange := strings.TrimSpace(parts[0])
-			remoteAddr = strings.TrimSpace(parts[1])
-
-			// Check if local port is a range
-			if strings.Contains(localPortOrRange, "-") {
-				rangeParts := strings.Split(localPortOrRange, "-")
-				if len(rangeParts) != 2 {
-					s.logger.Fatalf("invalid port range format: %s", localPortOrRange)
-				}
-
-				// Parse and validate start and end ports
-				startPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
-				if err != nil || startPort < 1 || startPort > 65535 {
-					s.logger.Fatalf("invalid start port in range: %s", rangeParts[0])
-				}
-
-				endPort, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
-				if err != nil || endPort < 1 || endPort > 65535 || endPort < startPort {
-					s.logger.Fatalf("invalid end port in range: %s", rangeParts[1])
-				}
-
-				// Create listeners for all ports in the range
-				for port := startPort; port <= endPort; port++ {
-					localAddr = fmt.Sprintf(":%d", port)
-					go s.localListener(g, localAddr, remoteAddr)
-					time.Sleep(1 * time.Millisecond) // for wide port ranges
-				}
-				continue
-			} else {
-				// Handle single local port case
-				localAddr = listenAddrFor(localPortOrRange)
-			}
-		} else {
+		if len(parts) > 2 {
 			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
 		}
-		// Start listeners for single port
-		go s.localListener(g, localAddr, remoteAddr)
+
+		// The left-hand side may name a local address as well as a port or a
+		// range, so one machine can serve different exposed ports on different
+		// local IPs. See expandListenSpec.
+		listens, err := expandListenSpec(parts[0])
+		if err != nil {
+			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+		}
+
+		var remoteAddr string
+		if len(parts) == 2 {
+			remoteAddr = strings.TrimSpace(parts[1])
+		}
+
+		for _, l := range listens {
+			// A mapping that named no destination forwards each port to itself.
+			target := remoteAddr
+			if target == "" {
+				target = l.port
+			}
+			go s.localListener(g, l.addr, target)
+			if len(listens) > 1 {
+				time.Sleep(1 * time.Millisecond) // for wide port ranges
+			}
+		}
 	}
 }
 

@@ -157,10 +157,11 @@ is the reverse tunnel's, so a config moves across unchanged:
 | `127.0.0.1:443=8443` | bind to one local address only |
 | `10000-10009` | a range, each to the same port |
 | `10000-10009=20000-20009` | a range, preserving the offset |
+| `85.11.12.13:10000-10009` | a range bound to one local address |
 | `443=10.0.0.1:80\|10.0.0.2:80` | two backends, load-balanced |
 
 A target with no host of its own means `peer_ip`, which is what almost every
-mapping wants. `accept_udp` adds UDP alongside TCP; it is off by default, for
+mapping wants. Full reference: [Port mappings](port-mappings.md). `accept_udp` adds UDP alongside TCP; it is off by default, for
 the same reason it is on the reverse tunnel — a web tunnel should not silently
 start carrying every QUIC flow on port 443.
 

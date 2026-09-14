@@ -25,6 +25,8 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [When a server is filtered, blocked, or dirty](filtered-or-dirty-ip.md)
 
 ### Per-tunnel settings
+- [Port mappings](port-mappings.md) — every form `ports = [...]` accepts, including
+  binding a listener to one local IP on a multi-homed server
 - [Forwarded UDP](forwarded-udp.md) — the one to read when UDP does not pass
 - [Performance presets](performance-presets.md) — Balance / Turbo / Aggressive / Throughput
 - [Failover & load balancing](failover-load-balancing.md) — backup addresses, health scoring
