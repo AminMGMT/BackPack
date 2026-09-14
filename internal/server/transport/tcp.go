@@ -343,18 +343,31 @@ func (s *TcpTransport) channelHandler(g *tcpGen) {
 }
 
 func (s *TcpTransport) tunnelListener(g *tcpGen) {
-	listener, err := network.ListenWithBuffers(
-		"tcp",
-		s.config.BindAddr,
-		s.config.SO_RCVBUF,
-		s.config.SO_SNDBUF,
-		s.config.MSS,
-		s.config.KeepAlive,
-		!s.config.Nodelay,
-	)
-	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
-		return
+	// The tunnel's own port is not optional, so a failed bind here cannot be
+	// skipped the way a forwarded port can — but it is no reason to exit
+	// either. Waiting and trying again is what the two real causes call for: a
+	// previous instance still shutting down, or the port in TIME_WAIT. Both
+	// clear on their own. See bindfail.go.
+	var backoff listenBackoff
+	var listener net.Listener
+	for {
+		var err error
+		listener, err = network.ListenWithBuffers(
+			"tcp",
+			s.config.BindAddr,
+			s.config.SO_RCVBUF,
+			s.config.SO_SNDBUF,
+			s.config.MSS,
+			s.config.KeepAlive,
+			!s.config.Nodelay,
+		)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
+		if !backoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	defer listener.Close()
@@ -566,8 +579,13 @@ func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
 func (s *TcpTransport) parsePortMappings(g *tcpGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
+		// A mapping that cannot be read is one mapping. It used to end the
+		// process — and under a unit that restarts every three seconds, one
+		// typo then became a crash loop instead of a message. Said once and
+		// skipped: the tunnel and its other ports are unaffected.
 		if len(parts) > 2 {
-			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
+			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
+			continue
 		}
 
 		// The left-hand side may name a local address as well as a port or a
@@ -575,7 +593,8 @@ func (s *TcpTransport) parsePortMappings(g *tcpGen) {
 		// local IPs. See expandListenSpec.
 		listens, err := expandListenSpec(parts[0])
 		if err != nil {
-			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
+			continue
 		}
 
 		var remoteAddr string
@@ -607,7 +626,10 @@ func (s *TcpTransport) startListeners(g *tcpGen, localAddr, remoteAddr string) {
 func (s *TcpTransport) localListener(g *tcpGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to listen on %s: %v", localAddr, err)
+		// One forwarded port that cannot be bound is one forwarded port. The
+		// tunnel and every other port it carries are unaffected, so this says
+		// so and gives up on this one alone. See bindfail.go.
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
 		return
 	}
 

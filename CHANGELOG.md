@@ -103,6 +103,59 @@ teardown to pin. They are left as they are.
 
 ### Fixed
 
+- **Optimize widened the ephemeral port range over every service port on the
+  machine.** It set `net.ipv4.ip_local_port_range` to `1024 65535`, on the
+  reasoning that more ephemeral ports means more concurrent connections. What it
+  also means is that any outgoing connection can be given a port a service owns
+  — and a port held that way cannot be bound by the service that owns it.
+
+  Reported from the field as a panel node that would not start: its ports are
+  62050 and 62051, which sit above the kernel's own range (`32768 60999`) and
+  inside the widened one. It was intermittent, appeared weeks after install, and
+  cleared when Backpack was stopped, because what held the port was one of its
+  outgoing connections. Measured here: an outgoing socket given 62055 makes the
+  later `listen` fail with "address already in use", and `ss -tlnp` — the
+  command anyone runs to find the culprit — shows nothing at all, because the
+  holder is a connection rather than a listener.
+
+  The range is the kernel's own again. Twenty-eight thousand ephemeral ports
+  with `tcp_tw_reuse` on is far more than a tunnel needs, and the four and a
+  half thousand the wider range added are not worth the 61000-65535 band, which
+  is where services like that one live. On top of that, the ports the configured
+  tunnels listen on are now written to `net.ipv4.ip_local_reserved_ports`, so a
+  tunnel port that does fall inside the range cannot be taken either.
+
+- **One busy port took down the whole tunnel, and then the whole process.**
+  Every listener in the reverse transports answered a failed bind with
+  `logger.Fatalf`, which is `os.Exit(1)`. The unit these run under carries
+  `Restart=always` and `RestartSec=3`, so an occupied port did not stop the
+  tunnel — it put it in a three-second crash loop: bind, die, restart, bind,
+  die. From the far end that reads as a tunnel connecting and dropping every few
+  seconds for no stated reason.
+
+  Measured with one forwarded port of two already taken: the control channel
+  came up, the healthy port was never bound at all, the process was gone four
+  seconds later, and the last line in the log was
+
+      [FATAL] failed to listen on :62050: bind: address already in use
+
+  A forwarded port that cannot be bound is now reported and skipped — the tunnel
+  and its other ports are unaffected. The tunnel's own port is retried instead,
+  backing off from two seconds to thirty, because the two things that actually
+  hold it — a previous instance still shutting down, and the port in TIME_WAIT —
+  both clear on their own. A port mapping that cannot be parsed is reported and
+  ignored rather than ending the process, and a certificate that cannot be set
+  up stops that listener with an explanation instead of the process.
+
+  The message says which machine, which port, and what to do:
+
+      forwarded port :62050: something else on THIS server is already listening there.
+        ...
+        Find out which:  ss -tlnp | grep 62050
+
+  The direct and layer-3 forwarders already returned the error and let the
+  caller decide; this brings the reverse transports to the same place.
+
 - **A tunnel could refuse its own client for good, saying the token was in use
   by somebody else.** Reported from the field: three weeks of ordinary service,
   then every reconnection refused with "the server already has a control channel

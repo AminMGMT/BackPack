@@ -244,10 +244,19 @@ func (s *QuicTransport) Restart() {
 // connection has proved nothing until its control stream passes the token — a
 // peer that has not is not a reason to disturb the running tunnel.
 func (s *QuicTransport) tunnelListener(g *quicGen, handshake chan<- net.Conn) {
-	listener, err := network.QUICListen(s.config.BindAddr, s.quicSettings)
-	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
-		return
+	// The tunnel's own port: retried rather than fatal. See bindfail.go.
+	var backoff listenBackoff
+	var listener *network.QUICListener
+	for {
+		var err error
+		listener, err = network.QUICListen(s.config.BindAddr, s.quicSettings)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
+		if !backoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	s.logger.Infof("server started successfully, listening on address: %s (QUIC)", listener.Addr().String())
@@ -436,8 +445,11 @@ func (s *QuicTransport) channelHandler(g *quicGen) {
 func (s *QuicTransport) parsePortMappings(g *quicGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
+		// One unreadable mapping is one mapping, not a reason to end the
+		// process. See the same passage in tcp.go.
 		if len(parts) > 2 {
-			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
+			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
+			continue
 		}
 
 		// The left-hand side may name a local address as well as a port or a
@@ -445,7 +457,8 @@ func (s *QuicTransport) parsePortMappings(g *quicGen) {
 		// local IPs. See expandListenSpec.
 		listens, err := expandListenSpec(parts[0])
 		if err != nil {
-			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
+			continue
 		}
 
 		var remoteAddr string
@@ -470,7 +483,8 @@ func (s *QuicTransport) parsePortMappings(g *quicGen) {
 func (s *QuicTransport) localListener(g *quicGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
+		// One forwarded port, not the tunnel. See bindfail.go.
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
 		return
 	}
 

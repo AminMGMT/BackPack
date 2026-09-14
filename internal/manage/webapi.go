@@ -421,7 +421,7 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 	if err := applyAdvanced(&s, n.Pck, n.Conn, n.Limits, port); err != nil {
 		return s, err
 	}
-	optimize.ApplyQuiet()
+	optimize.ApplyQuiet(ReservedPorts())
 	return s, nil
 }
 

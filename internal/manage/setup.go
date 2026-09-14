@@ -955,7 +955,7 @@ func finishSetup(s TunnelSpec) {
 	}
 
 	tui.Info("Applying system network optimizations...")
-	optimize.ApplyQuiet()
+	optimize.ApplyQuiet(ReservedPorts())
 
 	service, err := s.Save()
 	if err != nil {

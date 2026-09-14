@@ -522,7 +522,7 @@ func sideLabel(s directSide) string {
 // tunnel is managed, backed up and deleted by exactly the same machinery.
 func writeAndStart(name, body string, side directSide, token string) {
 	tui.Info("Applying system network optimizations...")
-	optimize.ApplyQuiet()
+	optimize.ApplyQuiet(ReservedPorts())
 
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		tui.Error("Cannot create the config directory: " + err.Error())

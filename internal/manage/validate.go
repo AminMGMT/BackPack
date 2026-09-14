@@ -51,8 +51,10 @@ func parsePorts(raw string) []string {
 
 // validPortSpec reports whether one forwarded-port entry is in a shape the
 // engine's port parser accepts: "N", "N-M", "N=addr", "N-M=addr" or
-// "ip:port=addr". An invalid entry would make the engine exit fatally and the
-// tunnel service crash-loop, so it must be rejected before it reaches a config.
+// "ip:port=addr". The engine reports and ignores an entry it cannot read now
+// rather than exiting on it, so a bad one no longer takes the tunnel with it —
+// but a mapping that is silently doing nothing is still worth refusing here,
+// where the operator is looking at it and can fix it.
 func validPortSpec(spec string) bool {
 	spec = strings.TrimSpace(spec)
 	parts := strings.SplitN(spec, "=", 2)

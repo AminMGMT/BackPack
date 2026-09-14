@@ -201,10 +201,22 @@ func (s *UdpTransport) Restart() {
 }
 
 func (s *UdpTransport) channelHandshake(g *udpGen) {
-	listener, err := net.Listen("tcp", s.config.BindAddr)
-	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
-		return
+	// The tunnel's own control port: retried rather than fatal. See bindfail.go.
+	// Named apart from the acceptBackoff further down — that one paces a
+	// spinning accept loop in milliseconds, this one waits seconds for another
+	// process to let go of a port.
+	var bindBackoff listenBackoff
+	var listener net.Listener
+	for {
+		var err error
+		listener, err = net.Listen("tcp", s.config.BindAddr)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
+		if !bindBackoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	s.logger.Infof("server started successfully, listening on address: %s", listener.Addr().String())
@@ -427,14 +439,27 @@ func (s *UdpTransport) applyBuffers(conn *net.UDPConn) {
 }
 
 func (s *UdpTransport) tunnelListener(g *udpGen) {
+	// An address that does not parse is a configuration error: retrying it
+	// would loop forever on something only an edit can fix.
 	tunnelUDPAddr, err := net.ResolveUDPAddr("udp", s.config.BindAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to resolve tunnel address: %v", err)
+		s.logger.Errorf("tunnel port %s is not an address this machine can listen on: %v",
+			s.config.BindAddr, err)
+		return
 	}
 
-	listener, err := net.ListenUDP("udp", tunnelUDPAddr)
-	if err != nil {
-		s.logger.Fatalf("failed to listen on tunnel UDP port: %v", err)
+	// The port itself: retried rather than fatal. See bindfail.go.
+	var backoff listenBackoff
+	var listener *net.UDPConn
+	for {
+		listener, err = net.ListenUDP("udp", tunnelUDPAddr)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
+		if !backoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	// This one socket receives every client's pooled traffic, so it is the first
@@ -533,8 +558,11 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 func (s *UdpTransport) parsePortMappings(g *udpGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
+		// One unreadable mapping is one mapping, not a reason to end the
+		// process. See the same passage in tcp.go.
 		if len(parts) > 2 {
-			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
+			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
+			continue
 		}
 
 		// The left-hand side may name a local address as well as a port or a
@@ -542,7 +570,8 @@ func (s *UdpTransport) parsePortMappings(g *udpGen) {
 		// local IPs. See expandListenSpec.
 		listens, err := expandListenSpec(parts[0])
 		if err != nil {
-			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
+			continue
 		}
 
 		var remoteAddr string
@@ -567,12 +596,15 @@ func (s *UdpTransport) parsePortMappings(g *udpGen) {
 func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 	localUDPAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to resolve local address: %v", err)
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
+		return
 	}
 
 	listener, err := net.ListenUDP("udp", localUDPAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to listen on local UDP port: %v", err)
+		// One forwarded port, not the tunnel. See bindfail.go.
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
+		return
 	}
 
 	s.applyBuffers(listener)

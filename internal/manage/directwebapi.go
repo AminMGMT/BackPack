@@ -291,7 +291,7 @@ func directBody(n NewDirectTunnel) (name, body string, err error) {
 // writeDirectConfig puts the config and its unit on disk and reloads systemd.
 // It does not start anything.
 func writeDirectConfig(name, body string) error {
-	optimize.ApplyQuiet()
+	optimize.ApplyQuiet(ReservedPorts())
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return err
 	}

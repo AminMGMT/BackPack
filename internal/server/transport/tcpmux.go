@@ -376,18 +376,27 @@ func (s *TcpMuxTransport) channelHandler(g *tcpMuxGen) {
 }
 
 func (s *TcpMuxTransport) tunnelListener(g *tcpMuxGen) {
-	listener, err := network.ListenWithBuffers(
-		"tcp",
-		s.config.BindAddr,
-		s.config.SO_RCVBUF,
-		s.config.SO_SNDBUF,
-		s.config.MSS,
-		s.config.KeepAlive,
-		!s.config.Nodelay,
-	)
-	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
-		return
+	// The tunnel's own port: retried rather than fatal. See bindfail.go.
+	var backoff listenBackoff
+	var listener net.Listener
+	for {
+		var err error
+		listener, err = network.ListenWithBuffers(
+			"tcp",
+			s.config.BindAddr,
+			s.config.SO_RCVBUF,
+			s.config.SO_SNDBUF,
+			s.config.MSS,
+			s.config.KeepAlive,
+			!s.config.Nodelay,
+		)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
+		if !backoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	defer listener.Close()
@@ -571,8 +580,11 @@ func (s *TcpMuxTransport) deliverTunnelConn(g *tcpMuxGen, conn net.Conn) {
 func (s *TcpMuxTransport) parsePortMappings(g *tcpMuxGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
+		// One unreadable mapping is one mapping, not a reason to end the
+		// process. See the same passage in tcp.go.
 		if len(parts) > 2 {
-			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
+			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
+			continue
 		}
 
 		// The left-hand side may name a local address as well as a port or a
@@ -580,7 +592,8 @@ func (s *TcpMuxTransport) parsePortMappings(g *tcpMuxGen) {
 		// local IPs. See expandListenSpec.
 		listens, err := expandListenSpec(parts[0])
 		if err != nil {
-			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
+			continue
 		}
 
 		var remoteAddr string
@@ -605,7 +618,8 @@ func (s *TcpMuxTransport) parsePortMappings(g *tcpMuxGen) {
 func (s *TcpMuxTransport) localListener(g *tcpMuxGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
+		// One forwarded port, not the tunnel. See bindfail.go.
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
 		return
 	}
 

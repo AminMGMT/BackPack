@@ -404,18 +404,27 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 	// in the ws transport: the socket that call opens carries none of the
 	// tunnel's options, which is what made the MSS clamp a setting this
 	// transport accepted and then ignored.
-	ln, err := network.ListenWithBuffers(
-		"tcp",
-		addr,
-		0, // the websocket transports have never pinned the socket buffers
-		0,
-		s.config.MSS,
-		s.config.KeepAlive,
-		!s.config.Nodelay,
-	)
-	if err != nil {
-		s.logger.Fatalf("failed to listen on %s: %v", addr, err)
-		return
+	// The tunnel's own port: retried rather than fatal. See bindfail.go.
+	var backoff listenBackoff
+	var ln net.Listener
+	for {
+		var err error
+		ln, err = network.ListenWithBuffers(
+			"tcp",
+			addr,
+			0, // the websocket transports have never pinned the socket buffers
+			0,
+			s.config.MSS,
+			s.config.KeepAlive,
+			!s.config.Nodelay,
+		)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", addr, err))
+		if !backoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	if s.config.Mode == config.WSMUX {
@@ -424,8 +433,10 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			if !s.controlChannel.IsSet() {
 				s.logger.Infof("waiting for %s control channel connection", s.config.Mode)
 			}
+			// The bind already succeeded, so this is the HTTP server itself
+			// stopping. Ending the run is right; ending the process is not.
 			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
-				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
+				s.logger.Errorf("%s server on %s stopped: %v", s.config.Mode, addr, err)
 			}
 		}()
 	} else {
@@ -434,7 +445,10 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
 		if err != nil {
 			ln.Close()
-			s.logger.Fatalf("failed to set up TLS on %s: %v", addr, err)
+			// Reported and stopped, not fatal. See the same passage in ws.go.
+			s.logger.Errorf("%s on %s cannot start: its TLS certificate could not be "+
+				"set up: %v", s.config.Mode, addr, err)
+			return
 		}
 		server.TLSConfig = tlsCfg
 
@@ -446,7 +460,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			// Empty paths: the certificate comes from TLSConfig.GetCertificate,
 			// so renewal needs no restart.
 			if err := server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
-				s.logger.Fatalf("failed to listen on %s: %v", addr, err)
+				s.logger.Errorf("%s server on %s stopped: %v", s.config.Mode, addr, err)
 			}
 		}()
 	}
@@ -468,8 +482,11 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
+		// One unreadable mapping is one mapping, not a reason to end the
+		// process. See the same passage in tcp.go.
 		if len(parts) > 2 {
-			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
+			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
+			continue
 		}
 
 		// The left-hand side may name a local address as well as a port or a
@@ -477,7 +494,8 @@ func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 		// local IPs. See expandListenSpec.
 		listens, err := expandListenSpec(parts[0])
 		if err != nil {
-			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
+			continue
 		}
 
 		var remoteAddr string
@@ -502,7 +520,8 @@ func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
+		// One forwarded port, not the tunnel. See bindfail.go.
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
 		return
 	}
 

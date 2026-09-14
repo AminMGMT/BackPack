@@ -742,7 +742,7 @@ func optimizeMenu() {
 		return
 	}
 	fmt.Println()
-	optimize.Apply(func(line string) { tui.Info("• " + line) })
+	optimize.Apply(func(line string) { tui.Info("• " + line) }, manage.ReservedPorts())
 	fmt.Println()
 	tui.Warn("A reboot is recommended for file-limit changes to fully apply.")
 	tui.PressEnter()

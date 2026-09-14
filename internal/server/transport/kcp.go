@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"runtime"
 	"strings"
@@ -391,10 +392,20 @@ func (s *KcpTransport) channelHandler(g *kcpGen) {
 }
 
 func (s *KcpTransport) tunnelListener(g *kcpGen) {
-	listener, carrier, err := network.KCPListen(s.config.BindAddr, s.config.Token, s.kcpSettings)
-	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", s.config.BindAddr, err)
-		return
+	// The tunnel's own port: retried rather than fatal. See bindfail.go.
+	var backoff listenBackoff
+	var listener *kcp.Listener
+	var carrier io.Closer
+	for {
+		var err error
+		listener, carrier, err = network.KCPListen(s.config.BindAddr, s.config.Token, s.kcpSettings)
+		if err == nil {
+			break
+		}
+		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
+		if !backoff.wait(g.ctx) {
+			return
+		}
 	}
 
 	// Both are closed on the way out. Closing the listener alone leaves the
@@ -550,8 +561,11 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 func (s *KcpTransport) parsePortMappings(g *kcpGen) {
 	for _, portMapping := range s.config.Ports {
 		parts := strings.Split(portMapping, "=")
+		// One unreadable mapping is one mapping, not a reason to end the
+		// process. See the same passage in tcp.go.
 		if len(parts) > 2 {
-			s.logger.Fatalf("invalid port mapping format: %s", portMapping)
+			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
+			continue
 		}
 
 		// The left-hand side may name a local address as well as a port or a
@@ -559,7 +573,8 @@ func (s *KcpTransport) parsePortMappings(g *kcpGen) {
 		// local IPs. See expandListenSpec.
 		listens, err := expandListenSpec(parts[0])
 		if err != nil {
-			s.logger.Fatalf("invalid port mapping %q: %v", portMapping, err)
+			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
+			continue
 		}
 
 		var remoteAddr string
@@ -584,7 +599,8 @@ func (s *KcpTransport) parsePortMappings(g *kcpGen) {
 func (s *KcpTransport) localListener(g *kcpGen, localAddr string, remoteAddr string) {
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
+		// One forwarded port, not the tunnel. See bindfail.go.
+		s.logger.Error(bindFailure("forwarded port", localAddr, err))
 		return
 	}
 
