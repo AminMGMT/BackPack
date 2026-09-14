@@ -46,13 +46,12 @@ type QuicTransport struct {
 	parentctx    context.Context
 	// The current run. Replaced by Restart while the previous run's
 	// goroutines are still reading it, so it lives behind a lock.
-	run            runState
-	logger         *logrus.Logger
-	tunnelChannel  chan net.Conn
-	localChannel   chan LocalTCPConn
-	reqNewConnChan chan struct{}
+	run    runState
+	logger *logrus.Logger
+	// The run's channels and its usage monitor are deliberately not fields:
+	// they belong to one generation, and a field outlives the generation that
+	// made it. See Start.
 	controlChannel netControl
-	usageMonitor   *web.Usage
 	restartMutex   sync.Mutex
 	limits         *limiter
 }
@@ -100,18 +99,12 @@ func NewQuicServer(parentCtx context.Context, config *QuicConfig, logger *logrus
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	server := &QuicTransport{
-		config:         config,
-		quicSettings:   config.settings(),
-		parentctx:      parentCtx,
-		logger:         logger,
-		tunnelChannel:  make(chan net.Conn, config.ChannelSize),
-		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
-		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		limits:         newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
+		config:       config,
+		quicSettings: config.settings(),
+		parentctx:    parentCtx,
+		logger:       logger,
+		limits:       newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
-	// Built after the transport exists, because it needs a getter for the
-	// status rather than a pointer into it.
-	server.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, server.status.get, logger)
 
 	// The first run is installed the same way every later one is, so there is
 	// only one path that ever writes it.
@@ -120,16 +113,28 @@ func NewQuicServer(parentCtx context.Context, config *QuicConfig, logger *logrus
 	return server
 }
 
-// Start brings up the first run. Every later one comes from Restart, which
-// builds its own generation and hands it straight to start — so the fields read
-// here are written once, by the constructor, before any other goroutine exists.
+// Start brings up the first run, building its generation exactly the way
+// Restart builds every later one.
+//
+// It used to take the first generation's channels from fields on the transport,
+// and Restart never replaced those fields — it only built fresh channels for
+// the new generation. So the first run's channels stayed reachable from the
+// struct for the life of the process, and with them every stream still queued
+// in them, none of which was ever closed. The same shape was measured on the
+// plain TCP transport: with a pool of 64, 64 sockets were still open after the
+// client had gone and the run had been torn down, and a forced GC did not
+// release them — an unreachable connection is closed by its finalizer, but
+// these were still reachable. Building the generation here leaves nothing
+// behind to pin.
 func (s *QuicTransport) Start() {
+	ctx := s.run.context()
 	s.start(&quicGen{
-		ctx:            s.run.context(),
-		tunnelChannel:  s.tunnelChannel,
-		localChannel:   s.localChannel,
-		reqNewConnChan: s.reqNewConnChan,
-		usageMonitor:   s.usageMonitor,
+		ctx:            ctx,
+		tunnelChannel:  make(chan net.Conn, s.config.ChannelSize),
+		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
+		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
+		usageMonitor: web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx,
+			s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
 	})
 }
 

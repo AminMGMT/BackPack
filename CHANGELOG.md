@@ -4,9 +4,11 @@ All notable changes to Backpack are documented here.
 
 ## v1.8.1 — 2026-09-13
 
-A memory fix for the `udp` transport, and the two bugs found while proving it.
+Memory and descriptor fixes across the reverse transports, and the bugs found
+while proving them.
 
-The transport reserved a 100,000-datagram queue for every connection it saw. A
+The `udp` transport reserved a 100,000-datagram queue for every connection it
+saw. A
 Go channel allocates its whole buffer the moment it is made, so that was 2.3 MB
 committed per connection before a single byte had been forwarded — and a pooled
 connection may never forward one. A tunnel sitting idle with a pool of 64 held
@@ -29,6 +31,26 @@ serve them exit, and a heap that reached 1067 MB under load came back to 151 MB
 on its own. What was wrong was the size of what each connection reserved, and
 one run's worth of it that was never let go.
 
+That second fault was not unique to `udp`. The same shape — `Start` taking the
+first run's channels from fields on the transport, and `Restart` building fresh
+channels without ever replacing those fields — is in `tcp`, `ws` and `quic` too,
+and there what it holds is sockets rather than bytes. On `tcp` the pool of idle
+tunnel connections waits in that channel to be paired, so the whole idle pool is
+what gets pinned: with a pool of 64, the server still held 64 open descriptors
+after the client had gone and the run had been torn down, and a forced garbage
+collection did not release them — an unreachable connection is closed by its
+finalizer, but these were still reachable from the struct. It is a one-shot cost
+rather than one that grows with every restart, and it scales with
+`connection_pool`, so it is eight descriptors on the default rather than
+sixty-four. After the fix the same tunnel comes back to its baseline seven on
+every cycle.
+
+`tcpmux`, `wsmux` and `kcp` carry the identical pattern and do not leak, which is
+worth writing down so it is not read later as an oversight: their handle loop
+takes each session off the channel the moment it arrives instead of holding it
+there until a forwarded connection needs one, so there is nothing queued at
+teardown to pin. They are left as they are.
+
 ### Fixed
 
 - **The `udp` transport reserved 2.3 MB for every connection it saw.** The
@@ -38,10 +60,13 @@ one run's worth of it that was never let go.
   paired, which is what dropping there would cost, and bounded so a peer that
   floods a stalled flow cannot grow the process without limit.
 
-- **A restart never released the first run's queue.** `Start` took its channels
-  from fields on the transport that `Restart` did not replace. It builds its own
-  generation now, exactly as `Restart` does, so nothing outlives the run that
-  made it.
+- **A restart never released the first run's queue — on `udp`, `tcp`, `ws` and
+  `quic`.** `Start` took its channels from fields on the transport that
+  `Restart` did not replace. It builds its own generation now on all four,
+  exactly as `Restart` already did, and those channels and the usage monitor are
+  gone from the transport structs, so nothing outlives the run that made it. On
+  `udp` this was 145 MB still held with no client connected; on `tcp`, 64 open
+  sockets that only a server restart freed.
 
 - **A tunnel connection that failed a single write was lost rather than
   replaced.** The error path left the connection's mutex locked for good — the

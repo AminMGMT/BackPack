@@ -40,17 +40,15 @@ type TcpTransport struct {
 	parentctx context.Context
 	// The current run. Replaced by Restart while the previous run's
 	// goroutines are still reading it, so it lives behind a lock.
-	run              runState
-	logger           *logrus.Logger
-	tunnelChannel    chan net.Conn
-	localChannel     chan LocalTCPConn
-	reqNewConnChan   chan struct{}
-	handshakeChannel chan controlCandidate
-	controlChannel   netControl
-	restartMutex     sync.Mutex
-	usageMonitor     *web.Usage
-	rtt              int64 // in ms, for UDP
-	limits           *limiter
+	run    runState
+	logger *logrus.Logger
+	// The run's channels and its usage monitor are deliberately not fields:
+	// they belong to one generation, and a field outlives the generation that
+	// made it. See Start.
+	controlChannel netControl
+	restartMutex   sync.Mutex
+	rtt            int64 // in ms, for UDP
+	limits         *limiter
 	// poolNonce is what this run's pool connections must present. It is empty
 	// while no control channel is up, and stays empty for a legacy client that
 	// cannot present one — which is what keeps the source-address fallback
@@ -89,23 +87,12 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 
 	// Initialize the TcpTransport struct
 	server := &TcpTransport{
-		config:         config,
-		parentctx:      parentCtx,
-		logger:         logger,
-		tunnelChannel:  make(chan net.Conn, config.ChannelSize),
-		localChannel:   make(chan LocalTCPConn, config.ChannelSize),
-		reqNewConnChan: make(chan struct{}, config.ChannelSize),
-		// Buffered by one so a control channel that arrives in the moment
-		// between the listener starting and channelHandshake reaching its
-		// select is held rather than dropped.
-		handshakeChannel: make(chan controlCandidate, 1),
-		limits:           newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
-		rtt:              0,
+		config:    config,
+		parentctx: parentCtx,
+		logger:    logger,
+		limits:    newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
+		rtt:       0,
 	}
-
-	// Built after the transport exists, because it needs a getter for the
-	// status rather than a pointer into it.
-	server.usageMonitor = web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, server.status.get, logger)
 
 	// The first run is installed the same way every later one is, so there is
 	// only one path that ever writes it.
@@ -114,17 +101,31 @@ func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 	return server
 }
 
-// Start brings up the first run. Every later one comes from Restart, which
-// builds its own generation and hands it straight to start — so the fields read
-// here are written once, by the constructor, before any other goroutine exists.
+// Start brings up the first run, building its generation exactly the way
+// Restart builds every later one.
+//
+// It used to take the first generation's channels from fields on the transport,
+// and Restart never replaced those fields — it only built fresh channels for
+// the new generation. So the first run's channels stayed reachable from the
+// struct for the life of the process, and with them every connection still
+// queued in them, none of which was ever closed. Measured with a pool of 64:
+// 64 sockets still open after the client had gone and the run had been torn
+// down, and a forced GC did not release them — an unreachable net.Conn is
+// closed by its finalizer, but these were still reachable. Building the
+// generation here leaves nothing behind to pin.
 func (s *TcpTransport) Start() {
+	ctx := s.run.context()
 	s.start(&tcpGen{
-		ctx:              s.run.context(),
-		tunnelChannel:    s.tunnelChannel,
-		localChannel:     s.localChannel,
-		reqNewConnChan:   s.reqNewConnChan,
-		handshakeChannel: s.handshakeChannel,
-		usageMonitor:     s.usageMonitor,
+		ctx:            ctx,
+		tunnelChannel:  make(chan net.Conn, s.config.ChannelSize),
+		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
+		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
+		// Buffered by one so a control channel that arrives in the moment
+		// between the listener starting and channelHandshake reaching its
+		// select is held rather than dropped.
+		handshakeChannel: make(chan controlCandidate, 1),
+		usageMonitor: web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx,
+			s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
 	})
 }
 
