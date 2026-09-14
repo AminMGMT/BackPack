@@ -53,6 +53,24 @@ teardown to pin. They are left as they are.
 
 ### Fixed
 
+- **A layer-3 tunnel with `paths` set came up and carried nothing.** Any value
+  above one — the option spreads the udp carrier over several sockets, for a
+  route that shapes per flow — produced a tunnel that completed its handshake,
+  logged an established session at both ends, and moved no data at all.
+
+  The merge layer hands one stable address upward rather than each path's own,
+  so that several sockets do not read to the tunnel as a peer roaming. The
+  dialling side knows that address when it is built; the listening side has
+  nobody to report yet and was passing nil. The tunnel learns where its peer is
+  from the address that arrives with a packet, and its outbound pump drops
+  everything while that is unset — so the handshake, which replies per path,
+  worked, and nothing else did. The listening side now pins the first address it
+  sees and reports that.
+
+  Every existing test for this layer drove it through an in-memory fake and none
+  asked what it reports when built without an address, which is how it shipped.
+  There is a test for exactly that now.
+
 - **The `udp` transport reserved 2.3 MB for every connection it saw.** The
   payload queue was 100,000 datagrams deep, allocated in full the moment a
   connection appeared, whether or not it ever carried traffic. It is 256 now —

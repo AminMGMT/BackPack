@@ -36,6 +36,52 @@ func (m *memCarrier) SetWriteDeadline(time.Time) error { return nil }
 func (m *memCarrier) Overhead() int                    { return 28 }
 func (m *memCarrier) CarrierName() string              { return m.name }
 
+// The listening side has nobody to report when it is built — no peer has
+// arrived yet — so it constructs the merge layer with a nil address. That must
+// not reach the tunnel above.
+//
+// This is the test that was missing, and its absence is why the bug shipped:
+// every other test here drives the layer through an in-memory fake and none of
+// them ever asked what address it hands upward when it was built without one.
+// The tunnel learns where its peer is from the address that comes up with a
+// received packet, and its outbound pump discards every packet while that is
+// nil — so with more than one path the handshake completed, both ends logged an
+// established session, and not one byte of data could leave. A tunnel that
+// reports itself healthy and carries nothing is the worst shape a fault can
+// take, and one assertion here would have caught it.
+func TestMultipathLearnsAnAddressWhenBuiltWithoutOne(t *testing.T) {
+	a, b := newMemCarrier("udp"), newMemCarrier("udp")
+	b.peer = &net.UDPAddr{IP: net.IPv4(10, 0, 0, 3), Port: 9001}
+
+	// nil, exactly as the listening side builds it.
+	mp := newMultipathCarrier([]DatagramCarrier{a, b}, nil)
+
+	buf := make([]byte, 16)
+	a.in <- []byte("one")
+	n, addr, err := mp.ReadFrom(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("no payload came up")
+	}
+	if addr == nil {
+		t.Fatal("a nil address was reported: the tunnel above cannot learn its peer " +
+			"from this, and drops every outbound packet while it is unset")
+	}
+	first := addr.String()
+
+	// A packet from the other path, whose own peer differs, must not change what
+	// is reported. Several sockets are one peer to the layer above, and an
+	// address that moved on every packet would read as a peer roaming.
+	b.in <- []byte("two")
+	if _, addr2, err := mp.ReadFrom(buf); err != nil {
+		t.Fatal(err)
+	} else if addr2 == nil || addr2.String() != first {
+		t.Errorf("second read reported %v, want the pinned %s", addr2, first)
+	}
+}
+
 // The point of the layer: the traffic is spread evenly, because an uneven
 // spread is an uneven set of flows and a shaper counting them would throttle
 // the busy one exactly as it throttled the single socket.

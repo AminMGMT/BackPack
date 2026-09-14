@@ -84,11 +84,21 @@ type multipathCarrier struct {
 	paths []DatagramCarrier
 	next  atomic.Uint32
 
-	// The address reported upward. It is one address for the life of the
-	// tunnel, deliberately: the layer above follows a peer that moves, and
-	// several paths arriving from several ports would otherwise read as a peer
-	// moving on every packet. Each path knows its own peer; nothing above needs
-	// to.
+	// The address reported upward, guarded by mu. It is one address for the
+	// life of the tunnel, deliberately: the layer above follows a peer that
+	// moves, and several paths arriving from several ports would otherwise read
+	// as a peer moving on every packet. Each path knows its own peer; nothing
+	// above needs to.
+	//
+	// The dialling side knows it at construction. The listening side does not —
+	// it has nobody to report until somebody arrives — so it starts nil and is
+	// pinned to the first address seen. That is not a detail: reporting nil is
+	// what broke this carrier. The tunnel learns where its peer is from the
+	// address handed up with a received packet (handleInit), and its outbound
+	// pump drops every packet while that is nil. So with more than one path the
+	// handshake completed, both ends logged an established session, and not one
+	// byte of data could leave — a tunnel that reports itself healthy and
+	// carries nothing.
 	reported net.Addr
 
 	in     chan pathPacket
@@ -174,12 +184,28 @@ func (c *multipathCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
 	case pkt := <-c.in:
 		// The address reported is the stable one, not the path's: see the
 		// comment on the field.
-		return copy(p, pkt.data), c.reported, nil
+		return copy(p, pkt.data), c.stableAddr(pkt.addr), nil
 	case <-c.closed:
 		return 0, nil, net.ErrClosed
 	case <-timeout:
 		return 0, nil, timeoutError{}
 	}
+}
+
+// stableAddr is the address handed upward with every packet: the one fixed at
+// construction, or — when there was none to fix, which is the listening side —
+// the first one seen, kept from then on.
+//
+// Pinning rather than passing each packet's own address through is the point of
+// the field: several paths arrive from several ports, and reporting each would
+// read to the layer above as a peer moving on every packet.
+func (c *multipathCarrier) stableAddr(seen net.Addr) net.Addr {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reported == nil {
+		c.reported = seen
+	}
+	return c.reported
 }
 
 // timeoutError is what a read deadline produces, in the shape callers test for.
