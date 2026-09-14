@@ -274,6 +274,9 @@ func Serve() error {
 	// no servers in the fleet it does nothing at all, and turning "nothing at
 	// all" off was a setting that could only ever be in the way.
 	_ = srv.nodes.start()
+	// Loss and round trip to every managed server, measured in the background
+	// so no request ever waits on a ping. See nodeprobe.go.
+	nodeNet.start()
 
 	// Said once, at startup, into the journal.
 	//

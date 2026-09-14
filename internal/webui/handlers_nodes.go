@@ -96,6 +96,17 @@ type nodeView struct {
 	LastSeen int64     `json:"lastSeen,omitempty"`
 	Info     node.Info `json:"info,omitempty"`
 
+	// Net is the path between this panel and that server — loss and round
+	// trip, measured here. See nodeprobe.go.
+	Net netHealth `json:"net"`
+
+	// Pending says this row was answered from what was already written down and
+	// the server has not been contacted for it. The first paint of the fleet
+	// page is served this way so the cards appear at once; the poll behind it
+	// replaces them with rows that were actually asked. A card drawn from a
+	// pending row must not claim the server is up: what is stored is a memory.
+	Pending bool `json:"pending,omitempty"`
+
 	// Tunnels are the ones this panel built there. It is what this panel
 	// remembers, not what the server has: a tunnel someone set up on that
 	// machine by hand is real and is not in this list.
@@ -106,6 +117,13 @@ type nodeView struct {
 func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// The fleet page's first paint asks for this. It contacts nothing, so
+		// the cards are on the screen in one round trip instead of after the
+		// slowest server in the fleet has answered. See writeNodeStateCached.
+		if r.URL.Query().Get("cached") == "1" {
+			s.writeNodeStateCached(w)
+			return
+		}
 		s.writeNodeState(w)
 	case http.MethodPost:
 		s.nodeAction(w, r)
@@ -115,6 +133,35 @@ func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) writeNodeState(w http.ResponseWriter) { s.writeNodeStateWith(w, nil) }
+
+// writeNodeStateCached answers with what is already written down and contacts
+// nothing.
+//
+// The fleet page used to wait on the live pass before it could draw anything:
+// four servers meant four SSH connections, and the page stood empty for as long
+// as the slowest of them took — four or five seconds — for information most of
+// which was already on disk. This is what the page draws immediately.
+//
+// Every row is marked pending, and none of them claims the server is up. What
+// is stored is a memory of the last answer, and a green light drawn from a
+// memory is exactly the kind of confident wrong thing this panel should not
+// show. The normal poll follows a moment later with rows that were asked.
+func (s *server) writeNodeStateCached(w http.ResponseWriter) {
+	list := node.List()
+	rows := make([]nodeView, len(list))
+	for i, n := range list {
+		rows[i] = nodeView{
+			Name: n.Name, Host: n.Host, SSHPort: n.SSHPort, User: n.User,
+			Fingerprint: n.Fingerprint, Added: n.Added, LastSeen: n.LastSeen,
+			Info: n.Info, Tunnels: manage.TunnelsOnNode(n.Name),
+			// Measured by this panel rather than asked of that server, so it is
+			// as current here as it is anywhere.
+			Net:     nodeNet.health(n.Name),
+			Pending: true,
+		}
+	}
+	writeJSON(w, map[string]any{"nodes": rows})
+}
 
 // writeNodeWarning is the fleet state with one thing to say about it.
 func (s *server) writeNodeWarning(w http.ResponseWriter, warning string) {
@@ -138,6 +185,7 @@ func (s *server) writeNodeStateWith(w http.ResponseWriter, extra map[string]any)
 			Name: n.Name, Host: n.Host, SSHPort: n.SSHPort, User: n.User,
 			Fingerprint: n.Fingerprint, Added: n.Added, LastSeen: n.LastSeen,
 			Info: n.Info, Tunnels: manage.TunnelsOnNode(n.Name),
+			Net: nodeNet.health(n.Name),
 		}
 		if run == nil {
 			continue

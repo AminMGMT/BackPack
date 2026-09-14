@@ -87,6 +87,35 @@ func Get() Snapshot {
 }
 
 // LoadString formats the three load averages the way uptime(1) does.
+// CPUPercentOver samples the processor across a real window.
+//
+// Get's figure is the instantaneous one — cpu.Percent with a zero interval,
+// which reports the delta since the last call in this process. In a long-lived
+// process (the panel, the monitor) that is a sensible few seconds of history
+// and costs nothing, which is why Get uses it.
+//
+// In a process that exists to answer one question and exit it means nothing at
+// all. `backpack node exec` is exactly that, and it is how a panel reads a
+// managed server: there is no previous call, so the only delta available is the
+// one since the package initialised microseconds earlier. Over a window that
+// short /proc/stat has usually not ticked, and gopsutil's own arithmetic then
+// returns 0 when nothing moved and 100 when a single jiffy landed. That is why
+// a managed server's card jumped between 0%, 100% and 50% on every poll while
+// the machine sat idle — the readings were not noisy, they were meaningless.
+//
+// Sampling over a real window costs that window once per call, which is the
+// price of a figure that means anything in a one-shot process.
+func CPUPercentOver(d time.Duration) float64 {
+	if d <= 0 {
+		d = 200 * time.Millisecond
+	}
+	pct, err := cpu.Percent(d, false)
+	if err != nil || len(pct) == 0 {
+		return 0
+	}
+	return Round1(pct[0])
+}
+
 func (s Snapshot) LoadString() string {
 	return fmt.Sprintf("%.2f, %.2f, %.2f", s.Load1, s.Load5, s.Load15)
 }

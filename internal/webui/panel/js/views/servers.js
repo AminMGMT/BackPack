@@ -38,33 +38,7 @@ function builtThere(n) {
     : `The ${c} tunnels built there from this panel keep running`;
 }
 
-/* The mark behind a server card.
- *
- * A rack, drawn in the same line style as every icon in the panel and scaled up
- * until it is architecture rather than iconography. It sits under the address
- * and bleeds off the right edge, faint enough to be texture — the card has to
- * read exactly as well with it as without, so it is never the thing the eye
- * lands on.
- *
- * The top unit's light is the only part that means anything: it takes the
- * connected colour, so the card's state is legible from its shape alone.
- */
-const RACK_SVG = `<svg class="sv-bg" viewBox="0 0 120 150" aria-hidden="true" focusable="false">
-  <g vector-effect="non-scaling-stroke">
-    <rect x="14" y="10" width="92" height="36" rx="7"/>
-    <rect x="14" y="56" width="92" height="36" rx="7"/>
-    <rect x="14" y="102" width="92" height="36" rx="7"/>
-    <path d="M74 22h20M74 28h14"/>
-    <path d="M74 68h20M74 74h14"/>
-    <path d="M74 114h20M74 120h14"/>
-    <path d="M28 34h30M28 80h30M28 126h30"/>
-    <circle class="led" cx="28" cy="25" r="3.4"/>
-    <circle cx="28" cy="71" r="3.4"/>
-    <circle cx="28" cy="117" r="3.4"/>
-  </g>
-</svg>`;
-
-/* The ground every server card sits on.
+/* The ground the add-a-server form sits on.
  *
  * Two wide roads across, two down, a scatter of smaller streets, some blocks
  * and a pin in the middle. The roads are drawn on rather than faded in — the
@@ -198,92 +172,93 @@ export function serversView(ctx) {
 
   /* One server, as a card.
    *
-   * The same card as a tunnel's, because they sit in the same grid and a
-   * fleet page whose cards are a different size and shape from the tunnels
-   * page reads as a different product. Same shell, same height, same bottom
-   * band of actions.
+   * It used to carry a street map behind it — texture rather than a place, and
+   * honest in its own note about knowing nothing of where the server was. What
+   * it cost was height: the card stood as tall as a tunnel's, and a fleet of
+   * four would not fit on a screen. Comparing four servers at a glance is what
+   * this page is for, so the drawing went and the card closed up around what it
+   * actually says.
    *
-   * What differs is what is behind it. A tunnel card has its chart there; a
-   * server card has a map, because the thing a managed server has that a
-   * tunnel does not is a place. Clicking draws it — graph paper gives way to
-   * roads, blocks and a pin.
+   * The shell stays the tunnel card's — same material, same corner, same bottom
+   * band — because the two are what this panel is made of. Only the height
+   * differs now, and they are never on screen together.
    *
-   * The map is a drawing, not a map. It has no idea where the server is and
-   * does not pretend to: no tiles are fetched, nothing is geocoded, and the
-   * roads are the same roads on every card. It is texture behind an address,
-   * and saying so here is cheaper than somebody later believing it.
+   * Two of the things on it move on every poll: the processor and memory
+   * readings, and the loss and round trip measured to it. Those are written
+   * into the card that already exists rather than drawn by rebuilding it; see
+   * paintLive and the signature below.
    */
   function nodeCard(n) {
     const i = n.info || {};
-    const built = (n.tunnels || []).length;
     const dash = v => (v && v !== '-' ? v : '—');
-    const login = `${n.user}@${n.host}${n.sshPort && n.sshPort !== 22 ? ':' + n.sshPort : ''}`;
     const mine = (store.get().stats?.version || '').trim();
     const behind = n.online && i.version && mine && i.version !== mine;
 
+    /* One line of identity under the name: the address, where it is, which
+       Backpack it runs, how long it has been up. They were four separate
+       blocks — an oversized address, a two-cell facts grid, a decorative map
+       behind all of it — on a card tall enough that a fleet of four did not
+       fit on a screen. They are facts of one or two words each; a row of them
+       reads faster than a layout of them. */
+    const meta = [
+      dash(i.ipv4) !== '—' ? i.ipv4 : n.host,
+      i.country || i.city || '',
+      i.version ? 'v' + String(i.version).replace(/^v/, '') : '',
+    ].filter(Boolean);
+
     const card = el('div', {
-      class: 'mp7' + (n.online ? ' live' : ''),
+      class: 'mp7' + (n.online ? ' live' : '') + (n.pending ? ' pend' : ''),
       'data-name': n.name,
     }, [
-      el('div', { class: 'mp-field' }, [
-        el('div', { class: 'mp-map', html: MAP_SVG }),
-        el('div', { class: 'mp-wash' }),
-      ]),
-
       el('div', { class: 'mp-in' }, [
         el('div', { class: 'mp-top' }, [
-          el('span', { class: 'mp-ic', html: MAPICON_SVG }),
           el('div', { class: 'mp-id' }, [
             el('b', { text: n.name }),
             el('small', { text: i.hostname || n.host }),
           ]),
           el('span', { class: 'mp-pill' }, [
-            el('i'), el('span', { text: n.online ? 'Reachable' : 'Unreachable' }),
+            el('i'),
+            el('span', { text: n.pending ? 'Checking' : (n.online ? 'Reachable' : 'Unreachable') }),
           ]),
         ]),
 
-        el('div', { class: 'mp-addr' }, [
-          el('b', { text: dash(i.ipv4) !== '—' ? i.ipv4 : n.host }),
-          i.ipv6 && i.ipv6 !== '-' ? el('em', { text: i.ipv6 }) : null,
-        ]),
+        el('div', { class: 'mp-meta' },
+          meta.map((v, k) => el('span', { class: k ? 'q' : 'a', text: v }))
+            .concat([el('span', { class: 'q', 'data-up': '', text: dash(i.uptime) })])),
 
-        n.online ? null : el('div', { class: 'mp-why', text: n.why || 'It did not answer.' }),
+        n.online || n.pending ? null
+          : el('div', { class: 'mp-why', text: n.why || 'It did not answer.' }),
 
         el('div', { class: 'sp' }),
 
-        /* Two facts, in one strip above the actions: which Backpack is on that
-           machine, and how long it has been up. The system name and the tunnel
-           count were here too — the first is a thing you learn once, and the
-           second is on the tunnels page beside the tunnels it counts. */
-        el('div', { class: 'mp-facts' }, [
-          fact7('Backpack', dash(i.version)),
-          fact7('Uptime', dash(i.uptime)),
+        /* What the machine is doing, not only what it is. Read on that machine
+           when the panel asks it; nothing here can see another server's
+           processor.
+
+           The values are written into these elements on every poll rather than
+           the card being rebuilt around them — see paintLive. Drawn for a
+           pending row too, from the last reading, so the card does not change
+           shape a second later when the live answer lands. */
+        el('div', { class: 'mp-load' }, [
+          meter7('cpu', 'Processor', i.cpuPercent,
+            i.cpuCores ? `${i.cpuCores} core${i.cpuCores === 1 ? '' : 's'}` : ''),
+          meter7('mem', 'Memory', i.memPercent,
+            i.memTotal ? `${bytes(i.memUsed || 0)} / ${bytes(i.memTotal)}` : ''),
         ]),
 
-        /* What the machine is doing, not only what it is.
+        /* The path between this panel and that server.
          *
-         * The card said which Backpack and how long up — two things that are
-         * true all week — and nothing at all about load, so a node at 95% and
-         * an idle one were the same card. These are read on that machine when
-         * the panel asks it; nothing here can see another server's processor.
-         *
-         * Shown only when it answered. A meter drawn at zero for a server that
-         * did not reply is a reading, and a wrong one. */
-        n.online && (i.cpuPercent !== undefined || i.memPercent !== undefined)
-          ? el('div', { class: 'mp-load' }, [
-              meter7('Processor', i.cpuPercent,
-                i.cpuCores ? `${i.cpuCores} core${i.cpuCores === 1 ? '' : 's'}` : ''),
-              meter7('Memory', i.memPercent,
-                i.memTotal ? `${bytes(i.memUsed || 0)} / ${bytes(i.memTotal)}` : ''),
-            ])
-          : null,
+         * This space used to repeat the login the panel connects with — the
+         * user, an at sign and the address — all of which is already on the
+         * card or in the form behind it. The panel runs on the Iran side and
+         * every managed server sits at the far end of the route that matters,
+         * so the one thing worth saying here is how that route behaves. */
+        el('div', { class: 'mp-net', 'data-net': '' }, netText(n)),
 
         el('div', { class: 'mp-rule' }),
       ]),
 
       el('div', { class: 'mp-foot' }, [
-        el('span', { class: 'mp-login', text: login }),
-        el('span', { class: 'sp' }),
         /* Upgrade only when there is something to upgrade to. A button that is
            always there and usually does nothing is a button people stop
            reading; this one appears when the panel has moved on and the server
@@ -315,23 +290,6 @@ export function serversView(ctx) {
       el('button', { class: 'btn7', text: 'Cancel' }),
     ]);
     card.append(confirm);
-
-    /* The tilt follows the pointer and springs back when it leaves. A surface
-       effect only: it moves nothing that has to be read or clicked. */
-    const clamp = v => Math.max(-1, Math.min(1, v));
-    card.addEventListener('mousemove', ev => {
-      const r = card.getBoundingClientRect();
-      /* Clamped, because a pointer just outside the card still fires this on
-         the way past, and an unclamped ratio turned eight degrees into forty. */
-      const dx = clamp((ev.clientX - (r.left + r.width / 2)) / (r.width / 2));
-      const dy = clamp((ev.clientY - (r.top + r.height / 2)) / (r.height / 2));
-      card.style.setProperty('--ry', `${(dx * 4).toFixed(2)}deg`);
-      card.style.setProperty('--rx', `${(-dy * 4).toFixed(2)}deg`);
-    });
-    card.addEventListener('mouseleave', () => {
-      card.style.setProperty('--rx', '0deg');
-      card.style.setProperty('--ry', '0deg');
-    });
 
     const btns = [...card.querySelectorAll('.mp-foot button')];
     const upB = behind ? btns.shift() : null;
@@ -393,23 +351,77 @@ export function serversView(ctx) {
    * exactly; the caption underneath is what the percentage is a percentage of,
    * which is the part a bare "78%" leaves out. Above 90 it takes the warning
    * colour — the point at which a server is about to become somebody's
-   * evening. */
-  const meter7 = (label, pct, caption) => {
-    const v = Math.max(0, Math.min(100, Number(pct) || 0));
-    return el('div', { class: 'mp-m' + (v >= 90 ? ' hot' : v >= 75 ? ' warm' : '') }, [
+   * evening.
+   *
+   * `key` is how paintLive finds it again: these are the two figures that move
+   * on every poll, and they are written into the elements already on the card
+   * rather than the card being made again around them. */
+  const meter7 = (key, label, pct, caption) => {
+    const v = pctOf(pct);
+    return el('div', { class: 'mp-m' + hotness(v), 'data-m': key }, [
       el('div', { class: 'mp-mh' }, [
         el('span', { text: label }),
         el('b', { text: v.toFixed(0) + '%' }),
       ]),
       el('div', { class: 'mp-bar' }, el('i', { style: `width:${v.toFixed(1)}%` })),
-      caption ? el('em', { text: caption }) : null,
+      el('em', { text: caption || '' }),
     ]);
   };
 
-  const fact7 = (k, v, warn) => el('div', { class: 'sv-fact' + (warn ? ' bad7' : '') }, [
-    el('span', { text: k }), el('b', { text: v }),
-    warn ? el('i', { text: warn }) : null,
-  ]);
+  const pctOf = v => Math.max(0, Math.min(100, Number(v) || 0));
+  const hotness = v => (v >= 90 ? ' hot' : v >= 75 ? ' warm' : '');
+
+  /* What to say about the path to a server.
+   *
+   * A probe that got no reply at all is reported as unknown rather than as
+   * total loss. ICMP is blocked outright on plenty of hosts and inside plenty
+   * of containers, and ping cannot tell that from a server dropping every
+   * packet — printing "100% loss" over a server that is working perfectly
+   * would be the card stating something false with confidence. */
+  function netText(n) {
+    const net = n.net || {};
+    if (!net.measured) return 'Packet loss —';
+    const loss = Number(net.lossPct) || 0;
+    const rtt = Number(net.rttMs) || 0;
+    return `Packet loss ${loss.toFixed(1)}% · RTT ${rtt.toFixed(0)} ms`;
+  }
+
+  /* The figures that move, written into the card that is already there.
+   *
+   * This is the other half of keeping the grid still. The signature below
+   * leaves these out on purpose, so a card whose processor ticked from 31% to
+   * 33% is not thrown away and built again — it is the same card with two
+   * numbers changed, which is what actually happened. The bar widths animate
+   * from where they were because the element they belong to never went away.
+   */
+  function paintLive(card, n) {
+    const i = n.info || {};
+    card.classList.toggle('live', !!n.online);
+    card.classList.toggle('pend', !!n.pending);
+
+    const up = card.querySelector('[data-up]');
+    if (up) up.textContent = (i.uptime && i.uptime !== '-') ? i.uptime : '—';
+
+    const set = (key, pct, caption) => {
+      const m = card.querySelector(`[data-m="${key}"]`);
+      if (!m) return;
+      const v = pctOf(pct);
+      m.className = 'mp-m' + hotness(v);
+      const b = m.querySelector('.mp-mh b');
+      if (b) b.textContent = v.toFixed(0) + '%';
+      const bar = m.querySelector('.mp-bar i');
+      if (bar) bar.style.width = v.toFixed(1) + '%';
+      const cap = m.querySelector('em');
+      if (cap) cap.textContent = caption || '';
+    };
+    set('cpu', i.cpuPercent,
+      i.cpuCores ? `${i.cpuCores} core${i.cpuCores === 1 ? '' : 's'}` : '');
+    set('mem', i.memPercent,
+      i.memTotal ? `${bytes(i.memUsed || 0)} / ${bytes(i.memTotal)}` : '');
+
+    const net = card.querySelector('[data-net]');
+    if (net) net.textContent = netText(n);
+  }
 
   /* Changing how a server is reached, inside the card it is about.
    *
@@ -523,8 +535,28 @@ export function serversView(ctx) {
    */
   const cards = new Map();   // name -> { el, sig }
 
-  const sigOf = d => JSON.stringify([d.online, d.why, d.host, d.user, d.sshPort,
-    d.lastSeen, d.tunnels || [], d.info || {}]);
+  /* What a card draws, minus the things that move.
+   *
+   * The readings are left out on purpose, and this is the whole fix for cards
+   * that looked like they were reloading: the signature used to be built from
+   * `d.info` whole and from `d.lastSeen`. Both change on every successful poll
+   * — the processor by a percent, the timestamp by six seconds — so no
+   * signature ever matched, every card was replaced four times a minute, and
+   * the entrance animation ran again each time. The reconcile below was
+   * written to prevent exactly that and was defeated by what it was comparing.
+   *
+   * Everything here is a fact that holds between polls. The readings are
+   * written into the card that already exists; see paintLive. It is the same
+   * split the tunnel cards make for their charts.
+   */
+  const sigOf = d => {
+    const i = d.info || {};
+    return JSON.stringify([
+      d.online, d.why, d.host, d.user, d.sshPort, d.pending, d.tunnels || [],
+      i.hostname, i.version, i.os, i.distro, i.ipv4, i.ipv6,
+      i.country, i.city, i.isp, i.cpuCores, i.memTotal,
+    ]);
+  };
 
   function reconcile(nodes) {
     const keep = new Set(nodes.map(n => n.name));
@@ -543,20 +575,38 @@ export function serversView(ctx) {
         else fleet.prepend(fresh);
         held = { el: fresh, sig };
         cards.set(n.name, held);
-      } else if (at ? held.el.previousElementSibling !== at : fleet.firstElementChild !== held.el) {
-        // Order changed — move it rather than rebuild it.
-        if (at) at.after(held.el); else fleet.prepend(held.el);
+      } else {
+        if (at ? held.el.previousElementSibling !== at : fleet.firstElementChild !== held.el) {
+          // Order changed — move it rather than rebuild it.
+          if (at) at.after(held.el); else fleet.prepend(held.el);
+        }
+        // Nothing structural changed, so only the readings are written.
+        paintLive(held.el, n);
       }
       at = held.el;
     }
   }
 
-  /* ---- the poll ---- */
+  /* ---- the poll ----
+   *
+   * The first paint comes from what the panel already knows, because the live
+   * listing opens a connection to every server and the page cannot draw until
+   * the slowest of them has answered — four or five seconds on a fleet of
+   * four, for a name, an address and a version that were all on disk. The
+   * cached answer puts the cards on the screen in one round trip, marked as
+   * not yet checked, and the live pass a moment later fills in reachability
+   * and the readings without rebuilding them.
+   */
   let timer = null;
   const tick = async () => {
     try { paint(await api.nodes()); } catch (e) { /* the page keeps what it has */ }
   };
-  tick();
+
+  (async () => {
+    try { paint(await api.nodesCached()); } catch (e) { /* the live pass follows */ }
+    tick();
+  })();
+
   timer = setInterval(tick, 6000);
   ctx.setTeardown(() => clearInterval(timer));
 }

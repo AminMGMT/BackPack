@@ -53,6 +53,32 @@ teardown to pin. They are left as they are.
 
 ### Added
 
+- **Packet loss and round trip from the panel to every managed server.** The
+  bottom of a server card repeated the login it was reached with — the user, an
+  at sign and the address, all of which are already on the card or in the form
+  behind it. The panel runs on the Iran side and every managed server sits at
+  the far end of the route that matters, so that space now says how the route is
+  behaving. Loss rather than latency alone, because latency on these paths is
+  mostly distance and does not change, while loss is what a filtered or
+  congested route does first and what a tunnel over it feels. The fleet is
+  measured together every five seconds, in the background, so no request ever
+  waits on a ping.
+
+  A probe that gets no reply is reported as unknown rather than as total loss.
+  ICMP is blocked outright on plenty of hosts and inside plenty of containers,
+  and ping cannot tell that from a server dropping every packet — both come back
+  as 100% loss, and printing that would put a confident, wrong figure on a card
+  whose server is working perfectly.
+
+- **The server card was redesigned around what it says.** It carried a street
+  map — texture behind an address, and honest in its own note about knowing
+  nothing of where the server was — on a card tall enough that a fleet of four
+  did not fit on a screen, which is the one thing that page is for. The drawing
+  and the pointer tilt are gone, the identity is one line (address, place,
+  version, uptime) instead of four blocks, and the card is a third shorter. The
+  shell stays the tunnel card's, since the two are what this panel is made of
+  and they are never on screen together.
+
 - **A forwarded port can name the local address it binds to, on every reverse
   transport.** `85.11.12.13:443=127.0.0.1:2053` pins that listener to one IP
   instead of to every interface, so a multi-homed server can carry the control
@@ -76,6 +102,40 @@ teardown to pin. They are left as they are.
   table regardless.
 
 ### Fixed
+
+- **A managed server's processor reading was arithmetic, not a measurement.**
+  The card jumped between 0%, 100% and 50% on every poll while the machine sat
+  idle. `sysstat.Get` reads the processor with a zero interval — the delta since
+  the last call in the same process — which is right for the panel and the
+  monitor, both of which are long-lived and call it on a timer. A managed server
+  is read by `backpack node exec`, which starts, answers one question and exits:
+  there is no previous call, so the only delta available is the one since the
+  package initialised microseconds earlier. Over a window that short /proc/stat
+  has usually not ticked, and gopsutil's own arithmetic then returns 0 when
+  nothing moved and 100 when a single jiffy landed. The node path samples over a
+  real 200 ms window now; nothing else changed, because everywhere else the
+  instantaneous reading was already correct and is on a hot path.
+
+- **The fleet page rebuilt every card four times a minute.** The grid already
+  reconciled — a card whose content had not changed was meant to be left alone —
+  and was defeated by what it compared: the signature was built from the
+  server's whole `info` object and from `lastSeen`, so the processor moving by a
+  percent and the timestamp moving by six seconds meant no signature ever
+  matched. Every card was replaced on every poll and its entrance animation ran
+  again, which is the flicker the report described as the cards constantly
+  reloading. The readings are out of the signature now and written into the card
+  that already exists, which is the split the tunnel cards have always made for
+  their charts.
+
+- **The fleet page stood empty until the slowest server answered.** Every card
+  asks its server whether it is up, and asking means an SSH connection; four
+  servers meant four or five seconds of blank page for a name, an address and a
+  version that were already on disk. The first paint is served from what the
+  panel already knows and contacts nothing, and the live pass follows on the
+  normal poll and fills in reachability and the readings without rebuilding the
+  cards. Rows drawn that way are marked pending and never claim a server is up:
+  what is stored is a memory, and a green light drawn from a memory is worse
+  than a grey one.
 
 - **The Overview's daily traffic strip froze on the day it was first drawn.**
   The month of per-day totals was read once and then never again: the guard

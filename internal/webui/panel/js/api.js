@@ -94,6 +94,11 @@ export const tunnelOptions = () => get('/api/tunnel/options');
    thing — the fleet — and each returns the state that follows, so the screen
    never has to guess what changed. */
 export const nodes = () => get('/api/nodes');
+/* The same fleet, answered from what the panel already knows and contacting no
+   server. The fleet page draws this first — otherwise the page stands empty
+   until the slowest machine in the fleet has answered — and then replaces it
+   with the live listing above. */
+export const nodesCached = () => get('/api/nodes?cached=1');
 const nodePost = form => post('/api/nodes', new URLSearchParams(form));
 export const nodeRemove = name => nodePost({ action: 'remove', name });
 /* Adding reaches the server while the operator waits, and installs Backpack on

@@ -286,6 +286,13 @@ func cachedAddrs() (v4, v6 string) {
 	return v4, v6
 }
 
+// nodeCPUWindow is how long the processor is watched before it is reported.
+//
+// Long enough that /proc/stat has ticked several times at the usual 100 Hz, so
+// the figure is a measurement rather than a coin toss; short enough that it is
+// lost in the round trip of the SSH call that asked for it.
+const nodeCPUWindow = 200 * time.Millisecond
+
 // LocalInfo describes this machine.
 func LocalInfo() Info {
 	host, _ := os.Hostname()
@@ -301,7 +308,12 @@ func LocalInfo() Info {
 		Distro:   m.OS,
 		Uptime:   sysstat.HumanDuration(m.Uptime),
 
-		CPUPercent: m.CPUPercent,
+		// Sampled over a real window rather than taken from the snapshot. This
+		// runs inside `backpack node exec`, which starts, answers and exits, so
+		// the snapshot's instantaneous reading has no earlier sample to
+		// subtract and comes back as 0 or 100 almost at random. See
+		// sysstat.CPUPercentOver.
+		CPUPercent: sysstat.CPUPercentOver(nodeCPUWindow),
 		CPUCores:   m.CPUCores,
 		MemPercent: m.MemPercent,
 		MemUsed:    m.MemUsed,
