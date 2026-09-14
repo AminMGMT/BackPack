@@ -77,6 +77,43 @@ teardown to pin. They are left as they are.
 
 ### Fixed
 
+- **The Overview's daily traffic strip froze on the day it was first drawn.**
+  The month of per-day totals was read once and then never again: the guard
+  deciding whether to fetch tested the fetched value itself, so the first
+  success stopped every later attempt for as long as the tab lived — and the
+  panel is a PWA, so tabs live for days. The total above the strip kept rising
+  the whole time, because that figure is recomputed from the metrics files on
+  every four-second poll and never went through this path at all, which is what
+  made the two disagree and sent the report looking at the sampler, the API and
+  the cache, where nothing was wrong. The strip refetches every five minutes
+  now, releases its in-flight guard even when a round fails, and its repaint
+  signature is built from the totals so new data is actually drawn.
+
+- **The panel reported the wrong country, city and network operator for the
+  server.** The public address came solely from an echo service — ipify and the
+  like — which answers a different question: where this host's *outbound*
+  traffic appears to come from. That matches the server's own address on an
+  ordinary VPS and parts company behind NAT, on a multi-homed box whose default
+  route is not the interface users arrive on, and most sharply on a server that
+  routes its own traffic through another tunnel, where the echo returns the far
+  end of that tunnel. The geo lookup then ran on that address, so Location and
+  ISP inherited the error — one report had its server listed in Baku, on an
+  operator it has no relationship with.
+
+  The machine's own interfaces are asked first now, and only a host holding no
+  globally routable address of its own — the genuine NAT case — falls back to
+  the echo. Where several public addresses are held, the one a server tunnel is
+  bound to wins, since that is the address clients are told to reach. Carrier
+  grade NAT (100.64.0.0/10) is excluded along with the private ranges, because
+  `net.IP.IsPrivate` does not cover it and it is exactly the kind of address
+  that looks public enough to be reported and is not. The common case no longer
+  waits on a third-party HTTP call at all.
+
+  The panel also says which of the two sources it used, and marks Location, ISP
+  and IPv4 as inferred when they rest on the echo rather than on an address this
+  machine holds — the three are one answer, and presenting a guess among them as
+  a finding is what made this worth reporting rather than worth checking.
+
 - **A port range refused to start when it named a bind address.**
   `10.0.0.5:443-450` died at startup with "invalid start port in range". Every
   transport tested for `-` before it looked for a host, so the whole string

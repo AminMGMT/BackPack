@@ -32,6 +32,15 @@ const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 /* The window is a month. The store keeps 720 hourly buckets and the endpoint
    takes ?days= up to 30, summed across every tunnel. */
 let dayTotals = null;
+/* When they were fetched. The strip used to be read once per page load and then
+   kept for as long as the tab lived: the guard below tested `dayTotals` itself,
+   so the first successful fetch stopped every later one. A panel left open —
+   and this is a PWA, so that is the normal case — went on drawing the same week
+   while the total above it moved every four seconds, because that total is
+   recomputed from the metrics files on each poll and never went through this
+   path at all. */
+let dayTotalsAt = 0;
+const DAY_TOTALS_TTL = 5 * 60 * 1000;
 
 async function loadDayTotals(names) {
   const sum = new Map();
@@ -194,10 +203,18 @@ function quickActions() {
 }
 
 function facts(s) {
+  /* Where the address came from decides how plainly the rows derived from it
+     can be stated. An address this machine holds on an interface is a fact; one
+     inferred from how the host appears to an outside echo service is a guess,
+     and a wrong one whenever egress leaves by another path — behind NAT, on a
+     multi-homed box, or on a server routing its own traffic through another
+     tunnel. Location and ISP are looked up from that address, so they inherit
+     the doubt and are marked with it rather than presented as findings. */
+  const from = s.ipv4Source === 'echo' ? ' (inferred)' : '';
   const rows = [
     ['Host', s.hostname], ['Version', s.version], ['OS', s.os],
-    ['Location', s.location], ['ISP', s.isp],
-    ['IPv4', s.ipv4], ['IPv6', s.ipv6], ['Uptime', s.uptime],
+    ['Location' + from, s.location], ['ISP' + from, s.isp],
+    ['IPv4' + from, s.ipv4], ['IPv6', s.ipv6], ['Uptime', s.uptime],
     // Both of these have a row above when they are wrong. Here they are just
     // facts about the machine, which is what they are when they are right.
     ['Congestion', s.congestion ? s.congestion.toUpperCase() : ''],
@@ -368,8 +385,11 @@ export function overview(ctx) {
                ? ` · ${onlineNodes}/${nodes.length} servers connected` : ''}</span>`);
 
     region('ovFacts', JSON.stringify([s.hostname, s.version, s.os, s.location, s.isp,
-      s.ipv4, s.ipv6, s.uptime, s.congestion, s.proxyEnabled, s.proxyRunning,
-      s.proxyType, s.proxyPort]), facts(s));
+      // The source is in the signature because it is in what facts() draws: a
+      // panel whose address stops being inferred and becomes known has to lose
+      // the "(inferred)" marks, and a signature that omitted it would keep them.
+      s.ipv4, s.ipv4Source, s.ipv6, s.uptime, s.congestion, s.proxyEnabled,
+      s.proxyRunning, s.proxyType, s.proxyPort]), facts(s));
 
     region('ovChips', JSON.stringify([sent, recv, up, tuns.length, onlineNodes, nodes.length]),
       `<span class="tk-chip"><i class="up"></i>${esc(bytes(sent))} sent</span>
@@ -405,10 +425,14 @@ export function overview(ctx) {
      tunnel list rather than asking once and giving up. */
   let asked = false;
   const stop = store.subscribe(async state => {
-    if (asked || dayTotals || !state.tunnels?.length) return;
+    if (asked || !state.tunnels?.length) return;
+    if (dayTotals && Date.now() - dayTotalsAt < DAY_TOTALS_TTL) return;
     asked = true;
     try { await loadDayTotals(state.tunnels.map(t => t.name)); paint(); }
-    catch (e) { /* the card simply has no month */ }
+    catch (e) { /* the card keeps the month it already has */ }
+    // Stamped whichever way it went, so a provider that is failing is retried
+    // on the same cadence as a success rather than on every poll.
+    finally { asked = false; dayTotalsAt = Date.now(); }
   });
   ctx.setTeardown(() => { unsub(); stop(); });
 

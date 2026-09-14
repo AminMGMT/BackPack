@@ -26,10 +26,16 @@ type SystemStats struct {
 	OS       string `json:"os"`
 	Uptime   string `json:"uptime"`
 
-	IPv4     string `json:"ipv4"`
-	IPv6     string `json:"ipv6"`
-	Location string `json:"location"`
-	ISP      string `json:"isp"`
+	IPv4 string `json:"ipv4"`
+	IPv6 string `json:"ipv6"`
+	// Where IPv4 was decided from — "interface" when the machine holds the
+	// address itself, "echo" when it had to be inferred from how this host
+	// appears to an outside service. Location and ISP are looked up from this
+	// address, so when it is the inferred one the panel says so rather than
+	// presenting a guess as a fact.
+	IPv4Source string `json:"ipv4Source"`
+	Location   string `json:"location"`
+	ISP        string `json:"isp"`
 
 	CPUPercent float64 `json:"cpuPercent"`
 	CPUCores   int     `json:"cpuCores"`
@@ -278,6 +284,7 @@ var (
 // is renumbered.
 type identityInfo struct {
 	ipv4, ipv6, location, isp string
+	ipv4Source                string
 }
 
 var (
@@ -308,7 +315,8 @@ func identity() identityInfo {
 }
 
 func refreshIdentity() {
-	next := identityInfo{ipv4: manage.PublicIPv4(), ipv6: manage.PublicIPv6()}
+	ipv4, ipv4Source := manage.PublicIPv4Detail()
+	next := identityInfo{ipv4: ipv4, ipv4Source: ipv4Source, ipv6: manage.PublicIPv6()}
 	if g := geo.Lookup(next.ipv4); g != nil {
 		next.location = strings.Trim(strings.TrimSpace(g.City+", "+g.Country), ", ")
 		next.isp = g.ISP
@@ -321,7 +329,10 @@ func refreshIdentity() {
 	// Keep what we already knew when a round comes back empty: a lookup that
 	// fails once should blank nothing on the page.
 	if next.ipv4 != "" {
-		idCur.ipv4 = next.ipv4
+		// The source travels with the address it describes: keeping one and
+		// replacing the other would label this address with where the previous
+		// one came from.
+		idCur.ipv4, idCur.ipv4Source = next.ipv4, next.ipv4Source
 	}
 	if next.ipv6 != "" {
 		idCur.ipv6 = next.ipv6
@@ -372,6 +383,7 @@ func GatherSystem() SystemStats {
 	// third parties, and this endpoint is polled every few seconds.
 	id := identity()
 	s.IPv4, s.IPv6, s.Location, s.ISP = id.ipv4, id.ipv6, id.location, id.isp
+	s.IPv4Source = id.ipv4Source
 
 	s.MonitorRunning = manage.MonitorRunning()
 	s.Congestion, s.CongestionWanted = network.TunnelCongestion()
