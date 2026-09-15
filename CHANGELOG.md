@@ -74,10 +74,73 @@ teardown to pin. They are left as they are.
   map — texture behind an address, and honest in its own note about knowing
   nothing of where the server was — on a card tall enough that a fleet of four
   did not fit on a screen, which is the one thing that page is for. The drawing
-  and the pointer tilt are gone, the identity is one line (address, place,
-  version, uptime) instead of four blocks, and the card is a third shorter. The
-  shell stays the tunnel card's, since the two are what this panel is made of
-  and they are never on screen together.
+  and the pointer tilt are gone, and the identity is one line (address, place,
+  version, uptime) instead of four blocks. The shell stays the tunnel card's,
+  since the two are what this panel is made of and they are never on screen
+  together.
+
+  The height that saved was spent again, on purpose, by the gauge below — so the
+  card ends this release taller than the one it replaced rather than shorter.
+  What it is not is taller *and* carrying a drawing that measures nothing, which
+  is the trade the map failed.
+
+- **The server card's ground is a gauge.** Two rings of dots sit behind it: the
+  outer one is the processor, the inner one memory, and the lit share of each
+  ring is the share of that resource in use. The processor figure is repeated in
+  the middle of the ring that draws it, so the card can be read across a room —
+  a fleet page of mostly dark rings is a fleet with headroom, and a full bright
+  one is the server that is about to become somebody's evening.
+
+  It is a gauge rather than a ground because this card has been here before. The
+  street map was removed for measuring nothing, and dots arranged on a circle
+  would have been the same mistake in a new shape: the rings are spaced to a
+  value or they have no business being drawn. The guard that used to assert this
+  card carried no decoration now asserts that what it carries is written from a
+  reading.
+
+  The colour is reachability rather than load, because a machine nobody can
+  reach has no interesting processor: the whole gauge goes to the error colour
+  when the server is unreachable, and a server that has not been asked yet
+  lights nothing at all rather than lighting zero.
+
+- **A server that cannot be reached says so in red.** The status dot was the
+  same grey for "unreachable" as for "not asked yet", so a server that had
+  dropped off the network looked like one the page simply had not got to.
+  Reachable is the ok colour, unreachable is the error one, and "checking" —
+  which is the card drawn from what was written down before anyone asked — stays
+  neutral, because it is claiming nothing.
+
+- **A tunnel card says which window its chart covers, and how far the tunnel
+  moved across it.** The chart was always the last twelve minutes and never said
+  so. It now carries the window it is drawing — live, the past 24 hours, 7 days
+  or 30 — chosen per card and remembered, with a trend figure in the header for
+  how much the window moved end to end.
+
+  The unit follows the window and has to. Live and 24 hours are rates, which is
+  what the tunnel was carrying at that moment; the day windows are totals,
+  because a total is what an hourly bucket adds up to, and drawing those as a
+  rate would put a per-day number on an axis that means per-second. The footer's
+  peak, low and average follow the same rule, so the chart and the figures under
+  it can never disagree about what they are counting.
+
+  The longer windows are read from the history the monitor already writes, and
+  only when one is asked for: the dashboard polls every few seconds, and putting
+  a per-tunnel history fetch on that path would be one request per tunnel per
+  poll for a figure nobody had asked to see. A window whose history has not
+  arrived keeps drawing the live one rather than emptying the card.
+
+  The trend is deliberately not in the tunnel's own colour. That colour is the
+  tunnel's state and nothing else — it was the direction of the traffic once,
+  which meant the same green stood for "carrying more" on a tunnel that was
+  down. The arrow carries the direction; the colour stays out of it.
+
+- **The dotted ground under a tunnel's chart is back, on terms that answer why
+  it went.** It was removed for competing with the line: the dots are not spaced
+  to any value, so they measure nothing, and on a dark card an unmasked field of
+  light dots is the brightest thing on it. It is masked from the left now, so it
+  exists under the chart and has faded out before it reaches any text, and it is
+  faint enough to read as ground rather than as a scale. The test that used to
+  assert its absence now asserts those two conditions instead.
 
 - **A forwarded port can name the local address it binds to, on every reverse
   transport.** `85.11.12.13:443=127.0.0.1:2053` pins that listener to one IP
@@ -143,6 +206,18 @@ teardown to pin. They are left as they are.
   is where services like that one live. On top of that, the ports the configured
   tunnels listen on are now written to `net.ipv4.ip_local_reserved_ports`, so a
   tunnel port that does fall inside the range cannot be taken either.
+
+- **The filled area under a tunnel's chart outlined itself in white.** It drew a
+  line down the right of the chart, across the bottom and back up the left —
+  which read as an axis, and was not one: it is the closing edge of the filled
+  shape, traced because the shape was being stroked at all.
+
+  The panel sets `svg { stroke: currentColor }` once, for its icon set, and both
+  `fill` and `stroke` inherit in SVG. The line and the bars name a stroke and so
+  were given the tunnel's colour; the area names only a fill, inherited the
+  stroke meant for icons, and outlined itself in the card's text colour. The
+  chart clears the inherited stroke now, and the two elements that are meant to
+  carry one still take it.
 
 - **One busy port took down the whole tunnel, and then the whole process.**
   Every listener in the reverse transports answered a failed bind with
