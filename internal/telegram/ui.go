@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -159,12 +160,25 @@ func refreshAndBack(lang, refresh, back string) []btn {
 // changes state passes through actionReply, which is the single point where
 // write permission, the rate limit and the confirmation are checked — so a new
 // action cannot be added that quietly skips one of them.
+//
+// The one exception to "read-only screens are answered for anyone" is a screen
+// that prints a secret, which is checked here for the same reason and against
+// the same function.
 func route(c Config, u tgUser, data string) reply {
 	lang := c.Language()
 	verb, rest, _ := strings.Cut(data, ":")
 
 	switch verb {
 	case "nav":
+		// Most screens are readings, and a reading is answered for anyone on the
+		// admin list. A few are not readings at all — they print a credential —
+		// and those are gated here. See secretScreens.
+		if secretScreens[rest] && !c.canWrite(strconv.FormatInt(u.ID, 10)) {
+			r := navigate(c, lang, "home")
+			r.toast = tr(lang, "Your access is read-only.")
+			r.alert = true
+			return r
+		}
 		return navigate(c, lang, rest)
 	case "t":
 		return tunnelRoute(lang, rest)
@@ -190,6 +204,21 @@ var navScreens = []string{
 	"home", "overview", "tunnels", "system", "alerts",
 	"health", "history", "audit", "tools", "update", "webui", "support",
 }
+
+// secretScreens names the nav screens that hand over a credential rather than
+// report a reading. They need write permission even though they change nothing.
+//
+// "Read-only" was written as "every screen, no actions", and every nav screen
+// was answered for anyone on the admin list on exactly that basis. nav:webui
+// changes nothing — it prints the web panel's password in plain text. But the
+// panel is root on this machine: every tunnel and its token, the backups, the
+// updater, the Telegram settings. So the account that had deliberately been
+// denied the restart button could take the whole server by opening a different
+// screen, and /webui reached it without even a button to notice.
+//
+// Handing somebody a credential is a write in everything but name, so it is
+// checked against the same canWrite every action is.
+var secretScreens = map[string]bool{"webui": true}
 
 // navigate serves the read-only screens.
 func navigate(c Config, lang, name string) reply {

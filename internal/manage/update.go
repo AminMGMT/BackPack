@@ -571,6 +571,15 @@ func ApplyUpdate(logf func(string)) error {
 		optimize.ApplyQuiet(ReservedPorts())
 	}
 
+	// Correct what an older version left on this machine. Everything it touches
+	// is a value this program wrote itself and later decided was wrong, so it is
+	// applied rather than offered — see internal/manage/migrate.go. Before the
+	// restarts below on purpose, the same as the tuning above: a tunnel should
+	// come back up on the corrected settings, not inherit the old ones until
+	// something else happens to bounce it.
+	logf("Bringing this server up to date with " + tag + "...")
+	MigrateAfterUpdate(logf)
+
 	logf("Restarting services...")
 	RestartService(app.WebUIService)
 	// Installs from before the monitor service acquire it here, so upgrading

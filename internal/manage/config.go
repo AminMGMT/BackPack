@@ -430,7 +430,7 @@ func (s TunnelSpec) Save() (string, error) {
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(app.ConfigPath(s.Name), []byte(s.Render()), 0644); err != nil {
+	if err := app.WriteFileAtomic(app.ConfigPath(s.Name), []byte(s.Render()), app.TunnelConfigMode); err != nil {
 		return "", err
 	}
 	if err := writeUnit(s.Name); err != nil {

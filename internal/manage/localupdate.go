@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/optimize"
 )
 
 // Updating from a release the operator downloaded themselves.
@@ -202,6 +203,18 @@ func ApplyLocalUpdate(u LocalUpdate, logf func(string)) error {
 		_ = os.MkdirAll(app.ConfigDir, 0755)
 		_ = os.WriteFile(app.InstallPathFile, []byte(app.InstallDir+"\n"), 0644)
 	}
+
+	// An offline install gets the same corrections as one from GitHub. It is
+	// the path taken on servers that cannot reach GitHub at all, which are the
+	// ones least likely to have anything else come along and fix them — see
+	// internal/manage/migrate.go, and ApplyUpdate for why both of these run
+	// before the restarts rather than after.
+	if optimize.WasApplied() {
+		logf("Re-applying kernel tuning (Optimize was run on this server)...")
+		optimize.ApplyQuiet(ReservedPorts())
+	}
+	logf("Bringing this server up to date with " + what + "...")
+	MigrateAfterUpdate(logf)
 
 	logf("Restarting services...")
 	RestartService(app.WebUIService)

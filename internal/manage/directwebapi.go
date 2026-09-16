@@ -248,7 +248,7 @@ func ApplyDirectTunnel(n NewDirectTunnel) (service string, active bool, created 
 	wasActive := IsActive(service)
 
 	if err := writeDirectConfig(name, body); err != nil {
-		_ = os.WriteFile(path, prev, 0644)
+		_ = app.WriteFileAtomic(path, prev, app.TunnelConfigMode)
 		return service, IsActive(service), false, err
 	}
 	if err := RestartService(service); err != nil {
@@ -295,7 +295,7 @@ func writeDirectConfig(name, body string) error {
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(app.ConfigPath(name), []byte(body), 0644); err != nil {
+	if err := app.WriteFileAtomic(app.ConfigPath(name), []byte(body), app.TunnelConfigMode); err != nil {
 		return err
 	}
 	if err := writeUnit(name); err != nil {
@@ -584,7 +584,7 @@ func EditDirectSettings(name string, e DirectEdit) error {
 	if _, err := toml.Decode(body, &check); err != nil {
 		return fmt.Errorf("the edit produced a config that does not parse: %w", err)
 	}
-	if err := os.WriteFile(app.ConfigPath(name), []byte(body), 0644); err != nil {
+	if err := app.WriteFileAtomic(app.ConfigPath(name), []byte(body), app.TunnelConfigMode); err != nil {
 		return err
 	}
 	return RestartService(app.ServiceName(name))

@@ -579,7 +579,7 @@ func applySpec(s TunnelSpec) error {
 
 	if _, err := s.Save(); err != nil {
 		// Save failed — put the original file back untouched.
-		_ = os.WriteFile(path, prev, 0644)
+		_ = app.WriteFileAtomic(path, prev, app.TunnelConfigMode)
 		return err
 	}
 	// Save alone won't reload an already-running unit — restart explicitly.
@@ -621,8 +621,8 @@ func applyRawConfig(name string, cfg []byte, note string) error {
 	}
 	wasActive := IsActive(service)
 
-	if err := os.WriteFile(path, cfg, 0644); err != nil {
-		_ = os.WriteFile(path, prev, 0644)
+	if err := app.WriteFileAtomic(path, cfg, app.TunnelConfigMode); err != nil {
+		_ = app.WriteFileAtomic(path, prev, app.TunnelConfigMode)
 		return err
 	}
 	if err := RestartService(service); err != nil {
@@ -644,7 +644,7 @@ func applyRawConfig(name string, cfg []byte, note string) error {
 // revertSpec restores a previous config file and brings the service back to the
 // state it was in before the edit.
 func revertSpec(path string, prev []byte, service string, wasActive bool) {
-	_ = os.WriteFile(path, prev, 0644)
+	_ = app.WriteFileAtomic(path, prev, app.TunnelConfigMode)
 	if wasActive {
 		_ = RestartService(service)
 	} else {

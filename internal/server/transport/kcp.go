@@ -720,6 +720,14 @@ func (s *KcpTransport) handleSession(g *kcpGen, session *smux.Session) {
 				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-incomingConn.timeCreated)
 				incomingConn.conn.Close()
 
+				// Free the slot this connection took on accept. It is otherwise
+				// released only by the handler goroutine, which never runs for a
+				// connection that timed out waiting to be paired — so a tunnel
+				// with max_connections set loses a slot to every timeout and
+				// eventually refuses everything. tcp and quic already do this;
+				// these four did not.
+				s.limits.release()
+
 				atomic.AddInt32(&s.streamCounter, -1)
 				<-counter
 				continue

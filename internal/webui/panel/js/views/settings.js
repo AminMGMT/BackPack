@@ -389,7 +389,13 @@ export function settingsView(ctx) {
             })) return;
             await api.setPassword({ password: pw });
             toast('Password changed — signing you out.');
-            setTimeout(() => { location.href = '/logout'; }, 1200);
+            /* api.base(), not a bare '/logout'. The panel lives under one
+               unguessable path segment and answers nothing outside it, so the
+               sign-out these two lines promise landed on a 404 and left the
+               operator holding a session cookie for a password that no longer
+               exists. The header's own logout link was always right, which is
+               why this only ever showed up here. */
+            setTimeout(() => { location.href = api.base() + '/logout'; }, 1200);
             return;
           }
           if (port) {
@@ -420,7 +426,7 @@ export function settingsView(ctx) {
         try {
           await api.setPassword({ password: pw });
           toast('Password changed — signing you out.');
-          setTimeout(() => { location.href = '/logout'; }, 1200);
+          setTimeout(() => { location.href = api.base() + '/logout'; }, 1200);
         } catch (e) { oops(e); }
       }));
 

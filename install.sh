@@ -28,10 +28,35 @@ err()  { echo -e "${RED}[x]${NC} $*" >&2; }
 REPO="AminMGMT/BackPack"
 BIN_PATH="/usr/local/bin/backpack"
 INSTALL_DIR="/root/BackPack"
-GO_VERSION="1.24.5"
-# toolchain already on the machine is not usable for a source build.
-GO_MIN_MINOR=24
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/tmp}")" 2>/dev/null && pwd || echo /tmp)"
+
+# Which Go the source build needs, and the oldest toolchain already on the
+# machine that is usable for it.
+#
+# Read from go.mod whenever it is beside this script, because go.mod is what
+# actually decides. The build runs with GOTOOLCHAIN=local on purpose — the
+# networks this installer targets frequently cannot reach the toolchain
+# downloader — and with that set, a local Go older than the `go` line does not
+# fall back to anything, it refuses.
+#
+# Pinning both numbers by hand is what broke it: go.mod moved to 1.26.0 while
+# these stayed at 1.24.5, so building from source could not succeed on any
+# machine. That is the path taken only when the release download has already
+# failed, which is to say on exactly the servers with the worst connectivity —
+# the ones least able to do anything else. The values below are the fallback for
+# a standalone `curl | bash`, where there is no go.mod to read and no source
+# build to do either.
+GO_VERSION="1.26.0"
+GO_MIN_MINOR=26
+if [[ -f "$SCRIPT_DIR/go.mod" ]]; then
+  gomod_go="$(grep -m1 -E '^go[[:space:]]+[0-9]+\.[0-9]+' "$SCRIPT_DIR/go.mod" | awk '{print $2}' || true)"
+  if [[ "$gomod_go" =~ ^[0-9]+\.([0-9]+)(\.[0-9]+)?$ ]]; then
+    # A `go` line may read "1.26" or "1.26.0"; a download URL needs all three.
+    if [[ -n "${BASH_REMATCH[2]}" ]]; then GO_VERSION="$gomod_go"; else GO_VERSION="${gomod_go}.0"; fi
+    GO_MIN_MINOR="${BASH_REMATCH[1]}"
+  fi
+  unset gomod_go
+fi
 
 if [[ $EUID -ne 0 ]]; then err "Please run as root (sudo)."; exit 1; fi
 

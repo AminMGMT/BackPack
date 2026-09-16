@@ -2,7 +2,6 @@ package manage
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -355,7 +354,7 @@ func applyEdit(t Tunnel, body string) {
 		tui.PressEnter()
 		return
 	}
-	if err := os.WriteFile(app.ConfigPath(t.Name), []byte(body), 0644); err != nil {
+	if err := app.WriteFileAtomic(app.ConfigPath(t.Name), []byte(body), app.TunnelConfigMode); err != nil {
 		tui.Error("Cannot write the config: " + err.Error())
 		tui.PressEnter()
 		return

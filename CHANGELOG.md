@@ -2,6 +2,143 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.8.2 — unreleased
+
+The serious findings of a section-by-section audit of the whole project, and the
+mechanism that lets a fix like these reach a server that already exists.
+
+That mechanism is the part worth reading first. Two of the fixes below change
+nothing for a server that already exists, because what they correct is not in
+the binary: it is a permission bit on a file written once at setup, and a kernel
+value written once and never read back. `ip_local_port_range` is the case that
+proves the point. It was corrected in v1.8.1, Health Check was taught to report
+it, and the engine went on widening it back on every single tunnel start — so an
+operator could optimize the machine, pass its own check, and be wide again the
+moment a tunnel restarted. An update now corrects the machine as well as the
+binary.
+
+### Security
+
+- **A read-only Telegram admin could read the web panel's password.** The bot
+  splits its admins into those who may act and those who may only look, and the
+  split was written as "every screen, no actions" — so every `nav:` screen was
+  answered for anyone on the admin list, and only the buttons that change
+  something were checked. That reading is right for eleven of the twelve
+  screens, which are readings: how much traffic, which tunnels are up, what the
+  last alert said.
+
+  The Web Panel screen is not a reading. It prints the panel's password in plain
+  text, and the panel is root on that machine — every tunnel and its token, the
+  backups, the updater, the bot's own settings. So the account that had
+  deliberately been denied the bot's restart button could take the whole server
+  by opening a different screen, and `/webui` reached it without a button to
+  notice. A screen that hands over a credential is now checked against the same
+  permission every action is.
+
+- **Tunnel configs are written `0600`.** A tunnel's config holds its token, and
+  on `tcp`, `udp` and `kcp` that token is the whole of what authorises a
+  connection to it. Every other file this program writes that holds a secret was
+  already `0600` — `telegram.json`, `webui.json`, the node registry, the TLS
+  key, the backups — and the tunnel configs alone were `0644`, so any account on
+  the box could read every token on it. Nine call sites across five files, which
+  is how they came to disagree; the mode is one constant now. Existing configs
+  are tightened by the migration below.
+
+  They are also written atomically now. These files are polled every two seconds
+  by the reload watcher and read on a timer by the panel and the monitor, and
+  five of the writers used a plain `os.WriteFile` while the atomic helper this
+  repository already has says in its own documentation that it exists for
+  exactly this.
+
+### Added
+
+- **An update now corrects the machine it is installed on, not only the binary.**
+  A fix that changes what a new install writes reaches nobody who is already
+  running. The servers that need it most are the ones that have been running
+  longest, and those are exactly the ones nothing rewrites.
+
+  So an update applies a list of corrections to what an older version left
+  behind: the tunnel configs on disk, and machine state no config holds. It
+  applies them without asking, and that is deliberate — everything on the list
+  is a value this program itself wrote and later decided was wrong, so a setting
+  the operator never chose is not one they should have to choose again. It is
+  also the limit: a migration that would overwrite a real decision does not
+  belong on the list, and each one says in its own words how it tells the two
+  apart. The ephemeral port range, for one, is corrected only when it reads back
+  the exact string the engine used to write.
+
+  Nothing is remembered between runs. A marker file recording "already applied"
+  would be wrong in both directions — a config restored from an older backup
+  would be skipped, and a value forced back by hand would stay forced back — so
+  every migration is idempotent, runs on every update, and writes only when
+  something is actually different. A migration that rewrites a config files what
+  it replaced in that tunnel's configuration history first, so an update that
+  changes a config is in the panel's Undo list like any other edit. It runs
+  before the tunnels restart, so they come back up on the corrected settings, and
+  it runs on the offline install too — that path is taken on servers that cannot
+  reach GitHub at all, which are the least likely to have anything else come
+  along and fix them. Nothing it does can fail an update; everything it changes,
+  and everything it tried and could not, is logged.
+
+  This release ships two migrations: the config permissions above, and the
+  ephemeral port range below.
+
+### Fixed
+
+- **The engine widened the ephemeral port range back on every start.** Optimize
+  sets `net.ipv4.ip_local_port_range` to the kernel's own `32768 60999` and
+  persists it, v1.8.1 fixed it there for exactly the reason recorded in that
+  release, and Health Check tells an operator whose machine is wide to go and run
+  Optimize. Then the engine's start-up tuning set it straight back to
+  `1024 65535` — on every tunnel, on every start.
+
+  A server could be optimized, pass its own health check, and be wide again the
+  moment anything restarted, with nothing anywhere saying so. The range is
+  machine-wide, it decides whether unrelated services can keep their own ports,
+  and it is persisted in a file the engine's tuning does not write; it belongs to
+  Optimize and the engine no longer touches it. A machine already carrying the
+  widened value is corrected by the migration above.
+
+- **A connection limit leaked a slot on every pairing timeout, on four of the
+  seven reverse transports.** Each of these reserves a slot the moment it accepts
+  a forwarded connection, deliberately, so a refused connection is refused before
+  it costs anything — and the handler goroutine gives the slot back when the
+  transfer ends. The pairing timeout is the one path where that goroutine never
+  runs: the client waited three seconds for a tunnel connection, none arrived,
+  and the connection was closed without ever reaching a handler.
+
+  `tcp` and `quic` freed the slot there. `tcpmux`, `wsmux`, `kcp` and `ws` did
+  not, so a tunnel with `max_connections` set lost a slot to every timeout and
+  eventually refused everything — with a limit that read correctly in the config
+  and a panel showing no connections at all. The shape is identical in all six,
+  which is why they are now checked together rather than one at a time.
+
+- **Exporting a backup from the panel returned 404.** The panel is served under
+  one unguessable path segment and answers nothing outside it, and every address
+  it asks for carries that path — except the one it navigates to rather than
+  fetches. Both Download buttons pointed at the root of the origin. The backup is
+  what an operator is told to take before an update.
+
+- **Signing out after a password change returned 404.** The same omission, twice,
+  in the second half of changing the panel password. The page says every device
+  is signed out including this one; what actually happened was a 404 and a
+  browser still holding a live session for a password that no longer existed. The
+  header's own logout link was always correct, which is why this only showed up
+  here.
+
+- **`install.sh` could not build from source.** It pinned Go 1.24.5 and accepted
+  any toolchain from 1.24 up, while `go.mod` requires 1.26.0. The build runs with
+  `GOTOOLCHAIN=local` on purpose — the networks this installer targets frequently
+  cannot reach the toolchain downloader, and a build that silently tries to fetch
+  a compiler is a build that hangs — and with that set, a Go older than the `go`
+  line does not fall back to anything, it refuses.
+
+  So building from source could not succeed on any machine, and that is the path
+  taken only when downloading a release has already failed, which is to say on
+  exactly the servers least able to do anything else about it. The installer
+  reads the version from `go.mod` now, rather than carrying a second copy of it
+  that drifts.
+
 ## v1.8.1 — 2026-09-13
 
 Memory and descriptor fixes across the reverse transports, and the bugs found

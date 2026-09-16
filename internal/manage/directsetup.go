@@ -529,7 +529,7 @@ func writeAndStart(name, body string, side directSide, token string) {
 		tui.PressEnter()
 		return
 	}
-	if err := os.WriteFile(app.ConfigPath(name), []byte(body), 0644); err != nil {
+	if err := app.WriteFileAtomic(app.ConfigPath(name), []byte(body), app.TunnelConfigMode); err != nil {
 		tui.Error("Cannot write the config: " + err.Error())
 		tui.PressEnter()
 		return

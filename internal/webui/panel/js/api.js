@@ -170,7 +170,12 @@ export const confHistory = name =>
 export const confRestore = (name, at) => post('/api/confhist/restore', { name, at });
 
 /* ---- CLI: 4 Backup & Restore --------------------------------------------- */
-export const backupExportURL = () => '/api/backup/export';
+/* A download is a navigation rather than a fetch, so it does not go through
+   get/post — which is exactly how it came to be the one address in this file
+   written without at(). Both Download buttons pointed at /api/backup/export on
+   a panel that answers nothing outside its base path, so the backup an operator
+   was told to take before an update was a 404. */
+export const backupExportURL = () => at('/api/backup/export');
 export const backupImport = file => {
   const fd = new FormData();
   fd.append('backup', file);

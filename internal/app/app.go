@@ -10,7 +10,7 @@ import (
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.8.1"
+	Version = "v1.8.2"
 
 	// RepoOwner/RepoName identify the GitHub repository used by the installer
 	// and the release-based updater.
@@ -72,6 +72,20 @@ const (
 func ServiceName(name string) string {
 	return ServicePrefix + name + ".service"
 }
+
+// TunnelConfigMode is the permission a tunnel's TOML config is written with.
+//
+// A tunnel config holds its token, and on tcp, udp and kcp that token is the
+// whole of what authorises a connection to it. Every other file this program
+// writes that holds a secret is 0600 — telegram.json, webui.json, the node
+// registry, the TLS key, the backups — and the tunnel configs alone were 0644,
+// which made every tunnel's token readable by any account on the machine.
+//
+// A constant here rather than a literal at each call site because there are
+// nine of them, spread over five files, and one of them being missed is exactly
+// how they came to disagree in the first place. Nothing but root reads these:
+// the engine, the panel and the monitor all run as root.
+const TunnelConfigMode = 0o600
 
 // ConfigPath returns the on-disk TOML path for a tunnel by its short name.
 func ConfigPath(name string) string {
