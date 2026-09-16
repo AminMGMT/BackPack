@@ -20,9 +20,8 @@ import (
 // metrics collector counts every byte the tunnel carries, so reading it costs
 // two atomic loads per tick.
 //
-// This only adds a reason to grow. The existing trigger is untouched, and the
-// transports that do not count bytes (ws, udp) simply never see this fire and
-// behave exactly as before.
+// This only adds a reason to grow: the existing trigger is untouched, and a
+// transport whose counters do not move never sees it fire.
 
 const (
 	// poolScaleMbpsPerConn is the sustained throughput, per live physical

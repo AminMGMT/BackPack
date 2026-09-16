@@ -326,10 +326,40 @@ export function addView(ctx) {
         });
       }
 
+      /* What a direct tunnel should start out as.
+       *
+       * /api/direct/defaults answers with a subnet nothing on this machine is
+       * using, a free interface name and a preset. The route and the handler
+       * were both registered; the wrapper that calls them was never written, so
+       * the panel never asked. The two fields that endpoint exists for are the
+       * two an operator is least able to guess — the tunnel's own /30 has to
+       * avoid every subnet already on the box, and picking one by hand is how
+       * you end up with a tunnel that comes up and blackholes the route it was
+       * built for.
+       *
+       * Only empty fields are filled, and only once per side: this runs from
+       * applyShape, which fires on every change, and overwriting what somebody
+       * has typed because they clicked something else is worse than not
+       * suggesting at all. */
+      const suggested = {};
+      async function suggestDirect(side) {
+        if (suggested[side]) return;
+        suggested[side] = true;
+        let d;
+        try { d = await api.directDefaults(side === 'server' ? 'iran' : 'kharej'); }
+        catch (e) { suggested[side] = false; return; }
+        for (const [name, value] of Object.entries(d || {})) {
+          if (!value) continue;
+          const f = root.querySelector(`.step3direct [name="${name}"]`);
+          if (f && !f.value) f.value = value;
+        }
+      }
+
       function applyShape() {
         const direct = chosen.direction === 'direct';
         show('.step3rev', !direct);
         show('.step3direct', direct);
+        if (direct) suggestDirect(chosen.side);
 
         /* "server" is the Iran side, "client" the kharej side — the words the
            create endpoints use. */

@@ -728,7 +728,15 @@ func autoRefreshMenu() {
 	} else if hours <= 0 {
 		tui.Success("Auto refresh disabled.")
 	} else {
-		tui.Success(fmt.Sprintf("All tunnels will restart every %d hour(s).", hours))
+		// What the crontab will actually do, which is not always what was
+		// typed: cron cannot say "every 36 hours", so anything above a day is
+		// rounded down to whole days. Reporting the number that was asked for
+		// would be repeating it back rather than confirming it.
+		eff := schedule.EffectiveHours(hours)
+		if eff != hours {
+			tui.Info(fmt.Sprintf("cron schedules whole days above 24 hours, so %d becomes %d.", hours, eff))
+		}
+		tui.Success(fmt.Sprintf("All tunnels will restart every %d hour(s).", eff))
 	}
 	tui.PressEnter()
 }

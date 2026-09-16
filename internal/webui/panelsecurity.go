@@ -67,6 +67,28 @@ func clearedCookie(r *http.Request, name string) *http.Cookie {
 	}
 }
 
+// crossSiteNavigation reports whether a request arrived from somewhere other
+// than this panel.
+//
+// Sec-Fetch-Site is what answers it. Every browser that matters sends it on
+// every navigation: "same-origin" for a link inside the panel, "cross-site" for
+// one on somebody else's page, and "none" for an address typed into the bar or
+// opened from a bookmark. A request with no such header at all — an old
+// browser, curl — is treated as same-site, because refusing it would break the
+// ordinary case to guard against one this header exists to describe.
+//
+// It is used on /logout, which changes state on a GET. A logout is not a
+// dangerous thing to be tricked into, and it is the one mutating route that has
+// to stay a link: the panel's own sign-out is an <a href>. What it is is
+// annoying, repeatedly, from any page an operator can be persuaded to open —
+// and SameSite=Lax does not stop it, because Lax exists precisely to keep
+// sending the cookie on a top-level navigation. Reaching it at all needs the
+// panel's unguessable path, so this is closing the last step of an attack that
+// has already got past the part that matters.
+func crossSiteNavigation(r *http.Request) bool {
+	return r.Header.Get("Sec-Fetch-Site") == "cross-site"
+}
+
 // withPanelSecurity adds the response headers the panel was serving without.
 //
 // The panel drives tunnels — it creates them, edits them and restarts them —
@@ -75,6 +97,28 @@ func clearedCookie(r *http.Request, name string) *http.Cookie {
 // wherever a link led.
 func withPanelSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A request that changes something has to have come from this panel.
+		//
+		// What stops cross-site requests today is a chain of three things, each
+		// of which holds: the session cookie is SameSite=Lax, so it is not sent
+		// on a cross-site POST; every mutating handler enforces POST; and the
+		// panel answers only under a path nobody can guess. That is enough, and
+		// it means the base path is a load-bearing control rather than the
+		// obscurity it is described as — a chain where the first link is a
+		// cookie attribute and the last is a secret in the address bar.
+		//
+		// This is a fourth, and the only one that is about the question being
+		// asked. A browser says where a request came from; an attacker's page
+		// cannot make it say something else. Absent — curl, a script, a peer
+		// panel holding the remote access token — is treated as same-site,
+		// because refusing those would break every caller that is not a browser
+		// to guard against one only a browser can perform.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
+			r.Method != http.MethodOptions && crossSiteNavigation(r) {
+			http.Error(w, "cross-site request refused", http.StatusForbidden)
+			return
+		}
+
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")

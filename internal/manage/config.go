@@ -206,8 +206,12 @@ func isMux(t string) bool {
 }
 
 // isKCP reports whether a transport rides on KCP — over UDP (kcp), over ICMP
-// echo (xdi), over forged raw IP (spoof), or over hand-built TCP segments
-// (pck). All four are tuned by the same kcp_* knobs and the same presets.
+// echo (xdi), or over hand-built TCP segments (pck). All three are tuned by the
+// same kcp_* knobs and the same presets.
+//
+// It used to say four and name spoof as one of them. Spoof is a direct-tunnel
+// carrier and has not been a reverse transport for some time, and the function
+// stopped covering it when it stopped being one — the sentence did not.
 func isKCP(t string) bool {
 	return t == "kcp" || t == "xdi" || t == "pck"
 }

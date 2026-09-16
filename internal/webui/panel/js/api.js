@@ -129,6 +129,14 @@ export const tunnelSuggest = () => get('/api/tunnel/suggest?what=port');
 /* ---- CLI: 1 Setup Iran / 2 Setup Kharej ---------------------------------- */
 export const tunnelCreate = payload => post('/api/tunnel/create', payload);
 export const directOptions  = () => get('/api/direct/options');
+/* What a direct tunnel on this side should start out as: a subnet nothing here
+   is using, an interface name that is free, and a preset. The endpoint and its
+   handler were both registered and this wrapper was never written, so nothing
+   in the panel ever asked — and the subnet fields, which are the two an
+   operator is least able to guess, opened empty on a form that refuses to
+   create without them. */
+export const directDefaults = side =>
+  get('/api/direct/defaults?side=' + encodeURIComponent(side || ''));
 export const directCreate   = payload => post('/api/direct/create', payload);
 
 /* ---- CLI: Manage → Health Check / Link Test / Speed Test ------------------ */

@@ -82,6 +82,20 @@ func (l *limiter) wrap(conn net.Conn) net.Conn {
 	return &limitedConn{Conn: conn, bucket: l.bucket}
 }
 
+// waitBytes charges n bytes against the bandwidth cap, blocking for as long as
+// the cap requires.
+//
+// This is what wrap does, for a transport that never has a net.Conn to wrap.
+// udp reads and writes datagrams on one shared *net.UDPConn per listener rather
+// than handing out a connection per flow, so there is nothing to put a wrapper
+// around and the cap has to be applied where the bytes are counted instead.
+func (l *limiter) waitBytes(n int) {
+	if l == nil || l.bucket == nil {
+		return
+	}
+	waitFor(l.bucket, n)
+}
+
 // limitedConn paces a connection's reads and writes against a shared token
 // bucket, so the cap covers the tunnel as a whole rather than each connection
 // separately.
@@ -103,11 +117,14 @@ func (c *limitedConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
-// wait blocks long enough to keep within the configured rate. A request larger
-// than the bucket can never be satisfied in one go, so it is charged in
-// bucket-sized pieces rather than failing.
-func (c *limitedConn) wait(n int) {
-	burst := c.bucket.Burst()
+// wait blocks long enough to keep within the configured rate.
+func (c *limitedConn) wait(n int) { waitFor(c.bucket, n) }
+
+// waitFor charges n bytes against a bucket. A request larger than the bucket
+// can never be satisfied in one go, so it is charged in bucket-sized pieces
+// rather than failing.
+func waitFor(bucket *rate.Limiter, n int) {
+	burst := bucket.Burst()
 	for n > 0 {
 		chunk := n
 		if burst > 0 && chunk > burst {
@@ -115,7 +132,7 @@ func (c *limitedConn) wait(n int) {
 		}
 		// A background context: the deadline that matters is the connection's
 		// own, which the underlying Read/Write already enforces.
-		if err := c.bucket.WaitN(context.Background(), chunk); err != nil {
+		if err := bucket.WaitN(context.Background(), chunk); err != nil {
 			return
 		}
 		n -= chunk

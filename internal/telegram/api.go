@@ -237,16 +237,6 @@ func send(c Config, chatID, text string) error {
 	return sendTo(c, chatID, text, homeKeyboard(c.Language()))
 }
 
-// sendPlain delivers text that was not written as HTML.
-//
-// The web panel hands the bot login codes and sign-in notices as plain strings.
-// Everything now goes out with parse_mode set, so an unescaped "<" in one of
-// them would have Telegram reject the message — and the message it would reject
-// is the one carrying the code needed to log in.
-func sendPlain(c Config, chatID, text string) error {
-	return sendTo(c, chatID, esc(text), homeKeyboard(c.Language()))
-}
-
 // broadcast delivers one message to every admin.
 //
 // Alerts used to go to the owner alone, which made a second admin an account

@@ -331,10 +331,27 @@ func (c *QuicTransport) poolMaintainer() {
 func (c *QuicTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
+	// The generation this handler belongs to, captured once.
+	//
+	// Everything below used to ask c.state.Cancel() != nil before deciding a
+	// failure was worth restarting for. That is always true: the constructor
+	// sets a cancel function before any of this can run, and Reset sets another
+	// on every restart. So the guard was open in every case it was written to
+	// close, and each goroutine dying during a teardown queued another restart
+	// of a tunnel that was already on its way down. The server transports were
+	// corrected to ask their generation's context instead; the client ones were
+	// not.
+	//
+	// Captured rather than read through c.state each time, for the same reason
+	// the server holds its context in the generation: Restart publishes a new
+	// one while these goroutines are still winding down, and a goroutine that
+	// went on to watch the new context would never see its own run end.
+	ctx := c.state.Ctx()
+
 	go func() {
 		for {
 			select {
-			case <-c.state.Ctx().Done():
+			case <-ctx.Done():
 				return
 			default:
 				// The server heartbeats regularly, so silence for longer than the
@@ -347,7 +364,7 @@ func (c *QuicTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 							c.logger.Warn("no heartbeat from the server within the keepalive period, reconnecting")
 						} else {
@@ -364,8 +381,8 @@ func (c *QuicTransport) channelHandler() {
 
 	for {
 		select {
-		case <-c.state.Ctx().Done():
-			_ = utils.SendBinaryByte(c.state.Conn(), utils.SG_Closed)
+		case <-ctx.Done():
+			_ = utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_Closed, controlWriteTimeout)
 			return
 
 		case msg := <-msgChan:

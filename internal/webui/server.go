@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -276,7 +277,13 @@ func Serve() error {
 	_ = srv.nodes.start()
 	// Loss and round trip to every managed server, measured in the background
 	// so no request ever waits on a ping. See nodeprobe.go.
-	nodeNet.start()
+	//
+	// Tied to this call rather than to the process: when Serve returns — which
+	// it only does on an error it cannot recover from — the probing stops with
+	// it instead of going on dialling a fleet nothing is left to show.
+	probeCtx, stopProbing := context.WithCancel(context.Background())
+	defer stopProbing()
+	nodeNet.start(probeCtx)
 
 	// Said once, at startup, into the journal.
 	//
@@ -417,6 +424,13 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// A sign-out somebody else's page navigated the browser into is not a
+	// sign-out the operator asked for. See crossSiteNavigation; the panel's own
+	// link is same-origin and unaffected.
+	if crossSiteNavigation(r) {
+		redirectTo(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.sessions.destroy(c.Value)
 	}

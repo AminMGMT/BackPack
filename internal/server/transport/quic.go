@@ -314,7 +314,7 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 	}
 	stream.SetReadDeadline(time.Time{})
 
-	if token != s.config.Token {
+	if !tokenMatches(token, s.config.Token) {
 		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
 			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
 		// wrapped, not the bare stream: it is what every other read and write
@@ -517,12 +517,12 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
 				// One of these runs per forwarded port, so an instant retry on a
 				// broken listener would pin a core per port. See acceptBackoff.
-				if !backoff.fail(g.ctx) {
+				if !backoff.Fail(g.ctx) {
 					return
 				}
 				continue
 			}
-			backoff.ok()
+			backoff.OK()
 
 			tcpConn, ok := conn.(*net.TCPConn)
 			if !ok {
@@ -565,8 +565,8 @@ func (s *QuicTransport) handleLoop(g *quicGen) {
 			return
 
 		case localConn := <-g.localChannel:
-			if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
+			if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
+				s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
 				localConn.conn.Close()
 				s.limits.release()
 				continue
@@ -588,13 +588,28 @@ func (s *QuicTransport) handleLoop(g *quicGen) {
 // hands the pair to the connection handler.
 func (s *QuicTransport) pairLocalConn(g *quicGen, localConn LocalTCPConn) {
 	for {
+		// The timeout runs on a timer, so it fires whether or not a stream ever
+		// arrives. handleLoop checks the age once before calling this and then
+		// this blocks, so on a pool that had run dry the connection was held
+		// open with nothing to time it out — the one case the timeout exists
+		// for was the one case it could not fire in.
+		timer := time.NewTimer(pairingWait(localConn.timeCreated))
+
 		select {
 		case <-g.ctx.Done():
+			timer.Stop()
+			localConn.conn.Close()
+			s.limits.release()
+			return
+
+		case <-timer.C:
+			s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
 			localConn.conn.Close()
 			s.limits.release()
 			return
 
 		case stream := <-g.tunnelChannel:
+			timer.Stop()
 			// Tell the client which backend this stream is for.
 			if err := utils.SendBinaryString(stream, localConn.remoteAddr); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)

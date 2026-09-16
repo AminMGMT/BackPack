@@ -40,11 +40,12 @@ type tunDevice struct {
 	name string
 	mtu  int
 
-	// The batch machinery, allocated once. Read needs somewhere to put the
-	// virtio header the kernel prefixes each read with when offload is on, and
-	// Write needs room in front of each packet for the same thing on the way
-	// out — so both go through a staging buffer rather than the caller's.
-	rbuf  []byte
+	// The batch machinery, allocated once. Write needs room in front of each
+	// packet for the virtio header the kernel expects when offload is on, so it
+	// goes through a staging buffer rather than the caller's.
+	//
+	// There was an rbuf here for the same job on the way in, and nothing ever
+	// read it: Read takes the header off in place.
 	wbufs [][]byte
 	wbuf  []byte
 

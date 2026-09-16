@@ -281,11 +281,28 @@ func (c *UdpTransport) poolMaintainer() {
 func (c *UdpTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
+	// The generation this handler belongs to, captured once.
+	//
+	// Everything below used to ask c.state.Cancel() != nil before deciding a
+	// failure was worth restarting for. That is always true: the constructor
+	// sets a cancel function before any of this can run, and Reset sets another
+	// on every restart. So the guard was open in every case it was written to
+	// close, and each goroutine dying during a teardown queued another restart
+	// of a tunnel that was already on its way down. The server transports were
+	// corrected to ask their generation's context instead; the client ones were
+	// not.
+	//
+	// Captured rather than read through c.state each time, for the same reason
+	// the server holds its context in the generation: Restart publishes a new
+	// one while these goroutines are still winding down, and a goroutine that
+	// went on to watch the new context would never see its own run end.
+	ctx := c.state.Ctx()
+
 	// Goroutine to handle the blocking ReceiveBinaryString
 	go func() {
 		for {
 			select {
-			case <-c.state.Ctx().Done():
+			case <-ctx.Done():
 				return
 			default:
 				// The worst case of the three: this control channel had no
@@ -296,7 +313,7 @@ func (c *UdpTransport) channelHandler() {
 				// being gone. See controlDeadline; UdpConfig carries no
 				// keepalive period, so this takes the fallback.
 				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(0))); err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Errorf("failed to set control channel deadline: %v", err)
 						go c.Restart()
 					}
@@ -304,7 +321,7 @@ func (c *UdpTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()
 					}
@@ -318,8 +335,8 @@ func (c *UdpTransport) channelHandler() {
 	// Main loop to listen for context cancellation or received messages
 	for {
 		select {
-		case <-c.state.Ctx().Done():
-			_ = utils.SendBinaryByte(c.state.Conn(), utils.SG_Closed)
+		case <-ctx.Done():
+			_ = utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_Closed, controlWriteTimeout)
 			return
 
 		case msg := <-msgChan:
@@ -344,7 +361,7 @@ func (c *UdpTransport) channelHandler() {
 				return
 
 			case utils.SG_RTT:
-				err := utils.SendBinaryByte(c.state.Conn(), utils.SG_RTT)
+				err := utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_RTT, controlWriteTimeout)
 				if err != nil {
 					c.logger.Error("failed to send RTT signal, restarting client: ", err)
 					go c.Restart()
@@ -488,17 +505,25 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 	done := make(chan struct{})
 	c.logger.Debugf("start to copy from tunnel %s to local %s", tunConn.LocalAddr(), remoteAddr)
 	go func() {
-		c.udpCopy(remoteConn, tunConn, port)
+		c.udpCopy(remoteConn, tunConn, port, true)
 		done <- struct{}{}
 	}()
 
-	c.udpCopy(tunConn, remoteConn, port)
+	c.udpCopy(tunConn, remoteConn, port, false)
 
 	<-done
 
 }
 
-func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
+// udpCopy forwards datagrams one way between the tunnel socket and a backend.
+//
+// dstIsTunnel says which way, and it is there for the traffic counters. The
+// convention is the one CountedConn sets on every other transport and is about
+// the tunnel rather than about this function: bytes read off the tunnel are
+// inbound, bytes written to it are outbound, on both ends of the link. This
+// transport counted neither, so however much it carried the panel, the CLI, the
+// Telegram report and the traffic history all read it as an idle tunnel.
+func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTunnel bool) {
 	buf := make([]byte, 16*1024)
 	readTimeout := 60 * time.Second
 
@@ -521,6 +546,13 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
 			return
 		}
 
+		if !dstIsTunnel {
+			// Read off the tunnel. Counted here rather than after the write:
+			// these bytes crossed the tunnel whether or not the backend took
+			// them, which is what a traffic figure is measuring.
+			metrics.AddBytes(uint64(n), 0)
+		}
+
 		totalWritten := 0
 		// Write the read data to the destination UDP connection
 		for totalWritten < n {
@@ -530,6 +562,10 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int) {
 				return
 			}
 			totalWritten += w
+		}
+
+		if dstIsTunnel {
+			metrics.AddBytes(0, uint64(totalWritten))
 		}
 
 		// Optionally update the port usage stats if sniffing is enabled

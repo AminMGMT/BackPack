@@ -30,7 +30,6 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 	// One process runs one tunnel, so the socket tuning is process-wide.
 	network.SetPinTCPBuffers(cfg.SOPinTCP)
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
-	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	handlers.SetZeroCopy(cfg.ZeroCopy)
 	// Loopback unless this tunnel asked otherwise; see web/monitorhttp.go.
 	web.SetMonitorBind(cfg.WebBind)

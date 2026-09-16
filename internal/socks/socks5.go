@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/backpack/backpack/internal/utils/acceptloop"
 )
 
 const (
@@ -45,6 +47,15 @@ func Serve(ctx context.Context, addr string, auth AuthFunc) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
+
+	// A bare `continue` on an accept error is what the acceptloop package was
+	// written for. This listener is closed on shutdown by the goroutine above,
+	// and a closed listener returns its error instantly and forever — so
+	// whichever of the close and the cancellation lands first decides between
+	// exiting cleanly and pinning a core until the other one is observed. The
+	// proxy runs on the same machines as the tunnels and against the same file
+	// descriptor ceiling, so EMFILE is the same story with no end to it at all.
+	var backoff acceptloop.Backoff
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -52,9 +63,13 @@ func Serve(ctx context.Context, addr string, auth AuthFunc) error {
 			case <-ctx.Done():
 				return nil
 			default:
-				continue
 			}
+			if !backoff.Fail(ctx) {
+				return nil
+			}
+			continue
 		}
+		backoff.OK()
 		go handle(conn, auth)
 	}
 }

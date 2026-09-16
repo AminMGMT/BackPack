@@ -543,12 +543,12 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
 				// One of these runs per forwarded port, so an instant retry on a
 				// broken listener would pin a core per port. See acceptBackoff.
-				if !backoff.fail(g.ctx) {
+				if !backoff.Fail(g.ctx) {
 					return
 				}
 				continue
 			}
-			backoff.ok()
+			backoff.OK()
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
@@ -617,8 +617,8 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 		case localConn := <-g.localChannel:
 		loop:
 			for {
-				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-					s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
+				if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
+					s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
 					localConn.conn.Close()
 					// The slot this connection took on accept is only freed by the
 					// handler goroutine, which never runs when the connection times
@@ -629,10 +629,28 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 					break loop
 				}
 
+				// The timeout runs on a timer, so it fires whether or not a
+				// tunnel connection ever arrives.
+				//
+				// The check above used to be the only one, and the select below
+				// blocks — so on a pool that had run dry it never ran. The one
+				// case a pairing timeout exists for was the one case it could
+				// not fire in: the client sat there until it gave up on its own,
+				// the slot it took against max_connections was never returned,
+				// and the socket stayed open for the life of the run.
+				timer := time.NewTimer(pairingWait(localConn.timeCreated))
 				select {
 				case <-g.ctx.Done():
+					timer.Stop()
+					// See tcp.go: the run is going away and nothing else will
+					// close this connection or give its slot back.
+					localConn.conn.Close()
+					s.limits.release()
 					return
+				case <-timer.C:
+					continue loop
 				case tunnelConnection := <-g.tunnelChannel:
+					timer.Stop()
 					close(tunnelConnection.ping)
 					tunnelConnection.mu.Lock()
 					if err := tunnelConnection.conn.WriteMessage(websocket.TextMessage, []byte(localConn.remoteAddr)); err != nil {
@@ -696,5 +714,9 @@ func (s *WsTransport) tlsSettings() network.TLSSettings {
 		ACMEDomain:   s.config.ACMEDomain,
 		ACMEEmail:    s.config.ACMEEmail,
 		ACMECacheDir: s.config.ACMECacheDir,
+		// Only used when no certificate was configured at all, and cosmetic
+		// even then — but a generated certificate that names the address it is
+		// served from reads as a certificate rather than as a mistake.
+		SelfSignedHost: certHost(s.config.BindAddr),
 	}
 }

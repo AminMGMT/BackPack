@@ -124,6 +124,13 @@ func (k KCPConfig) WithDefaults() KCPConfig {
 // address — so the packet actually arrives; only the source in the on-wire
 // header is replaced with SpoofSrcIP. The two ends must agree on the profile
 // and, where it matters, on the spoofed addresses.
+// Relay mode — a bare datagram relay to a local UDP socket rather than a
+// tunnel — was a shape of the reverse spoof transport and went with it. The
+// direct tunnel carries a whole private network, which is what the relay was
+// reached for: an inner transport that brings its own reliability (WireGuard,
+// most often) is routed over the tunnel rather than piped through it. Kept as a
+// note because "where did spoof_pipe go" is a question the removal invites, and
+// the file that answered it had nothing else left in it.
 type SpoofConfig struct {
 	// SpoofProfile is the L4 shim wrapped around each datagram, which decides
 	// what the packet looks like to inspection: "udp" (default), "icmp" (looks

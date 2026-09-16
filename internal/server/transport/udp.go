@@ -59,6 +59,7 @@ type UdpTransport struct {
 	activeMu          sync.Mutex
 	controlChannel    netControl
 	restartMutex      sync.Mutex
+	limits            *limiter
 	rtt               int64 // for Fun!
 }
 
@@ -78,6 +79,18 @@ type UdpConfig struct {
 	// keeps the tunnel carrying traffic under load instead of stalling.
 	SO_RCVBUF int
 	SO_SNDBUF int
+	// MaxConnections caps how many source addresses may be forwarded at once,
+	// and BandwidthMbps caps throughput across the whole tunnel. Zero means
+	// unlimited, the same as everywhere else.
+	//
+	// Both were accepted by the menu, saved into the TOML and shown in the
+	// panel, and this struct had nowhere to put them — so a udp tunnel was the
+	// one transport where a limit an operator set was silently not a limit.
+	// "Connection" is a source address here rather than a socket, because that
+	// is the only thing a connectionless protocol has that means the same
+	// thing: one peer's flow through the tunnel.
+	MaxConnections int
+	BandwidthMbps  int
 }
 
 func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
@@ -91,6 +104,7 @@ func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 		logger:            logger,
 		activeConnections: map[string]*TunnelUDPConn{},
 		activeMu:          sync.Mutex{},
+		limits:            newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 		rtt:               0,
 	}
 
@@ -249,12 +263,12 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 			// The context check above catches a shutdown, but a listener broken
 			// for any other reason fails instantly and forever; without a pause
 			// this loop would spin on a core. See acceptBackoff.
-			if !backoff.fail(g.ctx) {
+			if !backoff.Fail(g.ctx) {
 				return
 			}
 			continue
 		}
-		backoff.ok()
+		backoff.OK()
 
 		if !s.validControlClaim(conn) {
 			conn.Close()
@@ -321,7 +335,7 @@ func (s *UdpTransport) validControlClaim(conn net.Conn) bool {
 	// Resetting the deadline (removes any existing deadline)
 	conn.SetReadDeadline(time.Time{})
 
-	if msg != s.config.Token {
+	if !tokenMatches(msg, s.config.Token) {
 		s.logger.Warnf("invalid security token received")
 		return false
 	}
@@ -496,6 +510,20 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 			s.activeMu.Lock()
 			// Check if the connection is already active
 			if existingConn, exists := s.activeConnections[key]; exists {
+				// These bytes crossed the tunnel, so they are counted here —
+				// before the queue, which may not have room for them. A packet
+				// dropped below was still carried and still paid for, and a
+				// counter that hid it would show a tunnel losing traffic under
+				// load as a tunnel doing nothing.
+				//
+				// This transport reported 0 in and 0 out however much it
+				// carried: neither CountedConn nor AddBytes appeared in either
+				// of its files, because it never hands out a net.Conn for the
+				// wrapper to go around. The panel, the CLI, the Telegram report
+				// and the traffic history all read it as idle.
+				metrics.AddBytes(uint64(n), 0)
+				s.limits.waitBytes(n)
+
 				// Send the payload to the existing connection's payload channel
 				select {
 				case existingConn.payload <- append([]byte(nil), buf[:n]...): // Copy the packet to avoid data overwriting
@@ -510,7 +538,7 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 
 			s.activeMu.Unlock()
 
-			if string(buf[:n]) != s.config.Token { // For new connections, validate the token
+			if !tokenMatches(string(buf[:n]), s.config.Token) { // For new connections, validate the token
 				s.logger.Errorf("invalid token received from %s", addr.String())
 				continue
 			}
@@ -659,6 +687,16 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 
 				mu.Unlock()
 
+				// A new source address is a new flow, and a flow is what
+				// max_connections counts here. Taken before the flow costs
+				// anything, the same as every other transport does on accept —
+				// and released on all three ways out below, or a tunnel with a
+				// limit would bleed slots until it forwarded nothing.
+				if !s.limits.acquire() {
+					s.logger.Warnf("connection limit reached, dropping UDP packet from %s", addr.String())
+					continue
+				}
+
 				// Create a new payload channel for this connection
 				payloadChan := make(chan []byte, udpPayloadQueue)
 
@@ -695,6 +733,7 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 					// Close the newly created connection as it couldn't be added
 					close(newUDPConn.payload)
 					delete(activeConnections, key)
+					s.limits.release()
 				}
 			}
 		}
@@ -710,8 +749,8 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 		case <-g.ctx.Done():
 			return
 		case localConn := <-udpChan:
-			if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
+			if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
+				s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
 				// Drop the flow whole, rather than only stopping work on it.
 				//
 				// Giving up here while leaving the source address in the table
@@ -725,23 +764,32 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 				//
 				// Under the same lock the listener holds while it delivers, so
 				// closing the channel here cannot race a send into it.
-				key := localConn.addr.String()
-				mu.Lock()
-				if (*activeConnections)[key] == localConn {
-					close(localConn.payload)
-					delete(*activeConnections, key)
-				}
-				mu.Unlock()
+				s.dropLocalFlow(localConn, activeConnections, mu)
 				continue
 			}
 
 		loop:
 			for {
+				// The timeout runs on a timer, so it fires whether or not a
+				// tunnel connection ever arrives. The check above used to be the
+				// only one and the select below blocks, so on a pool that had
+				// run dry the flow was held with nothing to time it out.
+				timer := time.NewTimer(pairingWait(localConn.timeCreated))
+
 				select {
 				case <-g.ctx.Done():
+					timer.Stop()
+					// The run is going away and this flow never reached
+					// udpCopy, so nothing else will drop it or give its slot
+					// back.
+					s.dropLocalFlow(localConn, activeConnections, mu)
 					return
 
+				case <-timer.C:
+					continue loop
+
 				case tunnelConn := <-g.tunnelChannel:
+					timer.Stop()
 					close(tunnelConn.ping)
 					tunnelConn.mu.Lock()
 
@@ -800,8 +848,36 @@ func (s *UdpTransport) udpCopy(g *udpGen, udpLocal *LocalUDPConn, udpTunnel *Tun
 	}
 	mu.Unlock()
 
+	// The flow is over, so its slot goes back. Exactly one release per flow:
+	// this is the path a flow that was paired takes, and the two in
+	// localListener and handleLoop are the paths of a flow that never was.
+	s.limits.release()
+
 	// Remove tunnel connection from active connections and close the channel.
 	s.dropTunnelConn(udpTunnel)
+}
+
+// dropLocalFlow takes a forwarded flow out of the active set, closes its
+// payload channel and gives its connection slot back.
+//
+// Only when the entry is still this flow: the source address may already have
+// been recycled by a newer one, and deleting that would leave it in the table's
+// place with nothing reading its payload — every later datagram from the address
+// filed against a channel no goroutine reads. That is the stale entry that made
+// this transport go permanently quiet for a peer.
+//
+// The slot goes back unconditionally, because it was taken unconditionally when
+// the flow was created. Exactly one of this, the timeout path and udpCopy's
+// teardown runs for any given flow.
+func (s *UdpTransport) dropLocalFlow(localConn *LocalUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
+	key := localConn.addr.String()
+	mu.Lock()
+	if (*activeConnections)[key] == localConn {
+		close(localConn.payload)
+		delete(*activeConnections, key)
+	}
+	mu.Unlock()
+	s.limits.release()
 }
 
 // dropTunnelConn takes a tunnel connection out of the active set and closes its
@@ -844,6 +920,11 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 				}
 				totalWritten += w
 			}
+
+			// Onto the tunnel: the other half of what this transport never
+			// counted. See acceptTunnelConn for the inbound side.
+			metrics.AddBytes(0, uint64(totalWritten))
+			s.limits.waitBytes(totalWritten)
 
 			if s.config.Sniffer {
 				g.usageMonitor.AddOrUpdatePort(from.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))

@@ -91,6 +91,22 @@ func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.
 	for {
 		// Read data from the source connection
 		r, err := from.Read(buf)
+		// A Read is allowed to return bytes and an error together, and io.Reader
+		// says plainly that the bytes come first: process them, then the error.
+		// Returning here on the error threw away whatever it had just read, so a
+		// connection whose last read carries data and EOF in one call loses that
+		// data — the final record of a response, silently, on a path that
+		// otherwise carries everything faithfully.
+		//
+		// None of the readers on this path does it today: noiseConn, smux and
+		// kcp all return (0, err) at the end. So this is latent rather than a
+		// bug anybody has seen, and it stays latent only for as long as nobody
+		// puts a different reader here.
+		if r > 0 {
+			if !writeAll(from, to, buf[:r], logger, usage, remotePort, sniffer) {
+				return
+			}
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				logger.Trace("reader stream closed or EOF received")
@@ -101,31 +117,34 @@ func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.
 			to.Close()
 			return
 		}
+	}
+}
 
-		totalWritten := 0
-		for totalWritten < r {
-			// Write data to the destination connection
-			w, err := to.Write(buf[totalWritten:r])
-			if err != nil {
-				if errors.Is(err, net.ErrClosed) {
-					logger.Trace("writer stream closed or EOF received")
-				} else {
-					logger.Trace("unable to write to the connection: ", err)
-				}
-				from.Close()
-				to.Close()
-				return
-
+// writeAll puts one read's worth of bytes on the far side, reporting false when
+// the pair has been closed and the caller should stop.
+func writeAll(from, to net.Conn, data []byte, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) bool {
+	totalWritten := 0
+	for totalWritten < len(data) {
+		// Write data to the destination connection
+		w, err := to.Write(data[totalWritten:])
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				logger.Trace("writer stream closed or EOF received")
+			} else {
+				logger.Trace("unable to write to the connection: ", err)
 			}
-			totalWritten += w
+			from.Close()
+			to.Close()
+			return false
 		}
-
-		logger.Tracef("read data: %d bytes, written data: %d bytes", r, totalWritten)
-		if sniffer {
-			usage.AddOrUpdatePort(remotePort, uint64(totalWritten))
-		}
+		totalWritten += w
 	}
 
+	logger.Tracef("read data: %d bytes, written data: %d bytes", len(data), totalWritten)
+	if sniffer {
+		usage.AddOrUpdatePort(remotePort, uint64(totalWritten))
+	}
+	return true
 }
 
 // spliceTransfer runs one direction through the kernel when both ends are plain

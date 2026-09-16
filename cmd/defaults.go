@@ -9,6 +9,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 	"github.com/backpack/backpack/internal/utils/network"
 
 	"github.com/sirupsen/logrus"
@@ -22,18 +23,15 @@ const ( // Default values
 	defaultLogLevel       = "info"
 	defaultMuxSession     = 1
 	defaultKeepAlive      = 75
-	deafultHeartbeat      = 40 // 40 seconds
+	defaultHeartbeat      = 40 // 40 seconds
 	defaultDialTimeout    = 10 // 10 seconds
 	// related to smux
-	// defaultMuxVersion stays at 1 because smux has no version negotiation at
-	// all: a session whose two ends disagree is torn down on the first frame
-	// with "invalid protocol". Raising the default would therefore break every
-	// mux tunnel the moment one side was upgraded and the other was not — the
-	// control channel would come up and no data would pass, which is precisely
-	// the failure that is hardest to diagnose. Version 2 is worth having (it is
-	// what makes mux_streambuffer mean anything, see below), but it has to be
-	// negotiated first, not defaulted into.
-	defaultMuxVersion       = 1
+	//
+	// There is no default mux version here any more. There was one, pinned at 1
+	// with a paragraph explaining why raising it would break every mux tunnel
+	// the moment one end was upgraded — and the version is settled on the
+	// control channel now instead, so nothing read it. Both the mechanism and
+	// that reasoning live in internal/utils/network/mux.go.
 	defaultMaxFrameSize     = 32768   // 32KB
 	defaultMaxReceiveBuffer = 4194304 // 4MB
 	defaultMaxStreamBuffer  = 65536   // 64KB
@@ -136,7 +134,7 @@ func applyDefaults(cfg *config.Config) {
 	}
 	// Heartbeat
 	if cfg.Server.Heartbeat < 1 { // Minimum accepted interval is 1 second
-		cfg.Server.Heartbeat = deafultHeartbeat
+		cfg.Server.Heartbeat = defaultHeartbeat
 	}
 
 	// Timeout
@@ -165,7 +163,22 @@ func applyDefaults(cfg *config.Config) {
 // tables. What cannot be worked out is whether the process is allowed to open a
 // packet socket at all, and that is what this checks.
 func checkPck(cfg *config.Config) {
-	if cfg.Server.Transport != config.PCK && cfg.Client.Transport != config.PCK {
+	// A reverse tunnel naming pck as its transport, or a direct one naming it
+	// as its carrier.
+	//
+	// Only the first was checked. The carrier moved to the layer-3 engine and
+	// this gate stayed written in terms of [server] and [client], so every
+	// check below — Linux, root, the flag list, the MAC, the interface, the
+	// iptables warning — was skipped for exactly the configurations the wizard
+	// now produces. A direct tunnel over pck without CAP_NET_RAW failed deep
+	// inside the carrier on a socket error, rather than at load with the line
+	// that says how to grant it.
+	//
+	// sni is included because sni is pck: the same packet socket, the same
+	// pck_* keys, with a TLS ClientHello put at the front of the flow.
+	carrier := l3Carrier(cfg)
+	reverse := cfg.Server.Transport == config.PCK || cfg.Client.Transport == config.PCK
+	if !reverse && carrier != l3.CarrierPck && carrier != l3.CarrierSNI {
 		return
 	}
 	if runtime.GOOS != "linux" {
@@ -176,7 +189,10 @@ func checkPck(cfg *config.Config) {
 	}
 
 	pc := cfg.Server.PckConfig
-	if cfg.Client.Transport == config.PCK {
+	switch {
+	case !reverse:
+		pc = cfg.L3.PckConfig
+	case cfg.Client.Transport == config.PCK:
 		pc = cfg.Client.PckConfig
 	}
 	if _, err := network.ParseTCPFlagList(pc.PckFlags); err != nil {
@@ -203,6 +219,18 @@ func checkPck(cfg *config.Config) {
 	} else {
 		logger.Info("pck: rules dropping the kernel's RSTs and keeping the flow out of conntrack are installed on start and removed on stop.")
 	}
+}
+
+// l3Carrier returns the carrier a direct tunnel is configured to use, in lower
+// case, or "" when this configuration is not a direct tunnel at all.
+//
+// The three carrier checks each asked their own version of this question and
+// two of them forgot to, so it is one function now.
+func l3Carrier(cfg *config.Config) string {
+	if !cfg.L3.Enabled() {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(cfg.L3.Carrier))
 }
 
 // checkSpoof settles what a configuration naming the spoof carrier is allowed
@@ -232,7 +260,7 @@ func checkSpoof(cfg *config.Config) {
 	}
 
 	// Everything below is the direct tunnel's carrier.
-	if !cfg.L3.Enabled() || !strings.EqualFold(strings.TrimSpace(cfg.L3.Carrier), "spoof") {
+	if l3Carrier(cfg) != l3.CarrierSpoof {
 		return
 	}
 	listening := strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen")
@@ -357,7 +385,11 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) {
 // to do. The server is normally root anyway — this is for the case where it is
 // not.
 func checkXdi(cfg *config.Config) {
-	usesXdi := cfg.Server.Transport == config.XDI || cfg.Client.Transport == config.XDI
+	// The carrier as well as the transport — see checkPck for why this gate was
+	// blind to every configuration the wizard writes.
+	usesXdi := cfg.Server.Transport == config.XDI ||
+		cfg.Client.Transport == config.XDI ||
+		l3Carrier(cfg) == l3.CarrierXdi
 	if !usesXdi {
 		return
 	}

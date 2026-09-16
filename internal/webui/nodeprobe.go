@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -77,7 +78,14 @@ func (p *nodeProbe) health(name string) netHealth {
 
 // start begins measuring, once per process. Starting twice would double the
 // probe rate for no extra information.
-func (p *nodeProbe) start() {
+//
+// The context is what stops it. The loop was `for range t.C` with nothing else
+// in the select, so it could not be stopped by anything short of ending the
+// process — which is fine for the singleton the panel starts and wrong for
+// everything else: a test that started one left it running for the rest of the
+// suite, dialling every server in whatever fleet happened to be on the machine,
+// and a panel that has shut its listener down went on probing.
+func (p *nodeProbe) start(ctx context.Context) {
 	p.mu.Lock()
 	if p.started {
 		p.mu.Unlock()
@@ -86,10 +94,10 @@ func (p *nodeProbe) start() {
 	p.started = true
 	p.mu.Unlock()
 
-	go p.loop()
+	go p.loop(ctx)
 }
 
-func (p *nodeProbe) loop() {
+func (p *nodeProbe) loop(ctx context.Context) {
 	// A first pass immediately, so a panel that has just started has something
 	// to show on the first fleet page somebody opens rather than a dash for the
 	// first five seconds.
@@ -97,8 +105,13 @@ func (p *nodeProbe) loop() {
 
 	t := time.NewTicker(probeEvery)
 	defer t.Stop()
-	for range t.C {
-		p.pass()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p.pass()
+		}
 	}
 }
 

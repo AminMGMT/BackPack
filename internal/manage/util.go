@@ -17,12 +17,3 @@ func orDefault(v, def string) string {
 	}
 	return v
 }
-
-// orAuto is orDefault for the fields whose unset behaviour is "the engine works
-// it out" rather than a value that could be named.
-func orAuto(v string) string {
-	if v == "" {
-		return "automatic"
-	}
-	return v
-}

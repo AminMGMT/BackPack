@@ -391,12 +391,12 @@ func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
 				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr(), err)
 				// Back off rather than retry instantly: a closed listener fails
 				// immediately and forever, and `continue` would pin a core.
-				if !backoff.fail(g.ctx) {
+				if !backoff.Fail(g.ctx) {
 					return
 				}
 				continue
 			}
-			backoff.ok()
+			backoff.OK()
 
 			//discard any non tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
@@ -662,12 +662,12 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
 				// One of these runs per forwarded port, so an instant retry on a
 				// broken listener would pin a core per port. See acceptBackoff.
-				if !backoff.fail(g.ctx) {
+				if !backoff.Fail(g.ctx) {
 					return
 				}
 				continue
 			}
-			backoff.ok()
+			backoff.OK()
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
@@ -731,8 +731,8 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 		case localConn := <-g.localChannel:
 		loop:
 			for {
-				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
-					s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
+				if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
+					s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
 					localConn.conn.Close()
 					// The slot this connection took on accept is only freed by the
 					// handler goroutine, which never runs when the connection times
@@ -743,11 +743,33 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 					break loop
 				}
 
+				// The timeout runs on a timer, so it fires whether or not a
+				// tunnel connection ever arrives.
+				//
+				// The check above used to be the only one, and the select below
+				// blocks — so on a pool that had run dry it never ran. The one
+				// case a pairing timeout exists for was the one case it could
+				// not fire in: the client sat there until it gave up on its own,
+				// the slot it took against max_connections was never returned,
+				// and the socket stayed open for the life of the run.
+				timer := time.NewTimer(pairingWait(localConn.timeCreated))
 				select {
 				case <-g.ctx.Done():
+					timer.Stop()
+					// The run is going away and this connection never reached a
+					// handler, so nothing else will ever close it or give its
+					// slot back. Every restart used to leak one socket per
+					// connection parked here.
+					localConn.conn.Close()
+					s.limits.release()
 					return
 
+				case <-timer.C:
+					// Round the loop and take the expired path above.
+					continue loop
+
 				case tunnelConn := <-g.tunnelChannel:
+					timer.Stop()
 					// Send the target addr over the connection
 					if err := utils.SendBinaryTransportString(tunnelConn, localConn.remoteAddr, utils.SG_TCP); err != nil {
 						s.logger.Errorf("%v", err)

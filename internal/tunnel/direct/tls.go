@@ -1,16 +1,9 @@
 package direct
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"fmt"
-	"math/big"
 	"net"
-	"time"
 
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/sirupsen/logrus"
@@ -52,7 +45,7 @@ func originTLSConfig(cfg *Config, log *logrus.Logger) (*tls.Config, error) {
 		return tlsConfig, nil
 	}
 
-	cert, err := generateSelfSigned(cfg.hostForCert())
+	cert, err := network.GenerateSelfSigned(cfg.hostForCert())
 	if err != nil {
 		return nil, fmt.Errorf("direct: generating a certificate: %w", err)
 	}
@@ -78,44 +71,4 @@ func (c *Config) hostForCert() string {
 		return "localhost"
 	}
 	return host
-}
-
-// generateSelfSigned makes a throwaway certificate for one run.
-func generateSelfSigned(host string) (tls.Certificate, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: host},
-		// Backdated an hour so a peer whose clock runs slow does not reject a
-		// certificate that was valid when it was made.
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().AddDate(1, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		template.IPAddresses = []net.IP{ip}
-	} else {
-		template.DNSNames = []string{host}
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.Certificate{
-		Certificate: [][]byte{der},
-		PrivateKey:  key,
-		Leaf:        &template,
-	}, nil
 }

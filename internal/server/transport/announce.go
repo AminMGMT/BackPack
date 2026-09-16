@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
@@ -90,6 +91,14 @@ func refuseControl(conn io.ReadWriteCloser, reason string) {
 
 // tokenMatches compares an offered token to the configured one in constant
 // time.
+// Every transport goes through this, including the three that used a plain !=.
+//
+// Whether a timing difference over udp, kcp or quic is realistically
+// exploitable is a question worth arguing about and the wrong question to
+// settle here: three transports comparing the tunnel's only credential one way
+// and two comparing it another is a difference nobody chose, and the cheaper of
+// the two is the one that is harder to reason about. One function is also one
+// place to change if the answer ever turns out to be yes.
 func tokenMatches(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
@@ -137,3 +146,14 @@ type controlCandidate struct {
 // a tunnel that connects and then carries nothing — says nothing about its own
 // cause anywhere else.
 const legacyPoolWarning = "control channel established by a legacy client: its pool connections are authorised by source address, which fails when the client dials out from more than one address (carrier-grade NAT, a multi-homed host, a SNAT pool). Upgrade the client to authorise them by token instead."
+
+// certHost is the name to put in a certificate generated for a listener that
+// was not given one: the bind address's host, or "localhost" when it binds
+// every interface and so has no particular name of its own.
+func certHost(bindAddr string) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return "localhost"
+	}
+	return host
+}

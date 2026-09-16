@@ -1,5 +1,10 @@
 // Package testport hands out loopback ports for tests to bind.
 //
+// It is an ordinary package that only _test.go files import, which reads as
+// dead code to a tool and is not: a helper in a _test.go file belongs to one
+// package's test binary and cannot be shared, and three packages need this one.
+// Nothing outside a test should ever import it.
+//
 // It exists because the obvious way to do this is wrong, and the same wrong
 // version was written three times in this repository — in the end-to-end
 // harness, in the direct tunnel's tests and in the layer-3 forwarder's — with

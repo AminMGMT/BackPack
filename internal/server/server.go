@@ -33,7 +33,6 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 	// One process runs one tunnel, so the socket tuning is process-wide.
 	network.SetPinTCPBuffers(cfg.SOPinTCP)
 	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
-	// Off unless this tunnel asked for it; see handlers/zerocopy.go.
 	handlers.SetZeroCopy(cfg.ZeroCopy)
 	// Loopback unless this tunnel asked otherwise; see web/monitorhttp.go.
 	web.SetMonitorBind(cfg.WebBind)
@@ -266,6 +265,11 @@ func (s *Server) Start() {
 			SnifferLog:  s.config.SnifferLog,
 			SO_RCVBUF:   s.config.SO_RCVBUF,
 			SO_SNDBUF:   s.config.SO_SNDBUF,
+			// Passed like every other transport's. Leaving them off here is
+			// what made a udp tunnel accept a limit, save it, render it into
+			// the TOML, show it in the panel and never apply it.
+			MaxConnections: s.config.MaxConnections,
+			BandwidthMbps:  s.config.BandwidthMbps,
 		}
 
 		udpServer := transport.NewUDPServer(s.ctx, udpConfig, s.logger)

@@ -112,8 +112,6 @@ func freePort(t *testing.T) int {
 	return testport.Free(t)
 }
 
-func portFree(port int) bool { return testport.IsFree(port) }
-
 // tunnel is a running edge/origin pair on loopback.
 type tunnel struct {
 	edge   *Edge

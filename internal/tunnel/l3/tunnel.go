@@ -639,6 +639,19 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 	buf := make([]byte, maxMTU+256)
 	plain := make([]byte, 0, maxMTU+256)
+	// The one-packet slice tun.Write takes, allocated once.
+	//
+	// It was written as [][]byte{inner} at the call site, which is a fresh
+	// slice header on the heap for every packet that arrives — once per packet,
+	// forever, on the receive path of a tunnel carrying a whole network.
+	//
+	// It stays one packet. Batching the way the send path does is not available
+	// here: that path batches because tun.Read hands back several packets from
+	// one syscall, and this one reads the carrier a datagram at a time, so
+	// there is nothing to gather without either blocking on a read that may not
+	// come or holding packets back on a timer. Both trade latency for syscalls
+	// on a path where latency is the thing being protected.
+	wbuf := make([][]byte, 1)
 	ticker := time.NewTicker(previousGrace / 2)
 	defer ticker.Stop()
 
@@ -689,7 +702,7 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 		case typeResp:
 			t.handleResp(h, body)
 		case typeData:
-			plain = t.handleData(plain, h, body, from)
+			plain = t.handleData(plain, wbuf, h, body, from)
 		case typeProbe, typeProbeAck:
 			plain = t.handleProbeMessage(plain, h, body, from)
 		}
@@ -779,7 +792,10 @@ func (t *Tunnel) handleResp(h header, body []byte) {
 
 // handleData decrypts one packet and writes it into the interface. It returns
 // the plaintext buffer so its capacity is carried into the next call.
-func (t *Tunnel) handleData(plain []byte, h header, body []byte, from net.Addr) []byte {
+//
+// wbuf is the caller's one-element slice for the write, reused for the same
+// reason plain is.
+func (t *Tunnel) handleData(plain []byte, wbuf [][]byte, h header, body []byte, from net.Addr) []byte {
 	sess, isPending := t.sessionFor(h.session)
 	if sess == nil {
 		t.stats.dropped.Add(1)
@@ -811,7 +827,8 @@ func (t *Tunnel) handleData(plain []byte, h header, body []byte, from net.Addr) 
 		t.log.Debugf("l3: discarding a malformed inner packet from %s: %v", from, err)
 		return plain
 	}
-	if _, err := t.tun.Write([][]byte{inner}); err != nil {
+	wbuf[0] = inner
+	if _, err := t.tun.Write(wbuf); err != nil {
 		t.stats.dropped.Add(1)
 		t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
 		return plain

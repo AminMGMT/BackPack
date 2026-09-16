@@ -285,11 +285,28 @@ func (c *WsMuxTransport) poolMaintainer() {
 func (c *WsMuxTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
+	// The generation this handler belongs to, captured once.
+	//
+	// Everything below used to ask c.state.Cancel() != nil before deciding a
+	// failure was worth restarting for. That is always true: the constructor
+	// sets a cancel function before any of this can run, and Reset sets another
+	// on every restart. So the guard was open in every case it was written to
+	// close, and each goroutine dying during a teardown queued another restart
+	// of a tunnel that was already on its way down. The server transports were
+	// corrected to ask their generation's context instead; the client ones were
+	// not.
+	//
+	// Captured rather than read through c.state each time, for the same reason
+	// the server holds its context in the generation: Restart publishes a new
+	// one while these goroutines are still winding down, and a goroutine that
+	// went on to watch the new context would never see its own run end.
+	ctx := c.state.Ctx()
+
 	// Goroutine to handle the blocking ReceiveBinaryString
 	go func() {
 		for {
 			select {
-			case <-c.state.Ctx().Done():
+			case <-ctx.Done():
 				return
 
 			default:
@@ -299,7 +316,7 @@ func (c *WsMuxTransport) channelHandler() {
 				// and the watchdog sees an ESTABLISHED socket for every
 				// second of it. See controlDeadline.
 				if err := c.state.WSConn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Errorf("failed to set control channel deadline: %v", err)
 						go c.Restart()
 					}
@@ -307,7 +324,7 @@ func (c *WsMuxTransport) channelHandler() {
 				}
 				messageType, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Error("failed to read from channel connection. ", err)
 						go c.Restart()
 					}
@@ -325,8 +342,8 @@ func (c *WsMuxTransport) channelHandler() {
 
 	for {
 		select {
-		case <-c.state.Ctx().Done():
-			_ = c.state.WSConn().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
+		case <-ctx.Done():
+			_ = writeControl(c.state.WSConn(), []byte{utils.SG_Closed})
 			return
 
 		case msg := <-msgChan:
@@ -343,7 +360,7 @@ func (c *WsMuxTransport) channelHandler() {
 
 			case utils.SG_HB:
 				c.logger.Debug("heartbeat received successfully")
-				err := c.state.WSConn().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
+				err := writeControl(c.state.WSConn(), []byte{utils.SG_HB})
 				if err != nil {
 					c.logger.Errorf("failed to send heartbeat: %v", msg)
 					go c.Restart()

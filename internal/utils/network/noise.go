@@ -237,6 +237,18 @@ type noiseConn struct {
 	writeMu sync.Mutex
 	send    *noise.CipherState
 	padBuf  []byte // reused plaintext buffer: length byte, payload, filler
+	// frameBuf is the record as it goes on the wire: two length bytes and then
+	// the ciphertext, built in place and reused.
+	//
+	// Every record used to cost two allocations and a full copy of itself. The
+	// cipher allocated its output because it was handed a nil destination, and
+	// then the framing did append(hdr, msg...) — a second allocation and a copy
+	// of the whole record, up to 64 KB, once per record, on the hot path of the
+	// one transport that exists to be indistinguishable from ordinary traffic
+	// and so cannot afford to be slower than it. Encrypting straight into this
+	// buffer after the two reserved bytes makes both disappear, and keeps the
+	// record a single Write.
+	frameBuf []byte
 
 	readMu  sync.Mutex
 	recv    *noise.CipherState
@@ -260,11 +272,19 @@ func (c *noiseConn) Write(p []byte) (int, error) {
 		if len(chunk) > limit {
 			chunk = chunk[:limit]
 		}
-		enc, err := c.send.Encrypt(nil, nil, c.plaintext(chunk))
+		// Two bytes reserved for the length, then the ciphertext appended
+		// after them, so the record is built once and written once.
+		c.frameBuf = append(c.frameBuf[:0], 0, 0)
+		frame, err := c.send.Encrypt(c.frameBuf, nil, c.plaintext(chunk))
 		if err != nil {
 			return total, err
 		}
-		if err := writeNoiseFrame(c.Conn, enc); err != nil {
+		c.frameBuf = frame
+		if len(frame)-noiseLenPrefix > noiseMaxFrame {
+			return total, fmt.Errorf("noise: message too large (%d bytes)", len(frame)-noiseLenPrefix)
+		}
+		binary.BigEndian.PutUint16(frame[:noiseLenPrefix], uint16(len(frame)-noiseLenPrefix))
+		if _, err := c.Conn.Write(frame); err != nil {
 			return total, err
 		}
 		total += len(chunk)
@@ -349,14 +369,28 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// noiseLenPrefix is the length header in front of every record, and
+// noiseMaxFrame the largest record that header can describe.
+const (
+	noiseLenPrefix = 2
+	noiseMaxFrame  = 65535
+)
+
 // writeNoiseFrame prefixes a message with its length and writes it whole.
+//
+// This is the handshake's path, which sends three short messages in the life of
+// a connection. The record layer does not come through here: it builds its
+// frame in a buffer it keeps, because doing it this way costs an allocation and
+// a copy of the whole record, which is nothing three times and a great deal
+// once per record forever. See noiseConn.frameBuf.
 func writeNoiseFrame(w io.Writer, msg []byte) error {
-	if len(msg) > 65535 {
+	if len(msg) > noiseMaxFrame {
 		return fmt.Errorf("noise: message too large (%d bytes)", len(msg))
 	}
-	var hdr [2]byte
-	binary.BigEndian.PutUint16(hdr[:], uint16(len(msg)))
-	if _, err := w.Write(append(hdr[:], msg...)); err != nil {
+	buf := make([]byte, noiseLenPrefix+len(msg))
+	binary.BigEndian.PutUint16(buf[:noiseLenPrefix], uint16(len(msg)))
+	copy(buf[noiseLenPrefix:], msg)
+	if _, err := w.Write(buf); err != nil {
 		return err
 	}
 	return nil

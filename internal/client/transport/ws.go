@@ -213,6 +213,7 @@ func (c *WsTransport) poolMaintainer() {
 
 	newPoolSize := c.config.ConnPoolSize // intial value
 	var poolConnectionsSum int32 = 0
+	var load poolLoad // throughput signal, see poolload.go
 
 	for {
 		select {
@@ -231,6 +232,18 @@ func (c *WsTransport) poolMaintainer() {
 			// Calculate the average pool connections over the last 10 seconds
 			poolConnectionsAvg := (int(atomic.LoadInt32(&poolConnectionsSum)) + 9) / 10 // +9 for ceil-like logic
 			atomic.StoreInt32(&poolConnectionsSum, 0)                                   // Reset
+
+			// The pool is allowed to outgrow its configured size, which from
+			// outside is indistinguishable from a leak. Every other pooled
+			// transport publishes what its pool is doing and ws did not, so
+			// the panel's connection-pool card was simply missing on a ws or
+			// wss tunnel — not empty, not zero, absent — while the same card
+			// appeared for every other transport.
+			//
+			// The throughput figure is real here: ws counts its bytes through
+			// AddBytes, because it reads and writes messages rather than
+			// handing out a net.Conn.
+			metrics.ReportPool(poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, load.mbps())
 
 			// Dynamically adjust the pool size based on current connections
 			if (loadConnections + a) > poolConnectionsAvg*b {
@@ -254,11 +267,28 @@ func (c *WsTransport) poolMaintainer() {
 func (c *WsTransport) channelHandler() {
 	msgChan := make(chan byte, 1000)
 
+	// The generation this handler belongs to, captured once.
+	//
+	// Everything below used to ask c.state.Cancel() != nil before deciding a
+	// failure was worth restarting for. That is always true: the constructor
+	// sets a cancel function before any of this can run, and Reset sets another
+	// on every restart. So the guard was open in every case it was written to
+	// close, and each goroutine dying during a teardown queued another restart
+	// of a tunnel that was already on its way down. The server transports were
+	// corrected to ask their generation's context instead; the client ones were
+	// not.
+	//
+	// Captured rather than read through c.state each time, for the same reason
+	// the server holds its context in the generation: Restart publishes a new
+	// one while these goroutines are still winding down, and a goroutine that
+	// went on to watch the new context would never see its own run end.
+	ctx := c.state.Ctx()
+
 	// Goroutine to handle the blocking ReceiveBinaryString
 	go func() {
 		for {
 			select {
-			case <-c.state.Ctx().Done():
+			case <-ctx.Done():
 				return
 
 			default:
@@ -268,7 +298,7 @@ func (c *WsTransport) channelHandler() {
 				// and the watchdog sees an ESTABLISHED socket for every
 				// second of it. See controlDeadline.
 				if err := c.state.WSConn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Errorf("failed to set control channel deadline: %v", err)
 						go c.Restart()
 					}
@@ -276,7 +306,7 @@ func (c *WsTransport) channelHandler() {
 				}
 				messageType, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
-					if c.state.Cancel() != nil {
+					if ctx.Err() == nil {
 						c.logger.Error("failed to read from channel connection. ", err)
 						go c.Restart()
 					}
@@ -296,8 +326,8 @@ func (c *WsTransport) channelHandler() {
 	// Main loop to listen for context cancellation or received messages
 	for {
 		select {
-		case <-c.state.Ctx().Done():
-			_ = c.state.WSConn().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Closed})
+		case <-ctx.Done():
+			_ = writeControl(c.state.WSConn(), []byte{utils.SG_Closed})
 			return
 
 		case msg := <-msgChan:
@@ -315,7 +345,7 @@ func (c *WsTransport) channelHandler() {
 			case utils.SG_HB:
 				c.logger.Debug("heartbeat signal received successfully")
 				// send heartbeat back
-				err := c.state.WSConn().WriteMessage(websocket.BinaryMessage, []byte{utils.SG_HB})
+				err := writeControl(c.state.WSConn(), []byte{utils.SG_HB})
 				if err != nil {
 					c.logger.Errorf("failed to send heartbeat: %v", msg)
 					go c.Restart()

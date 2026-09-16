@@ -475,18 +475,17 @@ func fillNetwork(s *SystemStats, tunnels []manage.Tunnel) {
 	}
 }
 
-// GatherTunnels collects per-tunnel info concurrently, including ping and peer
+// gatherTunnels collects per-tunnel info concurrently, including ping and peer
 // geo. State reflects *real* connectivity, not just the local systemd unit:
 //
 //	stopped  — the systemd service is not active
 //	offline  — the service is active but the peer is unreachable (e.g. the other
 //	           side was stopped); a client stuck reconnecting shows here
 //	online   — active and reachable
-func GatherTunnels() []TunnelInfo { return gatherTunnels(nil) }
-
-// gatherTunnels takes the fleet runner so a paired tunnel can be asked about
-// its far end. nil means "do not ask", which is what every caller without a
-// fleet wants and what the tests use.
+//
+// It takes the fleet runner so a paired tunnel can be asked about its far end.
+// nil means "do not ask", which is what every caller without a fleet wants and
+// what the tests use.
 func gatherTunnels(run node.Runner) []TunnelInfo {
 	tunnels := manage.List()
 	out := make([]TunnelInfo, len(tunnels))

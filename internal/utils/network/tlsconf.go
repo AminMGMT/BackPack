@@ -3,6 +3,7 @@ package network
 import (
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -53,6 +54,11 @@ type TLSSettings struct {
 	// decide to accept a warning.
 	FallbackCertFile string
 	FallbackKeyFile  string
+
+	// SelfSignedHost is the name to put in a certificate generated because none
+	// was configured. Cosmetic — nothing validates it — and empty gives
+	// "localhost".
+	SelfSignedHost string
 }
 
 // UsesACME reports whether these settings request a Let's Encrypt certificate.
@@ -68,9 +74,16 @@ func (s TLSSettings) UsesACME() bool { return s.ACMEDomain != "" }
 func ServerTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error) {
 	var cfg *tls.Config
 	var err error
-	if s.UsesACME() {
+	switch {
+	case s.UsesACME():
 		cfg, err = acmeTLSConfig(s, logf)
-	} else {
+	case s.CertFile == "" && s.KeyFile == "":
+		// Told nothing, so one is made. See selfsigned.go for why generating
+		// beats refusing here, and for the message this used to fail with.
+		logf("no certificate configured: serving a generated one for this run " +
+			"(the token is what authenticates the tunnel; set acme_domain for a trusted certificate)")
+		cfg, err = selfSignedTLSConfig(s.SelfSignedHost)
+	default:
 		cfg, err = fileTLSConfig(s.CertFile, s.KeyFile)
 	}
 	if err != nil {
@@ -179,6 +192,52 @@ func (r *certReloader) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 
 // --- Let's Encrypt ----------------------------------------------------------
 
+// acmeCATimeout bounds one request to the certificate authority. See the
+// client it is used in.
+const acmeCATimeout = time.Minute
+
+// acmeHandshakeTimeout bounds one handshake's wait for issuance.
+//
+// Bounding each request to the CA is not enough on its own: the ACME client
+// retries a request that fails on transport, so a CA that is unreachable in the
+// way that matters here — a route that accepts the connection and then says
+// nothing — is a loop of bounded attempts with nothing ending it. Meanwhile the
+// handshake that triggered issuance is still open, the browser or the peer is
+// still waiting on it, and the fallback certificate below is never reached,
+// because nothing has returned an error yet.
+//
+// Past this the attempt is abandoned and the fallback is served. autocert keeps
+// working on it underneath and caches the result, so the next handshake gets
+// the real certificate the moment there is one.
+const acmeHandshakeTimeout = 15 * time.Second
+
+// issueWithin runs an issuance attempt and gives up waiting after d.
+//
+// The attempt itself is not cancelled — autocert has no way to be told to stop,
+// and stopping it would be wrong anyway: it is still the thing that will
+// eventually produce the certificate, and it caches what it gets. What this
+// bounds is how long a handshake waits for it.
+func issueWithin(issue func(*tls.ClientHelloInfo) (*tls.Certificate, error),
+	hello *tls.ClientHelloInfo, d time.Duration) (*tls.Certificate, error) {
+	type result struct {
+		crt *tls.Certificate
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		crt, err := issue(hello)
+		done <- result{crt, err}
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case r := <-done:
+		return r.crt, r.err
+	case <-timer.C:
+		return nil, fmt.Errorf("issuance did not finish within %s", d)
+	}
+}
+
 func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error) {
 	if s.ACMECacheDir == "" {
 		return nil, fmt.Errorf("acme cache directory is not set")
@@ -192,6 +251,22 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 		Cache:      autocert.DirCache(s.ACMECacheDir),
 		HostPolicy: autocert.HostWhitelist(s.ACMEDomain),
 		Email:      s.ACMEEmail,
+		// A bounded HTTP client for talking to the CA.
+		//
+		// autocert's default has no timeout, and issuance happens inside a
+		// handshake: a CA that accepts the connection and then says nothing —
+		// a blackholed route, which is the normal condition on the networks
+		// this runs on — leaves that handshake open for as long as the kernel
+		// keeps the socket, with the browser or the peer waiting on it and the
+		// fallback certificate below never reached, because nothing has
+		// returned an error yet.
+		//
+		// A minute is far longer than issuance needs and far shorter than
+		// forever. Past it the attempt fails, which is what lets the fallback
+		// be served and what lets the next handshake try again.
+		Client: &acme.Client{
+			HTTPClient: &http.Client{Timeout: acmeCATimeout},
+		},
 	}
 
 	cfg := m.TLSConfig()
@@ -225,7 +300,7 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 			clone.ServerName = s.ACMEDomain
 			want = &clone
 		}
-		crt, err := issue(want)
+		crt, err := issueWithin(issue, want, acmeHandshakeTimeout)
 		if err == nil || fallback == nil {
 			return crt, err
 		}

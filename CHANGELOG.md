@@ -4,7 +4,7 @@ All notable changes to Backpack are documented here.
 
 ## v1.8.2 — unreleased
 
-The serious findings of a section-by-section audit of the whole project, and the
+Every finding of a section-by-section audit of the whole project, and the
 mechanism that lets a fix like these reach a server that already exists.
 
 That mechanism is the part worth reading first. Two of the fixes below change
@@ -16,6 +16,12 @@ it, and the engine went on widening it back on every single tunnel start — so 
 operator could optimize the machine, pass its own check, and be wide again the
 moment a tunnel restarted. An update now corrects the machine as well as the
 binary.
+
+Verified on a real tunnel, not only in tests: all six layer-3 carriers — `udp`,
+`quic`, `pck`, `sni`, `xdi` and `spoof` — carried a 5 MB payload byte-identical
+over a TUN device in a network namespace, with no packet loss on a ping across
+the tunnel. That path had never been exercised end to end before, because the
+raw-socket carriers need capabilities a test process does not have.
 
 ### Security
 
@@ -34,6 +40,42 @@ binary.
   by opening a different screen, and `/webui` reached it without a button to
   notice. A screen that hands over a credential is now checked against the same
   permission every action is.
+
+- **The Telegram status report no longer carries the panel password.** Gating
+  the Web Panel screen closed the door that was written as a door, and it was
+  not the only way in. `StatusText` is two things at once: the Overview screen,
+  which any account on the admin list can open and which the bot leads with, and
+  the scheduled report, which is sent unprompted to every recipient on a timer.
+  Both reach a read-only admin, so the credential was on the screen in front of
+  them before they pressed anything and arrived again by itself every few hours.
+
+  The report gives the panel's address now. The password lives on the one screen
+  that checks who is asking.
+
+- **A cross-site request can no longer change anything, and can no longer sign
+  an operator out.** What stopped one was a chain of three things, each of which
+  holds: the session cookie is `SameSite=Lax` and so is not sent on a cross-site
+  POST, every mutating handler enforces POST, and the panel answers only under a
+  path nobody can guess. The shape of that is worth noticing — the last link is
+  a secret in the address bar, which makes the base path a load-bearing control
+  rather than the obscurity it is described as.
+
+  A browser says where a request came from and an attacker's page cannot make it
+  say otherwise, so that is checked now: a cross-site write is refused outright.
+  Signing out is the exception that proves it, because it changes state on a GET
+  and has to stay a link — under `SameSite=Lax` a cross-site top-level
+  navigation still carries the cookie, which is exactly what Lax is for. It is
+  checked where it is handled. Anything that is not a browser — a script, a peer
+  panel holding the remote access token, curl — sends no such header and is
+  unaffected.
+
+- **Every transport compares the tunnel's token in constant time.** `tcp` and
+  `tcpmux` went through a helper written for it; `udp`, `kcp` and `quic` used a
+  plain `!=`. Whether a timing difference over those three is realistically
+  exploitable is worth arguing about and is the wrong question to settle in five
+  places: two ways of comparing the only credential a tunnel has is a difference
+  nobody chose, and the cheaper of the two is the one that is harder to reason
+  about.
 
 - **Tunnel configs are written `0600`.** A tunnel's config holds its token, and
   on `tcp`, `udp` and `kcp` that token is the whole of what authorises a
@@ -83,6 +125,46 @@ binary.
   This release ships two migrations: the config permissions above, and the
   ephemeral port range below.
 
+### Changed
+
+- **Twelve unreachable functions, one unused field and a comment-only file are
+  gone.** An export surface written for a consumer that never arrived, the two
+  leftovers of the removed WireGuard-pipe mode, the bot's half of a panel
+  login-code integration that no longer exists, an exported wrapper nothing
+  called, a staging buffer for reads that reads never used, and a constant the
+  control channel's version negotiation replaced. Two comments that described
+  how things used to work were corrected rather than deleted: the reasoning
+  behind that constant is recorded where the negotiation lives, and the note
+  about where the pipe mode went now sits on the configuration it is about.
+
+  `internal/testport` stays, and says why: it is an ordinary package that only
+  `_test.go` files import, which reads as dead code to a tool and is not — a
+  helper in a `_test.go` file belongs to one package's test binary and cannot be
+  shared, and three packages need this one.
+
+- **The stealth record layer no longer allocates for every record it sends.**
+  Two allocations and a full copy of the record, up to 64 KB, once per record:
+  the cipher was handed a nil destination so it allocated its output, and the
+  framing then appended the header to it. On the hot path of the one transport
+  whose reason for existing is to be indistinguishable from ordinary traffic, in
+  a package that fights hard for exactly this elsewhere. Measured on an 8 KB
+  write: four allocations per record before, one after.
+
+- **The layer-3 receive path no longer allocates a slice per packet.** It built
+  a one-element `[][]byte` at the call site for every packet that arrived. It is
+  still one packet per write, and that is not an oversight: the send path
+  batches because reading the interface hands back several packets from one
+  syscall, and this path reads the carrier a datagram at a time, so there is
+  nothing to gather without either blocking on a read that may not come or
+  holding packets back on a timer. Both trade latency for syscalls on a path
+  where latency is the thing being protected.
+
+- **A typo and two stale comments.** `deafultHeartbeat`; a zero-copy line
+  duplicated in both engines; and `isKCP`'s doc naming four transports including
+  spoof, which has been a direct-tunnel carrier rather than a reverse transport
+  for some time — the function stopped covering it when it stopped being one,
+  and the sentence did not.
+
 ### Fixed
 
 - **The engine widened the ephemeral port range back on every start.** Optimize
@@ -125,6 +207,202 @@ binary.
   browser still holding a live session for a password that no longer existed. The
   header's own logout link was always correct, which is why this only showed up
   here.
+
+- **The `udp` transport counted no traffic at all.** Not a number that was
+  wrong — a number that was absent. Neither counter appeared in either of its
+  files, because it never hands out a `net.Conn` for the wrapper the other
+  transports use to go around, and nothing had been written for the case. A udp
+  tunnel carrying gigabytes read `0 B in, 0 B out` in the panel, in the CLI, in
+  the Telegram report and on the traffic chart: an idle tunnel, as far as
+  anything that displays it could tell.
+
+  Proved live at the time: 200 datagram round trips carried, both counters still
+  zero at both ends. The end-to-end test named "traffic is counted on every
+  transport" lists six and udp is not among them — it cannot be, because that
+  test forwards a TCP echo backend through the shared harness. So the one
+  transport with no coverage was the one transport with no counters. It has its
+  own test now, on a datagram path.
+
+- **`max_connections` and `bandwidth_mbps` did nothing on a `udp` tunnel.** They
+  were accepted by the menu, saved into the TOML, rendered, and shown in the
+  panel, and the struct the transport is built from had nowhere to put them.
+  Nothing anywhere said so. An operator capping a shared udp tunnel got a cap
+  that read back correctly on every screen and was never applied.
+
+  A "connection" is a source address here, because that is the only thing a
+  connectionless protocol has that means the same thing: one peer's flow through
+  the tunnel. The bandwidth cap is charged where the bytes are counted, for the
+  same reason the traffic fix had to go there.
+
+- **Every client transport restarted itself on a guard that was always open.**
+  Each one asked `c.state.Cancel() != nil` before deciding a failure was worth
+  restarting for, and that condition cannot be false: the constructor installs a
+  cancel function before any of that code can run, and every restart installs
+  another. So the guard was open in exactly the case it was written to close. A
+  tunnel coming down — a reload, a stop, a restart already in flight — has
+  several goroutines fail at once, and each one logged an error and queued
+  another restart of a transport that was already going away.
+
+  The server transports were corrected to ask their generation's own context
+  some time ago, with the reasoning written down where it was fixed. The client
+  ones kept the original, in all seven.
+
+- **Client control writes had no deadline.** A write into a peer that has
+  stopped reading fills the kernel's send buffer and then blocks until the
+  retransmit timer gives up — around fifteen minutes on Linux defaults. The
+  server grew a bounded write for precisely that failure; the client kept
+  writing unbounded, on the shutdown notice, which stalls a restart for that
+  whole window, and on the RTT probe, which runs on a timer forever and so
+  parks a goroutine and quietly stops the figure the panel shows. Ten seconds,
+  the same bound the other end uses.
+
+- **The pairing timeout could not fire in the case it exists for.** An accepted
+  client connection waits three seconds for a tunnel connection to carry it. The
+  check sat at the top of the pairing loop and the loop then blocked on the
+  tunnel channel — so it only ran when a tunnel connection arrived, and a
+  connection that arrived is one that did not need timing out. With a pool that
+  had run dry the client was held open with nobody waiting on it: the browser
+  sat there until it gave up on its own, the slot it took against
+  `max_connections` was never returned, and the socket stayed open for the life
+  of the run. It runs on a timer now, so it fires whether or not anything
+  arrives.
+
+  The same loops left on shutdown without closing the connection they were
+  holding or freeing its slot, so every reload leaked one of each per connection
+  parked there.
+
+- **A mux session that failed could deadlock its own handle loop.** Putting a
+  connection back on the local queue was a blocking send, made from inside the
+  goroutine that drains that very queue — and in the mux transports there is one
+  such goroutine per session, so the one making the send is frequently the only
+  one running. A full queue was then a goroutine waiting for itself: the tunnel
+  stopped for good, with every socket still open and nothing in the log to say
+  why. A connection that cannot be re-queued is closed and its slot returned,
+  which is what the accept path already did with the same channel.
+
+  The same path never gave back the mux slot it took, so a session that failed
+  to send the address `mux_session` times stopped taking connections at all —
+  the same stall through a different channel — and leaked the stream it could
+  not use.
+
+- **Any refresh interval above 24 hours read back as "disabled".** The schedule
+  is written as a cron line, and the form written for intervals over a day was
+  not one the reader matched, so `GetIntervalHours` answered 0. The job was
+  installed, cron had it, and the tunnels were refreshed on it — while the menu,
+  the Telegram bot and the web panel all agreed Auto Refresh was off. An
+  operator who set 48 hours saw it off the next time they looked, set it again,
+  and ended up with the same job written twice.
+
+  Intervals cron cannot express are rounded, which it always did; it now says so
+  rather than repeating back the number it was given.
+
+- **The Settings rail showed values that were never true.** The markup is lifted
+  from the approved design preview, so the five subtitles under it arrived as
+  sample text: "1.7.6 available", "Port 8443 · Let's Encrypt", "2FA on · 2
+  devices" on a panel that has no two-factor at all, and "Yesterday 03:00".
+  Those are not placeholders that look like placeholders — they are specific,
+  plausible claims about this machine.
+
+  They were rewritten from real data only when there was some, and skipping the
+  write is what leaves the invented line on screen, so the one moment the panel
+  knew least was the moment it made the most confident claim. Every line is
+  written now, and a line with nothing behind it says so. The port half of the
+  Panel access line read a field the stats payload has never carried, so it was
+  always undefined; it comes from the endpoint that knows the port and the
+  certificate. The footer's "the two marked with a dot differ from the default"
+  described a drawing — nothing on that screen marks anything with a dot.
+
+- **The direct tunnel form never asked for its suggested values.**
+  `/api/direct/defaults` answers with a subnet nothing on the machine is using,
+  a free interface name and a preset. The route and the handler were both
+  registered and the wrapper that calls them was never written, so the panel
+  never asked. The two fields that endpoint exists for are the two an operator
+  is least able to guess: a tunnel's own `/30` has to avoid every subnet already
+  on the box, and picking one by hand is how you get a tunnel that comes up and
+  blackholes the route it was built for.
+
+- **The bot gave out a web panel address that does not work.** It was built as
+  `http://IP:PORT`, which is two things wrong for anyone whose panel is not the
+  default: a panel behind TLS refuses the plain scheme, and every panel is
+  served under a secret path segment and answers nothing outside it. So the
+  bot's own Web Panel screen printed an address that 404s. The CLI has printed
+  the full address all along, which is why this only ever showed up here.
+
+- **Startup validation never ran for a direct tunnel's carrier.** `pck` and
+  `xdi` were reverse transports once and their checks still gated on
+  `[server]`/`[client]` naming one. Both are direct-tunnel carriers now — which
+  is what the setup wizard writes — so an `[l3]` config naming one went past
+  every check: no Linux check, no root check, no validation of `pck_flags`,
+  `pck_gateway_mac` or `pck_interface`, and not a word about iptables. The
+  difference that makes is between "run as root, or grant CAP_NET_RAW with this
+  command" at load, and a socket error from inside the carrier once the tunnel
+  is supposed to be up. `sni` is checked with `pck`, because `sni` is `pck` with
+  a ClientHello in front of it.
+
+- **A `wss` tunnel that was not told where its certificate is now gets one.** It
+  went through the file loader with two empty filenames and failed at startup
+  with `open : no such file or directory` — a message with no subject, naming
+  nothing. The direct engine has always generated a throwaway certificate in
+  exactly this case, said so in the log, and worked, so the same configuration
+  produced a working tunnel on one engine and a refusal on the other. Both use
+  the same generator now.
+
+  Generating rather than refusing is right because nothing here authenticates a
+  peer with it: the token is the credential, and TLS is on the wire to look like
+  TLS to whatever is in between. A certificate nobody validates serves that
+  exactly as well whoever signed it. A configured certificate that cannot be
+  read is still an error — an operator who supplied a path is entitled to hear
+  that it is wrong.
+
+- **The SOCKS proxy's accept loop can no longer burn a core.** A bare `continue`
+  on an accept error is right for the error accept normally returns and wrong
+  for the two that matter: a closed listener and a process out of file
+  descriptors both return instantly and go on returning, so the loop spins as
+  fast as the CPU allows with nothing to block on. The reverse transports grew a
+  backoff for exactly this; the proxy runs on the same machines, against the
+  same descriptor ceiling, and did not have it. It is one shared implementation
+  now rather than two.
+
+- **The last bytes of a stream are no longer dropped.** A `Read` may return what
+  it has along with the error that ended the stream — `io.Reader` says so
+  plainly, and says the bytes come first. The relay returned on the error and
+  discarded them, so a connection whose final read carries the tail of a
+  response and EOF in one call loses that tail, silently, on a path that
+  otherwise carries everything faithfully. None of the readers wired to it does
+  that today, which is why nobody has seen it; that is a property of those
+  readers and not of the loop.
+
+- **Installing a scheduled job can no longer delete every other job on the
+  machine.** Reading the crontab answered "there is no crontab" and "the crontab
+  could not be read" with the same nil, and the new crontab was built from it —
+  which is a crontab containing exactly one line, ours. Any transient failure of
+  `crontab -l` turned scheduling an auto-refresh into replacing the machine's
+  crontab: the operator's backups, their certificate renewals, their own
+  scripts, gone, with the program reporting success. The two are told apart now,
+  and a read that did not happen refuses the write rather than guessing at what
+  was there.
+
+- **The `ws` transport reports its connection pool.** The pool is allowed to
+  outgrow its configured size, which from outside is indistinguishable from a
+  leak, so every pooled transport publishes what it has, what it is aiming for
+  and what it was asked for. `ws` did not — so on a `ws` or `wss` tunnel the
+  panel's pool card was not empty or zero, it was absent.
+
+- **The panel's background probe can be stopped.** It looped on a ticker with
+  nothing else to select on, so nothing short of ending the process could stop
+  it. A process-lifetime singleton, so not a leak — but a panel that has shut
+  its listener down went on dialling the fleet, and a test that started one left
+  it running for the rest of the suite.
+
+- **A tunnel no longer hangs a handshake waiting for Let's Encrypt.** Issuance
+  happens inside a handshake, and the client talking to the CA had no timeout at
+  all. A CA that is unreachable in the way that matters — a route that accepts
+  the connection and then says nothing, which is the normal condition on the
+  networks this runs on — left that handshake open for as long as the kernel
+  kept the socket, with the peer waiting on it and the fallback certificate
+  never reached, because nothing had returned an error yet. Each request to the
+  CA is bounded, and so is the handshake's wait for the whole attempt; past it
+  the fallback is served while issuance carries on underneath.
 
 - **`install.sh` could not build from source.** It pinned Go 1.24.5 and accepted
   any toolchain from 1.24 up, while `go.mod` requires 1.26.0. The build runs with

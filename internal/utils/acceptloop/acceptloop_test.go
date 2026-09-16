@@ -1,4 +1,4 @@
-package transport
+package acceptloop
 
 import (
 	"context"
@@ -11,13 +11,13 @@ import (
 // failures took no measurable time and burned a core doing it. The pause is what
 // makes that impossible; the exact schedule matters less than that it exists.
 func TestAcceptBackoffStopsTheSpin(t *testing.T) {
-	var b acceptBackoff
+	var b Backoff
 	ctx := context.Background()
 
 	start := time.Now()
 	for i := 0; i < 8; i++ {
-		if !b.fail(ctx) {
-			t.Fatal("fail reported a cancelled context on a live one")
+		if !b.Fail(ctx) {
+			t.Fatal("Fail reported a cancelled context on a live one")
 		}
 	}
 	elapsed := time.Since(start)
@@ -32,16 +32,16 @@ func TestAcceptBackoffStopsTheSpin(t *testing.T) {
 // A successful accept must clear the backoff, or one bad connection would slow
 // every good one behind it.
 func TestAcceptBackoffResetsOnSuccess(t *testing.T) {
-	var b acceptBackoff
+	var b Backoff
 	ctx := context.Background()
 
 	for i := 0; i < 6; i++ {
-		b.fail(ctx) // climb to the ceiling
+		b.Fail(ctx) // climb to the ceiling
 	}
-	b.ok()
+	b.OK()
 
 	start := time.Now()
-	b.fail(ctx)
+	b.Fail(ctx)
 	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
 		t.Fatalf("after a success the next failure waited %v — the backoff did not reset", elapsed)
 	}
@@ -49,9 +49,9 @@ func TestAcceptBackoffResetsOnSuccess(t *testing.T) {
 
 // Cancellation must interrupt the pause, so a shutdown is not delayed by it.
 func TestAcceptBackoffReturnsOnCancel(t *testing.T) {
-	var b acceptBackoff
+	var b Backoff
 	for i := 0; i < 6; i++ {
-		b.fail(context.Background()) // climb to the 100ms ceiling
+		b.Fail(context.Background()) // climb to the 100ms ceiling
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -61,7 +61,7 @@ func TestAcceptBackoffReturnsOnCancel(t *testing.T) {
 	}()
 
 	start := time.Now()
-	if b.fail(ctx) {
+	if b.Fail(ctx) {
 		t.Fatal("fail reported success though the context was cancelled")
 	}
 	if elapsed := time.Since(start); elapsed > 90*time.Millisecond {

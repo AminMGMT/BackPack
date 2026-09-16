@@ -55,23 +55,44 @@ function fill(root, values, prefix = '') {
 /* The rail's one-line summaries and the version list were drawn with example
    values. They are rewritten from what the server reports, because a summary
    that is decoration is a summary that lies the first time something changes. */
-function summarise(root, { stats, tg, ch, ses, ab, upd }) {
+function summarise(root, { tg, ses, ab, upd, cert }) {
+  /* Every line is written, always.
+   *
+   * This used to skip the write when it had nothing to say — `if (line && text)`
+   * — and what is underneath is not blank. It is the preview's own sample text,
+   * drawn by whoever designed the screen: "2FA on · 2 devices" on a panel with
+   * no two-factor at all, and "Connected" for a bot that was never configured.
+   * So the one case where the panel knew least was the case where it made the
+   * most confident claim, and an operator whose session list failed to load was
+   * told about two devices that do not exist.
+   *
+   * A line with no data says so. "Could not be read" is worth more than a
+   * plausible sentence. */
   const say = (label, text) => {
     for (const b of root.querySelectorAll('b')) {
       if (b.textContent.trim() !== label) continue;
       const line = b.nextElementSibling;
-      if (line && text) line.textContent = text;
+      if (line) line.textContent = text || 'could not be read';
       return b;
     }
   };
-  say('Panel access', [
-    stats?.panelPort ? 'Port ' + stats.panelPort : null,
-    location.protocol === 'https:' ? 'HTTPS' : 'Plain HTTP',
-  ].filter(Boolean).join(' · '));
-  say('Security', [
-    ses ? `${ses.length} device${ses.length === 1 ? '' : 's'}` : null,
-  ].filter(Boolean).join(' · '));
-  say('Telegram bot', tg ? (tg.configured ? 'Connected' : 'Not configured') : null);
+  /* The port and the certificate, from the endpoint that knows both.
+   *
+   * It read stats.panelPort, and the stats payload has no such field — it never
+   * has — so the port half was always undefined and the line fell back to
+   * naming the scheme of the address the browser happened to use. That is not
+   * the same question: a panel reached through a reverse proxy is https to the
+   * browser and plain http to itself, and the port it is actually served on is
+   * the one an operator needs when they are about to change it. */
+  const certLabel = { acme: "Let's Encrypt", self: 'self-signed HTTPS', http: 'plain HTTP' };
+  say('Panel access', cert
+    ? [cert.port ? 'Port ' + cert.port : null, certLabel[cert.mode] || null]
+      .filter(Boolean).join(' · ')
+    : '');
+  say('Security', ses
+    ? `${ses.length} signed-in device${ses.length === 1 ? '' : 's'}`
+    : '');
+  say('Telegram bot', tg ? (tg.configured ? 'Connected' : 'Not configured') : '');
   /* The rail is one short line per group; a full sentence wraps and pushes the
      rest of the list down, so the summary is the fact, not the explanation. */
   const when = t => {
@@ -81,9 +102,9 @@ function summarise(root, { stats, tg, ch, ses, ab, upd }) {
     if (gap < 2 * day) return 'yesterday ' + d.toTimeString().slice(0, 5);
     return `${Math.floor(gap / day)} days ago`;
   };
-  say('Backup', ab?.last ? when(ab.last) : 'never taken');
+  say('Backup', ab ? (ab.last ? when(ab.last) : (ab.enabled ? 'weekly, none taken yet' : 'off')) : '');
   const tag = upd?.summary?.match(/v?[\d.]+/)?.[0];
-  const u = say('Update', upd?.available ? `${tag} available` : 'up to date');
+  const u = say('Update', upd ? (upd.available && tag ? `${tag} available` : 'up to date') : '');
   if (u) {
     const dot = u.parentElement?.querySelector('.dot, .badge');
     if (dot) dot.hidden = !upd?.available;
@@ -96,9 +117,9 @@ export function settingsView(ctx) {
     bind: async (root, close) => {
       dialogSubtitle(root, store.get().stats,
         'changes apply as you make them unless a control says otherwise');
-      const [tg, ch, ses, ab, upd] = await Promise.allSettled([
+      const [tg, ch, ses, ab, upd, cert] = await Promise.allSettled([
         api.telegram(), api.channel(), api.sessions(),
-        api.autoBackup(), api.updateCheck(),
+        api.autoBackup(), api.updateCheck(), api.panelCertRead(),
       ]);
       const val = r => (r.status === 'fulfilled' ? r.value : null);
 
@@ -124,9 +145,23 @@ export function settingsView(ctx) {
       if (tg.status === 'fulfilled') fill(root, tg.value);
       if (ch.status === 'fulfilled') fill(root, ch.value);
       summarise(root, {
-        stats: store.get().stats, tg: val(tg), ch: val(ch),
-        ses: val(ses), ab: val(ab), upd: val(upd),
+        tg: val(tg), ses: val(ses), ab: val(ab), upd: val(upd), cert: val(cert),
       });
+
+      /* The footer note.
+       *
+       * It read "Five groups · the two marked with a dot differ from the
+       * default", and nothing on this screen marks anything with a dot or knows
+       * what a default would be — it was the preview describing a drawing of
+       * itself. The count is the part that is true and worth keeping, so it is
+       * counted rather than asserted. */
+      {
+        const note = root.querySelector('.df .note');
+        const n = root.querySelectorAll('.rail3 [data-k]').length;
+        if (note && n) {
+          note.textContent = `${n} groups · changes take effect as they are saved.`;
+        }
+      }
 
       /* Sessions are a list, not a field. The preview drew two example rows;
          they are replaced by the real ones, or by a line saying there is one. */
@@ -240,9 +275,10 @@ export function settingsView(ctx) {
         }
       };
 
-      let certSnap = null;
-      try {
-        certSnap = await api.panelCertRead();
+      /* The same read the rail above used; asking twice would be two answers to
+         one question, and they can differ. */
+      let certSnap = val(cert);
+      if (certSnap) {
         certMode = certSnap.mode || 'self';
         const d = root.querySelector('[name="domain"]');
         if (d) d.value = certSnap.domain || certSnap.selfHost || '';
@@ -250,7 +286,7 @@ export function settingsView(ctx) {
         if (e2) e2.value = certSnap.email || '';
         const pp = root.querySelector('[name="port"]');
         if (pp && certSnap.port) pp.value = certSnap.port;
-      } catch (e) { /* the section still selects, it just starts on self-signed */ }
+      } /* else the section still selects, it just starts on self-signed */
       certOpts.forEach(o => o.addEventListener('click', () => {
         certMode = o.dataset.mode;
         paintCert(certSnap);

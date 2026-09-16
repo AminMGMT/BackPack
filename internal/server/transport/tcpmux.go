@@ -420,12 +420,12 @@ func (s *TcpMuxTransport) acceptTunnelConn(g *tcpMuxGen, listener net.Listener) 
 				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr(), err)
 				// Back off rather than retry instantly: a closed listener fails
 				// immediately and forever, and `continue` would pin a core.
-				if !backoff.fail(g.ctx) {
+				if !backoff.Fail(g.ctx) {
 					return
 				}
 				continue
 			}
-			backoff.ok()
+			backoff.OK()
 
 			//discard any non tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
@@ -652,12 +652,12 @@ func (s *TcpMuxTransport) acceptLocalConn(g *tcpMuxGen, listener net.Listener, r
 				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
 				// One of these runs per forwarded port, so an instant retry on a
 				// broken listener would pin a core per port. See acceptBackoff.
-				if !backoff.fail(g.ctx) {
+				if !backoff.Fail(g.ctx) {
 					return
 				}
 				continue
 			}
-			backoff.ok()
+			backoff.OK()
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
@@ -743,8 +743,8 @@ func (s *TcpMuxTransport) handleSession(g *tcpMuxGen, session *smux.Session) {
 			return
 
 		case incomingConn := <-g.localChannel:
-			if time.Now().UnixMilli()-incomingConn.timeCreated > 3000 { // 3000ms
-				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-incomingConn.timeCreated)
+			if nowMillis()-incomingConn.timeCreated > pairingTimeout.Milliseconds() {
+				s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-incomingConn.timeCreated)
 				incomingConn.conn.Close()
 
 				// Free the slot this connection took on accept. It is otherwise
@@ -770,8 +770,23 @@ func (s *TcpMuxTransport) handleSession(g *tcpMuxGen, session *smux.Session) {
 			// Send the target port over the tunnel connection
 			if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)
-				// Put local connection back to local channel
-				g.localChannel <- incomingConn
+				// The stream is unusable and nothing else will close it.
+				stream.Close()
+
+				// Give back the mux slot this attempt took. It was not given
+				// back, so a session that failed this way MuxCon times stopped
+				// taking connections at all: the loop blocks at the top on a
+				// counter that is full, and the only goroutine that empties it
+				// is this one.
+				<-counter
+
+				// Back on the queue for another stream, without blocking — see
+				// requeueLocal. A connection that goes back is still in flight
+				// and stays counted; one there was no room for is counted out
+				// here, because nothing downstream will ever do it.
+				if !requeueLocal(g.localChannel, incomingConn, s.limits, s.logger) {
+					atomic.AddInt32(&s.streamCounter, -1)
+				}
 				continue
 			}
 
@@ -794,8 +809,14 @@ func (s *TcpMuxTransport) handleSessionError(g *tcpMuxGen, incomingConn *LocalTC
 	// decrease session value
 	atomic.AddInt32(&s.sessionCounter, -1)
 
-	// Put local connection back to local channel
-	g.localChannel <- *incomingConn
+	// Back on the queue, without blocking. This runs on the session goroutine
+	// that has just failed and is about to return, so there may be no other
+	// goroutine left to drain the channel it is sending into. See requeueLocal.
+	// A connection there was no room for is counted out, since nothing
+	// downstream will do it.
+	if !requeueLocal(g.localChannel, *incomingConn, s.limits, s.logger) {
+		atomic.AddInt32(&s.streamCounter, -1)
+	}
 
 	// Attempt to request a new connection
 	select {
