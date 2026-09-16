@@ -73,6 +73,31 @@ func ServiceName(name string) string {
 	return ServicePrefix + name + ".service"
 }
 
+// ReleasePublicKey is the Ed25519 key that release signatures are checked
+// against, base64 of the raw 32 bytes.
+//
+// A release is published with a SHA256SUMS file and the updater verifies
+// every archive against it, which is what stops a mirror handing over a
+// different binary. What it does not stop is a mirror handing over a
+// different SHA256SUMS as well: the list travels the same channel as the
+// thing it describes, over the third-party proxies these machines are
+// obliged to use. Signing the list closes that, because the signature is
+// checked against a key that travelled with the binary already running.
+//
+// Empty means this build checks checksums and nothing more, which is what
+// every build before this one did. It is deliberately not a placeholder
+// value: a key nobody holds the private half of would refuse every update,
+// and one invented here would be worse than none. Generate the pair with
+// `make release-key`, paste the public half in here, and put the private
+// half in the repository's RELEASE_SIGNING_KEY secret — the release
+// workflow signs with it, and from that release on the updater requires a
+// signature and refuses an unsigned or mis-signed one.
+//
+// A var rather than a const so a test can pin a key of its own — the same
+// reason node.StorePath and optimize.sysctlFile are vars. Nothing at runtime
+// writes it.
+var ReleasePublicKey = ""
+
 // TunnelConfigMode is the permission a tunnel's TOML config is written with.
 //
 // A tunnel config holds its token, and on tcp, udp and kcp that token is the

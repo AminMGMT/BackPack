@@ -35,8 +35,15 @@ type Node struct {
 	// User and Password are the login. Root, in practice: the panel installs
 	// services and writes into /etc on that machine, which is what managing it
 	// means.
+	//
+	// Password is in memory only. What goes on disk is Sealed, and the
+	// difference is about the backup archive rather than about this machine —
+	// see seal.go. A legacy registry that still has a plaintext "password" is
+	// read from this field and re-sealed on its next save.
 	User     string `json:"user"`
 	Password string `json:"password,omitempty"`
+	// Sealed is Password encrypted with a key that is not in the backup.
+	Sealed string `json:"password_sealed,omitempty"`
 
 	// Fingerprint is the SHA-256 of the host key this server presented the
 	// first time it answered. Every connection after that must match it. Empty
@@ -73,12 +80,33 @@ func LoadStore() Store {
 	if data, err := os.ReadFile(StorePath); err == nil {
 		json.Unmarshal(data, &s)
 	}
+	for i := range s.Nodes {
+		// A sealed value wins; a plaintext one is what an older version wrote
+		// and is kept working until the next save re-seals it.
+		if s.Nodes[i].Sealed != "" {
+			s.Nodes[i].Password = unseal(s.Nodes[i].Sealed)
+		}
+		s.Nodes[i].Sealed = ""
+	}
 	return s
 }
 
-// SaveStore persists the state, root-only.
+// SaveStore persists the state, root-only and with every password sealed.
+//
+// Sealing here rather than at each call site is what makes it unconditional:
+// this is the only function that writes the file, so there is no path by which
+// a password reaches the disk in the clear.
 func SaveStore(s Store) error {
-	data, _ := json.MarshalIndent(s, "", "  ")
+	out := Store{Nodes: append([]Node(nil), s.Nodes...)}
+	for i := range out.Nodes {
+		sealed, err := seal(out.Nodes[i].Password)
+		if err != nil {
+			return err
+		}
+		out.Nodes[i].Sealed = sealed
+		out.Nodes[i].Password = ""
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
 	return app.WriteFileAtomic(StorePath, data, 0600)
 }
 
@@ -174,6 +202,7 @@ func Add(name, host string, sshPort int, user, password string) (Node, error) {
 // report. The one place that does need it looks it up by name.
 func blank(n Node) Node {
 	n.Password = ""
+	n.Sealed = ""
 	return n
 }
 

@@ -167,10 +167,7 @@ func writeStagedFile(target string, r io.Reader, hdr *tar.Header) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 		return err
 	}
-	mode := os.FileMode(hdr.Mode).Perm()
-	if mode == 0 {
-		mode = 0600
-	}
+	mode := restoredMode(target, os.FileMode(hdr.Mode).Perm())
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
@@ -188,6 +185,46 @@ func writeStagedFile(target string, r io.Reader, hdr *tar.Header) error {
 	// OpenFile respects the umask, so say the mode again — a 0600 token file
 	// that comes back 0644 is a restore that widens access to the tunnel.
 	return os.Chmod(target, mode)
+}
+
+// restoredMode decides what permission a restored file is written with.
+//
+// The archive's own mode, ordinarily: a backup is a copy of this machine and
+// putting it back should put back what was there.
+//
+// A tunnel config is the exception, and it is not hypothetical. Every config
+// written before v1.8.2 was 0644, so a backup taken then carries 0644, and
+// restoring one on a machine that had already been corrected puts every tunnel
+// token back within reach of every account on the box. The update migration
+// catches it — that is why it runs every time rather than once — but "catches
+// it on the next update" is a window measured in weeks, and there is no reason
+// to open it: nothing but root reads these, so the mode they are restored with
+// is not information the archive has to carry.
+func restoredMode(target string, archived os.FileMode) os.FileMode {
+	if isTunnelConfigPath(target) {
+		return app.TunnelConfigMode
+	}
+	if archived == 0 {
+		// A mode of zero is an archive that did not record one. 0600 rather
+		// than a guess: these files hold secrets more often than not.
+		return 0600
+	}
+	return archived
+}
+
+// isTunnelConfigPath reports whether a restore target is a tunnel's TOML.
+//
+// Matched on the name rather than on where it lands, because a restore writes
+// into a staging tree first: the path here is not the path the file will have,
+// and the question being asked is what kind of file it is.
+func isTunnelConfigPath(target string) bool {
+	if filepath.Ext(target) != ".toml" {
+		return false
+	}
+	// The config directory's own name is the last thing shared between the
+	// staging path and the live one.
+	return strings.Contains(filepath.ToSlash(target), "/"+filepath.Base(app.ConfigDir)+"/") ||
+		filepath.Base(filepath.Dir(target)) == filepath.Base(app.ConfigDir)
 }
 
 // noteRestoredFile records which of the files the caller asks about were in

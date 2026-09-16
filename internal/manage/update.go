@@ -358,7 +358,7 @@ func downloadAsset(tag, destDir string, logf func(string)) (string, error) {
 // fetchChecksums downloads the SHA256SUMS published with a release and returns
 // the expected hash for one asset. An empty hash with no error means the
 // release simply does not publish checksums.
-func fetchChecksums(tag, asset string) (string, error) {
+func fetchChecksums(tag, asset string) (sums []byte, want string, err error) {
 	url := fmt.Sprintf("%s/releases/download/%s/SHA256SUMS", repoURL(), tag)
 
 	var lastErr error = fmt.Errorf("no source reachable")
@@ -370,7 +370,7 @@ func fetchChecksums(tag, asset string) (string, error) {
 		}
 		if resp.StatusCode == http.StatusNotFound {
 			resp.Body.Close()
-			return "", nil // this release predates published checksums
+			return nil, "", nil // this release predates published checksums
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
@@ -383,9 +383,12 @@ func fetchChecksums(tag, asset string) (string, error) {
 			lastErr = err
 			continue
 		}
-		return hashFor(string(body), asset), nil
+		// The bytes as well as the hash: the signature is over the whole list,
+		// so re-deriving it from a parsed copy would be checking a signature
+		// against something other than what was signed.
+		return body, hashFor(string(body), asset), nil
 	}
-	return "", lastErr
+	return nil, "", lastErr
 }
 
 // hashFor picks one asset's hash out of a SHA256SUMS file. The format is
@@ -512,7 +515,7 @@ func ApplyUpdate(logf func(string)) error {
 	// runs as root. Declining to install is recoverable — the offline install in
 	// the README always works — while installing an archive nobody vouched for
 	// is not.
-	want, cerr := fetchChecksums(tag, filepath.Base(archive))
+	sums, want, cerr := fetchChecksums(tag, filepath.Base(archive))
 	if cerr != nil {
 		os.Remove(archive)
 		return fmt.Errorf("could not fetch the checksum list for %s, so the download cannot be "+
@@ -523,11 +526,25 @@ func ApplyUpdate(logf func(string)) error {
 		return fmt.Errorf("release %s publishes no checksum for %s, so the download cannot be "+
 			"verified\nInstall offline instead — see the README", tag, filepath.Base(archive))
 	}
+	// The signature first, because it is what says the list itself is the
+	// publisher's. Verifying the archive against a list nobody vouched for is
+	// the check this closes — see releasesig.go.
+	if serr := verifyChecksumSignature(tag, sums); serr != nil {
+		os.Remove(archive)
+		return serr
+	}
 	if verr := verifyChecksum(archive, want); verr != nil {
 		os.Remove(archive)
 		return fmt.Errorf("the downloaded release failed verification: %w", verr)
 	}
-	logf("Checksum verified.")
+	if releasesAreSigned() {
+		logf("Signature and checksum verified.")
+	} else {
+		// Said plainly rather than left as "verified": a checksum that arrived
+		// beside the thing it describes proves the download is intact, not that
+		// it is the publisher's.
+		logf("Checksum verified (this build pins no release key, so the checksum list itself is unverified).")
+	}
 
 	// Snapshot BEFORE touching anything, so we can always get back.
 	logf("Taking a safety snapshot...")

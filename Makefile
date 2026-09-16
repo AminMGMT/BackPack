@@ -48,8 +48,20 @@ release: version release-linux
 	@# restricted networks fetch these through third-party proxies, so this is
 	@# the only integrity check they get.
 	cd release && (sha256sum backpack_linux_*.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 backpack_linux_*.tar.gz > SHA256SUMS)
+	@# And a signature over that list. The checksum proves the download is
+	@# intact; the signature proves the list is the publisher's, which the
+	@# checksum cannot, because it travels the same channel as the archive it
+	@# describes. Nothing happens without RELEASE_SIGNING_KEY in the
+	@# environment, so a fork and a local build still produce a full set.
+	go run ./tools/signsums release/SHA256SUMS
 	@echo "Release assets ready in ./release"
 	@cat release/SHA256SUMS
+
+# release-key generates the signing pair, once. It prints both halves and keeps
+# neither: the public half is pasted into app.ReleasePublicKey, the private half
+# goes into the RELEASE_SIGNING_KEY repository secret and nowhere else.
+release-key:
+	@go run ./tools/releasekey
 
 install: build
 	install -m 0755 $(BIN) $(BIN_PATH)

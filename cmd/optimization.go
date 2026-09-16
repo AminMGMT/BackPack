@@ -1,95 +1,47 @@
 package cmd
 
 import (
-	"fmt"
 	"os/exec"
 	"runtime"
 	"syscall"
+
+	"github.com/backpack/backpack/internal/optimize"
 )
 
-// applyTCPTuning applies temporary TCP optimizations for Linux to handle massive connections
+// ApplyTCPTuning applies the socket and TCP settings a tunnel wants, at start.
+//
+// It used to carry its own table of values, and that table disagreed with the
+// one Optimize writes. The disagreements were not visible from anywhere:
+// Optimize set net.core.rmem_default to 16 MB and the next tunnel start put it
+// back to 1 MB, the same for wmem_default, and tcp_notsent_lowat went from
+// 128 KB to 32 KB the same way. An operator who had deliberately optimized the
+// machine had three of those settings quietly undone by a restart.
+//
+// ip_local_port_range was the fourth and the one that was visible, because
+// losing a service's port is a thing people notice. It is the reason this now
+// takes its values from optimize.EngineStartupTuning rather than keeping a
+// second copy of them — one table means the two cannot drift, and which keys a
+// starting tunnel may set is decided there, beside the values.
 func ApplyTCPTuning() {
-	if runtime.GOOS == "linux" {
-		logger.Info("Applying TCP optimizations for Linux...")
+	if runtime.GOOS != "linux" {
+		logger.Info("Non-Linux system detected, skipping TCP optimizations.")
+		return
+	}
+	logger.Info("Applying TCP optimizations for Linux...")
 
-		// Define the buffer sizes to try
-		bufferSizes := []int{
-			256 * 1024 * 1024, // 256MB
-			128 * 1024 * 1024, // 128MB
-			64 * 1024 * 1024,  // 64MB
-			32 * 1024 * 1024,  // 32MB
-			16 * 1024 * 1024,  // 16MB
+	for _, kv := range optimize.EngineStartupTuning() {
+		if err := exec.Command("sysctl", "-w", kv[0]+"="+kv[1]).Run(); err != nil {
+			// Warn, not error: a container without CAP_SYS_ADMIN refuses these
+			// and the tunnel runs perfectly well without them. A log full of
+			// harmless red is how people learn to stop reading it.
+			logger.Warnf("could not set %s=%s (%v) — continuing", kv[0], kv[1], err)
+		} else {
+			logger.Debugf("set %s=%s", kv[0], kv[1])
 		}
+	}
 
-		// Loop through buffer sizes and attempt to apply them
-		for _, size := range bufferSizes {
-			// Build the command with the current buffer size
-			cmd := []string{"sysctl", "-w", fmt.Sprintf("net.core.rmem_max=%d", size)}
-			if err := exec.Command(cmd[0], cmd[1:]...).Run(); err == nil {
-				logger.Printf("Successfully set rmem_max to %d\n", size)
-				break // Exit the loop if successful
-			} else {
-				logger.Debugf("Failed to set rmem_max to %d, trying next lower value...\n", size)
-			}
-		}
-
-		// Same for wmem_max
-		for _, size := range bufferSizes {
-			// Build the command with the current buffer size for wmem_max
-			cmd := []string{"sysctl", "-w", fmt.Sprintf("net.core.wmem_max=%d", size)}
-			if err := exec.Command(cmd[0], cmd[1:]...).Run(); err == nil {
-				logger.Printf("Successfully set wmem_max to %d\n", size)
-				break // Exit the loop if successful
-			} else {
-				logger.Debugf("Failed to set wmem_max to %d, trying next lower value...\n", size)
-			}
-		}
-
-		// Commands for optimizing TCP parameters.
-		//
-		// The ephemeral port range is deliberately not here.
-		//
-		// It used to be, as "1024 65535", and that made a closed loop out of the
-		// one setting this program had already decided was wrong: Optimize
-		// writes 32768-60999 to /etc/sysctl.d/99-backpack.conf, the health check
-		// tells the operator to run it, and then the next engine start — every
-		// engine start, on every tunnel — widened it straight back. A server
-		// could be optimized, pass its own check, and be wide again the moment a
-		// tunnel restarted, with nothing anywhere saying so.
-		//
-		// The range belongs to Optimize, which is the one place that reasons
-		// about it and the one place that persists it. An engine starting a
-		// tunnel has no business rewriting a machine-wide kernel setting that
-		// decides whether unrelated services can keep their own ports. See the
-		// note over ip_local_port_range in internal/optimize/optimize.go for
-		// what widening it actually costs.
-		commands := [][]string{
-			{"sysctl", "-w", "net.ipv4.tcp_tw_reuse=1"},            // Reuse TIME_WAIT sockets
-			{"sysctl", "-w", "net.ipv4.tcp_fin_timeout=15"},        // Reduce TCP FIN timeout
-			{"sysctl", "-w", "net.core.somaxconn=65536"},           // Increase max queue length of incoming connections
-			{"sysctl", "-w", "net.ipv4.tcp_max_syn_backlog=20480"}, // Increase SYN request backlog
-			{"sysctl", "-w", "net.ipv4.tcp_window_scaling=1"},      // Enable TCP window scaling
-			{"sysctl", "-w", "net.ipv4.tcp_fastopen=3"},            // Enable TCP Fast Open
-			// {"sysctl", "-w", "net.ipv4.tcp_rmem = 16384 1048576 33554432"}, // Maximum of 1MB of TCP read buffer memory
-			// {"sysctl", "-w", "net.ipv4.tcp_wmem = 16384 1048576 33554432"}, // Maximum of 1MB TCP write buffer memory
-			{"sysctl", "-w", "net.ipv4.tcp_notsent_lowat=32768"}, // Do not allow more than 4096 bytes of unsent data in buffer
-			//{"sysctl", "-w", "net.core.rmem_max=26214400"},       // Set maximum TCP receive buffer size
-			//{"sysctl", "-w", "net.core.wmem_max=26214400"},       // Set maximum TCP send buffer size
-			{"sysctl", "-w", "net.core.rmem_default=1048576"}, // Set default TCP receive buffer size
-			{"sysctl", "-w", "net.core.wmem_default=1048576"}, // Set default TCP send buffer size
-		}
-
-		// Execute the sysctl commands
-		for _, cmd := range commands {
-			err := exec.Command(cmd[0], cmd[1:]...).Run()
-			if err != nil {
-				logger.Errorf("Failed to apply TCP tuning: %s", cmd)
-			} else {
-				logger.Debugf("Successfully applied: %s", cmd)
-			}
-		}
-
-		// Set file descriptor limit programmatically
+	// Set file descriptor limit programmatically
+	{
 		var rLimit syscall.Rlimit
 		err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 		if err != nil {
@@ -114,7 +66,5 @@ func ApplyTCPTuning() {
 				logger.Debugf("Successfully set file descriptor limit to: %d", rLimit.Cur)
 			}
 		}
-	} else {
-		logger.Info("Non-Linux system detected, skipping TCP optimizations.")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/backpack/backpack/internal/app"
 )
 
 // The behaviour every other test here is really about: a bad archive must not
@@ -402,4 +404,48 @@ func equalTrees(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// A restored tunnel config is written 0600, whatever the archive says.
+//
+// Every config written before v1.8.2 was 0644, so every backup taken then
+// carries 0644 — and restoring one on a machine that had already been corrected
+// puts every tunnel token back within reach of every account on the box. The
+// update migration catches it, which is why it runs every time rather than
+// once, but that is a window measured in weeks and there is no reason to open
+// it. Nothing but root reads these files, so what mode they come back with is
+// not something the archive has to have an opinion about.
+func TestARestoredTunnelConfigIsNotWorldReadable(t *testing.T) {
+	for _, target := range []string{
+		"/tmp/staging/etc/backpack/iran-main.toml",
+		"etc/backpack/kharej.toml",
+		"/var/lib/backpack-restore/backpack/tunnel.toml",
+	} {
+		if got := restoredMode(target, 0o644); got != app.TunnelConfigMode {
+			t.Errorf("%s would be restored %#o, want %#o", target, got, app.TunnelConfigMode)
+		}
+	}
+}
+
+// Everything else comes back as it was: a backup is a copy of this machine, and
+// putting it back should put back what was there.
+func TestEveryOtherRestoredFileKeepsItsMode(t *testing.T) {
+	for _, tc := range []struct {
+		target   string
+		archived os.FileMode
+		want     os.FileMode
+	}{
+		{"etc/backpack/webui.json", 0o600, 0o600},
+		{"etc/backpack/telegram.json", 0o600, 0o600},
+		{"etc/backpack/certs/panel.crt", 0o644, 0o644},
+		{"etc/systemd/system/backpack-iran.service", 0o644, 0o644},
+		// An archive that recorded no mode at all gets 0600 rather than a
+		// guess: these files hold secrets more often than not.
+		{"etc/backpack/something", 0, 0o600},
+	} {
+		if got := restoredMode(tc.target, tc.archived); got != tc.want {
+			t.Errorf("%s archived %#o would be restored %#o, want %#o",
+				tc.target, tc.archived, got, tc.want)
+		}
+	}
 }

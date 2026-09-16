@@ -192,6 +192,9 @@ func answerTo(cmd string) string {
 }
 
 // isolateStore points the fleet file at a temp directory.
+// isolateStore points the registry at a temporary directory. The key that
+// seals it follows, because it is derived from this path rather than kept
+// separately — see seal.go.
 func isolateStore(t *testing.T) {
 	t.Helper()
 	old := StorePath

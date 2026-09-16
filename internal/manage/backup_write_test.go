@@ -312,3 +312,69 @@ func assertFileSays(t *testing.T, path, want string) {
 		t.Fatalf("%s holds %q, want %q", path, body, want)
 	}
 }
+
+// The fleet's sealing key is never in the archive.
+//
+// It is the whole of what sealing the fleet passwords is worth: the registry
+// beside it holds the root password of every managed server, and a backup is a
+// thing people move — downloaded through the panel, sent through the bot, kept
+// on a laptop. A key that travels in the same file is plaintext with extra
+// steps.
+func TestTheFleetKeyIsNotInTheBackup(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("iran.toml", "[server]\ntoken = \"x\"\n")
+	write("nodes.json", `{"nodes":[{"name":"a","password_sealed":"enc:v1:AAAA"}]}`)
+	write(fleetKeyName, "0123456789abcdef0123456789abcdef")
+
+	var buf bytes.Buffer
+	if err := writeBackupTree(&buf, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	names := archiveNames(t, buf.Bytes())
+	for _, n := range names {
+		if filepath.Base(n) == fleetKeyName {
+			t.Errorf("the archive carries %s, which makes sealing the fleet passwords "+
+				"worth nothing", n)
+		}
+	}
+	// And everything else is still there, or this test would pass on an empty
+	// archive.
+	var sawConfig, sawRegistry bool
+	for _, n := range names {
+		switch filepath.Base(n) {
+		case "iran.toml":
+			sawConfig = true
+		case "nodes.json":
+			sawRegistry = true
+		}
+	}
+	if !sawConfig || !sawRegistry {
+		t.Errorf("the archive is missing what it is for: %v", names)
+	}
+}
+
+// archiveNames lists the entries in a backup.
+func archiveNames(t *testing.T, archive []byte) []string {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	var out []string
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		out = append(out, h.Name)
+	}
+	return out
+}

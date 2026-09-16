@@ -341,18 +341,51 @@ export function addView(ctx) {
        * applyShape, which fires on every change, and overwriting what somebody
        * has typed because they clicked something else is worse than not
        * suggesting at all. */
-      const suggested = {};
-      async function suggestDirect(side) {
-        if (suggested[side]) return;
-        suggested[side] = true;
-        let d;
-        try { d = await api.directDefaults(side === 'server' ? 'iran' : 'kharej'); }
-        catch (e) { suggested[side] = false; return; }
-        for (const [name, value] of Object.entries(d || {})) {
+      /* The fields this fills, and only these.
+       *
+       * The endpoint also answers with a preset and a tunnel port. The preset
+       * is a row of buttons rather than a field, and the tunnel port exists on
+       * both shapes of this form and already has a Random button beside it —
+       * filling either from here would be reaching past what the endpoint is
+       * for. The subnet is what it is for: a tunnel's own /30 has to avoid
+       * every subnet already on the box, and picking one by hand is how you get
+       * a tunnel that comes up and blackholes the route it was built for. */
+      const SUGGESTED_FIELDS = ['localIp', 'peerIp'];
+
+      const suggestedFor = {};
+      let suggestion = null;
+
+      /* Fetched once per side, applied every time the shape is drawn.
+       *
+       * Applying it on the fetch alone does not work, and the reason is worth
+       * writing down: this bind rearranges the form into five steps after the
+       * template loads, so the field that exists when the answer arrives is not
+       * the field the operator ends up typing into. Re-applying is free — it
+       * only ever writes into a field that is still empty — and it lands
+       * whenever the field appears, in whatever order the rest of the bind
+       * happens to run. */
+      function applySuggestion() {
+        if (!suggestion) return;
+        for (const name of SUGGESTED_FIELDS) {
+          const value = suggestion[name];
           if (!value) continue;
-          const f = root.querySelector(`.step3direct [name="${name}"]`);
-          if (f && !f.value) f.value = value;
+          for (const f of root.querySelectorAll(`[name="${name}"]`)) {
+            if (!f.value) f.value = value;
+          }
         }
+      }
+
+      async function suggestDirect(side) {
+        applySuggestion();
+        if (suggestedFor[side]) return;
+        suggestedFor[side] = true;
+        try {
+          suggestion = await api.directDefaults(side === 'server' ? 'iran' : 'kharej');
+        } catch (e) {
+          suggestedFor[side] = false;
+          return;
+        }
+        applySuggestion();
       }
 
       function applyShape() {

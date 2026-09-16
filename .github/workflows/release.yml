@@ -28,6 +28,12 @@ jobs:
         run: go test ./... -timeout 20m
 
       - name: Build release assets
+        # RELEASE_SIGNING_KEY signs release/SHA256SUMS. Without it the build
+        # still produces every asset and simply publishes no signature, which
+        # is what a fork gets — and what this repository got until a key was
+        # generated. See tools/signsums and internal/manage/releasesig.go.
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: make release
 
       - name: Verify the tag matches the built version
@@ -78,4 +84,5 @@ jobs:
           files: |
             release/backpack_linux_*.tar.gz
             release/SHA256SUMS
+            release/SHA256SUMS.sig
             install.sh

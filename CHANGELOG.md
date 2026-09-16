@@ -159,6 +159,21 @@ raw-socket carriers need capabilities a test process does not have.
   holding packets back on a timer. Both trade latency for syscalls on a path
   where latency is the thing being protected.
 
+- **The engine's kernel tuning is the same table Optimize writes.** It carried
+  its own copy, and the two had drifted in four places. `ip_local_port_range`
+  was the one anybody noticed, because losing a service's port is visible;
+  `net.core.rmem_default` (16 MB put back to 1 MB), `wmem_default` (the same)
+  and `tcp_notsent_lowat` (128 KB to 32 KB) were not visible at all — an
+  operator who had deliberately optimized the machine had three settings quietly
+  undone by the next tunnel restart.
+
+  There is one table now and the engine applies a named subset of it: socket
+  buffers, queue lengths, and how TCP treats its own connections. What a
+  starting tunnel deliberately does not touch is machine policy — the ephemeral
+  port range, the congestion control algorithm, the queue discipline, IP
+  forwarding. Those change how everything else on the box behaves, and
+  installing a tunnel is not consent to have them changed.
+
 - **A typo and two stale comments.** `deafultHeartbeat`; a zero-copy line
   duplicated in both engines; and `isKCP`'s doc naming four transports including
   spoof, which has been a direct-tunnel carrier rather than a reverse transport

@@ -97,3 +97,39 @@ func panelSource(t *testing.T, name string) string {
 	}
 	return string(b)
 }
+
+// The direct form's suggestion has to land in the field, not only be fetched.
+//
+// /api/direct/defaults was registered and never called at all, which is the
+// finding. Calling it is half the fix: this bind rearranges the form into five
+// steps after the template loads, so the field that exists when the answer
+// arrives is not necessarily the one the operator types into. A lookup tied to
+// the container the template put the field in is a lookup that stops matching
+// as soon as the field is moved.
+func TestTheDirectSuggestionIsNotTiedToWhereTheTemplatePutTheField(t *testing.T) {
+	loadPanel()
+	src := jsCode(panelSource(t, "js/views/add.js"))
+
+	if !strings.Contains(src, "api.directDefaults(") {
+		t.Fatal("the add form never asks for its suggested values")
+	}
+	if strings.Contains(src, `.step3direct [name=`) {
+		t.Error("the suggestion is looked up under .step3direct, which this bind moves " +
+			"the fields out of — so it matches before the restructure and not after")
+	}
+	// Applied on every shape change rather than once on the answer, so it lands
+	// whenever the field appears.
+	if !strings.Contains(src, "applySuggestion()") {
+		t.Error("the suggestion is applied once, at whatever moment the answer arrives")
+	}
+	// And only into an empty field: overwriting what somebody typed because
+	// they clicked something else is worse than not suggesting at all.
+	if !strings.Contains(src, "if (!f.value) f.value = value") {
+		t.Error("the suggestion can overwrite a value the operator typed")
+	}
+	// Only the two fields the endpoint exists for. The preset is a row of
+	// buttons and the tunnel port exists on both shapes of the form.
+	if !strings.Contains(src, "SUGGESTED_FIELDS = ['localIp', 'peerIp']") {
+		t.Error("the suggestion reaches past the fields it is for")
+	}
+}

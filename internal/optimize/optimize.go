@@ -63,6 +63,59 @@ var sysctls = [][2]string{
 	{"net.ipv4.ip_forward", "1"},
 }
 
+// engineStartupKeys are the settings a tunnel applies for itself when it starts.
+//
+// The engine used to carry its own copy of these values, and the two tables
+// drifted: Optimize set net.core.rmem_default to 16 MB and the engine set it
+// back to 1 MB on the next tunnel start, the same for wmem_default, and
+// tcp_notsent_lowat went 128 KB to 32 KB the same way. Every one of those was a
+// setting an operator had deliberately applied, undone by a restart, with
+// nothing anywhere saying so — the shape of ip_local_port_range, without the
+// consequence that made that one visible.
+//
+// So there is one table now and this is a view of it. The keys here are the
+// ones that are safe to apply without being asked: socket buffers, queue
+// lengths, and how TCP treats its own connections. What is deliberately absent
+// is machine policy — the ephemeral port range, the congestion control
+// algorithm, the queue discipline, IP forwarding. Those change how everything
+// else on the box behaves, and installing a tunnel is not consent to have them
+// changed; they belong to Optimize, which the operator runs on purpose.
+var engineStartupKeys = []string{
+	"net.core.rmem_max",
+	"net.core.wmem_max",
+	"net.core.rmem_default",
+	"net.core.wmem_default",
+	"net.core.somaxconn",
+	"net.ipv4.tcp_max_syn_backlog",
+	"net.ipv4.tcp_tw_reuse",
+	"net.ipv4.tcp_fin_timeout",
+	"net.ipv4.tcp_window_scaling",
+	"net.ipv4.tcp_fastopen",
+	"net.ipv4.tcp_notsent_lowat",
+}
+
+// FullTuning returns everything Optimize applies, so a caller can be checked
+// against it rather than against a second list written by hand.
+func FullTuning() [][2]string {
+	return append([][2]string(nil), sysctls...)
+}
+
+// EngineStartupTuning returns the settings a starting tunnel applies, taken
+// from the same table Optimize writes so the two can never disagree again.
+func EngineStartupTuning() [][2]string {
+	want := make(map[string]bool, len(engineStartupKeys))
+	for _, k := range engineStartupKeys {
+		want[k] = true
+	}
+	out := make([][2]string, 0, len(engineStartupKeys))
+	for _, kv := range sysctls {
+		if want[kv[0]] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // sysctlFile is where the tuning is persisted, and the one durable trace that
 // Optimize has run here. A var rather than a const so a test can point it at a
 // temp directory instead of writing to /etc — the same way node.StorePath and
