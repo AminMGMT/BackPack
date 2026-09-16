@@ -58,12 +58,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build both architectures
-        run: make release
-
       - name: Check the version is in step
-        # VERSION is what the updater reads to detect a new release, so it must
-        # match the version compiled into the binary.
+        # VERSION is what the updater reads to detect a new release — the raw
+        # file on main is the fallback the CLI uses when the GitHub API rate
+        # limits the source's IP — so it must match the version compiled into
+        # the binary.
+        #
+        # Before `make release`, and deliberately. `release` depends on the
+        # `version` target, whose recipe regenerates VERSION from app.go; run
+        # afterwards, this compared app.go with a file derived from app.go
+        # moments earlier and could not fail however far the committed VERSION
+        # had drifted. A guard that cannot fire is worse than no guard, because
+        # it is read as one.
         run: |
           embedded="$(grep -oE 'Version = "v[0-9.]+"' internal/app/app.go | grep -oE 'v[0-9.]+')"
           declared="$(tr -d ' \n' < VERSION)"
@@ -73,6 +79,9 @@ jobs:
             echo "Run: make version"
             exit 1
           fi
+
+      - name: Build both architectures
+        run: make release
 
       - uses: actions/upload-artifact@v4
         with:

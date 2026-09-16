@@ -432,15 +432,35 @@ func checkOutbound(cfg *config.Config) {
 	// refusing: on udp the control channel is TCP and would honour every one of
 	// these settings, while the data went out by whatever route the kernel
 	// chose. The tunnel would come up and quietly leave by the wrong link — or,
-	// with a proxy, come up and carry nothing at all. On kcp, xdi and quic not
-	// even the control channel is TCP, so the settings would be accepted and
+	// with a proxy, come up and carry nothing at all. On kcp, xdi, pck and quic
+	// not even the control channel is TCP, so the settings would be accepted and
 	// then ignored outright.
-	switch cfg.Client.Transport {
-	case config.UDP, config.KCP, config.XDI, config.QUIC, config.SPOOF:
+	//
+	// pck was missing from this list for as long as it existed. It shares its
+	// case in client.go with kcp and xdi and, like them, carries everything
+	// through a packet socket that KcpConfig has no Outbound field to reach —
+	// so a pck tunnel passed this check, was told "the tunnel server will be
+	// reached ..." in its own log, and then dialled by whatever route the
+	// kernel chose. That is the exact failure the function exists to prevent.
+	if transportIgnoresOutbound(cfg.Client.Transport) {
 		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is not carried over the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
 	}
 
 	logger.Infof("the tunnel server will be reached %s", out)
+}
+
+// transportIgnoresOutbound reports whether a transport carries its data outside
+// the TCP dialer that proxy, local_addr, interface and so_mark apply to.
+//
+// A function rather than a switch inside checkOutbound so the list can be
+// asserted: the check itself ends in logger.Fatalf, which a test cannot call,
+// and the only defect this has ever had was a transport missing from the list.
+func transportIgnoresOutbound(t config.TransportType) bool {
+	switch t {
+	case config.UDP, config.KCP, config.XDI, config.PCK, config.QUIC, config.SPOOF:
+		return true
+	}
+	return false
 }
 
 // warnUnusedStreamBuffer says out loud that mux_streambuffer does nothing on

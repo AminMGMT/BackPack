@@ -104,7 +104,7 @@ func openSpoof(cfg Config) (DatagramCarrier, net.Addr, error) {
 		PeerIP:     realPeer.String(),
 		Interface:  cfg.Spoof.SpoofInterface,
 		XDPIface:   cfg.Spoof.SpoofXDPInterface,
-		SockBuf:    cfg.SockBuf,
+		SockBuf:    spoofSockBuf(cfg),
 		PeerSrcIP:  cfg.Spoof.SpoofPeerSrcIP,
 		ReplySplit: cfg.Spoof.SpoofICMPReply,
 		MTU:        cfg.Spoof.SpoofMTU,
@@ -171,4 +171,23 @@ func spoofRealPeer(cfg Config) (net.IP, error) {
 		ip = resolved.IP
 	}
 	return ip, nil
+}
+
+// spoofSockBuf settles which socket-buffer figure the forged-source carrier
+// uses.
+//
+// There are two keys for one setting: spoof_sockbuf, which the panel's Advanced
+// form collects and directrender writes, and the [l3] table's own sockbuf,
+// which every other carrier reads. This read cfg.SockBuf alone, so the specific
+// key was written to the file, read back into the form on the next visit — and
+// never reached a socket.
+//
+// The specific one wins when it is set, because an operator who filled in the
+// spoof field meant the spoof carrier; the general one is the fallback, so a
+// config that only names sockbuf keeps behaving exactly as it did.
+func spoofSockBuf(cfg Config) int {
+	if cfg.Spoof.SpoofSockBuf > 0 {
+		return cfg.Spoof.SpoofSockBuf
+	}
+	return cfg.SockBuf
 }

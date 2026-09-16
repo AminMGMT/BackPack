@@ -23,6 +23,31 @@ func validName(name string) bool {
 	return nameRe.MatchString(name)
 }
 
+// errBadName is what the two config readers answer a name that could not have
+// been written by this program.
+//
+// app.ConfigPath is plain concatenation — ConfigDir + "/" + name + ".toml" —
+// so a name carrying a separator names a file outside the config directory.
+// Nothing local produces one: the wizard and the panel form both check the name
+// on the way in. What reaches these readers unchecked is a name off the wire —
+// a query parameter on /api/tunnel/settings, or the body of a node's OpSettings
+// request — and neither had anything between it and the path.
+//
+// Both callers already require full administrative authority, so this closes a
+// gap rather than an escalation. It is worth closing anyway: the check exists,
+// it is one line, and the reason it was not here is that nobody wrote it down.
+func errBadName(name string) error {
+	return fmt.Errorf("%q is not a valid tunnel name (letters, digits, dot, dash and underscore, up to 40)", name)
+}
+
+// checkName refuses a name that must not be turned into a path.
+func checkName(name string) error {
+	if !validName(name) {
+		return errBadName(name)
+	}
+	return nil
+}
+
 // ValidName is validName for callers outside this package.
 //
 // It exists for one job: checking a name that arrived from another machine.

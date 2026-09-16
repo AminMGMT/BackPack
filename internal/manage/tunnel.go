@@ -71,6 +71,11 @@ func List() []Tunnel {
 // it through this rather than parsing the TOML themselves.
 func LoadTunnelConfig(name string) (config.Config, error) {
 	var cfg config.Config
+	// The other half of the guard in LoadSpec: this is the direct tunnel's
+	// reader, reached the same way from the same two places.
+	if err := checkName(name); err != nil {
+		return cfg, err
+	}
 	_, err := toml.DecodeFile(app.ConfigPath(name), &cfg)
 	return cfg, err
 }

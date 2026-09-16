@@ -181,9 +181,9 @@ type L3Config struct {
 	MaxConnections int `toml:"max_connections"`
 	BandwidthMbps  int `toml:"bandwidth_mbps"`
 
-	// Embedded so the spoof_* keys sit at the top level of the [l3] table,
-	// exactly as they do in [server] and [client]. They mean the same thing
-	// here, and are read only when carrier = "spoof".
+	// Embedded so the spoof_* keys sit at the top level of the [l3] table.
+	// This is the only table they are read from, and they are read only when
+	// carrier = "spoof".
 	SpoofConfig
 
 	// Embedded the same way for the pck_* keys, read only when

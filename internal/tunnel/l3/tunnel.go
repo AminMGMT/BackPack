@@ -749,9 +749,26 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 	t.lastInitID = h.session
 	t.lastReply = reply
 	// The address is provisional until a data packet confirms it, which is
-	// also what promotes the session. Recording it here is what makes the
-	// reply deliverable at all.
-	if t.current == nil {
+	// also what promotes the session.
+	//
+	// Only when no peer is known at all. The handshake carries no freshness of
+	// any kind — NNpsk0 has none, and the payload holds the encapsulation and
+	// nothing else — so a recorded typeInit datagram stays valid forever and
+	// this end cannot tell a replay from a first contact. It used to be enough
+	// that no session was CURRENT, and retireSessions clears current after
+	// rejectAfterTime: five idle minutes reopened the window on every tunnel,
+	// and one replayed datagram from a forged source then pointed this end's
+	// outgoing traffic at an address of the attacker's choosing. It could not
+	// be read there — the keys need the initiator's ephemeral, which a replay
+	// does not carry — but it was not going to the peer either.
+	//
+	// Pinning it to "no peer has ever been seen" narrows that to the first
+	// handshake after a restart, and the first authenticated packet from the
+	// real peer corrects it through notePeer. The residual is the protocol's,
+	// not this function's: closing it properly means putting a monotonic
+	// timestamp in the init payload and refusing one that does not advance,
+	// which is WireGuard's rule and a wire change both ends have to agree on.
+	if t.current == nil && t.peer == nil {
 		t.peer = from
 	}
 	t.mu.Unlock()

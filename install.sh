@@ -152,15 +152,56 @@ verify_asset() {
   return 0
 }
 
+# trusted_dir <dir> — true when an arbitrary local account cannot put a file in it.
+#
+# This gates the two places the installer trusts a file it found rather than one
+# it fetched: the local release asset below, and the source-build fallback. Both
+# install or compile something that then runs as root, and both take whatever
+# happens to be sitting in the script's own directory.
+#
+# Which directory that is depends on how the script was started. The documented
+# forms are all fine — `bash <(curl ...)` resolves to /dev/fd and a plain pipe
+# to /, neither of which holds an asset; the documented offline path puts all
+# three files in /root; a clone in a home directory is writable only by the
+# person running sudo. What is not fine is the natural variation on the offline
+# path: scp install.sh to /tmp and run it there.
+#
+# /tmp is world-writable, and its sticky bit does not help with this. Sticky
+# stops one account deleting or replacing another's file, so the scp'd
+# install.sh is safe — but it does nothing about CREATING a file that is not
+# there yet. An account on the box pre-creates backpack_linux_<arch>.tar.gz and
+# waits, and the branch below prefers a local asset over the download.
+#
+# The test is therefore the other-write bit, not ownership: a directory only the
+# invoking operator can write is not a problem, and requiring root ownership
+# would refuse an ordinary `git clone` in a home directory.
+trusted_dir() {
+  local dir="$1" perms
+  perms="$(stat -c '%a' "$dir" 2>/dev/null)" || return 1
+  perms="${perms: -3}"   # drop setuid/sticky if stat printed four digits
+  (( (${perms:2:1} & 2) == 0 ))
+}
+
 install_release() {
   # 1) A local release asset next to the script (e.g. ./release/ or ./dist/).
   for cand in "$SCRIPT_DIR/release/$ASSET" "$SCRIPT_DIR/dist/$ASSET" "$SCRIPT_DIR/$ASSET"; do
     if [[ -f "$cand" ]]; then
+      local canddir; canddir="$(dirname "$cand")"
+      local localsums="$canddir/SHA256SUMS"
+      # A world-writable directory is skipped whether or not SHA256SUMS is
+      # there, and the SHA256SUMS is why: it would have been picked up from the
+      # same directory as the archive, so anyone who could plant one could plant
+      # the other and they would agree. That is the argument this script already
+      # makes about third-party proxies, and it holds here for the same reason.
+      if ! trusted_dir "$canddir"; then
+        warn "Ignoring ${cand}: ${canddir} is world-writable, so neither it nor a checksum beside it can be trusted."
+        warn "Work from a directory only you can write — /root is what docs/install.md uses."
+        continue
+      fi
       info "Using local release asset: ${cand}"
       cp "$cand" "$INSTALL_DIR/$ASSET"
       # An offline install can carry SHA256SUMS beside the archive; verify it
       # when it is there, and say plainly when it is not.
-      local localsums="$(dirname "$cand")/SHA256SUMS"
       if [[ -f "$localsums" ]]; then
         # `|| rc=$?` rather than a bare call: `set -e` is currently suppressed
         # here because install_release runs inside `if`, so a bare call happens
@@ -246,12 +287,14 @@ build_from_source() {
 if install_release; then
   install_binary_from_tar
   info "Installed release binary -> ${BIN_PATH}"
-elif [[ -f "$SCRIPT_DIR/go.mod" && -f "$SCRIPT_DIR/main.go" ]]; then
+elif [[ -f "$SCRIPT_DIR/go.mod" && -f "$SCRIPT_DIR/main.go" ]] && trusted_dir "$SCRIPT_DIR"; then
   warn "Release download failed — building from source instead."
   build_from_source
   info "Built and installed -> ${BIN_PATH}"
 else
-  err "Could not download the release, and no source checkout was found here."
+  err "Could not download the release, and no usable source checkout was found here."
+  err "(A checkout in a world-writable directory is not built from: it would"
+  err " compile whatever is there into a binary that then runs as root.)"
   err "This server may not be able to reach GitHub. Install offline instead:"
   err "download the archive on a machine that can, copy it over, and follow the"
   err "offline steps in the README. Or clone the repo and run install.sh inside it."

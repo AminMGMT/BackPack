@@ -13,3 +13,6 @@
 .DS_Store
 *.log
 *.swp
+
+# Local audit dashboard — private, never committed
+fix.html

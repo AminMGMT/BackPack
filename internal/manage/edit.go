@@ -139,6 +139,10 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 
 // LoadSpec reconstructs any tunnel's spec (server or client) from disk.
 func LoadSpec(name string) (TunnelSpec, error) {
+	// Before the path is built, not after: see checkName in validate.go.
+	if err := checkName(name); err != nil {
+		return TunnelSpec{}, err
+	}
 	if !fileExists(app.ConfigPath(name)) {
 		return TunnelSpec{}, fmt.Errorf("no such tunnel %q", name)
 	}

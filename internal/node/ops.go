@@ -84,6 +84,13 @@ func Execute(req Request) Response {
 		if err := json.Unmarshal(req.Body, &nr); err != nil {
 			return failf("malformed settings request")
 		}
+		// The same existence check every other name-taking operation makes.
+		// Without it this was the one branch that handed a name straight to a
+		// path builder, and it answered a name for a tunnel this server does
+		// not have with whatever that path happened to parse as.
+		if _, ok := manage.Find(nr.Name); !ok {
+			return failf("no tunnel named %q on this server", nr.Name)
+		}
 		set, err := manage.TunnelSettingsOf(nr.Name)
 		if err != nil {
 			return failf("%v", err)
@@ -197,6 +204,15 @@ func doReceive(rr ReceiveRequest) Response {
 	if err != nil {
 		return failf("could not listen on %d: %v", rr.Port, err)
 	}
+	// Everything the sink accepts is bounded by the same deadline the listener
+	// is, so the window closing ends the whole thing rather than just the
+	// Accept loop.
+	//
+	// It did not before: a connection that stayed open and sent nothing left
+	// io.Copy blocked on a read with no deadline, holding its goroutine and its
+	// descriptor for the life of the process. The listener closing does not
+	// touch a connection already accepted.
+	deadline := time.Now().Add(d)
 	go func() {
 		defer ln.Close()
 		done := time.After(d)
@@ -208,7 +224,11 @@ func doReceive(rr ReceiveRequest) Response {
 			}
 			// Sunk, not echoed — the same rule as ServeThroughputOn, for the
 			// same reason: echoing would measure the round trip.
-			go func() { defer c.Close(); io.Copy(io.Discard, c) }()
+			go func() {
+				defer c.Close()
+				_ = c.SetDeadline(deadline)
+				io.Copy(io.Discard, c)
+			}()
 		}
 	}()
 	return okBody(map[string]any{"port": rr.Port, "seconds": int(d / time.Second)})

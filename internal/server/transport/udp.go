@@ -31,6 +31,15 @@ import (
 // without limit.
 const udpPayloadQueue = 256
 
+// idleForward is how long a forwarded UDP flow may go without a packet before
+// its two copy goroutines give up on it.
+//
+// A named constant because it was written out twice, as a local in each copy
+// loop, and the words around it had drifted from the value: the case comment
+// said thirty seconds, the log line said sixty, and the variable said sixty.
+// UDP has no close, so this is the only thing that ends a flow.
+const idleForward = 60 * time.Second
+
 // udpGen is the state of a single run of the transport: the context that ends
 // when the run does, and the channels its goroutines pass work over. Restart
 // builds a fresh set for the next run, so carrying them here keeps a goroutine
@@ -899,10 +908,25 @@ func (s *UdpTransport) dropTunnelConn(conn *TunnelUDPConn) {
 }
 
 func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn) {
-	inactivityTimeout := 60 * time.Second // Define a 60-second inactivity timeout
+	// One timer for the session, reset per packet.
+	//
+	// This was time.After inside the select, which allocates a fresh timer on
+	// every iteration and never stops it — so a loop that runs once per
+	// datagram left one live 60-second timer per packet sitting on the runtime's
+	// timer heap. At a thousand packets a second that is sixty thousand of them
+	// for one direction of one session. The semantics are unchanged: the timer
+	// is reset after every packet, so it still measures time since the last one.
+	idle := time.NewTimer(idleForward)
+	defer idle.Stop()
 
 	for {
 		select {
+		case <-g.ctx.Done():
+			// Teardown is immediate now. Without this the goroutine outlived
+			// the generation until the payload channel closed or the idle
+			// timeout fired, which keepAlive below already knew not to do.
+			return
+
 		case data, ok := <-from.payload: // Wait for data on the UDP payload channel
 			if !ok {
 				return
@@ -932,18 +956,30 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 
 			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
 
-		case <-time.After(inactivityTimeout): // Timeout after 30 seconds of inactivity
-			s.logger.Debugf("connection idle for 60 seconds, closing UDP connection for %s", from.addr.String())
+		case <-idle.C:
+			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
 			return
 		}
+
+		// Rearm for the next packet. Stop before Reset because the timer has
+		// not fired — reaching here means the payload case won the select — so
+		// its channel is empty and Reset is safe.
+		idle.Stop()
+		idle.Reset(idleForward)
 	}
 }
 
 func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUDPConn) {
-	inactivityTimeout := 60 * time.Second // Define a 60-second inactivity timeout
+	// See udpLocalCopy for why this is one timer rather than a time.After per
+	// packet, and why the context is watched.
+	idle := time.NewTimer(idleForward)
+	defer idle.Stop()
 
 	for {
 		select {
+		case <-g.ctx.Done():
+			return
+
 		case data, ok := <-from.payload: // Wait for data on the UDP payload channel
 			if !ok {
 				return
@@ -968,10 +1004,16 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 
 			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
 
-		case <-time.After(inactivityTimeout): // Timeout after 30 seconds of inactivity
-			s.logger.Debugf("connection idle for 60 seconds, closing UDP connection for %s", from.addr.String())
+		case <-idle.C:
+			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
 			return
 		}
+
+		// Rearm for the next packet. Stop before Reset because the timer has
+		// not fired — reaching here means the payload case won the select — so
+		// its channel is empty and Reset is safe.
+		idle.Stop()
+		idle.Reset(idleForward)
 	}
 }
 

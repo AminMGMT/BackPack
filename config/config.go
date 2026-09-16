@@ -114,10 +114,14 @@ func (k KCPConfig) WithDefaults() KCPConfig {
 	return k
 }
 
-// SpoofConfig holds the IP-spoofing carrier's settings, embedded in both the
-// server and client config so the spoof_* keys sit at the top level of the
-// table. It only takes effect when transport = "spoof"; every field is ignored
-// otherwise.
+// SpoofConfig holds the IP-spoofing carrier's settings, embedded in L3Config so
+// the spoof_* keys sit at the top level of the [l3] table. It only takes effect
+// when carrier = "spoof"; every field is ignored otherwise.
+//
+// It used to be embedded in [server] and [client] as well, when spoofing was a
+// reverse transport. It is not any more — see checkSpoof in cmd/defaults.go for
+// why a reverse tunnel over this carrier could never work — and [l3] is the
+// only table these keys are read from.
 //
 // The carrier forges the source address of the raw packets it sends. Routing
 // still uses the real peer — the server's bind address, the client's remote

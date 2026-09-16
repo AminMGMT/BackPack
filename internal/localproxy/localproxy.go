@@ -10,6 +10,7 @@ package localproxy
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -70,11 +71,23 @@ func Save(c Config) error {
 }
 
 // authFunc turns the configured credentials into a checker, or nil for no-auth.
+//
+// Constant-time, and both halves are always compared. A plain == short-circuits
+// at the first differing byte, and && short-circuits on the username — which
+// between them are a timing description of the password. Every other credential
+// check in this tree already uses subtle.ConstantTimeCompare (the panel
+// password, the tunnel token on four transports, the pool nonce, the relay
+// token); this was the one that did not, and a proxy on loopback behind a
+// tunnel is no reason to be the exception.
 func (c Config) authFunc() socks.AuthFunc {
 	if c.Username == "" && c.Password == "" {
 		return nil
 	}
-	return func(u, p string) bool { return u == c.Username && p == c.Password }
+	return func(u, p string) bool {
+		user := subtle.ConstantTimeCompare([]byte(u), []byte(c.Username))
+		pass := subtle.ConstantTimeCompare([]byte(p), []byte(c.Password))
+		return user&pass == 1
+	}
 }
 
 // Addr is the loopback address the proxy listens on. Loopback only: the proxy
