@@ -250,3 +250,18 @@ If Backpack helps you, a star or a small tip is appreciated. 🙏
 **Copyright © 2026 Amin Mohammadi (AminMGMT).**
 Released under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see
 [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+You may use, study, modify, redistribute and build a business on this. Two
+conditions come with it, both permitted by Section 7 of that licence and neither
+taking away anything it grants:
+
+- **Keep the attribution.** A modified version must carry this line in its
+  NOTICE, its README, its version output and the notices its panel shows:
+
+  > Based on BackPack by Amin Mohammadi (AminMGMT)
+  > https://github.com/AminMGMT/BackPack
+
+- **Use your own name.** "BackPack", the name and the logo are not licensed with
+  the code — a fork needs a name of its own. Saying truthfully that your work is
+  based on or compatible with BackPack is always fine. See
+  [TRADEMARK.md](TRADEMARK.md).

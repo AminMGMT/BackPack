@@ -268,7 +268,7 @@ func (e *Edge) handle(ctx context.Context, local net.Conn, m portmap.Mapping) {
 		return
 	}
 	defer e.limiter.Release()
-	local = e.limiter.Wrap(local)
+	local = e.limiter.Wrap(ctx, local)
 
 	stream, err := e.openFor(kindTCP, m)
 	if err != nil {

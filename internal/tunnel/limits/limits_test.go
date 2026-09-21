@@ -1,6 +1,7 @@
 package limits
 
 import (
+	"context"
 	"net"
 	"sync"
 	"testing"
@@ -23,7 +24,7 @@ func TestUnlimitedIsNil(t *testing.T) {
 	}
 	conn, _ := net.Pipe()
 	defer conn.Close()
-	if nilLimiter.Wrap(conn) != conn {
+	if nilLimiter.Wrap(context.Background(), conn) != conn {
 		t.Fatal("a nil limiter wrapped a connection")
 	}
 }
@@ -126,7 +127,7 @@ func TestBandwidthCapPacesSustainedTransfer(t *testing.T) {
 		}
 	}()
 
-	wrapped := l.Wrap(client)
+	wrapped := l.Wrap(context.Background(), client)
 
 	// Spend the burst. This part is expected to be quick.
 	if _, err := wrapped.Write(make([]byte, 1024*1024)); err != nil {
@@ -164,7 +165,7 @@ func TestNoBandwidthCapDoesNotPace(t *testing.T) {
 		}
 	}()
 
-	wrapped := l.Wrap(client)
+	wrapped := l.Wrap(context.Background(), client)
 	if wrapped != client {
 		t.Fatal("a connection was wrapped despite no bandwidth cap")
 	}
@@ -196,7 +197,7 @@ func TestWriteLargerThanTheBucket(t *testing.T) {
 		}
 	}()
 
-	wrapped := l.Wrap(client)
+	wrapped := l.Wrap(context.Background(), client)
 	done := make(chan error, 1)
 	go func() {
 		_, err := wrapped.Write(make([]byte, 3*1024*1024)) // three buckets

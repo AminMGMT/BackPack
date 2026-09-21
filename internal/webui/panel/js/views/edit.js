@@ -70,6 +70,17 @@ function fill(root, values) {
   });
 }
 
+/* bindValue renders the tunnel port the way it is typed: "443" when the tunnel
+   listens on every interface, "85.10.11.51:443" when it is pinned to one, and
+   "[2a01:4f8::1]:443" for a v6 literal, which is the form the server's parser
+   takes back. */
+function bindValue(settings) {
+  const port = settings.tunnelPort || '';
+  const host = settings.bindHost || '';
+  if (!host || !port) return port;
+  return host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
 function read(root) {
   const out = {};
   root.querySelectorAll('input[name], select[name], textarea[name]').forEach(n => {
@@ -327,7 +338,16 @@ export async function editView(ctx) {
        */
       await wireControls(root);
       shapeForTransport(root, settings, t);
-      fill(root, settings);
+      /* The tunnel port field shows the address as well when the control port
+         is pinned to one.
+       *
+       * tunnelPort stays the bare port in the API because adopt pairs the two
+       * ends of a tunnel by comparing it, and the far end cannot know which of
+       * this machine's addresses the port was bound to. The form is the one
+       * place the two belong back together: an operator who typed
+       * 85.10.11.51:443 has to see that on the next visit, or accepting the
+       * field unchanged would quietly widen the tunnel to every interface. */
+      fill(root, { ...settings, tunnelPort: bindValue(settings) });
       /* The family is not a field, so fill() never touches it and the dialog
          opened showing whichever one the preview happened to be drawn with —
          WebSocket, on every tunnel, including a TCP one. It is derived: the

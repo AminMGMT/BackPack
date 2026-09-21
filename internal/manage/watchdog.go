@@ -67,6 +67,9 @@ func RunWatchdog(ctx context.Context) {
 	// up for days is reported once a window rather than once and then never.
 	lastFlapReport := map[string]time.Time{}
 	seenHealthy := map[string]bool{} // only "was up, then dropped" counts as a drop
+	// Health by what the tunnel is carrying, alongside health by whether it is
+	// connected. See throughputhealth.go for why silence is not the test.
+	flow := newFlowWatch()
 
 	ticker := time.NewTicker(wdInterval)
 	defer ticker.Stop()
@@ -80,11 +83,16 @@ func RunWatchdog(ctx context.Context) {
 			for _, t := range List() {
 				if !IsActive(t.Service) {
 					fails[t.Name] = 0 // stopped on purpose (or systemd is restarting a crash)
+					flow.forget(t.Name)
 					continue
 				}
 				if tunnelHealthy(t, pairs) {
 					fails[t.Name] = 0
 					seenHealthy[t.Name] = true
+					// Connected is not the same as working. A tunnel that holds
+					// its control channel and carries nothing in one direction
+					// is the failure this watchdog used to report as healthy.
+					checkThroughput(t, flow, lastRestart)
 					continue
 				}
 				// Only treat as a "drop" if it had connected before — a tunnel
@@ -351,4 +359,48 @@ func reportRestart(name string, at []time.Time, lastReport map[string]time.Time,
 			"path drops full-sized packets (try a TCP MSS clamp) or the link is too "+
 			"lossy for the preset. Individual restart alerts for it are suppressed "+
 			"while this lasts.", name, len(at)))
+}
+
+// checkThroughput asks whether a connected tunnel is actually carrying, and
+// walks the graduated response when it is not.
+//
+// It reports whether it acted. The watchdog does not branch on that — a
+// connected tunnel is done either way — but the tests do, because "did the
+// ladder take a step" is the whole behaviour.
+//
+// The restart it may issue goes through the same cooldown as the connection
+// watchdog's, so a tunnel cannot be restarted by both halves in the same
+// minute — the two are looking at the same tunnel and would otherwise each
+// count the other's restart as their own failure to fix it.
+func checkThroughput(t Tunnel, flow *flowWatch, lastRestart map[string]time.Time) bool {
+	// Layer-3 and direct tunnels keep their own counters differently and are
+	// judged on their own terms elsewhere; see directHealthy.
+	if IsDirectKind(t) {
+		return false
+	}
+	in, out, ok := tunnelFlow(t.Name)
+	if !ok {
+		return false
+	}
+	now := time.Now()
+	if flow.observe(t.Name, in, out, now) != flowStalled {
+		return false
+	}
+
+	action, message := flow.decide(t.Name, now)
+	switch action {
+	case stallReport, stallGiveUp:
+		alerthist.RecordEvent(message)
+		return true
+	case stallRestart:
+		if time.Since(lastRestart[t.Name]) <= wdCooldown {
+			return false
+		}
+		alerthist.RecordEvent(message)
+		RestartService(t.Service)
+		lastRestart[t.Name] = now
+		go reportRecovery(t)
+		return true
+	}
+	return false
 }

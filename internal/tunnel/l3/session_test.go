@@ -7,7 +7,7 @@ import (
 )
 
 // handshakePair runs a full handshake and returns the two completed sessions.
-func handshakePair(t *testing.T, token string) (initiator, responder *session) {
+func handshakePair(t testing.TB, token string) (initiator, responder *session) {
 	t.Helper()
 	hs, err := beginHandshake(token, 0, "ipip")
 	if err != nil {

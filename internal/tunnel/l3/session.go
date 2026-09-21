@@ -269,6 +269,13 @@ type initiatorHandshake struct {
 	// encap is what this end announced, kept so complete can name both sides
 	// when the answer disagrees.
 	encap string
+
+	// announced is the protocol version this end put in the header, and
+	// agreed is what the two ends settled on once the reply arrived. See
+	// version.go for why the announcement travels in the header and the
+	// agreement is confirmed inside the encrypted reply.
+	announced int
+	agreed    int
 }
 
 // beginHandshake starts an attempt, returning the state and the message to
@@ -290,12 +297,20 @@ func beginHandshake(token string, avoid uint32, encap string) (*initiatorHandsha
 	if err != nil {
 		return nil, err
 	}
-	return &initiatorHandshake{id: id, state: state, msg: msg, encap: encap}, nil
+	return &initiatorHandshake{
+		id: id, state: state, msg: msg, encap: encap,
+		announced: versionCurrent,
+		agreed:    versionLegacy, // until the reply says otherwise
+	}, nil
 }
 
 // datagram renders the attempt as a message ready for the carrier.
 func (h *initiatorHandshake) datagram() []byte {
-	hdr := header{kind: typeInit, session: h.id, counter: 0}.bytes()
+	// The counter field is unused on a handshake message and unvalidated by
+	// every build before this one, which is what makes it the one place a new
+	// dialler can announce itself without an old listener noticing. See
+	// version.go.
+	hdr := header{kind: typeInit, session: h.id, counter: uint64(h.announced)}.bytes()
 	return append(hdr[:], h.msg...)
 }
 
@@ -307,12 +322,23 @@ func (h *initiatorHandshake) complete(reply []byte) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("l3: handshake rejected: %w", err)
 	}
+	theirEncap, theirVersion, sawMine, err := parseReplyPayload(string(payload))
+	if err != nil {
+		return nil, err
+	}
 	// An empty payload is a peer built before this check existed. Its
 	// encapsulation cannot be read, so it is not judged — the alternative would
 	// be refusing to talk to a working older build.
-	if theirs := string(payload); theirs != "" && theirs != h.encap {
-		return nil, errEncapMismatch(h.encap, theirs)
+	if theirEncap != "" && theirEncap != h.encap {
+		return nil, errEncapMismatch(h.encap, theirEncap)
 	}
+	// A peer that answered with a version block saw what this end announced,
+	// and says so. If it saw something else, the header was rewritten on the
+	// way — which can only ever weaken the terms. See version.go.
+	if theirVersion > versionLegacy && sawMine != h.announced {
+		return nil, errDowngraded(h.announced, sawMine)
+	}
+	h.agreed = agreedVersion(h.announced, theirVersion)
 	// The initiator sends under cs0 and receives under cs1; the responder
 	// mirrors it. Getting this pair the wrong way round would produce a
 	// tunnel in which nothing decrypts.
@@ -322,6 +348,15 @@ func (h *initiatorHandshake) complete(reply []byte) (*session, error) {
 // respond is the listening side of the handshake: it consumes the initiator's
 // message and produces both the session and the reply to send back.
 func respond(token string, id uint32, msg []byte, encap string) (*session, []byte, error) {
+	return respondV(token, id, versionLegacy, msg, encap)
+}
+
+// respondV is respond with the version the dialler announced in its header.
+//
+// Split so the old signature keeps working for the tests and callers that do
+// not care, and so there is exactly one place that decides what a reply looks
+// like.
+func respondV(token string, id uint32, peerVersion int, msg []byte, encap string) (*session, []byte, error) {
 	state, err := newHandshakeState(token, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("l3: building the handshake: %w", err)
@@ -338,13 +373,15 @@ func respond(token string, id uint32, msg []byte, encap string) (*session, []byt
 	// above — so it is not a stranger to be met with silence; it is the other
 	// half of a misconfigured tunnel, and it can only say so in its own log if
 	// it is told what this end uses.
-	reply, cs0, cs1, err := state.WriteMessage(nil, []byte(encap))
+	reply, cs0, cs1, err := state.WriteMessage(nil, []byte(replyPayload(encap, peerVersion, versionCurrent)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("l3: writing the handshake reply: %w", err)
 	}
 	hdr := header{kind: typeResp, session: id, counter: 0}.bytes()
 	datagram := append(hdr[:], reply...)
 
+	// The dialler's payload is still just the encapsulation: it cannot carry a
+	// version block, because an old listener compares it whole.
 	if theirs := string(payload); theirs != "" && theirs != encap {
 		return nil, datagram, errEncapMismatch(encap, theirs)
 	}

@@ -47,6 +47,73 @@ jobs:
         # corrupts traffic rather than crashing loudly, so this must stay clean.
         run: go test ./... -race -timeout 20m
 
+  soak:
+    name: Sustained run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Two minutes of steady traffic, watching for a leak
+        # The rest of the suite proves correctness over seconds. Both leaks this
+        # project has had — pooled slots bleeding on a pairing timeout, and a
+        # sixty-second timer per forwarded UDP packet — are invisible at that
+        # timescale and were found by reading the code months later.
+        #
+        # The pass condition is a trend rather than a number: goroutine counts
+        # wobble with scheduling and the heap saws between collections, so a
+        # threshold on any single reading would fail on runner noise.
+        env:
+          BACKPACK_SOAK_SECONDS: "120"
+        run: go test ./internal/e2e/ -run TestASustainedRunDoesNotLeak -count=1 -v -timeout 10m
+
+  compat:
+    name: Wire compatibility with the previous release
+    runs-on: ubuntu-latest
+    steps:
+      # Tags, not just the tip: the previous release is found with
+      # `git describe`, and a shallow clone has no tags to describe against.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the previous release
+        id: prev
+        # The two ends of a tunnel are two machines and are never updated at the
+        # same instant, so there is always a window where one end is new and the
+        # other is not. A wire change that forgets this does not degrade — it
+        # takes the tunnel down until somebody updates the far side, over a link
+        # that may be the only way to reach it.
+        #
+        # A repository with no tag yet has nothing to compare against, which is a
+        # reason to skip rather than to fail.
+        run: |
+          tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$tag" ]; then
+            echo "no previous tag to compare against; skipping"
+            echo "binary=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "previous release: $tag"
+          git worktree add --detach /tmp/prev "$tag"
+          (cd /tmp/prev && go build -o /tmp/backpack-prev .)
+          echo "binary=/tmp/backpack-prev" >> "$GITHUB_OUTPUT"
+
+      - name: Old and new ends of one tunnel, both directions
+        if: steps.prev.outputs.binary != ''
+        env:
+          BACKPACK_PREV_BINARY: ${{ steps.prev.outputs.binary }}
+        run: go test ./internal/e2e/ -run TestThePreviousReleaseStillTalksToThisOne -count=1 -v
+
   build:
     name: Cross-build
     runs-on: ubuntu-latest

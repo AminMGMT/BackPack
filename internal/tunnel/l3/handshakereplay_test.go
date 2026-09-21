@@ -106,3 +106,80 @@ func awaitPeer(t *testing.T, unwanted string) string {
 	t.Fatal("the listener never reported a peer")
 	return ""
 }
+
+// A handshake answered once is not answered again.
+//
+// The protocol carries no freshness, so a recorded typeInit stays valid for
+// ever and the responder cannot tell a replay from a first contact. The proper
+// fix is a timestamp and it needs a version both ends understand — see
+// initreplay.go for why that cannot ship in the same release as the version
+// mechanism itself.
+//
+// What can ship is this: the initiator picks a random identifier per handshake
+// and it already travels in the header, so remembering the ones recently
+// answered refuses a repeat with no wire change at all. It does not close the
+// hole. It closes the attack — one recorded packet replayed over and over to
+// keep a tunnel from establishing now costs the attacker a packet and buys
+// nothing.
+func TestAHandshakeAnsweredOnceIsNotAnsweredAgain(t *testing.T) {
+	var s seenInits
+	now := time.Now()
+
+	if s.seen(0xAABBCCDD, now) {
+		t.Fatal("the first sighting of an identifier was reported as a repeat")
+	}
+	if !s.seen(0xAABBCCDD, now) {
+		t.Error("the same identifier was accepted twice; a replay would be answered")
+	}
+	// A different one is a genuine new handshake and must still get through.
+	if s.seen(0x11223344, now) {
+		t.Error("a different identifier was refused as a replay")
+	}
+}
+
+// The memory is bounded in both directions: by count, so a long-lived tunnel
+// does not accumulate, and by time, so an identifier is eventually forgotten
+// rather than refusing a genuine handshake for ever.
+func TestTheHandshakeMemoryIsBounded(t *testing.T) {
+	var s seenInits
+	now := time.Now()
+
+	// Past the count limit: the earliest is forgotten and would be accepted
+	// again, which is the deliberate limit of this approach.
+	for i := 0; i < initMemory+10; i++ {
+		s.seen(uint32(i+1), now)
+	}
+	if len(s.ids) > initMemory {
+		t.Errorf("the memory holds %d entries, cap is %d", len(s.ids), initMemory)
+	}
+	if !s.seen(uint32(initMemory+10), now) {
+		t.Error("the most recent identifier was forgotten")
+	}
+
+	// Past the time window: everything ages out, so a tunnel up for months does
+	// not carry a set that only grows.
+	var s2 seenInits
+	s2.seen(0x99999999, now)
+	later := now.Add(initMemoryWindow + time.Minute)
+	if s2.seen(0x99999999, later) {
+		t.Error("an identifier older than the window was still refused; the memory " +
+			"never forgets and a genuine handshake reusing an old identifier would " +
+			"be refused for ever")
+	}
+}
+
+// The timestamp switch is deliberately off. It is written and tested so that
+// turning it on later is a one-line change rather than a design problem, and
+// off because an initiator cannot put a timestamp in its first message without
+// being refused by every listener already in the field.
+func TestTheFreshnessSwitchIsOffUntilVersionTwoExists(t *testing.T) {
+	for v := versionLegacy; v <= versionCurrent; v++ {
+		if freshnessRequired(v) {
+			t.Errorf("freshness is required at v%d, but no version this build speaks "+
+				"carries a timestamp — every handshake would be refused", v)
+		}
+	}
+	if !freshnessRequired(2) {
+		t.Error("freshnessRequired(2) is false; the switch has nothing to turn on")
+	}
+}

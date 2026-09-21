@@ -347,3 +347,17 @@ body[data-t="light"]{
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   transition:background .16s ease,color .16s ease}
 .dlg .selopt:hover{background:var(--sunk);color:var(--tx)}
+
+/* API tokens and the audit record.
+ *
+ * Both are lists of fixed-width facts — a hash-shaped name, a date, a status —
+ * and both are read by scanning down a column, so they are set in the same
+ * monospace the rollout plan uses rather than in the body face. */
+.tokout,.audout{margin:10px 0 0;padding:11px 13px;border:1px solid var(--ln);border-radius:11px;
+  background:var(--s2);font:11.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;
+  white-space:pre-wrap;word-break:break-all;color:var(--tx2);max-height:260px;overflow:auto}
+/* The one moment the secret exists in readable form, so it is impossible to
+   scroll past. */
+.tokout{border-color:var(--ok);color:var(--tx)}
+#toklist .arow span.gone{color:var(--er)}
+#toklist .arow span.idle{color:var(--wr)}

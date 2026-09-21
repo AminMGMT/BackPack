@@ -534,7 +534,7 @@ func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr
 	// counted and torn down by exactly the code that does it for TCP.
 	if s.config.AcceptUDP {
 		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
 	}
 
 	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
@@ -597,7 +597,7 @@ func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, rem
 				conn.Close()
 				continue
 			}
-			conn = s.limits.wrap(conn)
+			conn = s.limits.wrap(g.ctx, conn)
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:

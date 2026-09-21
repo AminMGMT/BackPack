@@ -643,7 +643,7 @@ func (s *TcpTransport) localListener(g *tcpGen, localAddr string, remoteAddr str
 	// counted and torn down by exactly the code that does it for TCP.
 	if s.config.AcceptUDP {
 		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
 	}
 
 	<-g.ctx.Done()
@@ -694,7 +694,7 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 				conn.Close()
 				continue
 			}
-			conn = s.limits.wrap(conn)
+			conn = s.limits.wrap(g.ctx, conn)
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
@@ -729,65 +729,31 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 		case <-g.ctx.Done():
 			return
 		case localConn := <-g.localChannel:
-		loop:
-			for {
-				if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
-					s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
-					localConn.conn.Close()
-					// The slot this connection took on accept is only freed by the
-					// handler goroutine, which never runs when the connection times
-					// out waiting to be paired. Without this a tunnel with a
-					// connection limit loses a slot for every timeout until it can
-					// accept nothing at all.
-					s.limits.release()
-					break loop
-				}
-
-				// The timeout runs on a timer, so it fires whether or not a
-				// tunnel connection ever arrives.
-				//
-				// The check above used to be the only one, and the select below
-				// blocks — so on a pool that had run dry it never ran. The one
-				// case a pairing timeout exists for was the one case it could
-				// not fire in: the client sat there until it gave up on its own,
-				// the slot it took against max_connections was never returned,
-				// and the socket stayed open for the life of the run.
-				timer := time.NewTimer(pairingWait(localConn.timeCreated))
-				select {
-				case <-g.ctx.Done():
-					timer.Stop()
-					// The run is going away and this connection never reached a
-					// handler, so nothing else will ever close it or give its
-					// slot back. Every restart used to leak one socket per
-					// connection parked here.
-					localConn.conn.Close()
-					s.limits.release()
-					return
-
-				case <-timer.C:
-					// Round the loop and take the expired path above.
-					continue loop
-
-				case tunnelConn := <-g.tunnelChannel:
-					timer.Stop()
-					// Send the target addr over the connection
-					if err := utils.SendBinaryTransportString(tunnelConn, localConn.remoteAddr, utils.SG_TCP); err != nil {
-						s.logger.Errorf("%v", err)
-						tunnelConn.Close()
-						continue loop
-					}
-
-					// Handle data exchange between connections
-					go func(localConn LocalTCPConn, tunnelConn net.Conn) {
+			// A connection that sat in the queue past its deadline is not worth
+			// giving a fresh timer to.
+			if expired(localConn) {
+				drop(localConn, s.limits, s.logger)
+				continue
+			}
+			pairing[net.Conn]{
+				ctx: g.ctx, local: localConn, tunnel: g.tunnelChannel,
+				limits: s.limits, log: s.logger,
+				announce: func(c net.Conn, addr string) error {
+					return utils.SendBinaryTransportString(c, addr, utils.SG_TCP)
+				},
+				discard: func(c net.Conn) { c.Close() },
+				relay: func(c net.Conn, local LocalTCPConn) {
+					go func() {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
 						defer s.limits.release()
-						handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol && !isUDPFlow(localConn.conn), localConn.conn, metrics.CountedConn(tunnelConn), s.logger, g.usageMonitor, localForwardPort(localConn.conn), s.config.Sniffer)
-					}(localConn, tunnelConn)
-					break loop
-
-				}
-			}
+						handlers.TCPConnectionHandler(g.ctx,
+							s.config.ProxyProtocol && !isUDPFlow(local.conn),
+							local.conn, metrics.CountedConn(c), s.logger,
+							g.usageMonitor, localForwardPort(local.conn), s.config.Sniffer)
+					}()
+				},
+			}.run()
 		}
 	}
 }

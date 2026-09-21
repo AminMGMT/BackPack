@@ -56,8 +56,25 @@ bind_addr = "85.11.12.13:443"                        # control channel, first IP
 ports     = ["85.11.12.14:443=127.0.0.1:2053"]       # users, second IP
 ```
 
-`bind_addr` takes the same `host:port` form. The setup wizard only offers
-`0.0.0.0` and `::`, so set a specific address by editing the config.
+`bind_addr` takes the same `host:port` form, and so does the **Tunnel port**
+field everywhere it is asked for — the setup wizard, the CLI's edit screen, and
+the panel's create and edit forms all accept `85.11.12.13:443` as well as a bare
+`443`. A port on its own still means every interface, which is what every
+existing tunnel has.
+
+A few details worth knowing:
+
+- The "listen on IPv6 as well" switch only chooses between the `0.0.0.0` and
+  `::` wildcards. Naming an address answers that question already, so the switch
+  is ignored for a pinned tunnel.
+- Changing only the port on a tunnel that is pinned keeps it pinned. To widen it
+  back to every interface, say so: `0.0.0.0:443`.
+- A **client** tunnel binds nothing — its tunnel port is the port on the server —
+  so it takes a port alone, and an address there is refused rather than ignored.
+- The address must be one this machine holds. The CLI warns if it is not on any
+  interface right now (a floating or not-yet-configured address is legitimate,
+  so this is a warning, not a refusal), and if the bind does fail the log says
+  `this server does not have that address` and points at `ip -brief address`.
 
 **Keeping a port off the public internet.** `127.0.0.1:8080=8080` exposes the
 mapping to this machine only — useful for something a local reverse proxy

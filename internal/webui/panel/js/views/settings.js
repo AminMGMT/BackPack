@@ -148,6 +148,81 @@ export function settingsView(ctx) {
         tg: val(tg), ses: val(ses), ab: val(ab), upd: val(upd), cert: val(cert),
       });
 
+      /* ---- API tokens and the record ----
+       *
+       * Both live under Security because both answer the same question: who
+       * can reach this panel and with what. A token is the answer for
+       * everything that is not a browser, and the record is the answer to what
+       * has already been done. */
+      {
+        const list = root.querySelector('#toklist');
+        const out  = root.querySelector('#toksecret');
+        const log  = root.querySelector('#audlog');
+
+        const when = ts => (ts ? new Date(ts * 1000).toLocaleDateString() : '—');
+
+        const drawTokens = rows => {
+          if (!list) return;
+          if (!rows.length) {
+            list.innerHTML = '<div class="arow"><div class="tx"><b>No tokens</b>'
+              + '<span>Nothing but a browser can reach this panel.</span></div></div>';
+            return;
+          }
+          /* Expired and never-used are called out, because the reason the
+             previous token was removed was that nobody could tell a live one
+             from a dead one and so nobody ever pruned them. */
+          list.innerHTML = rows.map(t => {
+            const state = t.expired
+              ? '<span class="gone">expired</span>'
+              : (t.unused ? '<span class="idle">never used</span>'
+                          : `last used ${when(t.lastUsed)}`);
+            return `<div class="arow"><div class="tx"><b>${esc(t.name)}</b>
+              <span>${esc(t.scope)} · expires ${when(t.expires)} · ${state}</span></div>
+              <button class="btn2 dgr" data-revoke-token="${esc(t.name)}">Revoke</button></div>`;
+          }).join('');
+        };
+
+        try { drawTokens((await api.tokens()).tokens || []); }
+        catch (e) { if (list) list.textContent = 'Could not read the tokens.'; }
+
+        list?.addEventListener('click', async ev => {
+          const name = ev.target.closest('[data-revoke-token]')?.dataset.revokeToken;
+          if (!name) return;
+          if (!await confirmBox({
+            title: `Revoke ${esc(name)}?`,
+            body: 'Anything still using it stops working immediately. It cannot be undone — a new token would be a new secret.',
+            go: 'Revoke' })) return;
+          try { drawTokens((await api.tokenRevoke(name)).tokens || []); toast(`${name} revoked.`); }
+          catch (e) { oops(e); }
+        });
+
+        root.querySelector('#tokmake')?.addEventListener('click', async () => {
+          const name = root.querySelector('[name="tokName"]')?.value.trim();
+          if (!name) { toast('Give the token a name.'); return; }
+          const scopeText = root.querySelector('[data-name="tokScope"]')?.textContent || '';
+          const scope = /write/i.test(scopeText) ? 'write' : 'read';
+          const days = parseInt(root.querySelector('[name="tokDays"]')?.value, 10) || 90;
+          try {
+            const r = await api.tokenIssue({ name, scope, days });
+            drawTokens(r.tokens || []);
+            if (out) {
+              out.hidden = false;
+              /* Said in full, because there is no second chance to read it. */
+              out.textContent =
+                `${r.secret}\n\nCopy it now — this is the only time it is shown.\n`
+                + `Use it as:  Authorization: Bearer <token>`;
+            }
+            root.querySelector('[name="tokName"]').value = '';
+          } catch (e) { oops(e); }
+        });
+
+        try {
+          const lines = (await api.audit(200)).lines || [];
+          if (log) log.textContent = lines.length ? lines.join('\n')
+            : 'Nothing has been changed through this panel yet.';
+        } catch (e) { if (log) log.textContent = 'Could not read the record.'; }
+      }
+
       /* The footer note.
        *
        * It read "Five groups · the two marked with a dot differ from the

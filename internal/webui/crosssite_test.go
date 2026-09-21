@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"github.com/backpack/backpack/internal/control"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,7 +76,7 @@ func TestACrossSiteReadIsStillAnswered(t *testing.T) {
 // Signing out is a GET, and the one that has to stay a link — so it is checked
 // where it is handled rather than by the method rule above.
 func TestACrossSiteLogoutDoesNotSignTheOperatorOut(t *testing.T) {
-	srv := &server{sessions: newSessionStore(), nodes: &fleet{}}
+	srv := &server{sessions: newSessionStore(), nodes: &control.Fleet{}}
 	r := httptest.NewRequest("GET", "/logout", nil)
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()

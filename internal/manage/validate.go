@@ -3,49 +3,17 @@ package manage
 import (
 	"fmt"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
+	"github.com/backpack/backpack/config"
 )
 
 // validPort reports whether s is a valid TCP/UDP port number.
 func validPort(s string) bool {
 	n, err := strconv.Atoi(s)
 	return err == nil && n >= 1 && n <= 65535
-}
-
-// nameRe restricts tunnel names to characters that are safe in file paths,
-// systemd unit names and the web UI (no spaces, quotes or slashes).
-var nameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,40}$`)
-
-// validName reports whether a tunnel name is acceptable.
-func validName(name string) bool {
-	return nameRe.MatchString(name)
-}
-
-// errBadName is what the two config readers answer a name that could not have
-// been written by this program.
-//
-// app.ConfigPath is plain concatenation — ConfigDir + "/" + name + ".toml" —
-// so a name carrying a separator names a file outside the config directory.
-// Nothing local produces one: the wizard and the panel form both check the name
-// on the way in. What reaches these readers unchecked is a name off the wire —
-// a query parameter on /api/tunnel/settings, or the body of a node's OpSettings
-// request — and neither had anything between it and the path.
-//
-// Both callers already require full administrative authority, so this closes a
-// gap rather than an escalation. It is worth closing anyway: the check exists,
-// it is one line, and the reason it was not here is that nobody wrote it down.
-func errBadName(name string) error {
-	return fmt.Errorf("%q is not a valid tunnel name (letters, digits, dot, dash and underscore, up to 40)", name)
-}
-
-// checkName refuses a name that must not be turned into a path.
-func checkName(name string) error {
-	if !validName(name) {
-		return errBadName(name)
-	}
-	return nil
 }
 
 // ValidName is validName for callers outside this package.
@@ -121,4 +89,90 @@ func validatePortSpecs(ports []string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateConfigFile reports what is wrong with a tunnel configuration on disk,
+// without starting anything.
+//
+// It exists because there was no way to ask. The engine validates thoroughly at
+// load — the transport, the carrier's privileges, the proxy settings, the flag
+// lists — and it does so by exiting, which is right for a service supervisor and
+// useless for a person who has just hand-edited a file and would like to know
+// before they restart a tunnel that is currently working. The reload path is
+// careful about this in the other direction: a file that does not parse is
+// ignored and the tunnel keeps running, quietly, with the operator none the
+// wiser that their edit did nothing.
+//
+// What this covers is deliberately bounded and it says so rather than implying
+// more: the file parses, it describes exactly one kind of tunnel, the addresses
+// and ports are addresses and ports, and the forwarded-port syntax is the
+// syntax. The checks that need the machine — whether a raw socket can be
+// opened, whether an interface exists, whether iptables is installed — stay
+// where they are, in the engine, because their answers are only true on the
+// host the tunnel will run on.
+func ValidateConfigFile(path string) []string {
+	var problems []string
+	add := func(format string, a ...any) { problems = append(problems, fmt.Sprintf(format, a...)) }
+
+	var cfg config.Config
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return []string{"the file does not parse: " + err.Error()}
+	}
+
+	kinds := 0
+	for _, on := range []bool{cfg.Server.BindAddr != "", cfg.Client.RemoteAddr != "",
+		cfg.L3.Enabled(), cfg.Direct.Enabled()} {
+		if on {
+			kinds++
+		}
+	}
+	switch {
+	case kinds == 0:
+		add("this file describes no tunnel: it has no [server] bind_addr, no [client] " +
+			"remote_addr, no [l3] mode and no [direct] mode")
+	case kinds > 1:
+		add("this file describes %d tunnels at once. One config is one tunnel — the "+
+			"engine picks [l3], then [direct], then [server]/[client], and the others "+
+			"are silently ignored", kinds)
+	}
+
+	if cfg.Server.BindAddr != "" {
+		if _, err := parseTunnelBind(cfg.Server.BindAddr); err != nil {
+			add("bind_addr: %v", err)
+		}
+		if len(cfg.Server.Ports) == 0 {
+			add("a server tunnel with no ports forwards nothing")
+		}
+		if err := validatePortSpecs(cfg.Server.Ports); err != nil {
+			add("ports: %v", err)
+		}
+		if strings.TrimSpace(cfg.Server.Token) == "" {
+			add("token is empty; both ends must carry the same one")
+		}
+	}
+	if cfg.Client.RemoteAddr != "" {
+		if h, p, err := net.SplitHostPort(cfg.Client.RemoteAddr); err != nil {
+			add("remote_addr %q is not host:port: %v", cfg.Client.RemoteAddr, err)
+		} else if h == "" || !validPort(p) {
+			add("remote_addr %q has no host, or a port outside 1-65535", cfg.Client.RemoteAddr)
+		}
+		if strings.TrimSpace(cfg.Client.Token) == "" {
+			add("token is empty; both ends must carry the same one")
+		}
+	}
+	if cfg.L3.Enabled() {
+		if m := strings.ToLower(strings.TrimSpace(cfg.L3.Mode)); m != "dial" && m != "listen" {
+			add("[l3] mode is %q; it has to be \"dial\" or \"listen\"", cfg.L3.Mode)
+		}
+		if _, _, err := net.SplitHostPort(cfg.L3.Addr); err != nil {
+			add("[l3] addr %q is not host:port: %v", cfg.L3.Addr, err)
+		}
+		if strings.TrimSpace(cfg.L3.Token) == "" {
+			add("[l3] token is empty")
+		}
+		if err := validatePortSpecs(cfg.L3.Ports); err != nil {
+			add("[l3] ports: %v", err)
+		}
+	}
+	return problems
 }

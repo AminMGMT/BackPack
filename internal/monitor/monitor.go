@@ -15,7 +15,9 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/backpack/backpack/internal/alerthist"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/socks"
@@ -24,6 +26,94 @@ import (
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/sirupsen/logrus"
 )
+
+// How a job that panicked is brought back.
+//
+// Containing a panic per job was already right: without it a bug in the
+// Telegram bot would take the watchdog down with it, and tunnels would stop
+// being restarted for a reason that has nothing to do with tunnels.
+//
+// What was missing is what happens next. The failed job stopped for the life of
+// the process, and the only trace was one line in a log nobody is reading at
+// the time. If that job is the watchdog, self-healing is silently off from then
+// on — which is the worst thing this service can do quietly, because the whole
+// point of it is to be the thing that notices.
+//
+// So a panicking job is restarted, with a backoff so that one panicking in a
+// tight loop does not become the new problem, and with a ceiling so that a job
+// which cannot run at all is eventually left down and said so once, rather than
+// restarted every five minutes for ever. The announcement goes into the alert
+// history as well as the log, because a log line is not a notification.
+const (
+	// jobRestartFirst and jobRestartMax bound the backoff. Seconds rather than
+	// milliseconds: what is being waited for is a bug clearing on its own,
+	// which it usually will not — the delay is there to keep the log and the
+	// processor usable while that becomes apparent.
+	// jobRestartLimit is how many times one job is brought back before it is
+	// left alone. A job that has panicked this many times is not going to
+	// succeed on the next attempt.
+	jobRestartLimit = 8
+)
+
+// Variables rather than constants so a test can drive the supervisor at test
+// speed. Five seconds is right in production and would make the test for this
+// take a minute, which is how a test ends up not being written.
+var (
+	jobRestartFirst = 5 * time.Second
+	jobRestartMax   = 5 * time.Minute
+)
+
+// superviseJob runs one job, restarting it if it panics.
+func superviseJob(ctx context.Context, logger *logrus.Logger, name string, fn func(context.Context)) {
+	delay := jobRestartFirst
+	for attempt := 1; ; attempt++ {
+		if !runJobOnce(logger, name, fn, ctx) {
+			logger.Infof("%s stopped", name)
+			return
+		}
+		if ctx.Err() != nil {
+			return // shutting down; nothing is worth restarting
+		}
+		if attempt >= jobRestartLimit {
+			msg := fmt.Sprintf("monitor: %s has panicked %d times and will not be restarted "+
+				"again — the other monitor jobs keep running, this one is down until the "+
+				"service restarts", name, attempt)
+			logger.Error(msg)
+			alerthist.RecordEvent(msg)
+			return
+		}
+		logger.Errorf("%s panicked; restarting it in %s (attempt %d of %d)",
+			name, delay, attempt+1, jobRestartLimit)
+		alerthist.RecordEvent(fmt.Sprintf("monitor: %s panicked and is being restarted", name))
+
+		t := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		if delay *= 2; delay > jobRestartMax {
+			delay = jobRestartMax
+		}
+	}
+}
+
+// runJobOnce runs a job to completion, reporting whether it panicked.
+//
+// Its own function so the recover has somewhere to put an answer: a deferred
+// recover in the loop above could contain the panic but could not tell the loop
+// that one had happened.
+func runJobOnce(logger *logrus.Logger, name string, fn func(context.Context), ctx context.Context) (panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			logger.Errorf("%s panicked: %v", name, r)
+		}
+	}()
+	fn(ctx)
+	return false
+}
 
 // Run starts the watchdog, the bot and the alert loop, and blocks until the
 // process is asked to stop.
@@ -56,17 +146,7 @@ func Run() {
 		wg.Add(1)
 		go func(name string, fn func(context.Context)) {
 			defer wg.Done()
-			// A panic in any one job would otherwise take the whole process
-			// down — including the watchdog, so tunnels would stop being
-			// restarted because an unrelated job hit a bug. Contain it: the
-			// failed job stops and says so, everything else keeps running.
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Errorf("%s panicked and was stopped; the other monitor jobs keep running: %v", name, r)
-				}
-			}()
-			fn(ctx)
-			logger.Infof("%s stopped", name)
+			superviseJob(ctx, logger, name, fn)
 		}(job.name, job.fn)
 	}
 

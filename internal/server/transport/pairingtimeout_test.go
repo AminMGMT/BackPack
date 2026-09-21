@@ -51,6 +51,12 @@ func TestThePairingWaitAlwaysProducesAUsableTimer(t *testing.T) {
 // on the machine knows it exists, so whichever way the loop leaves without
 // dealing with it, the socket and its limit slot are gone for the life of the
 // run. Every reload leaked one of each per connection parked there.
+//
+// **A transport satisfies this either by delegating to `pairing` or by having
+// the shape inline.** Delegating is the answer that cannot drift — the state
+// machine exists once and is tested directly below — and the inline check is
+// kept for the transports that have not moved, because it is the check that
+// caught the original leak in four copies at once.
 func TestEveryPairingLoopTimesOutAndCleansUpOnShutdown(t *testing.T) {
 	// The transports whose pairing loop blocks on a tunnel connection. The mux
 	// ones are not here on purpose: they open a stream on the session they
@@ -58,6 +64,12 @@ func TestEveryPairingLoopTimesOutAndCleansUpOnShutdown(t *testing.T) {
 	for _, name := range []string{"tcp", "ws", "quic", "udp"} {
 		t.Run(name, func(t *testing.T) {
 			src := readTransportSource(t, name+".go")
+			if strings.Contains(src, "pairing[") && strings.Contains(src, "}.run()") {
+				// It uses the shared state machine, which is where the timer,
+				// the teardown and the slot release now live — and which has
+				// its own tests rather than a scan of its source.
+				return
+			}
 			if !strings.Contains(src, "time.NewTimer(pairingWait(") {
 				t.Errorf("%s.go waits for a tunnel connection with no timer, so a "+
 					"connection parked on an empty pool is never timed out", name)
@@ -69,6 +81,26 @@ func TestEveryPairingLoopTimesOutAndCleansUpOnShutdown(t *testing.T) {
 				t.Errorf("%s.go leaves its pairing loop on ctx.Done() without releasing "+
 					"the connection it is holding — one socket and one limit slot "+
 					"leaked per parked connection, on every restart", name)
+			}
+		})
+	}
+}
+
+// And a transport that has moved must still drop a connection that was already
+// too old when it reached the front of the queue — the check the shared state
+// machine deliberately does not make, because giving a stale connection a fresh
+// timer would double its life.
+func TestATransportOnTheSkeletonStillDropsAStaleConnection(t *testing.T) {
+	for _, name := range []string{"tcp", "ws", "quic"} {
+		t.Run(name, func(t *testing.T) {
+			src := readTransportSource(t, name+".go")
+			if !strings.Contains(src, "pairing[") {
+				t.Skip("this transport has not moved to the shared pairing loop")
+			}
+			if !strings.Contains(src, "expired(localConn)") || !strings.Contains(src, "drop(localConn") {
+				t.Errorf("%s.go hands a connection to the pairing loop without checking "+
+					"whether it was already past its deadline, so a connection that "+
+					"queued for the whole timeout gets a second one", name)
 			}
 		})
 	}

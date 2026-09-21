@@ -387,3 +387,19 @@
   background:var(--s2)}
 .panel .mp7 .ed-n{font-size:10.5px;line-height:1.55;color:var(--dim)}
 .panel .mp7 .ed-f{display:flex;gap:8px;margin-top:auto;padding-top:4px}
+
+/* The rollout plan and what came of it.
+ *
+ * Monospace and preserved line breaks on purpose: it is a numbered list of
+ * which server goes when, and reflowing it into a paragraph would lose the
+ * one thing an operator is reading it for. */
+.np7 .rollout7{margin:10px 0 14px;padding:12px 14px;border:1px solid var(--ln);
+  border-radius:12px;background:var(--s2);font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;
+  white-space:pre-wrap;color:var(--tx2);overflow-x:auto}
+
+/* A server held back from rollouts on purpose. It has to be legible at a
+   glance next to one that is merely behind, which is the whole reason the
+   reason is stored. */
+.np7 .pin7{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:11px;background:color-mix(in srgb,var(--wr) 14%,transparent);color:var(--wr);
+  border:1px solid color-mix(in srgb,var(--wr) 34%,transparent)}

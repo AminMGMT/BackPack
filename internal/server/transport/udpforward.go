@@ -376,13 +376,13 @@ func (f *udpFlow) SetWriteDeadline(time.Time) error { return nil }
 // paired, counted and torn down by the code that does it for everything else.
 // The slot is released where every other one is: by the handler that finishes
 // the transfer, or by the loop that gives up on a connection nobody claimed.
-func udpAdmitter(local chan LocalTCPConn, reqNewConn chan struct{}, limits *limiter) func(net.Conn, string) bool {
+func udpAdmitter(ctx context.Context, local chan LocalTCPConn, reqNewConn chan struct{}, limits *limiter) func(net.Conn, string) bool {
 	return func(conn net.Conn, target string) bool {
 		if !limits.acquire() {
 			return false
 		}
 		select {
-		case local <- LocalTCPConn{conn: limits.wrap(conn), remoteAddr: target, timeCreated: time.Now().UnixMilli()}:
+		case local <- LocalTCPConn{conn: limits.wrap(ctx, conn), remoteAddr: target, timeCreated: time.Now().UnixMilli()}:
 			select {
 			case reqNewConn <- struct{}{}:
 			default:

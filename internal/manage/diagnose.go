@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"github.com/backpack/backpack/internal/manage/backup"
 	"math"
 	"net"
 	"os"
@@ -347,15 +348,44 @@ func tunnelChecksFor(t Tunnel, pairs [][2]string) []Check {
 		// The control port must actually be bound.
 		if p := addrPort(spec.BindAddr); p != "" {
 			if n, _ := strconv.Atoi(p); n > 0 {
+				// Asked about the address the tunnel actually binds, not the
+				// port on its own. A control port pinned to one of a
+				// multi-homed server's addresses shares its number with
+				// whatever holds the others, and probing ":443" there answers
+				// for the wrong socket in both directions.
+				where := spec.BindAddr
+				shown := p
+				if h := bindHostOf(spec.BindAddr); h != "" {
+					shown = net.JoinHostPort(h, p)
+				}
 				// UDP-based transports do not appear in the TCP listen
 				// table, so a "not listening" verdict would be wrong.
-				if listening(n) || isDatagram(spec.Transport) {
-					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK, Detail: p + " listening"})
+				if addrListening(where) || isDatagram(spec.Transport) {
+					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK, Detail: shown + " listening"})
 				} else {
 					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
-						Detail: p + " not listening",
+						Detail: shown + " not listening",
 						Fix:    "the service may have failed to bind — check its log"})
 				}
+			}
+			// A control port pinned to an address this machine does not hold.
+			//
+			// The CLI warns when the address is typed, and the engine's bind
+			// failure says it plainly — but neither reaches somebody who set
+			// the tunnel up from the panel, or whose address went away
+			// afterwards because an interface did not come back. This is the
+			// one surface all three of them share.
+			//
+			// A warning rather than a failure, for the same reason the wizard
+			// only warns: a floating address, a VIP keepalived has not claimed,
+			// or an interface that comes up later are all real, and
+			// net.ipv4.ip_nonlocal_bind exists so that binding one can be made
+			// to work.
+			if h := bindHostOf(spec.BindAddr); h != "" && !localAddrExists(h) {
+				out = append(out, Check{Group: g, Name: "Bind address", Level: CheckWarn,
+					Detail: h + " is not on any interface of this server",
+					Fix: "the tunnel binds that address alone and cannot start without it — " +
+						"check `ip -brief address`, or use a port on its own to listen on every interface"})
 			}
 		}
 		// Forwarded ports the users actually connect to.
@@ -544,9 +574,36 @@ func unitNofile() int {
 }
 
 // listening reports whether anything is bound to a local TCP port.
+// ifaceMTU reads the MTU an interface actually has, falling back to the
+// configured figure when it cannot be read. The note says when the two differ,
+// because that difference is auto_mtu having done its job and is worth seeing.
+func ifaceMTU(iface string, configured int) (int, string) {
+	b, err := os.ReadFile("/sys/class/net/" + iface + "/mtu")
+	if err != nil {
+		return configured, ""
+	}
+	live, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || live <= 0 {
+		return configured, ""
+	}
+	if configured > 0 && live != configured {
+		return live, fmt.Sprintf(" (measured; the config asks for %d)", configured)
+	}
+	return live, ""
+}
+
 func listening(port int) bool {
-	// If we cannot bind it, something already holds it — that is what we want.
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	return addrListening(fmt.Sprintf(":%d", port))
+}
+
+// addrListening reports whether something already holds a listen address.
+//
+// The test is the bind itself: if we cannot take it, somebody has it. That is
+// the whole check, and it is why the address matters — ":443" and
+// "85.10.11.51:443" are different sockets, and a server with two addresses can
+// have one taken and the other free.
+func addrListening(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return true
 	}
@@ -594,7 +651,7 @@ func Locations() []Location {
 		{Label: "Binary", Path: app.BinPath},
 		{Label: "Install folder", Path: app.InstallDir},
 		{Label: "Backups", Path: app.BackupDir},
-		{Label: "Snapshots", Path: snapshotRoot()},
+		{Label: "Snapshots", Path: backup.Root()},
 		{Label: "Config folder", Path: app.ConfigDir},
 		{Label: "Web panel config", Path: app.WebUIConfig},
 		{Label: "Telegram config", Path: app.TelegramConfig},
@@ -640,8 +697,18 @@ func directChecks(g string, t Tunnel) []Check {
 		// The interface is the tunnel. If it is not there, nothing else matters.
 		iface := orDefault(l.Iface, "bp0")
 		if ifaceExists(iface) {
+			// The MTU the interface actually has, not the one the config asks
+			// for.
+			//
+			// auto_mtu is on by default and its whole job is to measure the
+			// path and move the interface away from the configured figure. So
+			// on a tunnel where it has done something — which is the tunnel
+			// where the number matters — this check was reporting a value that
+			// is no longer true, on the screen an operator opens precisely
+			// because large transfers are stalling.
+			mtu, note := ifaceMTU(iface, l.MTU)
 			out = append(out, Check{Group: g, Name: "Interface", Level: CheckOK,
-				Detail: iface + "  " + l.LocalIP + " -> " + l.PeerIP + ", mtu " + strconv.Itoa(l.MTU)})
+				Detail: iface + "  " + l.LocalIP + " -> " + l.PeerIP + ", mtu " + strconv.Itoa(mtu) + note})
 		} else {
 			out = append(out, Check{Group: g, Name: "Interface", Level: CheckFail,
 				Detail: iface + " does not exist",

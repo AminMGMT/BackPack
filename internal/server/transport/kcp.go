@@ -614,7 +614,7 @@ func (s *KcpTransport) localListener(g *kcpGen, localAddr string, remoteAddr str
 	// counted and torn down by exactly the code that does it for TCP.
 	if s.config.AcceptUDP {
 		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
 	}
 
 	<-g.ctx.Done()
@@ -661,7 +661,7 @@ func (s *KcpTransport) acceptLocalConn(g *kcpGen, listener net.Listener, remoteA
 				conn.Close()
 				continue
 			}
-			conn = s.limits.wrap(conn)
+			conn = s.limits.wrap(g.ctx, conn)
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:

@@ -1,12 +1,14 @@
 package webui
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/backpack/backpack/internal/alerthist"
+	"github.com/backpack/backpack/internal/control"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/node"
 	"github.com/backpack/backpack/internal/tunhist"
@@ -65,20 +67,31 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 // managed server are the same shape all the way to the browser.
 type linkTestResult = manage.LinkTestResult
 
-var linkTest = struct {
-	mu      sync.Mutex
-	running bool
-	name    string
-	result  *linkTestResult
-}{}
+// jobLinkTest is the kind this runs under. One at a time, because two path
+// measurements at once measure each other — which is what control.Jobs gives
+// for free and what the mutex, bool and pointer that used to live here gave by
+// hand, without progress, cancellation or any memory of the last one.
+const jobLinkTest = "linktest"
 
 func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		linkTest.mu.Lock()
-		running, name, res := linkTest.running, linkTest.name, linkTest.result
-		linkTest.mu.Unlock()
-		writeJSON(w, map[string]any{"running": running, "name": name, "result": res})
+		// "What is happening, or what just happened" — the shape the old
+		// struct could not express, because it kept one result and forgot it
+		// the moment the next test started.
+		job, ok := s.jobs.Latest(jobLinkTest)
+		if !ok {
+			writeJSON(w, map[string]any{"running": false})
+			return
+		}
+		out := map[string]any{"running": job.State == control.Running, "name": job.Target}
+		if res, isResult := job.Result.(*linkTestResult); isResult {
+			out["result"] = res
+		}
+		if job.Err != "" {
+			out["error"] = job.Err
+		}
+		writeJSON(w, out)
 
 	case http.MethodPost:
 		name := r.URL.Query().Get("name")
@@ -97,7 +110,7 @@ func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 		runOn := ""
 		if can, why := manage.LinkTestable(t); !can {
 			pair, paired := manage.PairFor(name)
-			hub := s.nodes.get()
+			hub := s.nodes.Runner()
 			switch {
 			case t.Role == "client":
 				// Datagram, or another reason no machine can help with.
@@ -124,15 +137,6 @@ func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		linkTest.mu.Lock()
-		if linkTest.running {
-			linkTest.mu.Unlock()
-			writeJSON(w, map[string]string{"status": "already running"})
-			return
-		}
-		linkTest.running, linkTest.name, linkTest.result = true, name, nil
-		linkTest.mu.Unlock()
-
 		peerName := ""
 		if runOn != "" {
 			if p, ok := manage.PairFor(name); ok {
@@ -142,24 +146,39 @@ func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 				peerName = name
 			}
 		}
-		go func() {
-			var res linkTestResult
-			if runOn == "" {
-				res = manage.MeasureLink(t)
-			} else {
-				// Taken on the machine that dials, and labelled with it: a
-				// latency figure without the place it was measured from is a
-				// number about somebody else's path.
-				if err := s.nodes.get().Call(runOn, node.OpLinkTest,
-					node.NameRequest{Name: peerName}, &res); err != nil {
-					res = linkTestResult{Name: name, Error: err.Error()}
+
+		// The measurement outlives the request that asked for it, which is the
+		// whole reason it is a job: a bad path takes longer to measure than a
+		// good one, and the worst case — a dead peer — is longer than the
+		// panel's write timeout.
+		_, err := s.jobs.Start(r.Context(), jobLinkTest, name,
+			func(ctx context.Context, p *control.Progress) (any, error) {
+				var res linkTestResult
+				if runOn == "" {
+					p.Step("measuring from this server")
+					res = manage.MeasureLink(t)
+				} else {
+					// Taken on the machine that dials, and labelled with it: a
+					// latency figure without the place it was measured from is
+					// a number about somebody else's path.
+					p.Step("measuring from %s", runOn)
+					if err := s.nodes.Runner().Call(runOn, node.OpLinkTest,
+						node.NameRequest{Name: peerName}, &res); err != nil {
+						res = linkTestResult{Name: name, Error: err.Error()}
+					}
+					res.Name, res.RanOn = name, runOn
 				}
-				res.Name, res.RanOn = name, runOn
-			}
-			linkTest.mu.Lock()
-			linkTest.running, linkTest.result = false, &res
-			linkTest.mu.Unlock()
-		}()
+				return &res, nil
+			})
+		var busy control.ErrBusy
+		if errors.As(err, &busy) {
+			writeJSON(w, map[string]string{"status": "already running"})
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, map[string]string{"status": "started"})
 
 	default:

@@ -7,6 +7,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/server/transport"
+	"github.com/backpack/backpack/internal/tunnel/chain"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -68,7 +69,54 @@ func (s *Server) Start() {
 		defer func() { <-pprofStopped }()
 	}
 
-	switch s.config.Transport {
+	// One transport, or an ordered chain of them. With no fallbacks configured
+	// the chain holds a single candidate and behaves exactly as the switch it
+	// replaced. With fallbacks it holds each candidate for the dwell and then
+	// tries the next, which is how a client whose carrier was filtered finds an
+	// ear on this end. See internal/tunnel/chain for why the two ends meet.
+	//
+	// Candidates run one at a time on purpose: starting a transport binds the
+	// forwarded ports, so two live candidates would fight over them.
+	ch := chain.New(string(s.config.Transport),
+		config.FallbackNames(s.config.FallbackTransports),
+		config.Dwell(s.config.FallbackDwell)).
+		OnLog(func(m string) { s.logger.Info(m) })
+	if !ch.Single() {
+		s.logger.Infof("transport fallback chain: %v", ch.Candidates())
+	}
+	// The server holds each candidate for the whole dwell; the client sweeps.
+	ch.Run(s.ctx, false, func(ctx context.Context, name string) chain.Attempt {
+		r := s.startTransport(ctx, config.TransportType(name))
+		if r == nil {
+			return chain.Attempt{}
+		}
+		return chain.Attempt{Settled: r.Running}
+	})
+
+	s.logger.Info("all workers stopped successfully")
+
+	// suppress other logs
+	s.logger.SetLevel(logrus.FatalLevel)
+}
+
+// Stop shuts down the server gracefully
+func (s *Server) Stop() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+}
+
+// runner is what a started transport gives the chain back: a way to ask
+// whether a client has paired with it. Every transport already answers it —
+// see internal/server/transport/status.go.
+type runner interface{ Running() bool }
+
+// startTransport launches one transport under ctx and returns it. Cancelling
+// ctx tears it down, including the forwarded-port listeners, which is what lets
+// a chain run several of these one after another without them fighting over
+// the same ports.
+func (s *Server) startTransport(ctx context.Context, tr config.TransportType) runner {
+	switch tr {
 	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
 			BindAddr:       s.config.BindAddr,
@@ -90,15 +138,16 @@ func (s *Server) Start() {
 			BandwidthMbps:  s.config.BandwidthMbps,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth: s.config.Transport == config.STEALTH,
+			Stealth: tr == config.STEALTH,
 		}
 
-		tcpServer := transport.NewTCPServer(s.ctx, tcpConfig, s.logger)
+		tcpServer := transport.NewTCPServer(ctx, tcpConfig, s.logger)
 		go tcpServer.Start()
+		return tcpServer
 
 	case config.KCP, config.XDI, config.PCK:
 		kcp := s.config.KCPConfig.WithDefaults()
-		useICMP := s.config.Transport == config.XDI
+		useICMP := tr == config.XDI
 		kcpConfig := &transport.KcpConfig{
 			AcceptUDP:        s.config.ForwardsUDP(),
 			BindAddr:         s.config.BindAddr,
@@ -130,14 +179,15 @@ func (s *Server) Start() {
 			DataShards:       kcp.DataShards,
 			ParityShards:     kcp.ParityShards,
 			UseICMP:          useICMP,
-			UsePck:           s.config.Transport == config.PCK,
+			UsePck:           tr == config.PCK,
 			PckInterface:     s.config.PckInterface,
 			PckGatewayMAC:    s.config.PckGatewayMAC,
 			PckFlags:         s.config.PckFlags,
 		}
 
-		kcpServer := transport.NewKcpServer(s.ctx, kcpConfig, s.logger)
+		kcpServer := transport.NewKcpServer(ctx, kcpConfig, s.logger)
 		go kcpServer.Start()
+		return kcpServer
 
 	case config.QUIC:
 		quicConfig := &transport.QuicConfig{
@@ -158,8 +208,9 @@ func (s *Server) Start() {
 			BandwidthMbps:  s.config.BandwidthMbps,
 		}
 
-		quicServer := transport.NewQuicServer(s.ctx, quicConfig, s.logger)
+		quicServer := transport.NewQuicServer(ctx, quicConfig, s.logger)
 		go quicServer.Start()
+		return quicServer
 
 	case config.TCPMUX:
 		tcpMuxConfig := &transport.TcpMuxConfig{
@@ -187,8 +238,9 @@ func (s *Server) Start() {
 			BandwidthMbps:    s.config.BandwidthMbps,
 		}
 
-		tcpMuxServer := transport.NewTcpMuxServer(s.ctx, tcpMuxConfig, s.logger)
+		tcpMuxServer := transport.NewTcpMuxServer(ctx, tcpMuxConfig, s.logger)
 		go tcpMuxServer.Start()
+		return tcpMuxServer
 
 	case config.WS, config.WSS:
 		wsConfig := &transport.WsConfig{
@@ -203,7 +255,7 @@ func (s *Server) Start() {
 			Sniffer:      s.config.Sniffer,
 			WebPort:      s.config.WebPort,
 			SnifferLog:   s.config.SnifferLog,
-			Mode:         s.config.Transport,
+			Mode:         tr,
 			SimpleAuth:   s.config.SimpleAuth,
 			TLSCertFile:  s.config.TLSCertFile,
 			ACMEDomain:   s.config.ACMEDomain,
@@ -216,8 +268,9 @@ func (s *Server) Start() {
 			BandwidthMbps:  s.config.BandwidthMbps,
 		}
 
-		wsServer := transport.NewWSServer(s.ctx, wsConfig, s.logger)
+		wsServer := transport.NewWSServer(ctx, wsConfig, s.logger)
 		go wsServer.Start()
+		return wsServer
 
 	case config.WSMUX, config.WSSMUX:
 		wsMuxConfig := &transport.WsMuxConfig{
@@ -237,7 +290,7 @@ func (s *Server) Start() {
 			Sniffer:          s.config.Sniffer,
 			WebPort:          s.config.WebPort,
 			SnifferLog:       s.config.SnifferLog,
-			Mode:             s.config.Transport,
+			Mode:             tr,
 			SimpleAuth:       s.config.SimpleAuth,
 			TLSCertFile:      s.config.TLSCertFile,
 			ACMEDomain:       s.config.ACMEDomain,
@@ -250,8 +303,9 @@ func (s *Server) Start() {
 			BandwidthMbps:    s.config.BandwidthMbps,
 		}
 
-		wsMuxServer := transport.NewWSMuxServer(s.ctx, wsMuxConfig, s.logger)
+		wsMuxServer := transport.NewWSMuxServer(ctx, wsMuxConfig, s.logger)
 		go wsMuxServer.Start()
+		return wsMuxServer
 
 	case config.UDP:
 		udpConfig := &transport.UdpConfig{
@@ -272,24 +326,12 @@ func (s *Server) Start() {
 			BandwidthMbps:  s.config.BandwidthMbps,
 		}
 
-		udpServer := transport.NewUDPServer(s.ctx, udpConfig, s.logger)
+		udpServer := transport.NewUDPServer(ctx, udpConfig, s.logger)
 		go udpServer.Start()
+		return udpServer
 
 	default:
-		s.logger.Fatal("invalid transport type: ", s.config.Transport)
-	}
-
-	<-s.ctx.Done()
-
-	s.logger.Info("all workers stopped successfully")
-
-	// suppress other logs
-	s.logger.SetLevel(logrus.FatalLevel)
-}
-
-// Stop shuts down the server gracefully
-func (s *Server) Stop() {
-	if s.cancel != nil {
-		s.cancel()
+		s.logger.Fatal("invalid transport type: ", tr)
+		return nil
 	}
 }

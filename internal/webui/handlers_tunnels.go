@@ -205,7 +205,7 @@ func (s *server) alsoOnNode(name, action string) map[string]any {
 	}
 	out["node"] = pair.Node
 
-	hub := s.nodes.get()
+	hub := s.nodes.Runner()
 	if hub == nil || !hub.IsOnline(pair.Node) {
 		out["status"] = "partial"
 		out["peerError"] = pair.Node + " could not be reached, so its end was not " + action + "ed"
@@ -248,7 +248,7 @@ func (s *server) afterEdit(name string, r *http.Request) map[string]any {
 	}
 	out["node"] = nodeName
 
-	hub := s.nodes.get()
+	hub := s.nodes.Runner()
 	if hub == nil {
 		out["status"] = "partial"
 		out["peerError"] = "managed servers are turned off, so " + nodeName + " could not be updated"
@@ -327,7 +327,7 @@ func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
 				if peer == "" {
 					peer = name
 				}
-				hub := s.nodes.get()
+				hub := s.nodes.Runner()
 				if hub == nil || !hub.IsOnline(pair.Node) {
 					out["status"] = "partial"
 					out["peerError"] = pair.Node + " could not be reached, so its end is still there"

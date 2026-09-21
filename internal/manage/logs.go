@@ -20,7 +20,7 @@ func Logs(name string, n int) string {
 	// Shared and briefly cached, because the panel's log drawer polls this on a
 	// two-second timer and every caller used to get its own journalctl. See
 	// logscache.go for what that did to journald.
-	return journalCache.get(name+"\x00"+strconv.Itoa(n), func() string {
+	return journalCache.Get(name+"\x00"+strconv.Itoa(n), func() string {
 		return readLogs(name, n)
 	})
 }

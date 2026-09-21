@@ -498,7 +498,7 @@ func (s *QuicTransport) localListener(g *quicGen, localAddr string, remoteAddr s
 	// counted and torn down by exactly the code that does it for TCP.
 	if s.config.AcceptUDP {
 		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
 	}
 
 	<-g.ctx.Done()
@@ -542,7 +542,7 @@ func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remot
 				conn.Close()
 				continue
 			}
-			conn = s.limits.wrap(conn)
+			conn = s.limits.wrap(g.ctx, conn)
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
@@ -565,70 +565,40 @@ func (s *QuicTransport) handleLoop(g *quicGen) {
 			return
 
 		case localConn := <-g.localChannel:
-			if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
-				s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
-				localConn.conn.Close()
-				s.limits.release()
+			if expired(localConn) {
+				drop(localConn, s.limits, s.logger)
 				continue
 			}
 
-			// Ask the client to open a fresh stream so the pool stays topped up;
-			// a warm one already waiting is taken straight off the channel.
-			select {
-			case g.reqNewConnChan <- struct{}{}:
-			default:
-			}
-
-			s.pairLocalConn(g, localConn)
-		}
-	}
-}
-
-// pairLocalConn takes data streams until one accepts the target address, then
-// hands the pair to the connection handler.
-func (s *QuicTransport) pairLocalConn(g *quicGen, localConn LocalTCPConn) {
-	for {
-		// The timeout runs on a timer, so it fires whether or not a stream ever
-		// arrives. handleLoop checks the age once before calling this and then
-		// this blocks, so on a pool that had run dry the connection was held
-		// open with nothing to time it out — the one case the timeout exists
-		// for was the one case it could not fire in.
-		timer := time.NewTimer(pairingWait(localConn.timeCreated))
-
-		select {
-		case <-g.ctx.Done():
-			timer.Stop()
-			localConn.conn.Close()
-			s.limits.release()
-			return
-
-		case <-timer.C:
-			s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
-			localConn.conn.Close()
-			s.limits.release()
-			return
-
-		case stream := <-g.tunnelChannel:
-			timer.Stop()
-			// Tell the client which backend this stream is for.
-			if err := utils.SendBinaryString(stream, localConn.remoteAddr); err != nil {
-				s.logger.Tracef("failed to send address over stream: %v", err)
-				stream.Close()
-				// That stream is gone; ask for another and try again.
+			// Ask the client to open a fresh stream so the pool stays topped
+			// up; a warm one already waiting is taken straight off the channel.
+			askStream := func() {
 				select {
 				case g.reqNewConnChan <- struct{}{}:
 				default:
 				}
-				continue
 			}
+			askStream()
 
-			go func() {
-				// Free the connection slot once the transfer ends, or the limit
-				// would fill up permanently.
-				defer s.limits.release()
-				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol && !isUDPFlow(localConn.conn), localConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, localForwardPort(localConn.conn), s.config.Sniffer)
-			}()
-			return
+			pairing[net.Conn]{
+				ctx: g.ctx, local: localConn, tunnel: g.tunnelChannel,
+				limits: s.limits, log: s.logger, request: askStream,
+				announce: func(st net.Conn, addr string) error {
+					return utils.SendBinaryString(st, addr)
+				},
+				discard: func(st net.Conn) { st.Close() },
+				relay: func(st net.Conn, local LocalTCPConn) {
+					go func() {
+						// Free the connection slot once the transfer ends, or
+						// the limit would fill up permanently.
+						defer s.limits.release()
+						handlers.TCPConnectionHandler(g.ctx,
+							s.config.ProxyProtocol && !isUDPFlow(local.conn),
+							local.conn, metrics.CountedConn(st), s.logger,
+							g.usageMonitor, localForwardPort(local.conn), s.config.Sniffer)
+					}()
+				},
+			}.run()
 		}
 	}
 }

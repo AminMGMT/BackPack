@@ -719,19 +719,34 @@ func SetupServer() {
 	// config.ServerConfig.ForwardsUDP.
 	s := TunnelSpec{Role: "server", Transport: transport, AcceptUDP: false}
 
-	port := tui.Prompt("Tunnel (control) port: ")
-	if !validPort(port) {
-		tui.Error("Invalid port.")
+	// A port alone still means every interface. An address in front of it
+	// pins the control channel to one of them, which is what lets a two-address
+	// server run the control channel and a forwarded port on the same number.
+	tui.Info("A port alone (443) listens on every address on this server.")
+	tui.Info("To pin it to one — so another service can hold the same port on")
+	tui.Info("another address — write the address too: 85.10.11.51:443")
+	bindSpec := tui.Prompt("Tunnel (control) port: ")
+	bind, err := parseTunnelBind(bindSpec)
+	if err != nil {
+		tui.Error(err.Error())
 		tui.PressEnter()
 		return
 	}
-	// Binding the IPv6 wildcard accepts IPv4 as well on a normal dual-stack
-	// host, so this is "IPv6 too" rather than "IPv6 instead".
-	bind := "0.0.0.0"
-	if tui.Confirm("Listen on IPv6 as well", false) {
-		bind = "::"
+	port := bind.Port
+	// Only worth asking when they did not already say. Binding the IPv6
+	// wildcard accepts IPv4 as well on a normal dual-stack host, so this is
+	// "IPv6 too" rather than "IPv6 instead".
+	ipv6 := false
+	if !bind.HasHost() {
+		ipv6 = tui.Confirm("Listen on IPv6 as well", false)
+	} else if !localAddrExists(bind.Host) {
+		// A warning, not a refusal: a floating address or one that arrives
+		// with a later interface is a real setup. See localAddrExists.
+		tui.Warn(bind.Host + " is not on any interface of this server right now.")
+		tui.Warn("The tunnel will fail to bind unless it appears before it starts.")
+		fmt.Println()
 	}
-	s.BindAddr = net.JoinHostPort(bind, port)
+	s.BindAddr = bind.Addr(ipv6)
 
 	defaultName := "server-" + port
 	s.Name = uniqueName(tui.PromptDefault("Tunnel name", defaultName))

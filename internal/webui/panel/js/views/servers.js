@@ -100,8 +100,11 @@ const SHELL = `
     <h2>Servers</h2>
     <span class="cnt" id="nCount">0</span>
     <span class="sp"></span>
+    <button class="sb" id="nrollb" hidden>Upgrade the fleet</button>
     <button class="sb primary" id="naddb">Add a server</button>
   </div>
+
+  <pre class="rollout7" id="nroll" hidden></pre>
 
   <form class="addsv" id="addform" hidden autocomplete="off">
     <div class="asv-map">${MAP_SVG}</div>
@@ -157,6 +160,68 @@ export function serversView(ctx) {
   const note   = $('#asvnote', root);
   const goB    = $('#asvgo', root);
   const fleet  = $('#fleet', root);
+  const rollB  = $('#nrollb', root);
+  const rollOut = $('#nroll', root);
+
+  /* Upgrading the whole fleet, staged.
+   *
+   * Pressing it does not start anything: it reads back the plan the server
+   * worked out — which server goes first, how long it is watched, which ones
+   * are pinned and why — and asks. A rollout whose shape can only be found out
+   * by starting it is exactly what staging is for.
+   *
+   * The call that follows can take many minutes, because it soaks the canary
+   * and checks each wave before the next. That is the feature, so the button
+   * says so rather than looking hung. */
+  rollB.addEventListener('click', async () => {
+    rollB.disabled = true;
+    let plan;
+    try {
+      plan = (await api.nodeRolloutPlan()).message || '';
+    } catch (e) { oops(e); rollB.disabled = false; return; }
+
+    rollOut.hidden = false;
+    rollOut.textContent = plan;
+
+    if (!await confirmBox({
+      title: 'Upgrade the fleet?',
+      body: 'One server goes first and is watched before any other is touched. '
+          + 'If it does not come back healthy, nothing else is upgraded. '
+          + 'This takes several minutes and the page waits for it.',
+      go: 'Start the rollout' })) { rollB.disabled = false; return; }
+
+    rollB.textContent = 'Rolling out…';
+    try {
+      rollOut.textContent = (await api.nodeUpgradeAll()).message || 'Started.';
+      /* The rollout outlives this request by design — a soak window and a
+         check per wave — so the page follows it rather than holding a
+         connection open for ten minutes and timing out. */
+      await followRollout();
+    } catch (e) { oops(e); } finally {
+      rollB.disabled = false;
+      rollB.textContent = 'Upgrade the fleet';
+    }
+  });
+
+  /* Poll until the rollout ends, showing which server it is on. */
+  async function followRollout() {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 2000));
+      let state;
+      try { state = await api.nodeRolloutStatus(); }
+      catch (e) { rollOut.textContent += '\n\nLost touch with the rollout.'; return; }
+      paint(state);
+      const r = state.rollout;
+      if (!r) return;
+      if (r.running) {
+        rollB.textContent = 'Rolling out…';
+        rollOut.textContent = r.step || 'Working…';
+        continue;
+      }
+      rollOut.textContent = r.message || `Rollout ${r.state}.`;
+      return;
+    }
+  }
 
   /* ---- painting ---- */
   function paint(state) {
@@ -165,6 +230,11 @@ export function serversView(ctx) {
     $('#nCount', root).textContent = String(nodes.length);
 
     reconcile(nodes);
+
+    /* Only offer a fleet upgrade when more than one server could take one.
+       For a single server the per-card button says the same thing without the
+       ceremony of a plan. */
+    rollB.hidden = nodes.filter(n => !n.pinnedVersion).length < 2;
 
     const dock = $('#dock-s');
     if (dock) dock.textContent = nodes.length ? String(nodes.length) : '';
@@ -270,6 +340,14 @@ export function serversView(ctx) {
          * every managed server sits at the far end of the route that matters,
          * so the one thing worth saying here is how that route behaves. */
         el('div', { class: 'mp-net', 'data-net': '' }, netText(n)),
+
+        /* Why this one is behind. Said on the card rather than in a tooltip:
+           the question "why is that server still on the old version" is asked
+           by whoever is looking at the fleet, not by whoever set the pin. */
+        n.pinnedVersion
+          ? el('div', {}, [el('span', { class: 'pin7',
+              text: `Pinned at ${n.pinnedVersion}${n.pinReason ? ' — ' + n.pinReason : ''}` })])
+          : null,
       ]),
 
       el('div', { class: 'mp-foot' }, [
@@ -280,6 +358,16 @@ export function serversView(ctx) {
         behind ? el('button', { class: 'btn7 solid', text: `Upgrade to ${mine}`,
                                 title: `That server is on ${i.version || 'an older build'}` }) : null,
         el('button', { class: 'btn7', text: 'Refresh', title: 'Ask it again, now' }),
+        /* Held back from fleet rollouts, on purpose.
+         *
+         * A server that is behind because somebody decided so and one that is
+         * behind because an upgrade failed look identical on a card, and the
+         * difference is the whole question an operator is asking. So the
+         * reason is stored beside the pin and shown here. */
+        el('button', { class: 'btn7', text: n.pinnedVersion ? 'Unpin' : 'Pin',
+                       title: n.pinnedVersion
+                         ? `Held at ${n.pinnedVersion}: ${n.pinReason || 'no reason recorded'}`
+                         : 'Hold this server back from fleet upgrades' }),
         el('button', { class: 'btn7', text: 'Edit', title: 'Address, port, username, password' }),
         el('button', { class: 'btn7 warn', text: 'Remove' }),
       ]),
@@ -307,7 +395,28 @@ export function serversView(ctx) {
 
     const btns = [...card.querySelectorAll('.mp-foot button')];
     const upB = behind ? btns.shift() : null;
-    const [refreshB, editB, rmB] = btns;
+    const [refreshB, pinB, editB, rmB] = btns;
+
+    /* Pinning asks for the reason, because a pin without one becomes
+       permanent by default: whoever finds it later cannot tell whether it
+       still applies, so nobody removes it and the machine stays behind. The
+       server refuses an empty reason for the same reason. */
+    pinB.addEventListener('click', async () => {
+      pinB.disabled = true;
+      try {
+        if (n.pinnedVersion) {
+          paint(await api.nodeUnpin(n.name));
+          toast(`${n.name} will take part in fleet upgrades again.`);
+          return;
+        }
+        const reason = prompt(
+          `Why is ${n.name} being held back from fleet upgrades?\n` +
+          'This is shown next to it, so the next person knows whether it still applies.');
+        if (!reason || !reason.trim()) { pinB.disabled = false; return; }
+        paint(await api.nodePin(n.name, reason.trim()));
+        toast(`${n.name} is pinned.`);
+      } catch (e) { oops(e); pinB.disabled = false; }
+    });
 
     upB?.addEventListener('click', async () => {
       if (!await confirmBox({

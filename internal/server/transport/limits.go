@@ -75,11 +75,13 @@ func (l *limiter) release() {
 
 // wrap applies the bandwidth cap to a connection. Without a cap the connection
 // is returned untouched, so the unlimited path adds no overhead at all.
-func (l *limiter) wrap(conn net.Conn) net.Conn {
+//
+// ctx is the generation's: pacing has to stop when the tunnel does. See wait.
+func (l *limiter) wrap(ctx context.Context, conn net.Conn) net.Conn {
 	if l == nil || l.bucket == nil {
 		return conn
 	}
-	return &limitedConn{Conn: conn, bucket: l.bucket}
+	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx}
 }
 
 // waitBytes charges n bytes against the bandwidth cap, blocking for as long as
@@ -89,11 +91,11 @@ func (l *limiter) wrap(conn net.Conn) net.Conn {
 // udp reads and writes datagrams on one shared *net.UDPConn per listener rather
 // than handing out a connection per flow, so there is nothing to put a wrapper
 // around and the cap has to be applied where the bytes are counted instead.
-func (l *limiter) waitBytes(n int) {
+func (l *limiter) waitBytes(ctx context.Context, n int) {
 	if l == nil || l.bucket == nil {
 		return
 	}
-	waitFor(l.bucket, n)
+	waitFor(ctx, l.bucket, n)
 }
 
 // limitedConn paces a connection's reads and writes against a shared token
@@ -102,6 +104,9 @@ func (l *limiter) waitBytes(n int) {
 type limitedConn struct {
 	net.Conn
 	bucket *rate.Limiter
+	// ctx ends with the generation. A connection being paced has to stop
+	// waiting when the tunnel is torn down; see wait.
+	ctx context.Context
 }
 
 func (c *limitedConn) Read(b []byte) (int, error) {
@@ -118,21 +123,37 @@ func (c *limitedConn) Write(b []byte) (int, error) {
 }
 
 // wait blocks long enough to keep within the configured rate.
-func (c *limitedConn) wait(n int) { waitFor(c.bucket, n) }
+func (c *limitedConn) wait(n int) { waitFor(c.ctx, c.bucket, n) }
 
 // waitFor charges n bytes against a bucket. A request larger than the bucket
 // can never be satisfied in one go, so it is charged in bucket-sized pieces
 // rather than failing.
-func waitFor(bucket *rate.Limiter, n int) {
+func waitFor(ctx context.Context, bucket *rate.Limiter, n int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	burst := bucket.Burst()
 	for n > 0 {
 		chunk := n
 		if burst > 0 && chunk > burst {
 			chunk = burst
 		}
-		// A background context: the deadline that matters is the connection's
-		// own, which the underlying Read/Write already enforces.
-		if err := bucket.WaitN(context.Background(), chunk); err != nil {
+		// The generation's context, not a background one.
+		//
+		// This used to pass context.Background() with a note saying the
+		// deadline that matters is the connection's own, which the underlying
+		// Read/Write enforces. That is subtly wrong: WaitN blocks *before* the
+		// Read or Write it is pacing, so a deadline on the socket does not
+		// interrupt it and closing the connection does not either. A tunnel
+		// being torn down would sit here paying out a token bucket for a
+		// connection that is already going away — bounded by the bytes in hand
+		// over the configured rate, which is small at realistic limits and
+		// unbounded by anything the caller controls.
+		//
+		// An expired context returns an error here, which is the same "give up
+		// and let the bytes through" path a failed reservation already took:
+		// dropping them would corrupt the stream and blocking would hang it.
+		if err := bucket.WaitN(ctx, chunk); err != nil {
 			return
 		}
 		n -= chunk

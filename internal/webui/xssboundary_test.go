@@ -29,7 +29,7 @@ import (
 func TestAFarSideNameThatCouldNotBeCreatedHereIsRefused(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 
 	r := newFake()
 	r.up["germany"] = true
@@ -38,7 +38,7 @@ func TestAFarSideNameThatCouldNotBeCreatedHereIsRefused(t *testing.T) {
 		{Name: "quote\"inside", Role: "client", TunnelPort: "3454"},
 		{Name: "ordinary-name", Role: "client", TunnelPort: "3454"},
 	}
-	s.nodes.run = r
+	s.nodes.Use(r)
 
 	got, err := farEndsOn(r, "germany")
 	if err != nil {

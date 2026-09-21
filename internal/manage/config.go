@@ -39,6 +39,18 @@ type TunnelSpec struct {
 	// CDN edge. This keeps the tunnel up when one address gets filtered.
 	FallbackAddrs []string
 
+	// FallbackTransports are extra carriers this tunnel may fall back to when
+	// the configured one stops getting through — a different answer to the same
+	// problem FallbackAddrs solves, for the case where it is the carrier being
+	// filtered rather than the address.
+	//
+	// Both ends must carry the same list in the same order. They never tell
+	// each other where they are; they meet because the server holds each
+	// candidate while the client sweeps the list. See internal/tunnel/chain.
+	FallbackTransports []string
+	// FallbackDwell is how many seconds one candidate is held. 0 = the default.
+	FallbackDwell int
+
 	Nodelay        bool
 	Heartbeat      int
 	KeepAlive      int
@@ -355,6 +367,7 @@ func (s TunnelSpec) Render() string {
 			p("    %q,\n", port)
 		}
 		b.WriteString("]\n")
+		s.writeFallbackChain(p, &b)
 		return b.String()
 	}
 
@@ -369,6 +382,7 @@ func (s TunnelSpec) Render() string {
 		b.WriteString("]\n")
 	}
 	p("transport = %q\n", s.Transport)
+	s.writeFallbackChain(p, &b)
 	if s.Preset != "" {
 		p("preset = %q\n", s.Preset)
 	}
@@ -448,4 +462,21 @@ func (s TunnelSpec) Save() (string, error) {
 		return service, err
 	}
 	return service, nil
+}
+
+// writeFallbackChain renders the transport fallback list, and nothing at all
+// when there is none — which is the overwhelming majority of tunnels, and the
+// reason the key is absent rather than written empty.
+func (s TunnelSpec) writeFallbackChain(p func(string, ...any), b *strings.Builder) {
+	if len(s.FallbackTransports) == 0 {
+		return
+	}
+	b.WriteString("fallback_transports = [\n")
+	for _, t := range s.FallbackTransports {
+		p("    %q,\n", t)
+	}
+	b.WriteString("]\n")
+	if s.FallbackDwell > 0 {
+		p("fallback_dwell = %d\n", s.FallbackDwell)
+	}
 }

@@ -54,7 +54,7 @@ func TestAMeasurementTakenElsewhereNamesTheMachine(t *testing.T) {
 func TestTheRefusalSaysWhatWouldFixIt(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 	withFleet(s, newFake())
 
 	// No tunnel by that name: the handler refuses before any of this, which is

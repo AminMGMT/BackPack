@@ -11,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/cmd"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/cli"
 	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/menu"
@@ -39,6 +40,24 @@ func main() {
 		return
 	}
 
+	// The non-interactive commands, for the same reason and in the same place:
+	// they are subcommands with arguments of their own, and the flag package
+	// would stop at the first one and report the rest as unknown.
+	//
+	// Everything they do is in internal/cli, which returns what to print and
+	// what to exit with rather than doing either — so the whole surface is
+	// testable without a process. This is the only part that needs one.
+	if len(os.Args) > 1 && cli.IsCommand(os.Args[1]) {
+		r := cli.Run(os.Args[1:])
+		if r.Out != "" {
+			fmt.Print(r.Out)
+		}
+		if r.Err != "" {
+			fmt.Fprint(os.Stderr, r.Err)
+		}
+		os.Exit(r.Code)
+	}
+
 	configPath := flag.String("c", "", "path to a tunnel configuration file (TOML) — runs in engine mode")
 	showVersion := flag.Bool("v", false, "print the version and exit")
 	restartAll := flag.Bool("restart-all", false, "restart every configured tunnel and exit (used by the auto-refresh job)")
@@ -50,7 +69,11 @@ func main() {
 
 	switch {
 	case *showVersion:
+		// The version output is one of the places NOTICE's attribution term
+		// names, and it is the one a script or a bug report reaches for.
 		fmt.Println(app.Version)
+		fmt.Println(app.Attribution)
+		fmt.Println(app.AttributionURL)
 		return
 	case *restartAll:
 		ok, failed := manage.RestartAll()

@@ -26,53 +26,55 @@ func loadServerSpec(name string) (TunnelSpec, error) {
 		return TunnelSpec{}, fmt.Errorf("%q is not a server tunnel", name)
 	}
 	return TunnelSpec{
-		Role:            "server",
-		Name:            name,
-		Transport:       string(sc.Transport),
-		BindAddr:        sc.BindAddr,
-		Token:           sc.Token,
-		ChannelSize:     sc.ChannelSize,
-		KeepAlive:       sc.Keepalive,
-		Nodelay:         sc.Nodelay,
-		Heartbeat:       sc.Heartbeat,
-		LogLevel:        sc.LogLevel,
-		LogFormat:       sc.LogFormat,
-		AcceptUDP:       sc.ForwardsUDP(),
-		Ports:           sc.Ports,
-		MSS:             sc.MSS,
-		SoRcvBuf:        sc.SO_RCVBUF,
-		SoSndBuf:        sc.SO_SNDBUF,
-		TLSCert:         sc.TLSCertFile,
-		TLSKey:          sc.TLSKeyFile,
-		ACMEDomain:      sc.ACMEDomain,
-		ACMEEmail:       sc.ACMEEmail,
-		SimpleAuth:      sc.SimpleAuth,
-		MuxCon:          sc.MuxCon,
-		MuxVersion:      sc.MuxVersion,
-		ZeroCopy:        sc.ZeroCopy,
-		MuxFrameSize:    sc.MaxFrameSize,
-		MuxRecvBuffer:   sc.MaxReceiveBuffer,
-		MuxStreamBuffer: sc.MaxStreamBuffer,
-		Sniffer:         sc.Sniffer,
-		WebPort:         sc.WebPort,
-		WebBind:         sc.WebBind,
-		ProxyProtocol:   sc.ProxyProtocol,
-		MaxConnections:  sc.MaxConnections,
-		BandwidthMbps:   sc.BandwidthMbps,
-		Preset:          sc.Preset,
-		KCPMTU:          sc.MTU,
-		KCPInterval:     sc.Interval,
-		KCPResend:       sc.Resend,
-		KCPNoDelay:      sc.NoDelay,
-		KCPNoCongestion: sc.NoCongestion,
-		KCPSndWnd:       sc.SndWnd,
-		KCPRcvWnd:       sc.RcvWnd,
-		KCPAckNoDelay:   sc.AckNoDelay,
-		KCPDataShards:   sc.DataShards,
-		KCPParityShards: sc.ParityShards,
-		PckInterface:    sc.PckInterface,
-		PckGatewayMAC:   sc.PckGatewayMAC,
-		PckFlags:        sc.PckFlags,
+		Role:               "server",
+		Name:               name,
+		Transport:          string(sc.Transport),
+		BindAddr:           sc.BindAddr,
+		Token:              sc.Token,
+		ChannelSize:        sc.ChannelSize,
+		KeepAlive:          sc.Keepalive,
+		Nodelay:            sc.Nodelay,
+		Heartbeat:          sc.Heartbeat,
+		LogLevel:           sc.LogLevel,
+		LogFormat:          sc.LogFormat,
+		AcceptUDP:          sc.ForwardsUDP(),
+		Ports:              sc.Ports,
+		FallbackTransports: config.FallbackNames(sc.FallbackTransports),
+		FallbackDwell:      sc.FallbackDwell,
+		MSS:                sc.MSS,
+		SoRcvBuf:           sc.SO_RCVBUF,
+		SoSndBuf:           sc.SO_SNDBUF,
+		TLSCert:            sc.TLSCertFile,
+		TLSKey:             sc.TLSKeyFile,
+		ACMEDomain:         sc.ACMEDomain,
+		ACMEEmail:          sc.ACMEEmail,
+		SimpleAuth:         sc.SimpleAuth,
+		MuxCon:             sc.MuxCon,
+		MuxVersion:         sc.MuxVersion,
+		ZeroCopy:           sc.ZeroCopy,
+		MuxFrameSize:       sc.MaxFrameSize,
+		MuxRecvBuffer:      sc.MaxReceiveBuffer,
+		MuxStreamBuffer:    sc.MaxStreamBuffer,
+		Sniffer:            sc.Sniffer,
+		WebPort:            sc.WebPort,
+		WebBind:            sc.WebBind,
+		ProxyProtocol:      sc.ProxyProtocol,
+		MaxConnections:     sc.MaxConnections,
+		BandwidthMbps:      sc.BandwidthMbps,
+		Preset:             sc.Preset,
+		KCPMTU:             sc.MTU,
+		KCPInterval:        sc.Interval,
+		KCPResend:          sc.Resend,
+		KCPNoDelay:         sc.NoDelay,
+		KCPNoCongestion:    sc.NoCongestion,
+		KCPSndWnd:          sc.SndWnd,
+		KCPRcvWnd:          sc.RcvWnd,
+		KCPAckNoDelay:      sc.AckNoDelay,
+		KCPDataShards:      sc.DataShards,
+		KCPParityShards:    sc.ParityShards,
+		PckInterface:       sc.PckInterface,
+		PckGatewayMAC:      sc.PckGatewayMAC,
+		PckFlags:           sc.PckFlags,
 	}, nil
 }
 
@@ -88,52 +90,54 @@ func loadClientSpec(name string) (TunnelSpec, error) {
 		return TunnelSpec{}, fmt.Errorf("%q is not a client tunnel", name)
 	}
 	return TunnelSpec{
-		Role:            "client",
-		Name:            name,
-		Transport:       string(cc.Transport),
-		RemoteAddr:      cc.RemoteAddr,
-		FallbackAddrs:   cc.FallbackAddrs,
-		Token:           cc.Token,
-		ConnectionPool:  cc.ConnectionPool,
-		AggressivePool:  cc.AggressivePool,
-		KeepAlive:       cc.Keepalive,
-		Nodelay:         cc.Nodelay,
-		LogLevel:        cc.LogLevel,
-		LogFormat:       cc.LogFormat,
-		MSS:             cc.MSS,
-		SoRcvBuf:        cc.SO_RCVBUF,
-		SoSndBuf:        cc.SO_SNDBUF,
-		EdgeIP:          cc.EdgeIP,
-		SimpleAuth:      cc.SimpleAuth,
-		Proxy:           cc.Proxy,
-		LocalAddr:       cc.LocalAddr,
-		Interface:       cc.Interface,
-		SOMark:          cc.SOMark,
-		ZeroCopy:        cc.ZeroCopy,
-		MuxCon:          cc.MuxSession,
-		MuxVersion:      cc.MuxVersion,
-		MuxFrameSize:    cc.MaxFrameSize,
-		MuxRecvBuffer:   cc.MaxReceiveBuffer,
-		MuxStreamBuffer: cc.MaxStreamBuffer,
-		Sniffer:         cc.Sniffer,
-		WebPort:         cc.WebPort,
-		WebBind:         cc.WebBind,
-		Preset:          cc.Preset,
-		LoadBalance:     cc.LoadBalance,
-		HealthFailover:  cc.HealthFailover,
-		KCPMTU:          cc.MTU,
-		KCPInterval:     cc.Interval,
-		KCPResend:       cc.Resend,
-		KCPNoDelay:      cc.NoDelay,
-		KCPNoCongestion: cc.NoCongestion,
-		KCPSndWnd:       cc.SndWnd,
-		KCPRcvWnd:       cc.RcvWnd,
-		KCPAckNoDelay:   cc.AckNoDelay,
-		KCPDataShards:   cc.DataShards,
-		KCPParityShards: cc.ParityShards,
-		PckInterface:    cc.PckInterface,
-		PckGatewayMAC:   cc.PckGatewayMAC,
-		PckFlags:        cc.PckFlags,
+		Role:               "client",
+		Name:               name,
+		Transport:          string(cc.Transport),
+		RemoteAddr:         cc.RemoteAddr,
+		FallbackAddrs:      cc.FallbackAddrs,
+		FallbackTransports: config.FallbackNames(cc.FallbackTransports),
+		FallbackDwell:      cc.FallbackDwell,
+		Token:              cc.Token,
+		ConnectionPool:     cc.ConnectionPool,
+		AggressivePool:     cc.AggressivePool,
+		KeepAlive:          cc.Keepalive,
+		Nodelay:            cc.Nodelay,
+		LogLevel:           cc.LogLevel,
+		LogFormat:          cc.LogFormat,
+		MSS:                cc.MSS,
+		SoRcvBuf:           cc.SO_RCVBUF,
+		SoSndBuf:           cc.SO_SNDBUF,
+		EdgeIP:             cc.EdgeIP,
+		SimpleAuth:         cc.SimpleAuth,
+		Proxy:              cc.Proxy,
+		LocalAddr:          cc.LocalAddr,
+		Interface:          cc.Interface,
+		SOMark:             cc.SOMark,
+		ZeroCopy:           cc.ZeroCopy,
+		MuxCon:             cc.MuxSession,
+		MuxVersion:         cc.MuxVersion,
+		MuxFrameSize:       cc.MaxFrameSize,
+		MuxRecvBuffer:      cc.MaxReceiveBuffer,
+		MuxStreamBuffer:    cc.MaxStreamBuffer,
+		Sniffer:            cc.Sniffer,
+		WebPort:            cc.WebPort,
+		WebBind:            cc.WebBind,
+		Preset:             cc.Preset,
+		LoadBalance:        cc.LoadBalance,
+		HealthFailover:     cc.HealthFailover,
+		KCPMTU:             cc.MTU,
+		KCPInterval:        cc.Interval,
+		KCPResend:          cc.Resend,
+		KCPNoDelay:         cc.NoDelay,
+		KCPNoCongestion:    cc.NoCongestion,
+		KCPSndWnd:          cc.SndWnd,
+		KCPRcvWnd:          cc.RcvWnd,
+		KCPAckNoDelay:      cc.AckNoDelay,
+		KCPDataShards:      cc.DataShards,
+		KCPParityShards:    cc.ParityShards,
+		PckInterface:       cc.PckInterface,
+		PckGatewayMAC:      cc.PckGatewayMAC,
+		PckFlags:           cc.PckFlags,
 	}, nil
 }
 
@@ -216,22 +220,40 @@ func EditTunnel(name, host, tunnelPort string, ports []string) error {
 
 	changed := false
 	if tunnelPort != "" || host != "" {
-		if tunnelPort != "" && !validPort(tunnelPort) {
-			return fmt.Errorf("invalid tunnel port %q", tunnelPort)
+		var bind tunnelBind
+		if tunnelPort != "" {
+			var err error
+			if bind, err = parseTunnelBind(tunnelPort); err != nil {
+				return fmt.Errorf("invalid tunnel port %q: %w", tunnelPort, err)
+			}
 		}
 		if s.Role == "server" {
 			if host != "" {
 				return fmt.Errorf("the address can only be changed on client tunnels")
 			}
-			s.BindAddr = net.JoinHostPort(addrHost(s.BindAddr, "0.0.0.0"), tunnelPort)
+			// An address in the new value pins the tunnel to it; a bare port
+			// keeps whatever this tunnel already binds, which is what changing
+			// only the port has always done. That is also how a pinned tunnel
+			// is widened again: say 0.0.0.0:443 rather than 443.
+			if bind.HasHost() {
+				s.BindAddr = bind.Addr(false)
+			} else {
+				s.BindAddr = net.JoinHostPort(addrHost(s.BindAddr, "0.0.0.0"), bind.Port)
+			}
 		} else {
+			if bind.HasHost() {
+				// This field is the port on the server for a client, so an
+				// address here is aimed at the wrong setting.
+				return fmt.Errorf("a client binds nothing — its tunnel port is the port on the " +
+					"server, so it takes a port alone. Change where it dials with the server address instead")
+			}
 			h := addrHost(s.RemoteAddr, "")
 			p := addrPort(s.RemoteAddr)
 			if host != "" {
 				h = strings.Trim(strings.TrimSpace(host), "[]")
 			}
-			if tunnelPort != "" {
-				p = tunnelPort
+			if bind.Port != "" {
+				p = bind.Port
 			}
 			if h == "" || !validPort(p) {
 				return fmt.Errorf("invalid server address or port")

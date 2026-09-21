@@ -71,7 +71,12 @@ jobs:
           fi
 
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        # Pinned to a commit, not the moving v2 tag: this job holds
+        # RELEASE_SIGNING_KEY, and steps in a job share a runner — so whoever
+        # can repoint that tag can read the one secret the whole update
+        # verification design rests on. Update deliberately, with the tag the
+        # SHA belongs to written beside it.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           prerelease: ${{ steps.kind.outputs.prerelease }}
           body_path: RELEASE_NOTES.md

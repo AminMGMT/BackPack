@@ -29,6 +29,12 @@ type lossyRelay struct {
 	dropped atomic.Int64
 	passed  atomic.Int64
 
+	// latency and jitter are nanoseconds, added to every datagram in both
+	// directions. Zero — the default — leaves the relay exactly as it was for
+	// every test that only asked for loss. See fault_test.go.
+	latency atomic.Int64
+	jitter  atomic.Int64
+
 	mu      sync.Mutex
 	clients map[string]*net.UDPConn
 	closed  atomic.Bool
@@ -100,7 +106,7 @@ func (r *lossyRelay) run() {
 
 		payload := make([]byte, n)
 		copy(payload, buf[:n])
-		out.Write(payload)
+		r.deliver(func() { out.Write(payload) })
 	}
 }
 
@@ -123,7 +129,7 @@ func (r *lossyRelay) pumpBack(out *net.UDPConn, client *net.UDPAddr) {
 		}
 		payload := make([]byte, n)
 		copy(payload, buf[:n])
-		r.conn.WriteToUDP(payload, client)
+		r.deliver(func() { r.conn.WriteToUDP(payload, client) })
 	}
 }
 

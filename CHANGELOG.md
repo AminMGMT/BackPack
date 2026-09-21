@@ -94,6 +94,136 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Added
 
+- **The pairing step three transports had a copy of is now written once.** Seven
+  transports on the server side repeat accept → pair → admit → relay → release
+  by copy, and the copies have already proved they drift: the connection-slot
+  release on a pairing timeout was missing from four of the seven, the timeout
+  itself could not fire in the one case it exists for — the age was checked
+  once and then the loop blocked, so on a pool that had run dry nothing ever
+  woke up — and a run ending while a connection sat there leaked one socket and
+  one slot per parked connection on every restart. Each was found and fixed
+  once per copy, on three separate occasions.
+
+  `tcp`, `ws` and `quic` now share one state machine. What stays per transport
+  is what genuinely differs: how the backend address is announced, how an
+  unusable tunnel connection is dropped, and the relay itself. The mux
+  transports are deliberately left alone — they open a stream on a session they
+  already hold, so nothing is ever parked, which is a different lifecycle and
+  not a copy of this one.
+
+- **The panel no longer owns the fleet.** `internal/webui` served HTML *and*
+  owned the managed servers: the runner that reaches them, the loop that
+  measures the path to each one, and the state of every long-running operation
+  all lived in package-level variables next to HTTP handlers. Nothing was broken
+  by that, and everything built on top of it made the separation harder — each
+  new operations feature added one more package-level variable to a package
+  whose job is to render a page.
+
+  There is a `internal/control` now, and it is a **package** boundary rather
+  than a service boundary: no new process, no socket, no daemon, and the
+  single-binary install is untouched. What changes is that a second reader — a
+  CLI, an API, the monitor — becomes a caller rather than a rewrite.
+
+  It also brings **one job abstraction** for operations that outlive the request
+  that started them, with progress, cancellation and a memory of what happened
+  last time. There were two hand-rolled versions of this and a third on the way;
+  three ad-hoc versions of the same thing is how they drift. The link test can
+  now answer "what is happening, *or what just happened*", which the old one
+  could not: it forgot the last result the moment the next test started.
+
+- **The panel has scopes, API tokens and a record of what was done.** It had one
+  password and one level of access: anyone who could open it could change
+  anything, and nothing was written down afterwards — so "who restarted the
+  tunnel at three in the morning" had no answer.
+
+  Every request is now authorised at one function against one of three scopes:
+  read, write, admin. Handing out a credential is separate from using one, so a
+  write credential cannot mint itself a better one. The vocabulary is the
+  Telegram bot's, ported rather than reinvented — two permission models in one
+  product is how a gap opens between them.
+
+  **The record is written by that same function, not by the handlers.** A log
+  each handler writes for itself has one hole per handler somebody forgot to
+  update, and those holes are invisible until the day somebody goes looking.
+  Written at the choke point, the only way to act without being recorded is to
+  act without being authorised. Reads are not recorded — the panel polls itself,
+  and they would bury the lines that matter — but refused attempts are.
+
+  **API tokens are back, and `/metrics` works again.** The panel had a read-only
+  token once and it was removed for good reason: nothing issued it, so nothing
+  rotated it. That left `/metrics` — an endpoint built for scrapers — behind a
+  session cookie no scraper has. The new ones address the reasons rather than
+  repeating them: a name and an expiry are both required, last use is recorded
+  so a dead token is recognisable, and they are listed on a screen operators
+  actually open. Only the SHA-256 is stored, so a token cannot leak with a
+  backup, and the secret is shown exactly once. See `docs/access-control.md`.
+
+- **Fleet upgrades are staged: one server first, watched, then the rest in
+  waves.** "Upgrade all" replaced the binary on every managed server at once, in
+  parallel, and told you afterwards which ones had failed. That is the right
+  shape for a fleet of one and an act of faith for a fleet of twenty — a release
+  with a fault in it takes every server down before anybody has read the first
+  error, and the per-node rollback that already exists cannot help, because by
+  then every node has rolled itself back and nobody knows into what.
+
+  Now one server goes first, is left alone for a soak window, and is checked
+  before anything else is touched — and *checked* means it answers **and** the
+  tunnels that are supposed to be running on it are running, because a binary
+  that comes back with dead tunnels behind it is exactly what staging is for.
+  The rest follow in waves, each verified, halting when one fails. The plan is
+  worked out and readable before anything happens.
+
+  A server can also be **pinned** to hold it back, with a reason that is
+  required and is shown on its card. There is always a reason a machine is
+  deliberately behind, and it used to live in whoever set it up.
+
+  While wiring this up: the fleet upgrade had no button. `nodeUpgradeAll` was
+  exported by the panel's API layer and called from nowhere at all.
+
+- **The layer-3 receive path reads several datagrams per syscall.** The comment
+  that used to explain why it could not was right about *timer-based* batching —
+  holding packets back to gather them trades latency for syscalls on the path
+  where latency is the thing being protected — and it does not apply to
+  `recvmmsg`, which waits exactly as long as a single read would and then takes
+  whatever else has already arrived. An idle tunnel pays nothing.
+
+  Measured on 40,000 1200-byte datagrams: 59 → 214 kpps. The rate is the smaller
+  half of the result. Reading one at a time, the receive loop could not keep up
+  with the sender and the socket dropped 12,318 of the 40,000; the batched path
+  took every one. A tunnel losing packets inside its own receive loop looks
+  exactly like a lossy path from the outside, which is the most expensive kind
+  of fault to chase.
+
+  Linux only, plain `udp` carrier only, and every other carrier reads exactly as
+  it did before — including if the batch path refuses at runtime, which costs
+  throughput rather than the tunnel. All six layer-3 carriers were re-run over
+  real raw sockets in a network namespace afterwards.
+
+- **A tunnel can now change carrier by itself when the one it is on stops
+  getting through.** This was the gap between what the product is for and what
+  the engine would actually do: a tunnel is pinned to one transport, so when
+  that transport is the one being filtered it retried it for ever and the
+  operator was the failover mechanism — at three in the morning, from a phone,
+  on a connection that is also being filtered.
+
+  `fallback_transports` is an ordered list of carriers the tunnel may move to.
+  Both ends carry the same list. They never tell each other where they are: the
+  server holds each candidate for `fallback_dwell` while the other end tries the
+  whole list inside that window, so the two meet within one dwell with nothing
+  new on the wire and no negotiation to get wrong. Candidates run one at a time
+  because starting a transport binds the forwarded ports, and the outgoing one
+  is given time to let go of them before the next binds.
+
+  It is a better *connect*, not live switching — there is no session migration
+  here. A carrier that is up is left alone, including through a short drop,
+  because every transport already reconnects on its own and rotating through a
+  blip would turn a short outage into a long one. Rotation resumes only after a
+  working carrier has been down for five minutes.
+
+  Off unless configured, and a tunnel without a list runs exactly the code it
+  ran before. Set it from `Manage tunnels → Transport fallback chain` on either
+  end; see `docs/transport-fallback.md`.
+
 - **An update now corrects the machine it is installed on, not only the binary.**
   A fix that changes what a new install writes reaches nobody who is already
   running. The servers that need it most are the ones that have been running
@@ -124,6 +254,120 @@ raw-socket carriers need capabilities a test process does not have.
 
   This release ships two migrations: the config permissions above, and the
   ephemeral port range below.
+
+- **The tunnel's own port can be bound to one address, the way a forwarded port
+  already could.** On a server with two public addresses, the operator wants the
+  control channel on one and the user-facing port on the other — both on 443, so
+  the control channel blends in as HTTPS like everything else. The forwarded
+  ports have taken an address for a while: `85.10.11.61:443=127.0.0.1:2053`
+  binds that one and nothing else. The control port could not. Every path that
+  produced a bind address wrote `0.0.0.0` and joined the port onto it, so both
+  halves ended up asking for `0.0.0.0:443` and the second one got
+  `bind: address already in use`.
+
+  Almost nothing in the engine needed changing for this, which is the part worth
+  knowing: `bind_addr` is handed to the listener as it stands and has always
+  accepted an address, the reload path's port settling was already written in
+  terms of a full address, and the check that refuses two tunnels sharing a port
+  already compared host and port together. The documentation even described the
+  arrangement — and then said to set it by editing the config, because the
+  wizard only offered the two wildcards. What was missing was a way to say it.
+
+  So the **Tunnel port** field takes `85.10.11.51:443` wherever it is asked for:
+  the setup wizard, the CLI's edit screen, and the panel's create and edit forms.
+  A port on its own still means every interface, which is what every existing
+  tunnel has and what every existing config keeps. One parser reads both forms,
+  and every one of those four entry points goes through it rather than each
+  deciding for itself what an address is.
+
+  Four decisions in it are worth recording, because each one is a place the
+  obvious behaviour would have been wrong:
+
+  The "listen on IPv6 as well" switch chooses between the `0.0.0.0` and `::`
+  wildcards and nothing else. An operator who named an address has answered that
+  question already, and moving it to a wildcard because a checkbox was ticked
+  would be ignoring what they typed. The wizard stops asking once an address is
+  given.
+
+  Changing only the port on a tunnel that is pinned keeps it pinned, and the CLI
+  offers the address back as part of the default so that pressing Enter cannot
+  quietly widen it. Widening is said out loud instead: `0.0.0.0:443`.
+
+  A client is refused rather than obliged. Its tunnel port is the port on the
+  *server* — it binds nothing — so an address there is aimed at a different
+  setting, and it is told which one.
+
+  A host must be an IP literal; a name is refused. A bind address is a local
+  interface, and a name that resolves to an address this machine does not have
+  fails inside the listener with "cannot assign requested address", an error that
+  says nothing about the name that caused it.
+
+  Three things that report on a port moved with it. The check that refuses a
+  port already in use now asks about the address the tunnel will actually bind,
+  because asking about `:443` when the answer is `85.10.11.51:443` produces
+  exactly the refusal this feature exists to get past. Health Check does the
+  same, and gained a warning for a tunnel pinned to an address this server does
+  not currently hold — a warning and not a failure, because a floating address,
+  a VIP that keepalived has not claimed, and an interface that comes up later
+  are all real, and `ip_nonlocal_bind` exists so that binding one can be made to
+  work. And a bind that fails because the address is not on the machine now says
+  so in those words, with `ip -brief address` to check it against, instead of
+  passing the kernel's errno through.
+
+  One thing deliberately did not move: the port a tunnel reports to the other
+  end, and the port the panel pairs two ends on, are still the number alone. The
+  far end knows which port it dials and has no idea which of this machine's
+  addresses that port was bound to, so folding the address into it would have
+  stopped every pinned tunnel from matching its own other half.
+
+- **Releases are signed now, and the updater requires it.** The machinery has
+  been in place since this release opened: every release carries a SHA256SUMS
+  file, the updater refuses an archive whose hash is not in it, and CI signs
+  that list. What was missing was the key, so `releasesAreSigned()` was false and
+  the signature check returned nil on every update — checksums only, which the
+  updater said out loud.
+
+  There is a key now. The consequence is worth stating plainly rather than
+  discovering: **from this build on, a release without a valid signature is
+  refused rather than warned about.** That is the correct behaviour and it is a
+  one-way door — the signing secret has to be in place before the next tag, or
+  that release installs nowhere. Rotating later is the same operation and is not
+  free either: a machine on an older binary trusts the old key, so a new one has
+  to ship in a release still signed by the old.
+
+  Why it matters is the part the checksum alone could not cover. The list travels
+  the same channel as the thing it describes, and on a blocked network that
+  channel is somebody else's mirror. A mirror that can substitute the archive can
+  substitute the list beside it, and the two then agree with each other. A
+  signature does not travel that channel: it is checked against a key that
+  arrived with the binary already running.
+
+- **The attribution and the name are now written down, and enforced.** The
+  licence has always been AGPL-3.0 and that has not changed — the text in
+  `LICENSE` is untouched, deliberately, because part of the tunnel data plane
+  derives from prior AGPL/GPL work and editing the licence is not ours to do.
+
+  What is new is two additional terms in `NOTICE`, both of them things Section 7
+  of that licence expressly permits and neither of them taking away anything it
+  grants. Under 7(b), a modified version has to keep one line — "Based on
+  BackPack by Amin Mohammadi (AminMGMT)" — in its NOTICE, its README, its
+  version output, and the notices its panel shows the people using it. Under
+  7(e), the name and the logo are not licensed with the code: a fork is welcome
+  and needs a name of its own. `TRADEMARK.md` sets out the detail, including the
+  parts that need no permission at all — saying truthfully that your work is
+  based on, forked from or compatible with BackPack is always fine.
+
+  A requirement stated in a file and enforced by nothing is one that disappears
+  the first time somebody tidies a template, so there is a test. It checks that
+  the same sentence appears in all five places, that it is one sentence rather
+  than five that have drifted, that `LICENSE` is still the unmodified AGPL text,
+  and that the additional terms still cite the section that permits them — which
+  is what distinguishes them from the further restrictions Section 7 forbids.
+  Removing the line is a failing build, for a fork and for us.
+
+  The panel gained a line of its own on the login page as well. That one is
+  Section 13's: a network service has to show the people interacting with it
+  where the source is, and the login page is the first thing anybody reaches.
 
 ### Changed
 

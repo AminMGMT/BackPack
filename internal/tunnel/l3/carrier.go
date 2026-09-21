@@ -5,6 +5,9 @@ import (
 	"net"
 	"strings"
 	"sync"
+
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 // Carriers.
@@ -45,6 +48,14 @@ const (
 type udpCarrier struct {
 	*net.UDPConn
 	overhead int
+
+	// The recvmmsg wrapper, on the family this socket ended up on, plus the
+	// message array it reuses. Linux only; nil everywhere else, and nil here
+	// means the pump reads one datagram at a time. See batchread.go.
+	v4      *ipv4.PacketConn
+	v6      *ipv6.PacketConn
+	batchMu sync.Mutex
+	msgs    []ipv4.Message
 }
 
 func (c *udpCarrier) Overhead() int       { return c.overhead }
@@ -70,7 +81,9 @@ func listenUDP(bind string, sockBuf int) (DatagramCarrier, error) {
 		return nil, fmt.Errorf("l3: listening on %q: %w", bind, err)
 	}
 	sizeUDPBuffers(conn, sockBuf)
-	return &udpCarrier{UDPConn: conn, overhead: udpOverhead(addr)}, nil
+	c := &udpCarrier{UDPConn: conn, overhead: udpOverhead(addr)}
+	c.enableBatch()
+	return c, nil
 }
 
 // dialUDP binds the carrier for the side that reaches out, and resolves the
@@ -94,7 +107,9 @@ func dialUDP(remote string, sockBuf int) (DatagramCarrier, net.Addr, error) {
 		return nil, nil, fmt.Errorf("l3: opening a local socket: %w", err)
 	}
 	sizeUDPBuffers(conn, sockBuf)
-	return &udpCarrier{UDPConn: conn, overhead: udpOverhead(peer)}, peer, nil
+	c := &udpCarrier{UDPConn: conn, overhead: udpOverhead(peer)}
+	c.enableBatch()
+	return c, peer, nil
 }
 
 // sizeUDPBuffers asks the kernel for larger socket buffers. A burst off the

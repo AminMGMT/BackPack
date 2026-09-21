@@ -54,9 +54,27 @@ func bindFailure(what, addr string, err error) string {
 		return b.String()
 	}
 
+	if isAddrNotAvail(err) {
+		// The failure mode a pinned control port introduces. The tunnel was
+		// told to bind one of this server's addresses and the kernel does not
+		// have it — a typo, an interface that has not come up, or a floating
+		// address this host does not currently hold.
+		fmt.Fprintf(&b, "%s %s: this server does not have that address.\n", what, addr)
+		b.WriteString("  A tunnel port written as address:port binds that one interface, so the\n")
+		b.WriteString("  address has to be one this machine holds right now.\n")
+		b.WriteString("  Check it against:  ip -brief address\n")
+		b.WriteString("  Use a port on its own to listen on every interface instead.")
+		return b.String()
+	}
+
 	fmt.Fprintf(&b, "%s %s could not be opened: %v", what, addr, err)
 	return b.String()
 }
+
+// isAddrNotAvail reports whether a listen failed because the address is not
+// configured on this host. Unwrapped rather than matched on its text, for the
+// same reason as isAddrInUse.
+func isAddrNotAvail(err error) bool { return errors.Is(err, syscall.EADDRNOTAVAIL) }
 
 // isAddrInUse reports whether a listen failed because the port was taken. The
 // error arrives wrapped in net.OpError, so it is unwrapped rather than matched

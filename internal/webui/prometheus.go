@@ -42,6 +42,14 @@ func (s *server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 
 	counterHead(&b, "backpack_tunnel_bytes_in_total", "Bytes received over the tunnel")
 	counterHead(&b, "backpack_tunnel_bytes_out_total", "Bytes sent over the tunnel")
+	// What each tunnel's process is holding. These are the counters a leak
+	// shows up in first — see internal/metrics/runtime.go — and the reason they
+	// are here rather than left to a profiler is that nobody attaches a
+	// profiler to a tunnel that is merely getting slowly worse.
+	var runtimeSnaps []struct {
+		name string
+		rs   metrics.RuntimeStats
+	}
 	var kcpSnaps []metrics.Snapshot
 	for _, t := range tunnels {
 		snap, err := metrics.Read(app.ConfigDir, t.Name)
@@ -50,9 +58,30 @@ func (s *server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintf(&b, "backpack_tunnel_bytes_in_total{name=%q} %d\n", t.Name, snap.BytesIn)
 		fmt.Fprintf(&b, "backpack_tunnel_bytes_out_total{name=%q} %d\n", t.Name, snap.BytesOut)
+		if snap.Runtime != nil {
+			runtimeSnaps = append(runtimeSnaps, struct {
+				name string
+				rs   metrics.RuntimeStats
+			}{t.Name, *snap.Runtime})
+		}
 		if snap.KCP != nil {
 			snap.Name = t.Name
 			kcpSnaps = append(kcpSnaps, snap)
+		}
+	}
+
+	if len(runtimeSnaps) > 0 {
+		gaugeHead(&b, "backpack_tunnel_goroutines", "Goroutines held by the tunnel process")
+		gaugeHead(&b, "backpack_tunnel_open_files", "File descriptors held by the tunnel process")
+		gaugeHead(&b, "backpack_tunnel_heap_bytes", "Heap bytes in use by the tunnel process")
+		gaugeHead(&b, "backpack_tunnel_heap_objects", "Live heap objects in the tunnel process")
+		for _, r := range runtimeSnaps {
+			fmt.Fprintf(&b, "backpack_tunnel_goroutines{name=%q} %d\n", r.name, r.rs.Goroutines)
+			if r.rs.OpenFiles > 0 {
+				fmt.Fprintf(&b, "backpack_tunnel_open_files{name=%q} %d\n", r.name, r.rs.OpenFiles)
+			}
+			fmt.Fprintf(&b, "backpack_tunnel_heap_bytes{name=%q} %d\n", r.name, r.rs.HeapBytes)
+			fmt.Fprintf(&b, "backpack_tunnel_heap_objects{name=%q} %d\n", r.name, r.rs.HeapObjects)
 		}
 	}
 
@@ -83,6 +112,13 @@ func gauge(b *strings.Builder, name, help string, v float64) {
 
 func counterHead(b *strings.Builder, name, help string) {
 	fmt.Fprintf(b, "# HELP %s %s\n# TYPE %s counter\n", name, help, name)
+}
+
+// gaugeHead is counterHead for a value that goes down as well as up. Separate
+// from gauge() because these carry a label per tunnel, so the header is written
+// once and the samples follow.
+func gaugeHead(b *strings.Builder, name, help string) {
+	fmt.Fprintf(b, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
 }
 
 func boolVal(v bool) float64 {

@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/metrics"
 )
 
 // The two questions a tunnel could not answer about itself.
@@ -263,10 +266,20 @@ func pathChecks(g string, t Tunnel) []Check {
 	var out []Check
 
 	port := addrPort(t.Addr)
-	if port == "" || isDatagram(t.Transport) {
-		// A datagram tunnel has no entry in the TCP socket table, so none of
-		// this can be measured from here.
+	if port == "" {
 		return out
+	}
+	if isDatagram(t.Transport) {
+		// A datagram tunnel has no entry in the TCP socket table, so the pool
+		// and the traffic cannot be read the way they are below.
+		//
+		// The path MTU still can, and it is the one that matters most: a
+		// tunnel whose path cannot carry a full-sized packet comes up, answers
+		// every health check, carries ping and SSH, and stalls every large
+		// transfer — with nothing coming back to say so. Leaving the whole
+		// group out meant the transports most likely to be chosen for a hostile
+		// path were the ones told least about it.
+		return append(out, datagramPathChecks(g, t)...)
 	}
 
 	before := tunnelSockets(port)
@@ -360,4 +373,52 @@ func saturatingSub(now, then uint64) uint64 {
 		return 0
 	}
 	return now - then
+}
+
+// datagramPathChecks is what can still be measured for a tunnel the socket
+// table cannot see.
+//
+// Only the MTU, and only by probe: there is no kernel PMTU figure to prefer
+// here, because there is no TCP connection for the kernel to have learned one
+// from. The probe is the same binary search over ICMP the stream path falls
+// back to.
+func datagramPathChecks(g string, t Tunnel) []Check {
+	host := peerHostFor(t)
+	if host == "" {
+		return nil
+	}
+	mtu := probePathMTU(host)
+	if mtu == 0 {
+		return []Check{{Group: g, Name: "Path MTU", Level: CheckInfo,
+			Detail: "could not probe — the path drops ICMP"}}
+	}
+	// No negotiated MSS to compare against: nothing here speaks TCP. So the
+	// figure is reported with what it implies, and judged only against the
+	// obviously-too-small.
+	c := Check{Group: g, Name: "Path MTU", Level: CheckOK,
+		Detail: fmt.Sprintf("%d to %s", mtu, host)}
+	if mtu < 1400 {
+		c.Level = CheckWarn
+		c.Fix = fmt.Sprintf("the path carries only %d bytes. On a datagram transport nothing "+
+			"negotiates this down for you — set mss to %d or lower on both ends, or expect "+
+			"large transfers to stall while small ones work", mtu, safeMSS(mtu))
+	}
+	return []Check{c}
+}
+
+// peerHostFor is the address on the far end of a tunnel, from whichever side
+// this is.
+//
+// A client knows where it dials. A server does not know where its client is
+// until one connects, and the engine reports that in the metrics snapshot —
+// which is the same place the watchdog asks, rather than a second opinion.
+func peerHostFor(t Tunnel) string {
+	if t.Role == "client" {
+		return addrHost(t.Addr, "")
+	}
+	snap, err := metrics.Read(app.ConfigDir, t.Name)
+	if err != nil || snap.Peer == "" {
+		return ""
+	}
+	return addrHost(snap.Peer, snap.Peer)
 }

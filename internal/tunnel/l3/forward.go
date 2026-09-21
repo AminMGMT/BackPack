@@ -208,7 +208,7 @@ func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Map
 		return
 	}
 	defer f.limiter.Release()
-	local = f.limiter.Wrap(local)
+	local = f.limiter.Wrap(ctx, local)
 
 	f.stats.active.Add(1)
 	defer f.stats.active.Add(-1)

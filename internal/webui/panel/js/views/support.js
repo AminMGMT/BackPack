@@ -38,12 +38,25 @@ function links(root, close) {
   });
 }
 
+/* The version beside the attribution, read from the same place the rest of the
+   panel reads it. The notice itself is in the markup rather than built here:
+   NOTICE requires it to be present, and markup is what survives somebody
+   trimming a script. */
+function stampVersion(root) {
+  const el = root.querySelector('#bpver');
+  if (!el) return;
+  try {
+    const v = document.documentElement.dataset.version || '';
+    if (v) el.textContent = v;
+  } catch (e) { /* the notice stands without it */ }
+}
+
 export const starView = ctx => openScreen('support', {
   pick: '.dlg.star0',
-  bind: (root, close) => { links(root, close); copyable(root); ctx.setTeardown(close); },
+  bind: (root, close) => { links(root, close); copyable(root); stampVersion(root); ctx.setTeardown(close); },
 }).catch(oops);
 
 export const supportView = ctx => openScreen('support', {
   pick: '.dlg.sup0',
-  bind: (root, close) => { links(root, close); copyable(root); ctx.setTeardown(close); },
+  bind: (root, close) => { links(root, close); copyable(root); stampVersion(root); ctx.setTeardown(close); },
 }).catch(oops);

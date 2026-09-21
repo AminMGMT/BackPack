@@ -90,11 +90,14 @@ func (l *Limiter) Active() int {
 
 // Wrap applies the bandwidth cap to a connection. Without a cap the connection
 // is returned untouched, so the unlimited path adds no overhead at all.
-func (l *Limiter) Wrap(conn net.Conn) net.Conn {
+func (l *Limiter) Wrap(ctx context.Context, conn net.Conn) net.Conn {
 	if l == nil || l.bucket == nil {
 		return conn
 	}
-	return &limitedConn{Conn: conn, bucket: l.bucket}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx}
 }
 
 // limitedConn paces a connection's reads and writes against a shared token
@@ -103,6 +106,8 @@ func (l *Limiter) Wrap(conn net.Conn) net.Conn {
 type limitedConn struct {
 	net.Conn
 	bucket *rate.Limiter
+	// ctx ends with the tunnel. Pacing has to stop when it does; see wait.
+	ctx context.Context
 }
 
 func (c *limitedConn) Read(b []byte) (int, error) {
@@ -131,12 +136,20 @@ func (c *limitedConn) wait(n int) {
 		if burst > 0 && chunk > burst {
 			chunk = burst
 		}
-		// A background context: the deadline that matters is the connection's
-		// own, which the underlying Read/Write already enforces. An error here
-		// means the reservation could not be made at all, and there is nothing
-		// useful to do but let the bytes through — dropping them would corrupt
-		// the stream, and blocking forever would hang it.
-		if err := c.bucket.WaitN(context.Background(), chunk); err != nil {
+		// The connection's own context, not a background one.
+		//
+		// This used to pass context.Background() with a note saying the
+		// deadline that matters is the connection's, which the underlying
+		// Read/Write enforces. That is subtly wrong: WaitN blocks *before* the
+		// Read or Write it is pacing, so a socket deadline never reaches it and
+		// closing the connection does not either — a tunnel being torn down
+		// would sit here paying out a token bucket for a connection already on
+		// its way out.
+		//
+		// An error still means "let the bytes through": dropping them would
+		// corrupt the stream and blocking would hang it. A cancelled context
+		// takes the same path, which is what makes teardown immediate.
+		if err := c.bucket.WaitN(c.ctx, chunk); err != nil {
 			return
 		}
 		n -= chunk

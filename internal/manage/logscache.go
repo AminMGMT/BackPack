@@ -1,6 +1,10 @@
 package manage
 
-import "time"
+import (
+	"time"
+
+	"github.com/backpack/backpack/internal/manage/core"
+)
 
 // Reading a service's journal is expensive, and it was done once per request.
 //
@@ -26,4 +30,4 @@ const logsCacheTTL = 2 * time.Second
 // logsCachePrune is how long an untouched entry is kept before it is dropped.
 const logsCachePrune = 5 * time.Minute
 
-var journalCache = newTTLCache[string](logsCacheTTL, logsCachePrune)
+var journalCache = core.NewTTLCache[string](logsCacheTTL, logsCachePrune)

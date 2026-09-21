@@ -259,23 +259,32 @@ type PckConfig struct {
 
 // ServerConfig represents the configuration for the server.
 type ServerConfig struct {
-	BindAddr         string        `toml:"bind_addr"`
-	Transport        TransportType `toml:"transport"`
-	Token            string        `toml:"token"`
-	Nodelay          bool          `toml:"nodelay"`
-	Keepalive        int           `toml:"keepalive_period"`
-	ChannelSize      int           `toml:"channel_size"`
-	LogLevel         string        `toml:"log_level"`
-	LogFormat        string        `toml:"log_format"` // "" (text) or "json"
-	Ports            []string      `toml:"ports"`
-	PPROF            bool          `toml:"pprof"`
-	MuxSession       int           `toml:"mux_session"`
-	MuxVersion       int           `toml:"mux_version"`
-	MaxFrameSize     int           `toml:"mux_framesize"`
-	MaxReceiveBuffer int           `toml:"mux_recievebuffer"`
-	MaxStreamBuffer  int           `toml:"mux_streambuffer"`
-	Sniffer          bool          `toml:"sniffer"`
-	WebPort          int           `toml:"web_port"`
+	BindAddr  string        `toml:"bind_addr"`
+	Transport TransportType `toml:"transport"`
+	// FallbackTransports are additional carriers this tunnel may fall back to
+	// when the configured one stops getting through. Both ends carry the same
+	// list and rotate through it — see internal/tunnel/chain for how they meet
+	// without negotiating — so a filtered carrier is recovered from without an
+	// operator. Empty (the default) means one transport, exactly as before.
+	FallbackTransports []TransportType `toml:"fallback_transports"`
+	// FallbackDwell is how many seconds the server holds one candidate before
+	// trying the next. 0 uses DefaultFallbackDwell.
+	FallbackDwell    int      `toml:"fallback_dwell"`
+	Token            string   `toml:"token"`
+	Nodelay          bool     `toml:"nodelay"`
+	Keepalive        int      `toml:"keepalive_period"`
+	ChannelSize      int      `toml:"channel_size"`
+	LogLevel         string   `toml:"log_level"`
+	LogFormat        string   `toml:"log_format"` // "" (text) or "json"
+	Ports            []string `toml:"ports"`
+	PPROF            bool     `toml:"pprof"`
+	MuxSession       int      `toml:"mux_session"`
+	MuxVersion       int      `toml:"mux_version"`
+	MaxFrameSize     int      `toml:"mux_framesize"`
+	MaxReceiveBuffer int      `toml:"mux_recievebuffer"`
+	MaxStreamBuffer  int      `toml:"mux_streambuffer"`
+	Sniffer          bool     `toml:"sniffer"`
+	WebPort          int      `toml:"web_port"`
 	// WebBind is the address the sniffer/monitor page listens on. It has no
 	// authentication of any kind and reports the host's CPU, memory, disk and
 	// network along with the tunnel's status and per-port traffic, so it
@@ -364,23 +373,27 @@ type ClientConfig struct {
 	RemoteAddr string `toml:"remote_addr"`
 	// FallbackAddrs are additional server addresses tried in order whenever the
 	// primary cannot be reached (a filtered IP, a blocked port, a CDN edge).
-	FallbackAddrs    []string      `toml:"fallback_addrs"`
-	Transport        TransportType `toml:"transport"`
-	Token            string        `toml:"token"`
-	ConnectionPool   int           `toml:"connection_pool"`
-	RetryInterval    int           `toml:"retry_interval"`
-	Nodelay          bool          `toml:"nodelay"`
-	Keepalive        int           `toml:"keepalive_period"`
-	LogLevel         string        `toml:"log_level"`
-	LogFormat        string        `toml:"log_format"` // "" (text) or "json"
-	PPROF            bool          `toml:"pprof"`
-	MuxSession       int           `toml:"mux_session"`
-	MuxVersion       int           `toml:"mux_version"`
-	MaxFrameSize     int           `toml:"mux_framesize"`
-	MaxReceiveBuffer int           `toml:"mux_recievebuffer"`
-	MaxStreamBuffer  int           `toml:"mux_streambuffer"`
-	Sniffer          bool          `toml:"sniffer"`
-	WebPort          int           `toml:"web_port"`
+	FallbackAddrs []string      `toml:"fallback_addrs"`
+	Transport     TransportType `toml:"transport"`
+	// FallbackTransports and FallbackDwell mirror the server's; see there.
+	// They must match the server's list for the two ends to meet.
+	FallbackTransports []TransportType `toml:"fallback_transports"`
+	FallbackDwell      int             `toml:"fallback_dwell"`
+	Token              string          `toml:"token"`
+	ConnectionPool     int             `toml:"connection_pool"`
+	RetryInterval      int             `toml:"retry_interval"`
+	Nodelay            bool            `toml:"nodelay"`
+	Keepalive          int             `toml:"keepalive_period"`
+	LogLevel           string          `toml:"log_level"`
+	LogFormat          string          `toml:"log_format"` // "" (text) or "json"
+	PPROF              bool            `toml:"pprof"`
+	MuxSession         int             `toml:"mux_session"`
+	MuxVersion         int             `toml:"mux_version"`
+	MaxFrameSize       int             `toml:"mux_framesize"`
+	MaxReceiveBuffer   int             `toml:"mux_recievebuffer"`
+	MaxStreamBuffer    int             `toml:"mux_streambuffer"`
+	Sniffer            bool            `toml:"sniffer"`
+	WebPort            int             `toml:"web_port"`
 	// WebBind is the address the sniffer/monitor page listens on. It has no
 	// authentication of any kind and reports the host's CPU, memory, disk and
 	// network along with the tunnel's status and per-port traffic, so it

@@ -152,6 +152,31 @@ func applyDefaults(cfg *config.Config) {
 	checkXdi(cfg)
 	checkSpoof(cfg)
 	checkPck(cfg)
+	checkFallbackChain(cfg)
+}
+
+// checkFallbackChain refuses a fallback list that cannot work, at load time.
+//
+// A chain that names a transport this engine does not have would otherwise
+// produce a tunnel that quietly skips a candidate — and the whole point of the
+// chain is that nobody is watching when it rotates, so a silent skip would only
+// be discovered as an outage that never recovered.
+func checkFallbackChain(cfg *config.Config) {
+	if err := config.ValidateFallbackTransports(cfg.Server.Transport, cfg.Server.FallbackTransports); err != nil {
+		logger.Fatalf("[server] %v", err)
+	}
+	if err := config.ValidateFallbackTransports(cfg.Client.Transport, cfg.Client.FallbackTransports); err != nil {
+		logger.Fatalf("[client] %v", err)
+	}
+	// The two ends walk the same list and never tell each other where they are,
+	// so a mismatch is not a protocol error — it is a tunnel that takes longer
+	// to meet, or never does. It cannot be checked from one side, so it is said
+	// out loud instead.
+	if len(cfg.Client.FallbackTransports) > 0 {
+		logger.Warnf("transport fallback enabled: %v. The [server] end must carry the "+
+			"same list in the same order, or the two ends may not meet.",
+			config.FallbackNames(cfg.Client.FallbackTransports))
+	}
 }
 
 // checkPck refuses a pck tunnel that cannot work, and validates the flag cycle

@@ -252,14 +252,111 @@ install_binary_from_tar() {
 # Build-from-source fallback (only used when the release download fails and
 # this script sits inside a source checkout).
 # ---------------------------------------------------------------------------
+# The checksums Go publishes for the toolchain this build needs.
+#
+# Verified before the archive is unpacked, and the reason is the same one the
+# header gives for refusing third-party GitHub proxies: two of the three sources
+# below are mirrors, and a mirror that hands over a modified toolchain compromises
+# everything that toolchain then compiles — with no artefact left to compare
+# afterwards. TLS does not help, because the mirror is the party being trusted.
+#
+# Keyed by Go's own architecture names, which are not the release-asset names
+# used elsewhere in this script.
+#
+# GO_SHA_VERSION is the version these belong to, and it is checked against
+# GO_VERSION before anything is downloaded. That check exists because
+# GO_VERSION is read from go.mod and moves on its own: bumping the `go` line
+# would otherwise leave this table describing a toolchain nobody is fetching,
+# and the installer would verify a new archive against an old checksum — or,
+# worse, be quietly changed to skip the check. It fails loudly and says exactly
+# what to update instead. Values come from
+# https://go.dev/dl/?mode=json&include=all.
+GO_SHA_VERSION="1.26.0"
+GO_SHA256_amd64="aac1b08a0fb0c4e0a7c1555beb7b59180b05dfc5a3d62e40e9de90cd42f88235"
+GO_SHA256_arm64="bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd"
+GO_SHA256_386="35e2ec7a7ae6905a1fae5459197b70e3fcbc5e0a786a7d6ba8e49bcd38ad2e26"
+GO_SHA256_s390x="d62137f11530b97f3503453ad7d9e570af070770599fb8054f4e8cd0e905a453"
+GO_SHA256_armv6l="3f6b48d96f0d8dff77e4625aa179e0449f6bbe79b6986bfa711c2cfc1257ebd8"
+
+# go_arch maps this script's asset architecture onto the one Go names its
+# toolchain with.
+#
+# They are not the same set, and the difference was a plain bug: ARCH is armv5,
+# armv6 or armv7 for the three 32-bit ARM release assets, and Go publishes one
+# 32-bit ARM toolchain called armv6l. The download URL therefore asked for
+# go<version>.linux-armv7.tar.gz, which has never existed — so the
+# build-from-source fallback could not work on any ARM machine, which is the
+# hardware most likely to need it.
+go_arch() {
+  case "$1" in
+    armv*) echo "armv6l" ;;   # one 32-bit ARM toolchain, usable on v6 and v7
+    *)     echo "$1" ;;
+  esac
+}
+
+# go_sha256 is the expected checksum for an architecture, or "" when this script
+# carries none for it.
+go_sha256() {
+  local var="GO_SHA256_$1"
+  echo "${!var-}"
+}
+
 download_go() {
-  local file="go${GO_VERSION}.linux-${ARCH}.tar.gz" out="$1"
+  local garch file out want got
+  garch="$(go_arch "$ARCH")"
+  file="go${GO_VERSION}.linux-${garch}.tar.gz"
+  out="$1"
+  want="$(go_sha256 "$garch")"
+
+  # No pinned checksum means no download. The alternative — fetching it anyway
+  # and trusting whichever mirror answered — is the thing this exists to stop,
+  # and a gap in the table above is a gap in this script rather than a reason to
+  # lower the bar.
+  if [[ "$GO_VERSION" != "$GO_SHA_VERSION" ]]; then
+    err "This installer carries Go checksums for ${GO_SHA_VERSION}, but go.mod asks"
+    err "for ${GO_VERSION}. The toolchain cannot be verified, so it will not be"
+    err "downloaded."
+    err "Fix: update GO_SHA_VERSION and the GO_SHA256_* values in install.sh from"
+    err "     https://go.dev/dl/?mode=json&include=all"
+    err "Or install Go ${GO_VERSION} or newer yourself and run this again."
+    return 1
+  fi
+  if [[ -z "$want" ]]; then
+    err "No pinned Go checksum for ${garch} in this installer, so the toolchain"
+    err "cannot be verified and will not be downloaded."
+    err "Install Go ${GO_VERSION} or newer yourself and run this again, or use"
+    err "the offline install — see the README."
+    return 1
+  fi
+
   for u in "https://go.dev/dl/${file}" \
            "https://golang.google.cn/dl/${file}" \
            "https://mirrors.aliyun.com/golang/${file}"; do
     info "Trying ${u}"
-    curl -fsSL --connect-timeout 15 "$u" -o "$out" && return 0
-    warn "source failed, trying next..."
+    curl -fsSL --connect-timeout 15 "$u" -o "$out" || { warn "source failed, trying next..."; continue; }
+
+    if command -v sha256sum >/dev/null 2>&1; then
+      got="$(sha256sum "$out" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      got="$(shasum -a 256 "$out" | awk '{print $1}')"
+    else
+      err "Neither sha256sum nor shasum is available, so the Go toolchain cannot"
+      err "be verified. Refusing to unpack it."
+      rm -f "$out"
+      return 1
+    fi
+
+    if [[ "$got" == "$want" ]]; then
+      info "Go toolchain checksum verified: ${got:0:16}..."
+      return 0
+    fi
+
+    err "CHECKSUM MISMATCH for ${file} from ${u}"
+    err "  expected: ${want}"
+    err "  actual:   ${got}"
+    err "That source served something other than the published toolchain."
+    rm -f "$out"
+    warn "trying next source..."
   done
   return 1
 }

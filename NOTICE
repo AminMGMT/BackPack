@@ -5,6 +5,50 @@ Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 See the LICENSE file for the full text.
 
 --------------------------------------------------------------------------------
+Additional terms under Section 7 of the AGPL-3.0
+--------------------------------------------------------------------------------
+
+These are the two additions that Section 7 of the licence expressly permits.
+Neither takes away anything AGPL-3.0 grants you: you may still use, study,
+modify, redistribute and sell services built on this software.
+
+  (1) ATTRIBUTION — under Section 7(b), which permits requiring the
+      preservation of specified reasonable legal notices and author
+      attributions.
+
+      If you convey a modified version of this software, or run one for
+      others over a network, you must keep the following line visible and
+      unaltered in:
+
+        - this NOTICE file,
+        - the README of your distribution,
+        - the "About" or version output of the program, and
+        - the Appropriate Legal Notices your version displays to its users.
+
+      The line is:
+
+        Based on BackPack by Amin Mohammadi (AminMGMT)
+        https://github.com/AminMGMT/BackPack
+
+      Adding your own copyright and your own notices alongside it is expected.
+      Replacing or removing it is not permitted.
+
+  (2) TRADEMARK — under Section 7(e), which permits declining to grant rights
+      under trademark law.
+
+      "BackPack", the BackPack name and the BackPack logo are marks of Amin
+      Mohammadi (AminMGMT) and are NOT licensed with this code. A modified
+      version must carry a different name and its own branding. Saying
+      truthfully that your work is based on, forked from, or compatible with
+      BackPack is always allowed and needs no permission.
+
+      See TRADEMARK.md for the detail.
+
+If you remove these additional terms from a copy you received, Section 7 lets
+you do so — but the trademark is not ours to license to you in the first place,
+so removing clause (2) changes nothing about your right to use the name.
+
+--------------------------------------------------------------------------------
 Third-party attribution (required by AGPL-3.0)
 --------------------------------------------------------------------------------
 

@@ -211,17 +211,44 @@ func udpPortInUse(port string) bool {
 
 // TunnelPortInUse reports whether a tunnel's control port is already taken,
 // checking the protocol that transport actually listens on.
-func TunnelPortInUse(transport, port string) bool {
+//
+// addr is the full bind address, not a bare port. A tunnel pinned to one of a
+// server's addresses does not contend with a listener on another, and asking
+// about ":443" when the tunnel will bind "85.10.11.51:443" answers a question
+// nobody asked — it is exactly the refusal the two-address setup is trying to
+// get past. A bare port still works and still means every interface.
+func TunnelPortInUse(transport, addr string) bool {
+	if !strings.Contains(addr, ":") {
+		addr = ":" + addr
+	}
 	// pck is the one transport that binds nothing: its segments are read off
 	// the wire rather than delivered by the kernel. It still needs the TCP port
 	// to itself, though — a real listener there would receive the tunnel's
 	// segments too and answer them, which is exactly the interference the
 	// carrier goes to lengths to suppress from the kernel itself.
-	if transport == "pck" {
-		return PortInUse(port)
+	if isDatagram(transport) && transport != "pck" {
+		return udpAddrInUse(addr)
 	}
-	if isDatagram(transport) {
-		return udpPortInUse(port)
+	return tcpAddrInUse(addr)
+}
+
+// tcpAddrInUse and udpAddrInUse are PortInUse and udpPortInUse over a full
+// address. The bare-port helpers stay as they are: they have other callers,
+// and for those "any interface" is the right question.
+func tcpAddrInUse(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return true
 	}
-	return PortInUse(port)
+	ln.Close()
+	return false
+}
+
+func udpAddrInUse(addr string) bool {
+	conn, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return true
+	}
+	conn.Close()
+	return false
 }

@@ -17,6 +17,22 @@ const (
 	RepoOwner = "AminMGMT"
 	RepoName  = "BackPack"
 
+	// Attribution is the line NOTICE requires a modified version to keep.
+	//
+	// AGPL-3.0 gives everybody the right to fork this and publish the fork.
+	// Section 7(b) of the same licence lets the author require that the
+	// attribution be preserved when they do, and NOTICE exercises that. This
+	// is that line, in one place, so the surfaces that must show it cannot
+	// drift apart from the one that defines it.
+	//
+	// It is deliberately a fact rather than a restriction: a fork is welcome,
+	// and it has to say what it came from. See TRADEMARK.md for the separate
+	// question of the name, which is not licensed with the code at all.
+	Attribution = "Based on BackPack by Amin Mohammadi (AminMGMT)"
+
+	// AttributionURL accompanies it wherever there is room for a link.
+	AttributionURL = "https://github.com/" + RepoOwner + "/" + RepoName
+
 	// InstallDir is where the release bundle lives on the VPS.
 	InstallDir = "/root/BackPack"
 
@@ -84,19 +100,23 @@ func ServiceName(name string) string {
 // obliged to use. Signing the list closes that, because the signature is
 // checked against a key that travelled with the binary already running.
 //
-// Empty means this build checks checksums and nothing more, which is what
-// every build before this one did. It is deliberately not a placeholder
-// value: a key nobody holds the private half of would refuse every update,
-// and one invented here would be worse than none. Generate the pair with
-// `make release-key`, paste the public half in here, and put the private
-// half in the repository's RELEASE_SIGNING_KEY secret — the release
-// workflow signs with it, and from that release on the updater requires a
-// signature and refuses an unsigned or mis-signed one.
+// Empty meant this build checked checksums and nothing more, which is what
+// every build before v1.8.2 did. It is no longer empty, and that changes the
+// updater's behaviour in a way worth being exact about: **from a build
+// carrying this key, a release without a valid signature is refused rather
+// than warned about.** So the RELEASE_SIGNING_KEY secret has to be in place
+// before the next tag is pushed, or that release will not install anywhere.
+//
+// Rotating is the same operation and is not free: a machine running an older
+// binary trusts the old key and will refuse a release signed with a new one
+// until it has been updated by some other route. Publish one release carrying
+// the new public key while still signing with the old private key, then
+// switch.
 //
 // A var rather than a const so a test can pin a key of its own — the same
 // reason node.StorePath and optimize.sysctlFile are vars. Nothing at runtime
 // writes it.
-var ReleasePublicKey = ""
+var ReleasePublicKey = "uDVeC9NUFceAuhg53ZWbBNTVSaMC8tEvtwWmcDZmV9Q="
 
 // TunnelConfigMode is the permission a tunnel's TOML config is written with.
 //

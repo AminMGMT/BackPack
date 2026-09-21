@@ -241,6 +241,15 @@ type Tunnel struct {
 	lastInitID uint32
 	lastReply  []byte
 
+	// seenInits refuses a handshake this end has already answered. See
+	// initreplay.go: the protocol has no freshness in it, so a recorded
+	// typeInit stays valid for ever and can be replayed to keep a tunnel from
+	// establishing. This does not close that — the proper fix is a timestamp
+	// and it needs a version both ends understand — but it does stop the same
+	// packet being replayed over and over, which is the attack rather than the
+	// theory.
+	seenInits seenInits
+
 	stats struct {
 		packetsIn, packetsOut atomic.Uint64
 		bytesIn, bytesOut     atomic.Uint64
@@ -637,7 +646,6 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 
 // pumpFromCarrier reads datagrams off the carrier and routes them by kind.
 func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
-	buf := make([]byte, maxMTU+256)
 	plain := make([]byte, 0, maxMTU+256)
 	// The one-packet slice tun.Write takes, allocated once.
 	//
@@ -645,13 +653,25 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 	// slice header on the heap for every packet that arrives — once per packet,
 	// forever, on the receive path of a tunnel carrying a whole network.
 	//
-	// It stays one packet. Batching the way the send path does is not available
-	// here: that path batches because tun.Read hands back several packets from
-	// one syscall, and this one reads the carrier a datagram at a time, so
-	// there is nothing to gather without either blocking on a read that may not
-	// come or holding packets back on a timer. Both trade latency for syscalls
-	// on a path where latency is the thing being protected.
+	// It stays one packet on the way to the interface. Gathering several
+	// datagrams from the *carrier* is a different question and is answered by
+	// recvmmsg, which waits no longer than a single read would; see
+	// batchread.go. Only the plain UDP carrier can do it, so both paths exist.
 	wbuf := make([][]byte, 1)
+
+	// The receive batch: one buffer per datagram, reused for the life of the
+	// pump. A carrier with no batch capability uses only the first.
+	batch := 1
+	reader := asBatchReader(t.carrier)
+	if reader != nil {
+		batch = batchSize
+	}
+	bufs := make([][]byte, batch)
+	for i := range bufs {
+		bufs[i] = make([]byte, maxMTU+256)
+	}
+	sizes := make([]int, batch)
+	froms := make([]net.Addr, batch)
 	ticker := time.NewTicker(previousGrace / 2)
 	defer ticker.Stop()
 
@@ -680,33 +700,67 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 	}()
 
 	for {
-		n, from, err := t.carrier.ReadFrom(buf)
+		got, err := t.receive(reader, bufs, sizes, froms)
 		if err != nil {
 			if ctx.Err() == nil {
 				t.log.Errorf("l3: reading from the carrier: %v", err)
 			}
 			return
 		}
-
-		h, body, err := parseHeader(buf[:n])
-		if err != nil {
-			// A stray datagram on an open port: a scanner, a stale peer, or
-			// noise. Not worth a log line above debug.
-			t.stats.dropped.Add(1)
-			continue
-		}
-
-		switch h.kind {
-		case typeInit:
-			t.handleInit(h, body, from)
-		case typeResp:
-			t.handleResp(h, body)
-		case typeData:
-			plain = t.handleData(plain, wbuf, h, body, from)
-		case typeProbe, typeProbeAck:
-			plain = t.handleProbeMessage(plain, h, body, from)
+		for i := 0; i < got; i++ {
+			plain = t.route(plain, wbuf, bufs[i][:sizes[i]], froms[i])
 		}
 	}
+}
+
+// receive takes the next datagram, or the next several. It is the only place
+// that knows the carrier might be batchable, so the loop above reads the same
+// either way.
+//
+// A batch read that fails falls through to the single read rather than killing
+// the pump: recvmmsg is an optimisation, and losing it must cost throughput
+// rather than the tunnel. The one exception is a real socket error, which the
+// single read will hit again and report properly.
+func (t *Tunnel) receive(reader batchReader, bufs [][]byte, sizes []int, froms []net.Addr) (int, error) {
+	if reader != nil {
+		n, err := reader.ReadBatch(bufs, sizes, froms)
+		if err == nil {
+			return n, nil
+		}
+		if !errors.Is(err, errNoBatch) {
+			return 0, err
+		}
+	}
+	n, from, err := t.carrier.ReadFrom(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0], froms[0] = n, from
+	return 1, nil
+}
+
+// route parses one datagram off the carrier and hands it to whichever half of
+// the protocol owns it.
+func (t *Tunnel) route(plain []byte, wbuf [][]byte, datagram []byte, from net.Addr) []byte {
+	h, body, err := parseHeader(datagram)
+	if err != nil {
+		// A stray datagram on an open port: a scanner, a stale peer, or
+		// noise. Not worth a log line above debug.
+		t.stats.dropped.Add(1)
+		return plain
+	}
+
+	switch h.kind {
+	case typeInit:
+		t.handleInit(h, body, from)
+	case typeResp:
+		t.handleResp(h, body)
+	case typeData:
+		return t.handleData(plain, wbuf, h, body, from)
+	case typeProbe, typeProbeAck:
+		return t.handleProbeMessage(plain, h, body, from)
+	}
+	return plain
 }
 
 // handleInit is the listening side's half of the handshake.
@@ -725,9 +779,24 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 		_, _ = t.carrier.WriteTo(reply, from)
 		return
 	}
+	// A handshake answered earlier and now arriving again with a *different*
+	// one in between is not a retransmission — it is a replay, and answering it
+	// would displace whatever session is pending. Refused silently: a peer that
+	// genuinely needs a new session picks a new identifier, so there is nothing
+	// a real caller loses here.
+	if t.seenInits.seen(h.session, time.Now()) {
+		t.mu.Unlock()
+		t.stats.dropped.Add(1)
+		t.log.Debugf("l3: refusing a handshake from %s: session %08x has been answered "+
+			"before, so this is a replay rather than a first contact", from, h.session)
+		return
+	}
 	t.mu.Unlock()
 
-	sess, reply, err := respond(t.cfg.Token, h.session, body, encapID(t.encap))
+	// The counter on a handshake message is the dialler's announced protocol
+	// version; every build before this one sent 0 there and ignored it. See
+	// version.go.
+	sess, reply, err := respondV(t.cfg.Token, h.session, int(h.counter), body, encapID(t.encap))
 	if err != nil {
 		// A mismatched encapsulation is a misconfiguration, not an intruder:
 		// the peer proved it holds the token, so it is told, loudly, and its

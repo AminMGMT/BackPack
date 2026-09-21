@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/manage/core"
 )
 
 // Which tunnels have their other end on a managed server.
@@ -157,4 +158,18 @@ func TunnelsOnNode(node string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Deleting a tunnel drops the record that it had a pair.
+//
+// Registered rather than called: core.Delete is the lowest layer and the
+// pairing record belongs above it, so core is told what to clean up instead of
+// reaching up to do it — which is what would make the bottom of the package
+// depend on the top.
+//
+// The other end is deliberately left running. There is no operation that
+// removes a tunnel on a managed server, and a delete here is not consent to one
+// there; what goes is only the record that the two were a pair.
+func init() {
+	core.OnDelete(func(name string) { _ = ForgetNodePair(name) })
 }

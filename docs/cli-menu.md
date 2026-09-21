@@ -46,7 +46,7 @@ it.
 |---|---|
 | **Select transport family** | TCP / UDP / WebSocket / Experimental. [Transports](transports.md) |
 | **Select … transport** | the variant within that family |
-| **Tunnel (control) port** | what the client dials. Refused if already in use for that protocol |
+| **Tunnel (control) port** | what the client dials. Refused if already in use for that protocol. A port alone listens on every address; `85.10.11.51:443` pins it to one, so another service can hold the same port on another address — see [Port mappings](port-mappings.md#binding-to-one-local-address) |
 | **Listen on IPv6 as well** `[y/N]` | binds `::`, which accepts IPv4 too on a dual-stack host — "as well", not "instead" |
 | **Tunnel name** | names the service (`backpack-<name>`) and the config file |
 | **Security token** | a 64-char token is suggested; the client needs the identical string |

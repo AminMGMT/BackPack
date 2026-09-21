@@ -335,10 +335,14 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 		return s, fmt.Errorf("invalid name %q — use letters, digits, dots and dashes (max 40)", n.Name)
 	}
 
-	port := strings.TrimSpace(n.TunnelPort)
-	if !validPort(port) {
-		return s, fmt.Errorf("the tunnel port must be between 1 and 65535")
+	// Accepts "443" and "85.10.11.51:443" alike. See tunnelbind.go: an address
+	// pins the control channel to one of a multi-homed server's interfaces,
+	// which is what lets it share a port number with a forwarded port.
+	bind, err := parseTunnelBind(n.TunnelPort)
+	if err != nil {
+		return s, fmt.Errorf("the tunnel port is not valid: %w", err)
 	}
+	port := bind.Port
 
 	s.Token = strings.TrimSpace(n.Token)
 	if s.Token == "" {
@@ -346,13 +350,11 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 	}
 
 	if s.Role == "server" {
-		// The IPv6 wildcard accepts IPv4 too on a dual-stack host, so this is
-		// "IPv6 as well" rather than "IPv6 instead".
-		bind := "0.0.0.0"
-		if n.IPv6 {
-			bind = "::"
-		}
-		s.BindAddr = net.JoinHostPort(bind, port)
+		// The IPv6 wildcard accepts IPv4 too on a dual-stack host, so the flag
+		// is "IPv6 as well" rather than "IPv6 instead". It only decides the
+		// wildcard family: an operator who named an address has answered the
+		// question already.
+		s.BindAddr = bind.Addr(n.IPv6)
 
 		s.Ports = parsePorts(n.Ports)
 		if len(s.Ports) == 0 {
@@ -365,6 +367,10 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 			s.ProxyProtocol = n.ProxyProtocol
 		}
 	} else {
+		if bind.HasHost() {
+			return s, fmt.Errorf("a client binds nothing — its tunnel port is the port on the " +
+				"server, so it takes a port alone")
+		}
 		host := strings.Trim(strings.TrimSpace(n.ServerAddr), "[]")
 		if host == "" {
 			return s, fmt.Errorf("the server address is required")
@@ -538,18 +544,32 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 		}
 	}
 
-	if port := strings.TrimSpace(e.TunnelPort); port != "" {
-		if !validPort(port) {
-			return fmt.Errorf("the tunnel port must be between 1 and 65535")
+	if spec := strings.TrimSpace(e.TunnelPort); spec != "" {
+		bind, err := parseTunnelBind(spec)
+		if err != nil {
+			return fmt.Errorf("the tunnel port is not valid: %w", err)
 		}
 		if s.Role == "server" {
-			if addrPort(s.BindAddr) != port {
-				s.BindAddr = net.JoinHostPort(addrHost(s.BindAddr, "0.0.0.0"), port)
+			// An address pins the tunnel to it; a bare port keeps whatever
+			// this tunnel already binds. Widening a pinned tunnel back to
+			// every interface is therefore said explicitly: 0.0.0.0:443.
+			want := net.JoinHostPort(addrHost(s.BindAddr, "0.0.0.0"), bind.Port)
+			if bind.HasHost() {
+				want = bind.Addr(false)
+			}
+			if want != s.BindAddr {
+				s.BindAddr = want
 				changed = true
 			}
-		} else if addrPort(s.RemoteAddr) != port {
-			s.RemoteAddr = net.JoinHostPort(addrHost(s.RemoteAddr, ""), port)
-			changed = true
+		} else {
+			if bind.HasHost() {
+				return fmt.Errorf("a client binds nothing — its tunnel port is the port on the " +
+					"server, so it takes a port alone. Change where it dials with the server address instead")
+			}
+			if addrPort(s.RemoteAddr) != bind.Port {
+				s.RemoteAddr = net.JoinHostPort(addrHost(s.RemoteAddr, ""), bind.Port)
+				changed = true
+			}
 		}
 	}
 
@@ -629,12 +649,22 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 // TunnelSettings is a tunnel's current editable state, for filling the panel's
 // Edit form.
 type TunnelSettings struct {
-	Name       string   `json:"name"`
-	Role       string   `json:"role"`
-	Transport  string   `json:"transport"`
-	ServerHost string   `json:"serverHost"` // client only
-	TunnelPort string   `json:"tunnelPort"`
-	Ports      []string `json:"ports"` // server only, bot relay mapping hidden
+	Name       string `json:"name"`
+	Role       string `json:"role"`
+	Transport  string `json:"transport"`
+	ServerHost string `json:"serverHost"` // client only
+	TunnelPort string `json:"tunnelPort"`
+
+	// BindHost is the one address a server tunnel's control port is pinned to,
+	// or "" when it listens on every interface.
+	//
+	// Kept apart from TunnelPort rather than folded into it, because that field
+	// is an identity as well as a setting: adopt.go pairs the two ends of a
+	// tunnel by comparing it, and the far end knows the port but has no idea
+	// which of this machine's addresses the port was bound to. Merging them
+	// would silently stop every pinned tunnel from matching its own other half.
+	BindHost   string   `json:"bindHost,omitempty"` // server only
+	Ports      []string `json:"ports"`              // server only, bot relay mapping hidden
 	Preset     string   `json:"preset"`
 	PresetName string   `json:"presetName"`
 	Tune       FineTune `json:"tune"`
@@ -678,6 +708,7 @@ func TunnelSettingsOf(name string) (TunnelSettings, error) {
 	}
 	if s.Role == "server" {
 		out.TunnelPort = addrPort(s.BindAddr)
+		out.BindHost = bindHostOf(s.BindAddr)
 		out.Ports = VisiblePorts(s.Ports, s.Token)
 	} else {
 		out.TunnelPort = addrPort(s.RemoteAddr)

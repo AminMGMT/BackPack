@@ -78,13 +78,54 @@ func Logo(version string) {
 	fmt.Print(Reset)
 	fmt.Printf("%s Backpack  %s%s%s\n", Bold+White, Red, version, Reset)
 	fmt.Println(Gray + " TeleGram : @BlackProtocols  |  GitHub : https://github.com/AminMGMT" + Reset)
+	// The attribution NOTICE requires a modified version to keep. Printed here
+	// because this banner is the program's About screen, and that is one of the
+	// places the additional term under AGPL-3.0 §7(b) names.
+	fmt.Println(Gray + " " + attribution + Reset)
+}
+
+// attribution is set from app.Attribution by the caller, so this package does
+// not import app — tui is the bottom of the dependency order and everything
+// imports it.
+var attribution = "Based on BackPack by Amin Mohammadi (AminMGMT)"
+
+// SetAttribution lets the binary hand tui the single definition of the line,
+// rather than tui carrying a second copy that can drift from it.
+func SetAttribution(s string) {
+	if s != "" {
+		attribution = s
+	}
 }
 
 // Prompt reads a trimmed line after printing label.
 func Prompt(label string) string {
+	v, _ := promptLine(label)
+	return v
+}
+
+// promptLine is Prompt with the one thing Prompt throws away: whether there is
+// any input left.
+//
+// It matters in exactly one place and it matters a lot there. readChoice loops
+// until it is given a valid number, and a read error returns an empty string
+// for ever — so on a session whose stdin has closed (a piped invocation, a
+// terminal that went away, stdin from /dev/null) the menu span a tight loop
+// printing "Invalid choice" until somebody killed it, burning a core and
+// filling the terminal.
+//
+// Callers that genuinely want "empty means the default" are unaffected: they
+// read the string and ignore the second value, which is what Prompt does for
+// them.
+func promptLine(label string) (string, bool) {
 	fmt.Print(White + label + Reset)
-	line, _ := reader.ReadString('\n')
-	return strings.TrimSpace(line)
+	line, err := reader.ReadString('\n')
+	trimmed := strings.TrimSpace(line)
+	// A final line with no newline is still a line; only an error with nothing
+	// on it means the input is gone.
+	if err != nil && trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
 }
 
 // PromptDefault reads a line; if empty returns def.
@@ -156,7 +197,12 @@ func ChooseOpt(title string, opts []Option) int {
 // readChoice reads a 1..n selection (0 = back → -1).
 func readChoice(n int) int {
 	for {
-		v := Prompt(Gray + "Enter your choice (0 to go back): " + Reset + White)
+		v, ok := promptLine(Gray + "Enter your choice (0 to go back): " + Reset + White)
+		if !ok {
+			// No input left. Going back is the only safe reading: the
+			// alternative is this loop, which used to run for ever.
+			return -1
+		}
 		if v == "0" {
 			return -1
 		}

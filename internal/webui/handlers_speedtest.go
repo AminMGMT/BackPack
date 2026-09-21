@@ -69,7 +69,7 @@ func (s *server) handleSpeedTestRun(w http.ResponseWriter, r *http.Request) {
 	// far end is not a managed server behaves exactly as it did.
 	started, recvErr := "", ""
 	if nodeName, paired := manage.NodeFor(req.Name); paired {
-		if hub := s.nodes.get(); hub != nil && hub.IsOnline(nodeName) {
+		if hub := s.nodes.Runner(); hub != nil && hub.IsOnline(nodeName) {
 			port := req.Port
 			if plan, perr := manage.SpeedTestPlanFor(req.Name); perr == nil {
 				for _, t := range plan.Targets {

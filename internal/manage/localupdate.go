@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"github.com/backpack/backpack/internal/manage/backup"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,7 +184,7 @@ func ApplyLocalUpdate(u LocalUpdate, logf func(string)) error {
 	}
 
 	logf("Taking a safety snapshot...")
-	snap, err := TakeSnapshot("pre-update")
+	snap, err := backup.TakeSnapshot("pre-update")
 	if err != nil {
 		return fmt.Errorf("could not take a safety snapshot: %w", err)
 	}
@@ -228,7 +229,7 @@ func ApplyLocalUpdate(u LocalUpdate, logf func(string)) error {
 	if bad := unhealthyAfterUpdate(); len(bad) > 0 {
 		logf("Health check FAILED for: " + strings.Join(bad, ", "))
 		logf("Rolling back to the previous version...")
-		if rerr := RestoreSnapshot(snap, logf); rerr != nil {
+		if rerr := backup.RestoreSnapshot(snap, logf); rerr != nil {
 			return fmt.Errorf("update failed AND rollback failed: %v (rollback: %v) — "+
 				"restore manually from %s", strings.Join(bad, ", "), rerr, snap.Dir)
 		}

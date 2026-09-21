@@ -14,5 +14,9 @@
 *.log
 *.swp
 
-# Local audit dashboard — private, never committed
+# Local planning dashboards — private, never committed
 fix.html
+premium.html
+premium-fa.html
+idea.md
+todo.md

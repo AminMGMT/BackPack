@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/control"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/node"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -157,10 +158,21 @@ func (s *sessionStore) clear() {
 type server struct {
 	sessions *sessionStore
 
-	// nodes owns the listener managed servers connect to. It is always present
-	// and holds no listener until the feature is turned on, so every handler
-	// can ask it a question without checking whether the feature exists.
-	nodes *fleet
+	// The things this panel operates on, which it reads rather than owns. They
+	// used to be package-level variables sitting beside the handlers; see
+	// internal/control for why they are not any more.
+	//
+	// They are always present and empty rather than nil, so every handler can
+	// ask a question without first checking whether the feature exists.
+	nodes *control.Fleet
+	net   *control.Net
+	jobs  *control.Jobs
+
+	// ctx is the panel's own lifetime, which is what a background job is tied
+	// to. A job tied to the request that started it would be cancelled the
+	// moment the browser had its reply, and a fleet rollout answers in
+	// milliseconds and runs for minutes.
+	ctx context.Context
 }
 
 // basePrefix is the path the panel is served under, read from disk for the same
@@ -188,7 +200,7 @@ func Serve() error {
 	if err != nil {
 		return err
 	}
-	srv := &server{sessions: newSessionStore(), nodes: &fleet{}}
+	srv := newServer()
 
 	// The SOCKS5 relay, the watchdog, the Telegram bot and the alerts all
 	// deliberately run elsewhere — in the backpack-monitor service. See
@@ -253,6 +265,10 @@ func Serve() error {
 	mux.HandleFunc("/api/speedtest/plan", srv.requireAuth(srv.handleSpeedTestPlan))
 	mux.HandleFunc("/api/speedtest", srv.requireAuth(srv.handleSpeedTestRun))
 	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
+	// Access control. Issuing a credential is guarded harder than using one:
+	// a write token must not be able to mint itself a better one. See access.go.
+	mux.HandleFunc("/api/tokens", srv.guard(ScopeAdmin, srv.handleTokens))
+	mux.HandleFunc("/api/audit", srv.guard(ScopeAdmin, srv.handleAudit))
 	mux.HandleFunc("/api/sessions", srv.requireAuth(srv.handleSessions))
 	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
 	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
@@ -274,16 +290,20 @@ func Serve() error {
 	// be opened before a server could connect; the panel dials out now, so with
 	// no servers in the fleet it does nothing at all, and turning "nothing at
 	// all" off was a setting that could only ever be in the way.
-	_ = srv.nodes.start()
+	_ = srv.nodes.Start()
 	// Loss and round trip to every managed server, measured in the background
-	// so no request ever waits on a ping. See nodeprobe.go.
+	// so no request ever waits on a ping. See internal/control/net.go.
 	//
 	// Tied to this call rather than to the process: when Serve returns — which
 	// it only does on an error it cannot recover from — the probing stops with
 	// it instead of going on dialling a fleet nothing is left to show.
 	probeCtx, stopProbing := context.WithCancel(context.Background())
 	defer stopProbing()
-	nodeNet.start(probeCtx)
+	srv.net.Start(probeCtx)
+	// Background jobs share that lifetime. A rollout left running against a
+	// fleet after the panel has gone is exactly the thing nobody would notice
+	// until it had finished.
+	srv.ctx = probeCtx
 
 	// Said once, at startup, into the journal.
 	//
@@ -356,37 +376,96 @@ func Serve() error {
 // requireAuth wraps a handler, redirecting unauthenticated users to /login
 // (or 401 for API calls).
 func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.guard(ScopeWrite, next)
+}
+
+// requireReadAuth guards the endpoints that only read.
+//
+// It used to accept a second credential as well — a read-only token, for a
+// scraper or a peer panel. Nothing used it: it had to be minted by hand from a
+// screen most operators never opened, so nothing issued it, and a credential
+// nobody issues is a credential nobody rotates. Removing it was right and it
+// left /metrics — an endpoint built for scrapers — behind a session cookie,
+// which no scraper has.
+//
+// Tokens are back, and the reasons they were removed are addressed rather than
+// repeated: they are scoped like everything else, they are listed where an
+// operator sees them, they carry a required expiry, and they record when they
+// were last used so a dead one can be recognised. See access.go.
+func (s *server) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.guard(ScopeRead, next)
+}
+
+// guard is the one place a request is authorised, and therefore the one place
+// an action is recorded.
+//
+// Splitting those two jobs is the obvious design and it is the wrong one. An
+// audit log written by each handler has one hole per handler somebody forgot to
+// update, and the holes are invisible until the day somebody goes looking.
+// Written here, the only way to act without being recorded is to act without
+// being authorised.
+func (s *server) guard(need Scope, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookie)
-		if err != nil || !s.sessions.valid(c.Value) {
-			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+		who, ok := s.identify(r)
+		if !ok || who.Scope < need {
+			// A browser gets sent to the login page; anything else gets a
+			// status code, because a scraper following a redirect to an HTML
+			// login form reports success and scrapes the form.
+			isAPI := strings.HasPrefix(r.URL.Path, "/api") || r.URL.Path == "/metrics"
+			if isAPI || bearer(r) != "" {
+				if ok {
+					// It proved who it is and is not allowed to do this, which
+					// is a different answer and a more useful one.
+					s.note(r, who, http.StatusForbidden)
+					http.Error(w, "this credential is read-only", http.StatusForbidden)
+					return
+				}
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			redirectTo(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next(w, r)
-	}
-}
-
-// requireReadAuth guards the read-only endpoints.
-//
-// It used to accept a second credential as well — a read-only token, for a
-// scraper or a peer panel. Nothing used it: it had to be minted by hand from a
-// screen most operators never opened, and the panel it was for does not exist.
-// A credential nobody issues is a credential nobody rotates, so it went. What
-// is left is the session, which is the same check requireAuth makes; the two
-// stay apart because read-only and read-write is a distinction worth keeping
-// even while they happen to agree.
-func (s *server) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.valid(c.Value) {
+		if !auditable(r) {
 			next(w, r)
 			return
 		}
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		rec := &statusRecorder{ResponseWriter: w}
+		next(rec, r)
+		s.note(r, who, rec.status)
 	}
+}
+
+// identify works out who is making a request: a panel session, or a scoped
+// token.
+func (s *server) identify(r *http.Request) (caller, bool) {
+	ip := clientIP(r)
+	if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.valid(c.Value) {
+		// The session is the panel password, which is full access. Named
+		// operators at lesser levels are a separate credential — a token —
+		// because a second password on the same login form would be a second
+		// thing to brute force against the same rate limiter.
+		return caller{Kind: "session", Scope: ScopeAdmin, IP: ip}, true
+	}
+	if secret := bearer(r); secret != "" {
+		if tok, ok := checkToken(secret); ok {
+			return caller{Kind: "token", Name: tok.Name, Scope: tok.Scope, IP: ip}, true
+		}
+	}
+	return caller{IP: ip}, false
+}
+
+// note writes one line of the record.
+func (s *server) note(r *http.Request, who caller, status int) {
+	record(auditEntry{
+		At:     time.Now().Unix(),
+		Who:    who.describe(),
+		IP:     who.IP,
+		Method: r.Method,
+		Path:   r.URL.Path,
+		Action: auditAction(r),
+		Status: status,
+	})
 }
 
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -443,7 +522,7 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, gatherTunnels(s.nodes.get()))
+	writeJSON(w, gatherTunnels(s.nodes.Runner()))
 }
 
 func (s *server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -481,7 +560,7 @@ func (s *server) writePeerLogs(w http.ResponseWriter, name string) {
 			"other end for this panel to read.\n", name)
 		return
 	}
-	run := s.nodes.get()
+	run := s.nodes.Runner()
 	if run == nil {
 		fmt.Fprintf(w, "Managed servers are turned off, so %s cannot be reached.\n", pair.Node)
 		return
@@ -647,4 +726,19 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// newServer builds a panel with an empty fleet, an empty set of measurements
+// and an empty job registry.
+//
+// One constructor rather than a literal, because there are now three of these
+// and a handler that reaches for a nil one panics on a page nobody was looking
+// at — the reason they are all non-nil and empty rather than lazily created.
+func newServer() *server {
+	return &server{
+		sessions: newSessionStore(),
+		nodes:    &control.Fleet{},
+		net:      control.NewNet(),
+		jobs:     control.NewJobs(),
+	}
 }

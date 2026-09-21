@@ -33,9 +33,7 @@ func isolateFleet(t *testing.T) {
 	t.Cleanup(func() { node.StorePath, manage.NodePairPath = oldStore, oldPairs })
 }
 
-func newFleetServer() *server {
-	return &server{sessions: newSessionStore(), nodes: &fleet{}}
-}
+func newFleetServer() *server { return newServer() }
 
 // fakeRunner stands in for a fleet of real machines.
 //
@@ -82,7 +80,7 @@ func (f *fakeRunner) Reachable(name string) (bool, string) {
 func (f *fakeRunner) Forget(name string) { f.forgot = append(f.forgot, name) }
 
 // withFleet puts a stand-in behind the panel's fleet.
-func withFleet(s *server, f *fakeRunner) { s.nodes.run = f }
+func withFleet(s *server, f *fakeRunner) { s.nodes.Use(f) }
 
 func post(t *testing.T, s *server, form string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -102,7 +100,7 @@ func post(t *testing.T, s *server, form string) *httptest.ResponseRecorder {
 func TestAnEmptyFleetIsEmptyAndActsOnNothing(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 
 	r := httptest.NewRequest("GET", "/api/nodes", nil)
 	w := httptest.NewRecorder()
@@ -137,7 +135,7 @@ func TestAnEmptyFleetIsEmptyAndActsOnNothing(t *testing.T) {
 func TestAddingAServerKeepsOnlyWhatAnswers(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 
 	f := newFake()
 	withFleet(s, f)
@@ -205,7 +203,7 @@ func TestAddingAServerKeepsOnlyWhatAnswers(t *testing.T) {
 func TestCredentialsCanBeChangedAndAreNeverSentBack(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 	f := newFake()
 	f.up["kharej"] = true
 	withFleet(s, f)
@@ -436,7 +434,7 @@ func TestTheCarryForwardNeverBlocksAnEdit(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
 
-	if got := peerConnOnNode(s.nodes.get(), "kharej-de", "fr-relay-kharej"); got != nil {
+	if got := peerConnOnNode(s.nodes.Runner(), "kharej-de", "fr-relay-kharej"); got != nil {
 		t.Errorf("an unreachable node produced settings out of nowhere: %+v", got)
 	}
 }
@@ -487,11 +485,11 @@ func (r *installingRunner) Call(name, op string, body, out any) error {
 func TestAServerRunningAnOlderBackpackIsUpgradedNotRefused(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 
 	r := &installingRunner{fakeRunner: newFake(), installWorks: true}
 	r.answers[node.OpHello] = node.Info{Version: "v1.7.7", OS: "Ubuntu 24.04"}
-	s.nodes.run = r
+	s.nodes.Use(r)
 
 	w := post(t, s, "action=add&name=germany&host=91.107.245.145&user=root&password=x")
 	if w.Code != http.StatusOK {
@@ -520,10 +518,10 @@ func TestAServerRunningAnOlderBackpackIsUpgradedNotRefused(t *testing.T) {
 func TestAnUpgradeThatDoesNotHelpSaysSoInOneSentence(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 
 	r := &installingRunner{fakeRunner: newFake(), installWorks: false}
-	s.nodes.run = r
+	s.nodes.Use(r)
 
 	w := post(t, s, "action=add&name=germany&host=91.107.245.145&user=root&password=x")
 	if w.Code == http.StatusOK {
@@ -555,7 +553,7 @@ func TestAnUpgradeThatDoesNotHelpSaysSoInOneSentence(t *testing.T) {
 func TestTheFleetPageRefreshesWhatEachServerReports(t *testing.T) {
 	isolateFleet(t)
 	s := newFleetServer()
-	t.Cleanup(s.nodes.stop)
+	t.Cleanup(s.nodes.Stop)
 
 	f := newFake()
 	f.up["germany"] = true

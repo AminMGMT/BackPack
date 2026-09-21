@@ -108,7 +108,18 @@ export const nodeCredentials = fields => nodePost({ action: 'credentials', ...fi
 export const nodeUpgrade = name => nodePost({ action: 'upgrade', name });
 /* Ask one server again now, rather than waiting for its answer to go stale. */
 export const nodeRefresh = name => nodePost({ action: 'refresh', name });
+/* What an upgrade-all would do, without doing it. A rollout whose shape can
+   only be discovered by starting it is the thing staging exists to fix, so the
+   plan is its own call and the button reads it out first. */
+export const nodeRolloutPlan = () => nodePost({ action: 'rolloutplan' });
+/* Staged: one canary, soaked and checked, then waves, halting on a failure.
+   It answers immediately and runs for minutes — poll nodeRolloutStatus. */
 export const nodeUpgradeAll = () => nodePost({ action: 'upgradeall' });
+export const nodeRolloutStatus = () => nodePost({ action: 'rolloutstatus' });
+export const nodeRolloutCancel = () => nodePost({ action: 'rolloutcancel' });
+/* Hold one server back from rollouts, with the reason recorded beside it. */
+export const nodePin = (name, reason) => nodePost({ action: 'pin', name, reason });
+export const nodeUnpin = name => nodePost({ action: 'unpin', name });
 
 /* Both ends in one submission: this end is created here, and the other is
    derived from it and applied on the node. See handleNodePair. */
@@ -241,3 +252,17 @@ export const alerts = () => get('/api/alerts');
 /* The panel's own base, for the few places that build an address outside the
    fetch helpers above — a link, a form action. */
 export const base = () => BASE;
+
+/* Access control.
+ *
+ * Tokens are for callers that are not browsers — a Prometheus scraper has no
+ * cookie, and /metrics is an endpoint built for scrapers. The secret comes back
+ * exactly once, in the response that creates it. */
+export const tokens = () => get('/api/tokens');
+export const tokenIssue = ({ name, scope, days }) =>
+  post('/api/tokens', new URLSearchParams({ name, scope, days: String(days) }));
+export const tokenRevoke = name =>
+  post('/api/tokens', new URLSearchParams({ action: 'revoke', name }));
+/* What has been done through this panel. Written by the authorisation guard,
+   so an action cannot be permitted without being recorded. */
+export const audit = (limit = 200) => get(`/api/audit?limit=${limit}`);

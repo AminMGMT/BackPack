@@ -22,15 +22,33 @@ import (
 // and the bug was in four of them, which is the argument for checking them
 // together rather than one at a time.
 func TestEveryPairingTimeoutFreesItsConnectionSlot(t *testing.T) {
-	// udp is absent on purpose: it never acquires a slot, because
-	// max_connections is not wired to it at all. That is its own defect and it
-	// is not this one — adding udp here would make this test fail for a reason
-	// it does not describe.
+	// udp is absent because it has no pairing timeout to check: it has no
+	// accept, so there is no "waited for a tunnel connection and none came"
+	// branch of this shape.
+	//
+	// It used to be absent for a different reason — max_connections was not
+	// wired to it at all — and that is no longer true: udp acquires a slot per
+	// flow and releases it on each of the three ways out. The limiter itself is
+	// covered directly in limits_behaviour_test.go rather than by reading the
+	// source of its callers.
 	for _, name := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic"} {
 		t.Run(name, func(t *testing.T) {
 			src, err := os.ReadFile(name + ".go")
 			if err != nil {
 				t.Fatalf("%s.go: %v", name, err)
+			}
+			// A transport that delegates to the shared pairing loop has no
+			// branch of its own to read: the release lives in pairloop.go, in
+			// one place, and is tested there by running it rather than by
+			// reading it. What this still has to check for such a transport is
+			// the one release that stayed behind — the stale connection dropped
+			// before a pairing is ever started.
+			if strings.Contains(string(src), "}.run()") {
+				if !strings.Contains(string(src), "drop(localConn, s.limits") {
+					t.Errorf("%s.go hands connections to the shared pairing loop but "+
+						"drops a stale one without freeing its slot", name)
+				}
+				return
 			}
 			branch, ok := timeoutBranch(string(src))
 			if !ok {

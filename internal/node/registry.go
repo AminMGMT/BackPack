@@ -56,6 +56,30 @@ type Node struct {
 	// Info is what the server last said about itself. It is stored rather than
 	// asked for on demand so the fleet screen can draw a server that is down.
 	Info Info `json:"info,omitempty"`
+
+	// Pin holds this server back from a fleet rollout.
+	//
+	// There is always a reason a machine is deliberately behind — a customer
+	// mid-migration, a kernel the new build has not been tried on, a box
+	// somebody is bisecting against. That reason currently lives in whoever set
+	// it up, and a fleet upgrade run by anyone else quietly undoes it. Written
+	// down next to the node, "why is that one still on the old version" has an
+	// answer the next person can read.
+	//
+	// PinnedVersion is what it is held at, for the record; nothing enforces it
+	// on the machine itself. PinReason is required when pinning, because a pin
+	// with no reason becomes permanent by default — nobody dares remove it.
+	PinnedVersion string `json:"pinnedVersion,omitempty"`
+	PinReason     string `json:"pinReason,omitempty"`
+}
+
+// Pinned reports whether this node is held back, in the shape a rollout plan
+// wants.
+func (n Node) Pinned() (Skip, bool) {
+	if n.PinnedVersion == "" {
+		return Skip{}, false
+	}
+	return Skip{Name: n.Name, Version: n.PinnedVersion, Reason: n.PinReason}, true
 }
 
 // Store is the whole persisted state.
@@ -317,5 +341,47 @@ func Remove(name string) error {
 			return fmt.Errorf("no server called %q", name)
 		}
 		return nil
+	})
+}
+
+// Pin holds a server back from fleet rollouts at the version it is on.
+//
+// The reason is required. A pin with no reason outlives the situation that
+// caused it: nobody who finds it later knows whether it is still needed, so
+// nobody removes it, and the machine is behind for ever.
+func Pin(name, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("say why %s is being held back — a pin with no reason never gets removed", name)
+	}
+	return update(func(s *Store) error {
+		for i := range s.Nodes {
+			if s.Nodes[i].Name != name {
+				continue
+			}
+			v := s.Nodes[i].Info.Version
+			if v == "" {
+				v = "its current version"
+			}
+			s.Nodes[i].PinnedVersion = v
+			s.Nodes[i].PinReason = reason
+			return nil
+		}
+		return fmt.Errorf("no server called %q", name)
+	})
+}
+
+// Unpin lets a server take part in rollouts again.
+func Unpin(name string) error {
+	return update(func(s *Store) error {
+		for i := range s.Nodes {
+			if s.Nodes[i].Name != name {
+				continue
+			}
+			s.Nodes[i].PinnedVersion = ""
+			s.Nodes[i].PinReason = ""
+			return nil
+		}
+		return fmt.Errorf("no server called %q", name)
 	})
 }

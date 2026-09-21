@@ -10,6 +10,7 @@ import (
 
 	"github.com/backpack/backpack/internal/client/transport"
 	"github.com/backpack/backpack/internal/debugserver"
+	"github.com/backpack/backpack/internal/tunnel/chain"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
@@ -97,190 +98,27 @@ func (c *Client) Start() {
 		c.logger.Infof("reaching the tunnel server %s", outbound)
 	}
 
-	switch c.config.Transport {
-	case config.TCP, config.STEALTH:
-		tcpConfig := &transport.TcpConfig{
-			RemoteAddr:     c.config.RemoteAddr,
-			Endpoints:      endpoints,
-			Nodelay:        c.config.Nodelay,
-			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
-			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:   c.config.ConnectionPool,
-			Token:          c.config.Token,
-			Sniffer:        c.config.Sniffer,
-			WebPort:        c.config.WebPort,
-			SnifferLog:     c.config.SnifferLog,
-			AggressivePool: c.config.AggressivePool,
-			MSS:            c.config.MSS,
-			SO_RCVBUF:      c.config.SO_RCVBUF,
-			SO_SNDBUF:      c.config.SO_SNDBUF,
-			Outbound:       outbound,
-			// Stealth is the TCP transport with a Noise record layer over every
-			// tunnel connection; everything else about it is identical.
-			Stealth: c.config.Transport == config.STEALTH,
-		}
-		tcpClient := transport.NewTCPClient(c.ctx, tcpConfig, c.logger)
-		go tcpClient.Start()
-
-	case config.TCPMUX:
-		tcpMuxConfig := &transport.TcpMuxConfig{
-			RemoteAddr:       c.config.RemoteAddr,
-			Endpoints:        endpoints,
-			Nodelay:          c.config.Nodelay,
-			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
-			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:     c.config.ConnectionPool,
-			Token:            c.config.Token,
-			MuxVersion:       c.config.MuxVersion,
-			MaxFrameSize:     c.config.MaxFrameSize,
-			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
-			MaxStreamBuffer:  c.config.MaxStreamBuffer,
-			Sniffer:          c.config.Sniffer,
-			WebPort:          c.config.WebPort,
-			SnifferLog:       c.config.SnifferLog,
-			AggressivePool:   c.config.AggressivePool,
-			MSS:              c.config.MSS,
-			SO_RCVBUF:        c.config.SO_RCVBUF,
-			SO_SNDBUF:        c.config.SO_SNDBUF,
-			Outbound:         outbound,
-		}
-		tcpMuxClient := transport.NewMuxClient(c.ctx, tcpMuxConfig, c.logger)
-		go tcpMuxClient.Start()
-
-	case config.KCP, config.XDI, config.PCK:
-		kcp := c.config.KCPConfig.WithDefaults()
-		useICMP := c.config.Transport == config.XDI
-		kcpConfig := &transport.KcpConfig{
-			RemoteAddr:       c.config.RemoteAddr,
-			Endpoints:        endpoints,
-			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
-			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:     c.config.ConnectionPool,
-			Token:            c.config.Token,
-			MuxVersion:       c.config.MuxVersion,
-			MaxFrameSize:     c.config.MaxFrameSize,
-			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
-			MaxStreamBuffer:  c.config.MaxStreamBuffer,
-			Sniffer:          c.config.Sniffer,
-			WebPort:          c.config.WebPort,
-			SnifferLog:       c.config.SnifferLog,
-			AggressivePool:   c.config.AggressivePool,
-			SO_RCVBUF:        c.config.SO_RCVBUF,
-			SO_SNDBUF:        c.config.SO_SNDBUF,
-			MTU:              kcp.MTU,
-			Interval:         kcp.Interval,
-			Resend:           kcp.Resend,
-			NoDelay:          kcp.NoDelay,
-			NoCongestion:     kcp.NoCongestion,
-			SndWnd:           kcp.SndWnd,
-			RcvWnd:           kcp.RcvWnd,
-			AckNoDelay:       kcp.AckNoDelay,
-			DataShards:       kcp.DataShards,
-			ParityShards:     kcp.ParityShards,
-			UseICMP:          useICMP,
-			UsePck:           c.config.Transport == config.PCK,
-			PckInterface:     c.config.PckInterface,
-			PckGatewayMAC:    c.config.PckGatewayMAC,
-			PckFlags:         c.config.PckFlags,
-		}
-		kcpClient := transport.NewKcpClient(c.ctx, kcpConfig, c.logger)
-		go kcpClient.Start()
-
-	case config.QUIC:
-		quicConfig := &transport.QuicConfig{
-			RemoteAddr:     c.config.RemoteAddr,
-			Endpoints:      endpoints,
-			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
-			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:   c.config.ConnectionPool,
-			Token:          c.config.Token,
-			Sniffer:        c.config.Sniffer,
-			WebPort:        c.config.WebPort,
-			SnifferLog:     c.config.SnifferLog,
-			AggressivePool: c.config.AggressivePool,
-			SO_RCVBUF:      c.config.SO_RCVBUF,
-			SO_SNDBUF:      c.config.SO_SNDBUF,
-		}
-		quicClient := transport.NewQuicClient(c.ctx, quicConfig, c.logger)
-		go quicClient.Start()
-
-	case config.WS, config.WSS:
-		WsConfig := &transport.WsConfig{
-			RemoteAddr:     c.config.RemoteAddr,
-			Endpoints:      endpoints,
-			Nodelay:        c.config.Nodelay,
-			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
-			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:   c.config.ConnectionPool,
-			Token:          c.config.Token,
-			Sniffer:        c.config.Sniffer,
-			WebPort:        c.config.WebPort,
-			SnifferLog:     c.config.SnifferLog,
-			Mode:           c.config.Transport,
-			SimpleAuth:     c.config.SimpleAuth,
-			AggressivePool: c.config.AggressivePool,
-			EdgeIP:         c.config.EdgeIP,
-			MSS:            c.config.MSS,
-			Outbound:       outbound,
-		}
-		WsClient := transport.NewWSClient(c.ctx, WsConfig, c.logger)
-		go WsClient.Start()
-
-	case config.WSMUX, config.WSSMUX:
-		wsMuxConfig := &transport.WsMuxConfig{
-			RemoteAddr:       c.config.RemoteAddr,
-			Endpoints:        endpoints,
-			Nodelay:          c.config.Nodelay,
-			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
-			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:     c.config.ConnectionPool,
-			Token:            c.config.Token,
-			MuxVersion:       c.config.MuxVersion,
-			MaxFrameSize:     c.config.MaxFrameSize,
-			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
-			MaxStreamBuffer:  c.config.MaxStreamBuffer,
-			Sniffer:          c.config.Sniffer,
-			WebPort:          c.config.WebPort,
-			SnifferLog:       c.config.SnifferLog,
-			Mode:             c.config.Transport,
-			SimpleAuth:       c.config.SimpleAuth,
-			AggressivePool:   c.config.AggressivePool,
-			EdgeIP:           c.config.EdgeIP,
-			MSS:              c.config.MSS,
-			Outbound:         outbound,
-		}
-		wsMuxClient := transport.NewWSMuxClient(c.ctx, wsMuxConfig, c.logger)
-		go wsMuxClient.Start()
-
-	case config.UDP:
-		udpConfig := &transport.UdpConfig{
-			RemoteAddr:     c.config.RemoteAddr,
-			Endpoints:      endpoints,
-			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
-			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
-			ConnPoolSize:   c.config.ConnectionPool,
-			Token:          c.config.Token,
-			Sniffer:        c.config.Sniffer,
-			WebPort:        c.config.WebPort,
-			SnifferLog:     c.config.SnifferLog,
-			AggressivePool: c.config.AggressivePool,
-			SO_RCVBUF:      c.config.SO_RCVBUF,
-			SO_SNDBUF:      c.config.SO_SNDBUF,
-		}
-		udpClient := transport.NewUDPClient(c.ctx, udpConfig, c.logger)
-		go udpClient.Start()
-
-	default:
-		c.logger.Fatal("invalid transport type: ", c.config.Transport)
+	// One transport, or an ordered chain of them. With no fallbacks configured
+	// the chain holds a single candidate and behaves exactly as the switch it
+	// replaced: start it, wait for the context. With fallbacks it rotates past
+	// a carrier that never comes up. See internal/tunnel/chain.
+	ch := chain.New(string(c.config.Transport),
+		config.FallbackNames(c.config.FallbackTransports),
+		config.Dwell(c.config.FallbackDwell)).
+		OnLog(func(m string) { c.logger.Info(m) })
+	if !ch.Single() {
+		c.logger.Infof("transport fallback chain: %v", ch.Candidates())
 	}
-
-	<-c.ctx.Done()
+	// sweep: the client tries each candidate for a fraction of the dwell so it
+	// covers the whole list inside one server dwell, which is what makes the
+	// two ends meet without negotiating.
+	ch.Run(c.ctx, true, func(ctx context.Context, name string) chain.Attempt {
+		r := c.startTransport(ctx, config.TransportType(name), endpoints, outbound)
+		if r == nil {
+			return chain.Attempt{}
+		}
+		return chain.Attempt{Settled: r.Running}
+	})
 
 	c.logger.Info("all workers stopped successfully")
 
@@ -314,4 +152,205 @@ func buildOutbound(cfg *config.ClientConfig) (*network.Outbound, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// runner is what a started transport gives the chain back: a way to ask
+// whether the control channel is up. Every transport already answers it — see
+// internal/client/transport/status.go.
+type runner interface{ Running() bool }
+
+// startTransport launches one transport under ctx and returns it. Cancelling
+// ctx tears it down; nothing else here reaches for c.ctx, so a chain can run
+// several of these one after another in the same process.
+func (c *Client) startTransport(ctx context.Context, tr config.TransportType, endpoints *network.Endpoints, outbound *network.Outbound) runner {
+	switch tr {
+	case config.TCP, config.STEALTH:
+		tcpConfig := &transport.TcpConfig{
+			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
+			Nodelay:        c.config.Nodelay,
+			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:   c.config.ConnectionPool,
+			Token:          c.config.Token,
+			Sniffer:        c.config.Sniffer,
+			WebPort:        c.config.WebPort,
+			SnifferLog:     c.config.SnifferLog,
+			AggressivePool: c.config.AggressivePool,
+			MSS:            c.config.MSS,
+			SO_RCVBUF:      c.config.SO_RCVBUF,
+			SO_SNDBUF:      c.config.SO_SNDBUF,
+			Outbound:       outbound,
+			// Stealth is the TCP transport with a Noise record layer over every
+			// tunnel connection; everything else about it is identical.
+			Stealth: tr == config.STEALTH,
+		}
+		tcpClient := transport.NewTCPClient(ctx, tcpConfig, c.logger)
+		go tcpClient.Start()
+		return tcpClient
+
+	case config.TCPMUX:
+		tcpMuxConfig := &transport.TcpMuxConfig{
+			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
+			Nodelay:          c.config.Nodelay,
+			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:     c.config.ConnectionPool,
+			Token:            c.config.Token,
+			MuxVersion:       c.config.MuxVersion,
+			MaxFrameSize:     c.config.MaxFrameSize,
+			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
+			MaxStreamBuffer:  c.config.MaxStreamBuffer,
+			Sniffer:          c.config.Sniffer,
+			WebPort:          c.config.WebPort,
+			SnifferLog:       c.config.SnifferLog,
+			AggressivePool:   c.config.AggressivePool,
+			MSS:              c.config.MSS,
+			SO_RCVBUF:        c.config.SO_RCVBUF,
+			SO_SNDBUF:        c.config.SO_SNDBUF,
+			Outbound:         outbound,
+		}
+		tcpMuxClient := transport.NewMuxClient(ctx, tcpMuxConfig, c.logger)
+		go tcpMuxClient.Start()
+		return tcpMuxClient
+
+	case config.KCP, config.XDI, config.PCK:
+		kcp := c.config.KCPConfig.WithDefaults()
+		useICMP := tr == config.XDI
+		kcpConfig := &transport.KcpConfig{
+			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
+			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:     c.config.ConnectionPool,
+			Token:            c.config.Token,
+			MuxVersion:       c.config.MuxVersion,
+			MaxFrameSize:     c.config.MaxFrameSize,
+			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
+			MaxStreamBuffer:  c.config.MaxStreamBuffer,
+			Sniffer:          c.config.Sniffer,
+			WebPort:          c.config.WebPort,
+			SnifferLog:       c.config.SnifferLog,
+			AggressivePool:   c.config.AggressivePool,
+			SO_RCVBUF:        c.config.SO_RCVBUF,
+			SO_SNDBUF:        c.config.SO_SNDBUF,
+			MTU:              kcp.MTU,
+			Interval:         kcp.Interval,
+			Resend:           kcp.Resend,
+			NoDelay:          kcp.NoDelay,
+			NoCongestion:     kcp.NoCongestion,
+			SndWnd:           kcp.SndWnd,
+			RcvWnd:           kcp.RcvWnd,
+			AckNoDelay:       kcp.AckNoDelay,
+			DataShards:       kcp.DataShards,
+			ParityShards:     kcp.ParityShards,
+			UseICMP:          useICMP,
+			UsePck:           tr == config.PCK,
+			PckInterface:     c.config.PckInterface,
+			PckGatewayMAC:    c.config.PckGatewayMAC,
+			PckFlags:         c.config.PckFlags,
+		}
+		kcpClient := transport.NewKcpClient(ctx, kcpConfig, c.logger)
+		go kcpClient.Start()
+		return kcpClient
+
+	case config.QUIC:
+		quicConfig := &transport.QuicConfig{
+			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
+			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:   c.config.ConnectionPool,
+			Token:          c.config.Token,
+			Sniffer:        c.config.Sniffer,
+			WebPort:        c.config.WebPort,
+			SnifferLog:     c.config.SnifferLog,
+			AggressivePool: c.config.AggressivePool,
+			SO_RCVBUF:      c.config.SO_RCVBUF,
+			SO_SNDBUF:      c.config.SO_SNDBUF,
+		}
+		quicClient := transport.NewQuicClient(ctx, quicConfig, c.logger)
+		go quicClient.Start()
+		return quicClient
+
+	case config.WS, config.WSS:
+		WsConfig := &transport.WsConfig{
+			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
+			Nodelay:        c.config.Nodelay,
+			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:   c.config.ConnectionPool,
+			Token:          c.config.Token,
+			Sniffer:        c.config.Sniffer,
+			WebPort:        c.config.WebPort,
+			SnifferLog:     c.config.SnifferLog,
+			Mode:           tr,
+			SimpleAuth:     c.config.SimpleAuth,
+			AggressivePool: c.config.AggressivePool,
+			EdgeIP:         c.config.EdgeIP,
+			MSS:            c.config.MSS,
+			Outbound:       outbound,
+		}
+		WsClient := transport.NewWSClient(ctx, WsConfig, c.logger)
+		go WsClient.Start()
+		return WsClient
+
+	case config.WSMUX, config.WSSMUX:
+		wsMuxConfig := &transport.WsMuxConfig{
+			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
+			Nodelay:          c.config.Nodelay,
+			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:     c.config.ConnectionPool,
+			Token:            c.config.Token,
+			MuxVersion:       c.config.MuxVersion,
+			MaxFrameSize:     c.config.MaxFrameSize,
+			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
+			MaxStreamBuffer:  c.config.MaxStreamBuffer,
+			Sniffer:          c.config.Sniffer,
+			WebPort:          c.config.WebPort,
+			SnifferLog:       c.config.SnifferLog,
+			Mode:             tr,
+			SimpleAuth:       c.config.SimpleAuth,
+			AggressivePool:   c.config.AggressivePool,
+			EdgeIP:           c.config.EdgeIP,
+			MSS:              c.config.MSS,
+			Outbound:         outbound,
+		}
+		wsMuxClient := transport.NewWSMuxClient(ctx, wsMuxConfig, c.logger)
+		go wsMuxClient.Start()
+		return wsMuxClient
+
+	case config.UDP:
+		udpConfig := &transport.UdpConfig{
+			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
+			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:   c.config.ConnectionPool,
+			Token:          c.config.Token,
+			Sniffer:        c.config.Sniffer,
+			WebPort:        c.config.WebPort,
+			SnifferLog:     c.config.SnifferLog,
+			AggressivePool: c.config.AggressivePool,
+			SO_RCVBUF:      c.config.SO_RCVBUF,
+			SO_SNDBUF:      c.config.SO_SNDBUF,
+		}
+		udpClient := transport.NewUDPClient(ctx, udpConfig, c.logger)
+		go udpClient.Start()
+		return udpClient
+
+	default:
+		c.logger.Fatal("invalid transport type: ", tr)
+		return nil
+	}
 }

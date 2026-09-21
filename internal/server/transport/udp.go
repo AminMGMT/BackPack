@@ -531,7 +531,7 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 				// wrapper to go around. The panel, the CLI, the Telegram report
 				// and the traffic history all read it as idle.
 				metrics.AddBytes(uint64(n), 0)
-				s.limits.waitBytes(n)
+				s.limits.waitBytes(g.ctx, n)
 
 				// Send the payload to the existing connection's payload channel
 				select {
@@ -739,9 +739,29 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 
 				default:
 					s.logger.Warn("UDP channel is full, dropping packet.")
-					// Close the newly created connection as it couldn't be added
-					close(newUDPConn.payload)
-					delete(activeConnections, key)
+					// Take the flow back out the way every other path does it:
+					// under the lock, and only when the entry is still this one.
+					//
+					// It used to close the channel and delete the key with no
+					// lock held at all, while the insert four lines above took
+					// one and every other reader and writer of this map takes
+					// one. Two things came of that. The delete raced the map —
+					// which is the plain data race — and the close raced a send
+					// into the very channel being closed, which is a panic
+					// rather than a race: the reader path above sends into
+					// existingConn.payload while holding mu, and mu was exactly
+					// what this was not holding. dropTunnelConn says so in its
+					// own doc comment; this was the one place that did not
+					// follow it.
+					//
+					// Only reachable when udpChan is full, which is why -race
+					// has never caught it: nothing in the suite fills it.
+					mu.Lock()
+					if activeConnections[key] == &newUDPConn {
+						close(newUDPConn.payload)
+						delete(activeConnections, key)
+					}
+					mu.Unlock()
 					s.limits.release()
 				}
 			}
@@ -948,7 +968,7 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 			// Onto the tunnel: the other half of what this transport never
 			// counted. See acceptTunnelConn for the inbound side.
 			metrics.AddBytes(0, uint64(totalWritten))
-			s.limits.waitBytes(totalWritten)
+			s.limits.waitBytes(g.ctx, totalWritten)
 
 			if s.config.Sniffer {
 				g.usageMonitor.AddOrUpdatePort(from.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))

@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/backpack/backpack/internal/app"
@@ -144,7 +145,13 @@ func editPortsMenu(name string) {
 		fmt.Println()
 
 		if spec.Role == "server" {
-			tui.Info("Tunnel (control) port : " + addrPort(spec.BindAddr))
+			// Shown with its address when the control port is pinned to one,
+			// because "443" alone would read as every interface.
+			shown := addrPort(spec.BindAddr)
+			if h := bindHostOf(spec.BindAddr); h != "" {
+				shown = net.JoinHostPort(h, shown)
+			}
+			tui.Info("Tunnel (control) port : " + shown)
 			tui.Info("Forwarded ports       : " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
 			tui.Info("Transport             : " + transportLabel(spec.Transport))
 			tui.Info("Performance preset    : " + presetLabel(spec.Preset))
@@ -188,6 +195,11 @@ func editPortsMenu(name string) {
 				Desc:  "carry UDP on the exposed ports too — off unless you need it",
 			})
 			actions = append(actions, func() { toggleAcceptUDP(name, spec) })
+			opts = append(opts, tui.Option{
+				Title: "Transport fallback chain",
+				Desc:  "carriers to try when this one stops getting through",
+			})
+			actions = append(actions, func() { changeFallbackTransports(name, spec) })
 			if !isDatagram(spec.Transport) {
 				opts = append(opts, tui.Option{
 					Title: "TCP MSS clamp",
@@ -225,6 +237,7 @@ func editPortsMenu(name string) {
 			tui.Info("Server address : " + spec.RemoteAddr)
 			tui.Info("Transport      : " + transportLabel(spec.Transport))
 			tui.Info("Backup servers : " + fallbackSummary(spec.FallbackAddrs))
+			tui.Info("Carrier chain  : " + chainSummary(spec.Transport, spec.FallbackTransports))
 			tui.Info("Preset         : " + presetLabel(spec.Preset))
 			tui.Info("Load balancing : " + onOff(spec.LoadBalance))
 			if !isDatagram(spec.Transport) {
@@ -239,6 +252,7 @@ func editPortsMenu(name string) {
 				{Title: "Change server address", Desc: "IP or domain of the Iran server"},
 				{Title: "Change transport", Desc: "switch carrier — keeps the token"},
 				{Title: "Backup server addresses", Desc: "auto-failover when the main IP gets blocked"},
+				{Title: "Transport fallback chain", Desc: "auto-failover when the carrier gets blocked"},
 				{Title: "Change performance preset", Desc: "Balance, Turbo or Aggressive"},
 				{Title: "Load balancing", Desc: "use all backup addresses at once, not just as spares"},
 			}
@@ -247,6 +261,7 @@ func editPortsMenu(name string) {
 				func() { changeClientHost(name, spec) },
 				func() { changeTunnelTransport(name, spec) },
 				func() { changeFallbackAddrs(name, spec) },
+				func() { changeFallbackTransports(name, spec) },
 				func() { changeTunnelPreset(name, spec) },
 				func() { toggleLoadBalance(name, spec) },
 			}
@@ -282,35 +297,62 @@ func editPortsMenu(name string) {
 
 // changeTunnelPort prompts for and applies a new tunnel (control) port.
 func changeTunnelPort(name string, spec TunnelSpec) {
+	// The default offered back is what this tunnel currently binds, written
+	// the way it would be typed: the address as well, when it has one, so
+	// accepting the default cannot silently widen a pinned tunnel to every
+	// interface.
 	cur := addrPort(spec.BindAddr)
 	if spec.Role == "client" {
 		cur = addrPort(spec.RemoteAddr)
+	} else if h := bindHostOf(spec.BindAddr); h != "" {
+		cur = net.JoinHostPort(h, cur)
 	}
 	fmt.Println()
-	port := tui.PromptDefault("New tunnel port", cur)
-	if port == cur {
+	if spec.Role == "server" {
+		tui.Info("A port alone listens on every address; 85.10.11.51:443 pins it to one.")
+	}
+	entered := tui.PromptDefault("New tunnel port", cur)
+	if entered == cur {
 		return
 	}
-	if !validPort(port) {
-		tui.Error("Invalid port.")
+	bind, err := parseTunnelBind(entered)
+	if err != nil {
+		tui.Error(err.Error())
 		tui.PressEnter()
 		return
 	}
-	// Check the protocol the transport actually binds: a UDP-based tunnel is
-	// unaffected by whatever holds the same TCP port, and vice versa.
-	if spec.Role == "server" && TunnelPortInUse(spec.Transport, port) {
-		tui.Error(fmt.Sprintf("Port %s is already in use on this machine.", port))
+	port := bind.Port
+	if spec.Role == "client" && bind.HasHost() {
+		// On a client this field is the port on the SERVER, not something
+		// bound here — so an address in it is almost certainly aimed at the
+		// wrong question.
+		tui.Error("A client dials the server; it binds nothing. Change the server's")
+		tui.Error("address with \"Change server address\" instead.")
 		tui.PressEnter()
 		return
 	}
-	if err := EditTunnel(name, "", port, nil); err != nil {
+	// Check the protocol the transport actually binds, on the address it
+	// binds: a UDP-based tunnel is unaffected by whatever holds the same TCP
+	// port, and a tunnel pinned to one address is unaffected by a listener on
+	// another.
+	if spec.Role == "server" {
+		if bind.HasHost() && !localAddrExists(bind.Host) {
+			tui.Warn(bind.Host + " is not on any interface of this server right now.")
+		}
+		if TunnelPortInUse(spec.Transport, bind.Addr(false)) {
+			tui.Error(fmt.Sprintf("%s is already in use on this machine.", bind.Addr(false)))
+			tui.PressEnter()
+			return
+		}
+	}
+	if err := EditTunnel(name, "", entered, nil); err != nil {
 		tui.Error("Failed: " + err.Error())
 		tui.PressEnter()
 		return
 	}
-	tui.Success(fmt.Sprintf("Tunnel port changed to %s and the tunnel was restarted.", port))
+	tui.Success(fmt.Sprintf("Tunnel port changed to %s and the tunnel was restarted.", entered))
 	if spec.Role == "server" {
-		tui.Warn("Update the CLIENT side to the same port, or it will not reconnect.")
+		tui.Warn("Update the CLIENT side to port " + port + ", or it will not reconnect.")
 	}
 	tui.PressEnter()
 }

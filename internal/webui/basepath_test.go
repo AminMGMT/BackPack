@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"github.com/backpack/backpack/internal/control"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -282,7 +283,7 @@ func TestSettingAPathRefusesWhatItCannotServe(t *testing.T) {
 // is an address at the root of the origin, which is the one place the panel now
 // answers nowhere. Opening it bounced to /login and 404'd; there was no way in.
 func TestEveryRedirectStaysInsideThePanel(t *testing.T) {
-	srv := &server{sessions: newSessionStore(), nodes: &fleet{}}
+	srv := &server{sessions: newSessionStore(), nodes: &control.Fleet{}}
 	const base = "/x7Kq2p"
 
 	// Each of these is a redirect a browser follows on the way in or out.
@@ -314,7 +315,7 @@ func TestEveryRedirectStaysInsideThePanel(t *testing.T) {
 
 // Signing in successfully lands on the panel, not on the root.
 func TestSigningInLandsOnThePanel(t *testing.T) {
-	srv := &server{sessions: newSessionStore(), nodes: &fleet{}}
+	srv := &server{sessions: newSessionStore(), nodes: &control.Fleet{}}
 	const base = "/x7Kq2p"
 
 	form := strings.NewReader("password=" + srv.password())

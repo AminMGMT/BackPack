@@ -524,7 +524,7 @@ func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr strin
 	// counted and torn down by exactly the code that does it for TCP.
 	if s.config.AcceptUDP {
 		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.localChannel, g.reqNewConnChan, s.limits))
+			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
 	}
 
 	<-g.ctx.Done()
@@ -585,7 +585,7 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 				conn.Close()
 				continue
 			}
-			conn = s.limits.wrap(conn)
+			conn = s.limits.wrap(g.ctx, conn)
 
 			select {
 			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
@@ -615,59 +615,33 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 		case <-g.ctx.Done():
 			return
 		case localConn := <-g.localChannel:
-		loop:
-			for {
-				if nowMillis()-localConn.timeCreated > pairingTimeout.Milliseconds() {
-					s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-localConn.timeCreated)
-					localConn.conn.Close()
-					// The slot this connection took on accept is only freed by the
-					// handler goroutine, which never runs when the connection times
-					// out waiting to be paired. Without this a tunnel with a
-					// connection limit loses a slot for every timeout until it can
-					// accept nothing at all.
-					s.limits.release()
-					break loop
-				}
-
-				// The timeout runs on a timer, so it fires whether or not a
-				// tunnel connection ever arrives.
-				//
-				// The check above used to be the only one, and the select below
-				// blocks — so on a pool that had run dry it never ran. The one
-				// case a pairing timeout exists for was the one case it could
-				// not fire in: the client sat there until it gave up on its own,
-				// the slot it took against max_connections was never returned,
-				// and the socket stayed open for the life of the run.
-				timer := time.NewTimer(pairingWait(localConn.timeCreated))
-				select {
-				case <-g.ctx.Done():
-					timer.Stop()
-					// See tcp.go: the run is going away and nothing else will
-					// close this connection or give its slot back.
-					localConn.conn.Close()
-					s.limits.release()
-					return
-				case <-timer.C:
-					continue loop
-				case tunnelConnection := <-g.tunnelChannel:
-					timer.Stop()
-					close(tunnelConnection.ping)
-					tunnelConnection.mu.Lock()
-					if err := tunnelConnection.conn.WriteMessage(websocket.TextMessage, []byte(localConn.remoteAddr)); err != nil {
-						s.logger.Debugf("%v", err) // failed to send port number
-						tunnelConnection.conn.Close()
-						continue loop
-					}
-					// Handle data exchange between connections
-					go func(tunnelConn TunnelChannel, localConn LocalTCPConn) {
+			if expired(localConn) {
+				drop(localConn, s.limits, s.logger)
+				continue
+			}
+			pairing[TunnelChannel]{
+				ctx: g.ctx, local: localConn, tunnel: g.tunnelChannel,
+				limits: s.limits, log: s.logger,
+				announce: func(c TunnelChannel, addr string) error {
+					// The keepalive goroutine stops here: from this point the
+					// connection is carrying traffic, and a ping written into
+					// the middle of it would be framed as tunnel data.
+					close(c.ping)
+					c.mu.Lock()
+					defer c.mu.Unlock()
+					return c.conn.WriteMessage(websocket.TextMessage, []byte(addr))
+				},
+				discard: func(c TunnelChannel) { c.conn.Close() },
+				relay: func(c TunnelChannel, local LocalTCPConn) {
+					go func() {
 						// Free the connection slot once the transfer ends, or
 						// the limit would fill up permanently.
 						defer s.limits.release()
-						handlers.WSConnectionHandler(g.ctx, tunnelConn.conn, localConn.conn, s.logger, g.usageMonitor, localForwardPort(localConn.conn), s.config.Sniffer)
-					}(tunnelConnection, localConn)
-					break loop
-				}
-			}
+						handlers.WSConnectionHandler(g.ctx, c.conn, local.conn,
+							s.logger, g.usageMonitor, localForwardPort(local.conn), s.config.Sniffer)
+					}()
+				},
+			}.run()
 		}
 	}
 }

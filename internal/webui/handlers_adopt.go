@@ -76,7 +76,7 @@ func candidatesFor(local manage.Tunnel, states []node.TunnelState) []manage.Pair
 // be the other end; which one it is, is the operator's to confirm — a pairing
 // written on a guess sends the next edit to a tunnel somebody else is using.
 func (s *server) handleTunnelAdopt(w http.ResponseWriter, r *http.Request) {
-	run := s.nodes.get()
+	run := s.nodes.Runner()
 	if run == nil {
 		http.Error(w, "no fleet on this panel", http.StatusServiceUnavailable)
 		return

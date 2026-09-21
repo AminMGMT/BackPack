@@ -369,22 +369,6 @@ func writePckKeys(b *strings.Builder, p config.PckConfig) {
 // tunnel the Iran machine is the one that dials, so those words would say the
 // opposite of what is true. Geography does not have that problem.
 
-// directRole turns the engine's edge/origin into what an operator recognises.
-func directRole(resolved string) string {
-	if resolved == "origin" {
-		return "kharej"
-	}
-	return "iran"
-}
-
-// l3Role does the same for the layer-3 tunnel's dial/listen.
-func l3Role(mode string) string {
-	if strings.EqualFold(strings.TrimSpace(mode), "listen") {
-		return "kharej"
-	}
-	return "iran"
-}
-
 // Two questions the display code actually asks.
 //
 // Every screen that shows a tunnel used to ask `Role == "server"`, meaning one

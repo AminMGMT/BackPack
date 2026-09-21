@@ -2,6 +2,7 @@
 
 Reference pages: what each part of Backpack **is**, and every setting it has.
 
+- [Architecture](architecture.md) — what the project is made of and where each part lives
 - Looking for a **step-by-step setup**? → [`tutorial/`](../tutorial/README.md)
 - Looking for the **overview and install**? → [main README](../README.md)
 
@@ -25,6 +26,8 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [When a server is filtered, blocked, or dirty](filtered-or-dirty-ip.md)
 
 ### Per-tunnel settings
+- [Access control](access-control.md) — scopes, API tokens for scrapers, and the record of what was done.
+- [Transport fallback](transport-fallback.md) — what a tunnel does when its carrier stops getting through.
 - [Port mappings](port-mappings.md) — every form `ports = [...]` accepts, including
   binding a listener to one local IP on a multi-homed server
 - [Forwarded UDP](forwarded-udp.md) — the one to read when UDP does not pass
