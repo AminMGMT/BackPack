@@ -9,6 +9,10 @@ Not sure which to pick? Run **Manage → Link Test** on the kharej server; it
 measures your route and recommends one. See
 [Choosing a transport](choosing-a-transport.md).
 
+**Twelve of them.** IP Spoofing used to be a thirteenth and is not any more —
+it is a carrier of the [direct tunnel](l3-direct-tunnel.md) now, for the reason
+given at the bottom of this page.
+
 | Transport | Family | Encrypted handshake | PROXY protocol | Needs | Setup guide |
 |-----------|--------|:--:|:--:|-------|---|
 | TCP | TCP | — | ✅ | — | [→](../tutorial/tcp.md) |
@@ -23,7 +27,6 @@ measures your route and recommends one. See
 | WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
 | WSS Mux | WebSocket | ✅ (TLS) | ✅ | certificate | [→](../tutorial/websocket-tls.md) |
 | **xDi (ICMP)** | Experimental | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
-| **IP Spoofing** | Experimental | ✅ (token key) | ✅ | Linux, root, a path that passes forged sources | [→](../tutorial/ip-spoofing.md) |
 
 "Encrypted handshake" means the tunnel's own credential is protected on the
 wire. On the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) the token is sent
