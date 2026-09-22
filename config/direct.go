@@ -65,12 +65,14 @@ type DirectConfig struct {
 	// Both empty generates a self-signed one, which is what a direct
 	// connection to an IP address wants.
 	TLSCertFile string `toml:"tls_cert"`
-	TLSKeyFile  string `toml:"tls_key"`
+	// TLSKeyFile is the private key for tls_cert.
+	TLSKeyFile string `toml:"tls_key"`
 
 	// ACMEDomain switches the kharej side to a Let's Encrypt certificate for
 	// that domain instead of a generated one. The domain must resolve to it.
 	ACMEDomain string `toml:"acme_domain"`
-	ACMEEmail  string `toml:"acme_email"`
+	// ACMEEmail is where Let's Encrypt sends expiry warnings. Optional.
+	ACMEEmail string `toml:"acme_email"`
 
 	// Ports are the forwarded port mappings, served on the Iran side, in the
 	// same syntax the reverse tunnel uses. A target with no host of its own
@@ -89,7 +91,9 @@ type DirectConfig struct {
 	// (0 = unlimited). Both are enforced on the Iran side, where the users
 	// arrive, and both are off unless set.
 	MaxConnections int `toml:"max_connections"`
-	BandwidthMbps  int `toml:"bandwidth_mbps"`
+	// BandwidthMbps caps total throughput across this tunnel, in megabits per
+	// second. 0 is unlimited.
+	BandwidthMbps int `toml:"bandwidth_mbps"`
 
 	// Preset is the name of the tuning profile the keys below came from. It is
 	// a label: the engine reads the individual values, not this. It exists so
@@ -136,10 +140,16 @@ type DirectConfig struct {
 
 	// MuxVersion, MaxFrameSize, MaxReceiveBuffer and MaxStreamBuffer tune the
 	// mux session. They are the same keys the reverse mux transports take.
-	MuxVersion       int `toml:"mux_version"`
-	MaxFrameSize     int `toml:"mux_framesize"`
+	MuxVersion int `toml:"mux_version"`
+	// MaxFrameSize caps one smux frame, in bytes. Filled from a preset.
+	MaxFrameSize int `toml:"mux_framesize"`
+	// MaxReceiveBuffer is the per-session receive window, in bytes. Filled from a
+	// preset. (The spelling is a typo that shipped; it cannot be corrected
+	// without breaking every existing config.)
 	MaxReceiveBuffer int `toml:"mux_recievebuffer"`
-	MaxStreamBuffer  int `toml:"mux_streambuffer"`
+	// MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a
+	// preset.
+	MaxStreamBuffer int `toml:"mux_streambuffer"`
 }
 
 // Enabled reports whether this configuration describes a direct tunnel. It is

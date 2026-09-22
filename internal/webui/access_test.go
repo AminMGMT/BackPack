@@ -366,3 +366,114 @@ func TestIssuingOverTheAPIReturnsTheSecretOnce(t *testing.T) {
 		t.Fatal("the listing handed the secret back")
 	}
 }
+
+// A wrong bearer token can be retried for ever.
+//
+// The login form has been rate-limited since there was a login form: five
+// failures and the address waits ten minutes. Tokens arrived later and got
+// none of it, so `/metrics` — which exists to be polled, from a script, by
+// something that is not a browser — would answer an unlimited number of
+// guesses at line rate.
+//
+// The seam is the same one everything else is authorised at: guard.
+func TestGuessingATokenIsRateLimited(t *testing.T) {
+	isolateAccess(t)
+	limiter.reset("192.0.2.1")
+	t.Cleanup(func() { limiter.reset("192.0.2.1") })
+
+	s := &server{sessions: newSessionStore()}
+	var ran bool
+
+	guess := func() int {
+		w := httptest.NewRecorder()
+		r := req("GET", "/metrics", "not-the-token")
+		r.RemoteAddr = "192.0.2.1:34567"
+		s.guard(ScopeRead, ok(&ran))(w, r)
+		return w.Code
+	}
+
+	// The first few are refused the ordinary way.
+	for i := 0; i < loginMaxFails; i++ {
+		if code := guess(); code != http.StatusUnauthorized {
+			t.Fatalf("guess %d answered %d, want 401", i+1, code)
+		}
+	}
+
+	// And then the address is told to wait, rather than being allowed to keep
+	// guessing.
+	if code := guess(); code != http.StatusTooManyRequests {
+		t.Fatalf("after %d wrong tokens the answer was %d, want 429 — a credential "+
+			"that can be retried without limit is a credential that can be guessed",
+			loginMaxFails, code)
+	}
+	if ran {
+		t.Fatal("a handler ran for a request with a wrong token")
+	}
+}
+
+// A correct token must not be punished for somebody else's guesses from the
+// same address, and it must clear the count — otherwise a shared NAT address
+// locks out the scraper that is working.
+func TestACorrectTokenClearsTheFailureCount(t *testing.T) {
+	isolateAccess(t)
+	limiter.reset("192.0.2.2")
+	t.Cleanup(func() { limiter.reset("192.0.2.2") })
+
+	secret, _, err := IssueToken("prometheus", ScopeRead, time.Hour)
+	if err != nil {
+		t.Fatalf("issuing: %v", err)
+	}
+	s := &server{sessions: newSessionStore()}
+	var ran bool
+
+	send := func(token string) int {
+		w := httptest.NewRecorder()
+		r := req("GET", "/metrics", token)
+		r.RemoteAddr = "192.0.2.2:34567"
+		s.guard(ScopeRead, ok(&ran))(w, r)
+		return w.Code
+	}
+
+	for i := 0; i < loginMaxFails-1; i++ {
+		send("wrong")
+	}
+	if code := send(secret); code != http.StatusOK {
+		t.Fatalf("a correct token answered %d", code)
+	}
+	// The slate is clean, so the next few wrong ones are ordinary refusals
+	// again rather than a lockout.
+	for i := 0; i < loginMaxFails-1; i++ {
+		if code := send("wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("after a success, guess %d answered %d, want 401", i+1, code)
+		}
+	}
+}
+
+// Guessing must not lock out the panel's own session. A browser with a valid
+// cookie is not the thing being guarded against here.
+func TestAValidSessionIsNotBlockedByTokenGuesses(t *testing.T) {
+	isolateAccess(t)
+	limiter.reset("192.0.2.3")
+	t.Cleanup(func() { limiter.reset("192.0.2.3") })
+
+	s := &server{sessions: newSessionStore()}
+	var ran bool
+	for i := 0; i < loginMaxFails+3; i++ {
+		w := httptest.NewRecorder()
+		r := req("GET", "/metrics", "wrong")
+		r.RemoteAddr = "192.0.2.3:1"
+		s.guard(ScopeRead, ok(&ran))(w, r)
+	}
+
+	tok := s.sessions.create("192.0.2.3")
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/metrics", nil)
+	r.RemoteAddr = "192.0.2.3:1"
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	s.guard(ScopeRead, ok(&ran))(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("a signed-in browser was answered %d because something guessed tokens "+
+			"from the same address", w.Code)
+	}
+}

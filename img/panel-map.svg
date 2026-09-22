@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-labelledby="t d">
+  <title id="t">The Backpack web panel's navigation</title>
+  <desc id="d">A strip across the top belongs to no screen. Below it a dock selects one of three sections: Overview at #/, Servers at #/servers, and Tunnels at #/tunnels. Seven per-tunnel dialogs — live log, metrics, history, link test, speed test, edit and undo — and seven installation dialogs — add tunnel, settings, alerts, health check, maintenance, support and star — open over whichever section was showing, and closing one returns to that section.</desc>
+
+  <style>
+    :root { color-scheme: light dark; }
+    .bg   { fill: #ffffff; }
+    .card { fill: #f4f6f8; stroke: #c9d1d9; stroke-width: 1.5; }
+    .sect { fill: #e8f0fe; stroke: #4c7fd6; stroke-width: 2; }
+    .strip{ fill: #eef1f4; stroke: #c9d1d9; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .lbl  { font: 600 15px ui-sans-serif, system-ui, sans-serif; fill: #14202e; }
+    .sub  { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #5a6a7a; }
+    .note { font: italic 12px ui-sans-serif, system-ui, sans-serif; fill: #5a6a7a; }
+    .head { font: 700 13px ui-sans-serif, system-ui, sans-serif; fill: #14202e; letter-spacing: .06em; }
+    .link { stroke: #93a3b4; stroke-width: 1.5; fill: none; }
+    @media (prefers-color-scheme: dark) {
+      .bg    { fill: #0d1117; }
+      .card  { fill: #161b22; stroke: #30363d; }
+      .sect  { fill: #16283f; stroke: #58a6ff; }
+      .strip { fill: #12171e; stroke: #30363d; }
+      .lbl, .head { fill: #e6edf3; }
+      .sub, .note { fill: #8b949e; }
+      .link  { stroke: #4b5563; }
+    }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="960" height="540"/>
+
+  <!-- the strip -->
+  <rect class="strip" x="40" y="26" width="880" height="44" rx="8"/>
+  <text class="lbl" x="60" y="54">Strip — this machine, right now</text>
+  <text class="note" x="600" y="54">belongs to no screen; keeps running under a dialog</text>
+
+  <!-- the dock -->
+  <text class="head" x="40" y="108">THE DOCK — THREE SECTIONS, ONE AT A TIME</text>
+
+  <rect class="sect" x="40" y="122" width="280" height="64" rx="10"/>
+  <text class="lbl" x="60" y="148">Overview</text>
+  <text class="sub"  x="60" y="170">#/</text>
+
+  <rect class="sect" x="340" y="122" width="280" height="64" rx="10"/>
+  <text class="lbl" x="360" y="148">Servers</text>
+  <text class="sub"  x="360" y="170">#/servers</text>
+
+  <rect class="sect" x="640" y="122" width="280" height="64" rx="10"/>
+  <text class="lbl" x="660" y="148">Tunnels</text>
+  <text class="sub"  x="660" y="170">#/tunnels</text>
+
+  <!-- the seam between sections and dialogs -->
+  <path class="link" d="M180 186 L180 214 M480 186 L480 214 M780 186 L780 214"/>
+  <path class="link" d="M180 214 L780 214"/>
+  <path class="link" d="M480 214 L480 240"/>
+  <text class="note" x="500" y="234">a dialog opens over the section you were on, and closing returns to it</text>
+
+  <!-- per-tunnel dialogs -->
+  <text class="head" x="40" y="272">OVER A TUNNEL — #/t/&lt;name&gt;/…</text>
+  <g>
+    <rect class="card" x="40"  y="286" width="200" height="50" rx="8"/>
+    <text class="lbl" x="56" y="308">Live log</text><text class="sub" x="56" y="326">/logs</text>
+
+    <rect class="card" x="256" y="286" width="200" height="50" rx="8"/>
+    <text class="lbl" x="272" y="308">Metrics</text><text class="sub" x="272" y="326">/metrics</text>
+
+    <rect class="card" x="472" y="286" width="200" height="50" rx="8"/>
+    <text class="lbl" x="488" y="308">History</text><text class="sub" x="488" y="326">/history</text>
+
+    <rect class="card" x="688" y="286" width="200" height="50" rx="8"/>
+    <text class="lbl" x="704" y="308">Link test</text><text class="sub" x="704" y="326">/link</text>
+
+    <rect class="card" x="40"  y="346" width="200" height="50" rx="8"/>
+    <text class="lbl" x="56" y="368">Speed test</text><text class="sub" x="56" y="386">/speed</text>
+
+    <rect class="card" x="256" y="346" width="200" height="50" rx="8"/>
+    <text class="lbl" x="272" y="368">Edit</text><text class="sub" x="272" y="386">/edit</text>
+
+    <rect class="card" x="472" y="346" width="200" height="50" rx="8"/>
+    <text class="lbl" x="488" y="368">Undo</text><text class="sub" x="488" y="386">/undo</text>
+  </g>
+
+  <!-- installation dialogs -->
+  <text class="head" x="40" y="432">OVER THE INSTALLATION</text>
+  <g>
+    <rect class="card" x="40"  y="446" width="160" height="50" rx="8"/>
+    <text class="lbl" x="56" y="468">Add tunnel</text><text class="sub" x="56" y="486">#/add</text>
+
+    <rect class="card" x="216" y="446" width="160" height="50" rx="8"/>
+    <text class="lbl" x="232" y="468">Settings</text><text class="sub" x="232" y="486">#/settings</text>
+
+    <rect class="card" x="392" y="446" width="160" height="50" rx="8"/>
+    <text class="lbl" x="408" y="468">Alerts</text><text class="sub" x="408" y="486">#/alerts</text>
+
+    <rect class="card" x="568" y="446" width="160" height="50" rx="8"/>
+    <text class="lbl" x="584" y="468">Health check</text><text class="sub" x="584" y="486">#/health</text>
+
+    <rect class="card" x="744" y="446" width="176" height="50" rx="8"/>
+    <text class="lbl" x="760" y="468">Maintenance</text><text class="sub" x="760" y="486">#/maintenance</text>
+  </g>
+  <text class="note" x="40" y="518">Plus two static screens: #/support and #/star.</text>
+</svg>

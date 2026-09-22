@@ -44,10 +44,14 @@ func (f *pairedConn) wasClosed() bool {
 	return f.closed
 }
 
-// LocalAddr is reached by localForwardPort in some paths; a nil address would
-// panic there, so this returns something real.
+// LocalAddr and RemoteAddr are reached by the forwarding and logging paths;
+// the embedded nil net.Conn would panic there, so both return something real.
 func (f *pairedConn) LocalAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+}
+
+func (f *pairedConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2}
 }
 
 // takenLimiter is a limiter with one slot already taken, which is the state a

@@ -51,6 +51,14 @@ func startMetricsWithTraffic(
 	bytesIn, bytesOut func() uint64,
 ) {
 	name := tunnelNameFromPath(configPath)
+
+	// The same three facts identify a line in a shipped log as identify a
+	// snapshot on disk, and both are known exactly here and nowhere earlier —
+	// so they are set together rather than derived twice. It has to happen
+	// before the engine builds its logger, which is why this call comes before
+	// NewServer and NewClient in every path. See utils/logident.go.
+	utils.SetLogIdentity(utils.LogIdentity{Tunnel: name, Role: role, Transport: transport})
+
 	if name == "" {
 		return
 	}

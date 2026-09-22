@@ -22,3 +22,8 @@ func (c *udpCarrier) enableBatch() {}
 func (c *udpCarrier) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, error) {
 	return 0, errNoBatch
 }
+
+// WriteBatch is never reached off Linux; see ReadBatch.
+func (c *udpCarrier) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
+	return 0, errNoBatch
+}

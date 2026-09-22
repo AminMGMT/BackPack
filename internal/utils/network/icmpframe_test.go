@@ -41,11 +41,15 @@ func TestEverySessionGetsItsOwnEchoIdentifier(t *testing.T) {
 	for _, id := range ids {
 		releaseXdiSessionID(id)
 	}
+	// Every id released above has to become issuable again, or the pool drains
+	// and a tunnel that has reconnected enough times can no longer get one.
+	// Reusing a released id is the expected outcome; the failure being guarded
+	// is issuing stopping altogether.
 	for i := 0; i < sessions; i++ {
 		id := acquireXdiSessionID()
 		defer releaseXdiSessionID(id)
-		if _, held := seen[id]; !held {
-			continue // a fresh one is fine; what matters is that issuing still works
+		if id == 0 {
+			t.Fatalf("the session pool stopped issuing after %d releases", i)
 		}
 	}
 }

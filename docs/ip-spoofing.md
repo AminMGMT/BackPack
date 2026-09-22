@@ -209,7 +209,6 @@ costs something — bandwidth, CPU, or a shape a different filter notices instea
 | Setting | Key | What it does |
 |---|---|---|
 | Expected forged source from the other end | `spoof_peer_src_ip` | Pins the source the peer stamps, so anything arriving with a different one is dropped **before the encryption looks at it** — a tighter, cheaper receive path. Empty accepts any source and leaves demux to the port and the encryption: safe, but noisier. Set it to the peer's `spoof_src_ip`. |
-| Forged destination address | `spoof_dst_ip` | A forged destination written **only into the cosmetic L4 shim** of the profiles that carry one. The packet is still routed to the real peer. Empty mirrors `spoof_src_ip`. **Ignored by the udp profile.** |
 
 ### Sizing
 
@@ -334,3 +333,24 @@ jitter، DSCP، shuffle پورت، رابط شبکه، بافر سوکت و MTU.
 
 ---
 [← Back to the docs index](README.md) · [Step-by-step tutorial →](../tutorial/ip-spoofing.md)
+
+
+## A key that used to be here
+
+`spoof_dst_ip` was offered until v1.8.2 and is gone. It described a forged
+destination "written only into the cosmetic L4 shim", and there was nowhere for
+it to go: an IPv4 destination lives in exactly one place — the IP header — and
+that has to carry the peer's real address or the packet is not delivered. The
+shim this carrier writes is UDP, TCP or ICMP, and none of those holds an
+address; the only identifier in it is a port, derived from the token so both
+ends agree without exchanging anything.
+
+So the key was accepted, validated as an address, written to the file, and read
+back into a field nothing downstream ever looked at. An update removes it from
+any config that still has it, leaving the rest of the file exactly as it was.
+
+If you set it, nothing changes: it was never doing anything.
+
+---
+
+*Last verified against Backpack v1.8.2.*

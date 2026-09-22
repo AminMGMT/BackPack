@@ -85,7 +85,7 @@ func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out := map[string]any{"running": job.State == control.Running, "name": job.Target}
-		if res, isResult := job.Result.(*linkTestResult); isResult {
+		if res, isResult := control.ResultOf[*linkTestResult](job); isResult {
 			out["result"] = res
 		}
 		if job.Err != "" {
@@ -168,6 +168,7 @@ func (s *server) handleLinkTest(w http.ResponseWriter, r *http.Request) {
 					}
 					res.Name, res.RanOn = name, runOn
 				}
+				noteJob(nil)
 				return &res, nil
 			})
 		var busy control.ErrBusy

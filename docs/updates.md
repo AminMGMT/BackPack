@@ -54,3 +54,7 @@ release-based.
 
 ---
 [← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

@@ -25,6 +25,42 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Security
 
+- **The Go toolchain moved from 1.26.0 to 1.26.6, which closes 24 known
+  vulnerabilities.** Every one of them is in the standard library, every one was
+  already fixed upstream, and every one is on code this product actually runs —
+  `net/http`, `crypto/tls`, `crypto/x509`, `html/template`, `net/url`,
+  `encoding/asn1`. The panel serves HTTP over TLS with HTML templates and the
+  updater fetches releases over HTTPS, so none of it was theoretical.
+
+  Nothing in the repository was going to notice. `govulncheck` runs in CI now
+  and fails the build, and because it reports only what the code can actually
+  reach, a failure means something worth reading rather than a list to
+  acknowledge.
+
+  The pinned checksums in `install.sh` moved with it, verified against the real
+  archive rather than copied from an index.
+
+- **Eight fuzz targets on the parsers that read attacker-controlled bytes**, and
+  they found two bugs in the first minute.
+
+  `parseReplyPayload` accepted a *negative* protocol version. `Atoi` is happy
+  with `-1`, and version agreement takes the lower of the two — so a peer
+  announcing `v-1` negotiated the session down to a version that does not exist
+  and then behaved as legacy, which is the one outcome version negotiation was
+  built to prevent. The downgrade check did not catch it because it looks at the
+  echo of *our* announcement, not at the sanity of theirs.
+
+  And **the setup link was silently corrupting tokens.** Its payload is JSON,
+  and `encoding/json` replaces any byte sequence that is not valid UTF-8 with a
+  replacement character, without a word. A token carrying one stray byte — from
+  a paste, or a terminal in another encoding — arrived at the other end as a
+  *different* token, and the tunnel then refused every connection for the one
+  reason neither machine reports: the two ends do not hold the same secret. The
+  entire purpose of a setup link is to remove the manual retyping step. It
+  refuses now instead, and checks every field rather than the four the first
+  version of the guard happened to name.
+
+
 - **A read-only Telegram admin could read the web panel's password.** The bot
   splits its admins into those who may act and those who may only look, and the
   split was written as "every screen, no actions" — so every `nav:` screen was
@@ -93,6 +129,217 @@ raw-socket carriers need capabilities a test process does not have.
   exactly this.
 
 ### Added
+
+- **The layer-3 carrier hands whole runs of packets to the kernel to cut up.**
+  UDP segmentation offload, on the send path.
+
+  This is the change that says the `sendmmsg` conclusion was only half right.
+  That one removed seven eighths of the syscalls and bought no measurable
+  throughput, and the reason is that the cost is not the syscall — it is **per
+  datagram, inside the kernel**: a copy into the socket buffer and a walk down
+  the protocol stack, each, for every datagram. Batching the *calls* does
+  nothing about that.
+
+  `UDP_SEGMENT` does. Measured three ways, so the gain could not be mistaken for
+  a bigger batch: at the **same batch of eight and the same 5,000 syscalls it is
+  two to three times the rate**, and six times fewer syscalls on top of that at
+  48 per call. The middle figure is the one that decided it.
+
+  Two conditions, both written where the code is. Every segment but the last has
+  to be the same size — the mechanism's rule, so a transfer through the tunnel
+  qualifies and the ragged traffic in between takes the old path untouched. And
+  support is found out by trying, because it depends on the kernel, the address
+  family and the route: the first refusal turns it off for the life of the
+  socket and re-sends the same batch the old way, so nothing is dropped.
+
+  Verified on a real TUN in a network namespace as well as in tests — `udp` and
+  `quic` carriers, ping plus 2 MB byte-identical.
+
+- **Every document has a Persian summary — 38 of 38, up from 24.** The people
+  who run this are Iranian, and a page that exists only in English is a page a
+  good part of its audience reads with a dictionary open. `troubleshooting.md`
+  is the clearest case: it is read when something is already broken, which is
+  exactly when reading a second language is hardest.
+
+  They are summaries rather than translations, and that is a decision. A full
+  translation is a second copy to keep in step, and a second copy of a
+  configuration reference that has quietly fallen behind is worse than none.
+  Each one carries the argument of its page — what the thing is, when you want
+  it, and what will go wrong.
+
+  The fourteen that were missing were not an oversight anybody could see,
+  because nothing listed them. A test lists them now, and checks the block is
+  marked right-to-left; without that it renders as left-aligned text with the
+  punctuation in the wrong places. `config-reference.md` is generated, so its
+  note is generated with it — anything hand-added to that file is lost on the
+  next regeneration.
+
+- **Two-factor sign-in for the panel.** The panel is root on the machine —
+  everything it can do, it does as root — and it was behind one password, on a
+  port that has to be reachable. A code from an authenticator app is now the
+  second thing somebody would have to have.
+
+  It is RFC 6238, with no dependency added: a TOTP is an HMAC over a counter and
+  a truncation, the algorithm has not changed since 2011, and the RFC's own
+  published test vectors are the test — so a drift that would stop every phone
+  in a fleet at once cannot get through. SHA-1, six digits, thirty seconds,
+  because that is what every app defaults to and an operator who has to
+  hand-configure an entry is an operator who leaves the feature off.
+
+  **Ten recovery codes come with it, shown once and stored hashed.** A second
+  factor whose only key is a phone is a way to lose a server. They are accepted
+  in the same box as a code, because somebody reaching for one has already lost
+  the phone and should not have to find a different field, and each one works
+  exactly once.
+
+  **And there is a way back that does not depend on either.** If the phone and
+  the codes are both gone, CLI → Web Panel → Two-factor sign-in turns it off
+  from the machine itself. That asks for no password on purpose: anyone who can
+  run it is already root and can read the file the secret is in, so a prompt
+  would protect nothing and would strand an operator who had also forgotten the
+  password.
+
+  Enrolment does not take effect until a code proves the app actually holds the
+  secret, so a tab closed after the QR code leaves the panel exactly as it was.
+  Turning it *off* from the panel needs the password again, because a stolen
+  session must not be able to quietly remove the thing that would have stopped
+  it.
+
+- **Chaos tests: the faults that are not network faults.** The existing fault
+  suite covers loss, latency, jitter and a backend that accepts and then says
+  nothing. Those are the conditions a tunnel is designed for. These are the ones
+  that take one down, and none of them had a test.
+
+  *A peer killed mid-transfer* — a client destroyed with 4 MB in flight, three
+  times over. What is checked is not only that it comes back: the interrupted
+  transfer has to **fail** rather than hang, because a caller left blocked on a
+  dead tunnel never finds out; the server has to take a fourth client
+  afterwards; and the open-descriptor count must not climb with each life, which
+  is the failure that actually happens — recovering every time while keeping
+  something from each previous one.
+
+  *A backend that resets instead of closing* — `SO_LINGER 0`, which is what a
+  killed process produces. The tunnel has to pass that through rather than
+  absorb it.
+
+  *A full disk*, against the metrics collector: it keeps ticking through the
+  failures, the snapshot already written stays intact, and it writes again on
+  its own once there is room. A collector that stopped on the first error would
+  leave a healthy tunnel looking dead to the watchdog for the life of the
+  process.
+
+  *Out of file descriptors*, with a real `RLIMIT_NOFILE`. The limit is
+  process-wide, so the test re-runs itself as a child, exhausts the descriptors
+  there, and checks the tunnel neither dies nor spins and recovers unaided.
+
+- **JSON logs say which tunnel they came from.** Every line in JSON format now
+  carries `tunnel`, `role`, `transport` and `host` alongside the timestamp,
+  level and message.
+
+  JSON output has existed for a while and there was not much anyone could do
+  with it. An operator with five servers who shipped all five journals to one
+  place got a single stream in which no line said which machine or which tunnel
+  produced it — so searching it meant already knowing which server to look at,
+  which is the problem shipping was supposed to solve.
+
+  The field names are an interface, not an implementation detail: a dashboard,
+  an alert rule or a line in a runbook is written against them, and renaming one
+  would break all of them on the update that shipped it with nothing failing
+  anywhere. They are documented in `docs/log-schema.md` — which also carries a
+  promtail and a vector recipe, both reading journald — and a test fails if one
+  is renamed.
+
+  The human-readable format is untouched. It is read by somebody on the server
+  they are already logged into, who knows all four and would only have them
+  repeated on every line.
+
+- **The panel's JavaScript has tests.** Twenty-seven of them, in
+  `internal/webui/paneltest/`, run by `go test ./internal/webui` and written as
+  plain `node --test` — no `package.json`, no `node_modules`, no dependency of
+  any kind. A Go toolchain remains the only thing this repository requires; the
+  test skips where node is not installed.
+
+  Three files cover the modules that decide what a number or a state *means* —
+  formatting, tunnel state, routing. Those are shared by every screen, so a unit
+  mistake in one of them is wrong on all of them at once, and there is no DOM
+  involved in any of it.
+
+  The fourth is a static wiring check, and it is the one that earns its keep.
+  The panel has no build step — a deliberate choice, and this is its cost:
+  nothing notices an import naming a file that does not exist, or a function
+  exported and never called. Both have happened. It now checks that every module
+  is imported by something, every export is referenced elsewhere, and every
+  relative import resolves. It found two dead exports on its first run.
+
+- **The reverse transports are now tested over a real network path, not
+  loopback.** `tools/transporttest/` builds two network namespaces joined by a
+  veth pair, applies loss and latency with `tc netem`, runs an actual reverse
+  tunnel between them and pushes 2 MB through a forwarded port, comparing it
+  byte for byte at the other end.
+
+  Loopback has a 65536-byte MTU, loses nothing and reorders nothing, which is
+  the opposite of the path this product exists for. Every transport passes
+  there, and the failures that matter in the field are precisely the ones it
+  cannot produce.
+
+  Three passes over nine transports — a real MTU, a 1280-byte MTU, and 2% loss
+  with 20 ms of latency — twenty-seven of twenty-seven. The QUIC fault below is
+  what the first run found.
+
+- **`tools/mutate` — mutation testing.** Coverage says a line ran; it says
+  nothing about whether a test would have noticed had that line been wrong, and
+  a test that exercises code without asserting on the result raises coverage by
+  exactly as much as one that checks everything.
+
+  It enumerates comparison, connective, sign and integer-boundary mutations from
+  the AST and runs each through `go test -overlay`, so the source tree is never
+  written to and an interrupted run leaves nothing to clean up. It refuses to
+  report a score for a suite that was already failing, and counts mutants that
+  did not compile separately from mutants that were killed.
+
+  Pointed at the fallback chain it scored 59.5%, and the survivors were not
+  noise. `Single()` — which decides whether the rotation machinery runs at all —
+  could have its comparison inverted, so a three-candidate chain would report
+  itself as having nothing to fall back to, and no test noticed. The window
+  arithmetic had the same shape of hole: the rendezvous test asserts a bound, so
+  "two candidates" could be treated as "one" and a client would hold a blocked
+  carrier for the server's whole dwell. Both are closed, and the score is 67.6%.
+
+- **`docs/design-decisions.md` — what Backpack deliberately does not do.** The
+  seventeen proposals that were considered seriously and turned down, each with
+  the reason, plus the three facts every one of them rests on and the licence
+  reality that decides what can be sold. Features that get built stop being
+  interesting; the reasons for the ones that were refused otherwise have to be
+  re-derived every time somebody proposes them again.
+
+- **`docs/web-panel-screens.md` and `img/panel-map.svg` — the panel, screen by
+  screen.** All seventeen screens: the three sections in the dock, the seven
+  per-tunnel dialogs and the seven installation ones, each with its address,
+  what it shows, and the CLI entry that does the same job.
+
+  Screenshots are deliberately not part of it. A photograph of a panel goes
+  stale on the next restyle and nothing detects it; this map cannot, because a
+  test reads the routes out of `panel/js/main.js` and the addresses out of the
+  document and fails when they disagree.
+
+
+- **`backpack tunnel status` now says whether the tunnel is carrying anything.**
+  It reported the name, the role, the transport, the address and `state: online`
+  — which is exactly the answer that is wrong in the failure this product cares
+  about most. From a terminal there was no way to ask the first question anybody
+  asks about a tunnel that looks healthy.
+
+  It now shows the peer, bytes in and bytes out *separately* — one climbing
+  while the other is frozen is a stall, and both frozen is an idle tunnel, which
+  is not a fault — how old the reading is, and the failing last hop with the
+  shape of the failure: `refused` is a service that is not running, `timeout` is
+  usually a firewall on the same machine, and the two have different fixes. A
+  reading too old to mean anything is left out rather than shown, because a
+  figure on a screen is read as now.
+
+- **A troubleshooting runbook**, `docs/troubleshooting.md`, ordered by how often
+  each cause is actually the answer rather than by how interesting it is.
+
 
 - **The pairing step three transports had a copy of is now written once.** Seven
   transports on the server side repeat accept → pair → admit → relay → release
@@ -371,6 +618,37 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Changed
 
+- **`internal/menu` is one file per screen.** `menu.go` was 1,462 lines with one
+  function per screen and `Run()` a long switch over all of them. It is 179 now
+  — the root screen and the helpers every screen shares — and the screens live
+  in `manage.go`, `proxy.go`, `backup.go`, `webpanel.go`, `system.go`,
+  `telegram.go` and `update.go`, each opening with a sentence saying what that
+  screen is for. Nothing else changed: same functions, same behaviour.
+
+  One test had to move with it, and it was the right one to notice. The guard
+  that every Manage option has a case in the switch read `menu.go` by name, so
+  splitting the file would have left it passing while watching nothing. It reads
+  the whole package now.
+
+- **The menu package can be tested.** `tui.SetInput` replaces the source every
+  prompt reads from and returns the function that puts it back — a seam, so that
+  a test can be the keyboard.
+
+  It matters because `internal/menu` is where an operator meets this product and
+  it was at 3.2% coverage: a package of screens that nothing could enter without
+  a person at a terminal. Eleven screens are now entered and left again, each
+  asserted to print the words somebody navigates by, and the two panel
+  sub-screens are drawn against a known configuration and checked in both
+  directions. Two behaviours that had only been reasoned about are pinned: a
+  screen handed no input at all does not spin, and a non-numeric choice is
+  refused rather than rounded to something.
+
+  21.1% by statement, with a CI floor to keep it there. No screen is driven into
+  an action, and the one screen that could not be driven safely — kernel tuning,
+  whose confirmation defaults to yes — is excluded with the reason written next
+  to it.
+
+
 - **Twelve unreachable functions, one unused field and a comment-only file are
   gone.** An export surface written for a consumer that never arrived, the two
   leftovers of the removed WireGuard-pipe mode, the bot's half of a panel
@@ -425,6 +703,105 @@ raw-socket carriers need capabilities a test process does not have.
   and the sentence did not.
 
 ### Fixed
+
+- **Two allocation-budget tests were flaky, about one run in five.** Both drive
+  a real socket, and when the far side falls behind, the send or receive path
+  takes an error return — which allocates an `*net.OpError`, a wrapped syscall
+  error, a string. That has nothing to do with whether `ReadBatch` and
+  `WriteBatch` allocate per call, which is the whole question they exist to
+  answer.
+
+  They sample the figure a few times and keep the lowest. That is the right
+  statistic for an allocation budget rather than a way of hiding a failure:
+  allocations cannot be under-counted, so interference can only push the number
+  up, and a budget the lowest sample still exceeds is a budget genuinely
+  exceeded. Twelve consecutive runs, clean.
+
+- **`docs/releasing.md` carried its verification stamp in the middle of the
+  document**, with a whole section written after it — so everything below it
+  looked unstamped to a reader and the test that watches those stamps was
+  satisfied by a line nobody would read as covering the rest.
+
+- **`log_format = "json"` did nothing on a layer-3 or a direct tunnel.** It was
+  offered in the menus, accepted, written into the configuration file and shown
+  back as set — and both engines built their logger with the text formatter
+  hardcoded, so the setting had no effect at all. Only the reverse tunnel ever
+  honoured it. All three do now.
+
+  Found while giving the JSON logs something worth shipping: the new fields
+  appeared on a reverse tunnel and not on the other two, which is how a setting
+  that has been ignored since it was added gets noticed.
+
+- **QUIC could not come up at all over a path with a 1280-byte MTU.** quic-go's
+  first packet is 1280 bytes of payload by default, which is 1308 bytes on the
+  wire over IPv4 and 1328 over IPv6. A path that cannot carry that drops every
+  Initial packet, and because the Initial packet is the first thing sent, the
+  handshake never completed: the transport did not connect slowly or carry a
+  reduced rate, it carried nothing and reported no reason.
+
+  1280 is not an exotic number. It is the standard MTU of an IPv6 tunnel, the
+  figure a great many mobile carriers hand out, and what is left after any
+  encapsulation on top of a 1500-byte link — including a BackPack layer-3 tunnel
+  carrying another tunnel, which is why the `quic` carrier had it too.
+
+  Found by running the transports over a real pair of network namespaces rather
+  than loopback: at MTU 1280 the other eight reverse transports carried 2 MB
+  byte-identical and `quic` carried zero bytes. Loopback has a 65536-byte MTU
+  and can never show this.
+
+  Both QUIC endpoints now start from 1232 bytes — 1280 less an IPv6 and a UDP
+  header, so it fits either address family — and Path MTU Discovery, which stays
+  enabled, grows it to whatever the route really carries within the first few
+  round trips. A fat path loses nothing but the size of the handshake itself.
+  Verified over both a 1280 and a 1400-byte namespace path, 2 MB byte-identical
+  each way, and pinned by a unit test that relays QUIC through a deliberately
+  narrow path.
+
+- **A layer-3 tunnel could report packets carrying no bytes.** The two counters
+  cannot be updated in one step, and the writer bumped packets first — so a
+  reader landing between the two lines saw a tunnel that had carried packets
+  containing nothing. Not stale: impossible.
+
+  It mattered past looking wrong on a dashboard. `bytes_in` and `bytes_out` are
+  what the watchdog's stall detection watches, and a direction that reads as
+  frozen for an instant is precisely the signal it exists to act on.
+
+  Every writer now adds bytes before packets and the reader loads packets before
+  bytes — opposite orders, on purpose — which makes "packets seen implies bytes
+  seen" true at every instant. A test that reads flat out while packets cross
+  holds it, and it is the test that found the second half: the fix had been
+  applied to the receive side only, and the send side had the same bug.
+
+- **A reload could fight the tunnel it was replacing for its own ports.**
+  `Start` returned when the transport's supervisor stopped, not when the
+  goroutines it launched had — so for a window afterwards the old run still held
+  its listeners, and a reload builds the next generation as soon as the previous
+  `Start` returns.
+
+  It was papered over by a flat two-second sleep in every transport's restart
+  path, and the comment next to that sleep said what it was for. A sleep is a
+  guess: usually long enough, never a guarantee, and silently wrong on a loaded
+  machine — which is exactly when a restart is most likely to be happening.
+
+  Every transport now counts the listeners it holds and `Start` waits for that
+  count to reach zero, so "Start returned" means "the ports are free". The
+  sleeps are gone, which also makes a restart faster: a listener closes in
+  microseconds rather than always costing two seconds.
+
+- **A restart that gave up left the panel and the watchdog believing there was
+  a peer.** Every transport's `Restart` has a branch it takes when the tunnel is
+  shutting down — rebuilding a run from a finished context would bind the ports
+  the run replacing it is about to ask for — and that branch returned *before*
+  the two lines that clear the status and the published peer, because those sit
+  on the path that carries on.
+
+  It was invisible for as long as the only way to reach it was a process about
+  to exit and a snapshot about to go stale. The transport fallback chain makes
+  it reachable: the chain cancels a candidate's context and the process *keeps
+  running*, so the snapshot carries a fresh timestamp and a connected peer for a
+  tunnel that is mid-rotation with nothing connected at all — and the watchdog
+  reads that and calls it healthy. Fixed on all fourteen transports.
+
 
 - **The engine widened the ephemeral port range back on every start.** Optimize
   sets `net.ipv4.ip_local_port_range` to the kernel's own `32768 60999` and

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"fmt"
+	"net"
 	"testing"
 	"time"
 )
@@ -89,7 +90,31 @@ func TestEveryTransportComesBackAfterTheTunnelRestarts(t *testing.T) {
 			backend := startEchoBackend(t)
 			tunnelPort := freePort(t)
 			entryPort := freePort(t)
-			token := "matrix-restart-token-0123456789a"
+			// A different token per run, and that is the point rather than
+			// tidiness.
+			//
+			// tunnel.Stop cancels the context and waits on Start to return —
+			// but Start returns when the transport's supervisor stops, not when
+			// the goroutines it launched have. So run 1's client can still be
+			// dialling while run 2's server comes up on the same port, and with
+			// one shared token that ghost *proves the token* and is accepted as
+			// the control channel. Run 2's real client is then the second
+			// arrival, the tunnel never carries, and the failure reads as "run
+			// 2 never came up".
+			//
+			// Measured on kcp, whose tunnel port is UDP: 41 passes in 45 with a
+			// shared token, 45 in 45 with distinct ones. It is rare on an idle
+			// machine and not rare on a loaded two-core CI runner under the
+			// race detector, which is where it was found.
+			//
+			// Two runs of one transport have no reason to share a secret, and
+			// sharing one lets the previous run satisfy this one's server,
+			// which tests nothing. The underlying defect — Start returning
+			// before the transport has stopped — is a product issue and is
+			// recorded as one; it is not this test's to work around.
+			tokenFor := func(run int) string {
+				return fmt.Sprintf("matrix-restart-token-run%d-000000", run)
+			}
 
 			for attempt := 1; attempt <= 2; attempt++ {
 				if transport == "udp" {
@@ -99,6 +124,7 @@ func TestEveryTransportComesBackAfterTheTunnelRestarts(t *testing.T) {
 					continue
 				}
 				func() {
+					token := tokenFor(attempt)
 					srvCfg := baseServerConfig(transport, tunnelPort, entryPort, backend.addr, token)
 					cliCfg := baseClientConfig(transport,
 						fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
@@ -110,7 +136,8 @@ func TestEveryTransportComesBackAfterTheTunnelRestarts(t *testing.T) {
 					if err := tun.roundTrip(randomPayload(t, 32*1024)); err != nil {
 						t.Fatalf("%s: run %d carried nothing: %v", transport, attempt, err)
 					}
-					tun.Stop() // release the ports for the next run
+
+					tun.Stop() // the ports are waited for at the top of the next run
 				}()
 			}
 		})
@@ -126,13 +153,24 @@ func TestEveryTransportComesBackAfterTheTunnelRestarts(t *testing.T) {
 // over a protocol that cannot promise delivery.
 func carriesDatagrams(t *testing.T, transport string) {
 	t.Helper()
+	carriesDatagramsOver(t, transport, "127.0.0.1", "0.0.0.0")
+}
+
+// carriesDatagramsOver is the same claim on a named address family, so the
+// IPv6 matrix can make it too. dialHost is what the client dials and bindHost
+// is what the server binds — the two differ, and a tunnel that works on one
+// family and not the other usually fails on exactly that asymmetry.
+func carriesDatagramsOver(t *testing.T, transport, dialHost, bindHost string) {
+	t.Helper()
 	backendAddr := startUDPEchoBackend(t)
 	tunnelPort := freePort(t)
 	entryPort := freePort(t)
 	token := "matrix-udp-token-0123456789abcd"
 
 	srvCfg := baseServerConfig(transport, tunnelPort, entryPort, backendAddr, token)
-	cliCfg := baseClientConfig(transport, fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	srvCfg.BindAddr = net.JoinHostPort(bindHost, fmt.Sprint(tunnelPort))
+	cliCfg := baseClientConfig(transport,
+		net.JoinHostPort(dialHost, fmt.Sprint(tunnelPort)), token, nil)
 
 	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
 	_ = tun // stopped by the harness

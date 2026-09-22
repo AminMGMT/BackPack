@@ -93,7 +93,7 @@ func TestChangeTimesRunOldestFirst(t *testing.T) {
 func TestNoHistoryIsNotAFailure(t *testing.T) {
 	withTempConfigDir(t)
 
-	if got := ConfigHistory("never-edited"); got != nil && len(got) != 0 {
+	if got := ConfigHistory("never-edited"); len(got) != 0 {
 		t.Errorf("a tunnel with no history returned %d entries", len(got))
 	}
 	if got := ConfigChangeTimes("never-edited"); len(got) != 0 {

@@ -30,7 +30,7 @@ const directRestartDelay = 5 * time.Second
 
 // runDirectTunnel keeps one direct tunnel running until ctx ends.
 func runDirectTunnel(cfg *config.Config, ctx context.Context, configPath string) {
-	logger := utils.NewLoggerWithFormat(directLogLevel(cfg), "")
+	logger := utils.NewLoggerWithFormat(directLogLevel(cfg), directLogFormat(cfg))
 
 	dc := cfg.Direct
 	tunnelCfg := direct.Config{
@@ -123,4 +123,14 @@ func directLogLevel(cfg *config.Config) string {
 		return cfg.Server.LogLevel
 	}
 	return cfg.Client.LogLevel
+}
+
+// directLogFormat reads log_format the same way directLogLevel reads the
+// level. It was hardcoded to the text format, so `log_format = "json"` on a
+// direct tunnel was accepted and then ignored.
+func directLogFormat(cfg *config.Config) string {
+	if cfg.Server.LogFormat != "" {
+		return cfg.Server.LogFormat
+	}
+	return cfg.Client.LogFormat
 }

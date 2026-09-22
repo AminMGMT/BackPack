@@ -2,7 +2,7 @@ BIN      := backpack
 BIN_PATH := /usr/local/bin/backpack
 LDFLAGS  := -s -w
 
-.PHONY: all build install uninstall clean tidy run vendor release-linux release version
+.PHONY: all build install uninstall clean tidy run vendor release-linux release version sbom reproducible
 
 all: build
 
@@ -54,8 +54,42 @@ release: version release-linux
 	@# describes. Nothing happens without RELEASE_SIGNING_KEY in the
 	@# environment, so a fork and a local build still produce a full set.
 	go run ./tools/signsums release/SHA256SUMS
+	@# The bill of materials, published with the release.
+	@#
+	@# Go records every module and its hash inside the binary it builds, so this
+	@# is read back out of the artefact rather than assembled from go.mod — it
+	@# describes what was actually linked, not what the manifest asked for, and
+	@# those differ the moment anything is replaced or vendored.
+	@#
+	@# It also names the toolchain, which is the dependency with the most
+	@# reachable CVEs in this project's history and the one nothing else records.
+	$(MAKE) sbom
 	@echo "Release assets ready in ./release"
 	@cat release/SHA256SUMS
+
+# sbom writes what the release was actually built from.
+#
+# No new tool: `go version -m` reads the module graph Go stamps into every
+# binary, with the hash of each dependency. That is the bill of materials, and
+# it is more trustworthy than one generated from go.mod because it comes out of
+# the artefact somebody will actually run.
+sbom:
+	@mkdir -p release
+	@{ 	  echo "# Backpack $$(cat VERSION) — bill of materials"; 	  echo "#"; 	  echo "# Read out of the built binary, so it describes what was linked"; 	  echo "# rather than what go.mod asked for."; 	  echo "#"; 	  echo "# Verify a binary you downloaded against this with:"; 	  echo "#     go version -m ./backpack"; 	  echo; 	  go version -m dist/backpack-linux-amd64; 	} > release/SBOM.txt
+	@echo "SBOM -> release/SBOM.txt"
+
+# reproducible checks that two builds of the same source are byte-identical.
+#
+# They are, and have been: CGO is off, -trimpath removes the build directory,
+# and the version is stamped from a file rather than from the clock. This makes
+# that a thing somebody can check rather than a claim in a document — which is
+# the whole point of a reproducible build, since the property is only useful if
+# a third party can confirm it.
+reproducible:
+	@CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o /tmp/backpack-repro-a .
+	@CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o /tmp/backpack-repro-b .
+	@if cmp -s /tmp/backpack-repro-a /tmp/backpack-repro-b; then 	  echo "reproducible: two builds are byte-identical"; 	else 	  echo "NOT reproducible: two builds of the same source differ"; exit 1; 	fi
+	@rm -f /tmp/backpack-repro-a /tmp/backpack-repro-b
 
 # release-key generates the signing pair, once. It prints both halves and keeps
 # neither: the public half is pasted into app.ReleasePublicKey, the private half

@@ -35,10 +35,11 @@ func (s *server) rolloutPlan() node.Plan {
 
 // verifyNode decides whether a server came back healthy from its upgrade.
 //
-// Answering is not enough. A binary that starts and tunnels that do not is
-// exactly the failure a staged rollout exists to catch on one machine instead
-// of twenty — so a node is healthy when it answers *and* every tunnel that is
-// enabled on it is actually running.
+// Answering is not enough, and neither is systemd answering. A node is healthy
+// when it answers, every enabled tunnel has a process, every one of those
+// *holds a peer* by the engine's own account, and none of them is delivering
+// into nothing at the far side. Those are four different failures and a rollout
+// that checks only the first passes a canary that is broken in the other three.
 //
 // A node with no tunnels is healthy if it answers; there is nothing else to
 // ask, and refusing to proceed past a machine that has nothing to run would
@@ -58,15 +59,52 @@ func (s *server) verifyNode(run node.Runner, name string) error {
 		return fmt.Errorf("%s answered but would not say what it is running: %w", name, err)
 	}
 
-	var down []string
+	// Three questions, in order of how much they prove.
+	//
+	// "Is the unit running" is the weakest and it is the one a rollout is most
+	// tempted to stop at. A binary that comes back and a tunnel that carries
+	// are not the same claim, and the whole reason to upgrade one server first
+	// is to find out which one you got.
+	var (
+		down       []string // systemd has no process
+		unpaired   []string // the process is there and the tunnel is not up
+		deliverNil []string // the tunnel is up and delivering into nothing
+	)
 	for _, t := range tunnels {
-		if t.Enabled && !t.Active {
+		if !t.Enabled {
+			continue
+		}
+		if !t.Active {
 			down = append(down, t.Name)
+			continue
+		}
+		// The engine's own answer, when it has one. A node still running an
+		// older build through an upgrade has no opinion, and absent must not
+		// read as "not connected" — that would halt every rollout on its first
+		// node until the whole fleet had already been upgraded.
+		if t.Connected != nil && !*t.Connected {
+			unpaired = append(unpaired, t.Name)
+			continue
+		}
+		// Up, and every connection dying one step past the end of it. Only
+		// this node can see it, which is why it crosses the wire at all — and
+		// verifying a canary without looking at it was leaving the most useful
+		// thing on the table.
+		if t.ServiceDown != "" {
+			deliverNil = append(deliverNil, t.Name+" ("+t.ServiceDown+")")
 		}
 	}
-	if len(down) > 0 {
+
+	switch {
+	case len(down) > 0:
 		return fmt.Errorf("%s answered but %d tunnel(s) did not come back: %s",
 			name, len(down), strings.Join(down, ", "))
+	case len(unpaired) > 0:
+		return fmt.Errorf("%s answered and %d tunnel(s) are running without a peer: %s",
+			name, len(unpaired), strings.Join(unpaired, ", "))
+	case len(deliverNil) > 0:
+		return fmt.Errorf("%s answered and %d tunnel(s) are up but delivering into nothing: %s",
+			name, len(deliverNil), strings.Join(deliverNil, ", "))
 	}
 	return nil
 }
@@ -104,6 +142,12 @@ func describeRollout(res node.Result) string {
 // cancel the rollout the moment the browser had its reply. It is tied to the
 // panel instead, so a panel that shuts down does not leave servers being
 // upgraded with nobody watching.
+// noteJob records a finished job for the panel's own metrics. Counted here
+// rather than read back from control.Jobs' history, which is bounded — a count
+// taken from it would fall as old jobs age out, and a counter that goes down is
+// one Prometheus reads as a process restart.
+func noteJob(err error) { noteJobOutcome(err == nil) }
+
 func (s *server) jobCtx() context.Context {
 	if s.ctx != nil {
 		return s.ctx

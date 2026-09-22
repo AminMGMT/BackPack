@@ -43,3 +43,7 @@ VPN همهٔ کاربران را یک دستگاه می‌شمارد و محدو
 
 ---
 [← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

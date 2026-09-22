@@ -86,3 +86,46 @@ func TestEndpointsSpreadSingleEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// The order a racer is handed.
+//
+// A racer given the raw list would start from the primary on every reconnect
+// and undo whatever the failover had decided — which is the whole value of
+// health steering and of rotation.
+func TestPreferenceOrderStartsWhereTheTunnelIs(t *testing.T) {
+	e := NewEndpoints("a", "b", "c")
+
+	if got := e.InPreferenceOrder(); got[0] != "a" {
+		t.Fatalf("a fresh list starts at %q, want the primary", got[0])
+	}
+
+	e.Rotate() // now on b
+	got := e.InPreferenceOrder()
+	if len(got) != 3 {
+		t.Fatalf("got %d endpoints, want all three", len(got))
+	}
+	if got[0] != "b" {
+		t.Fatalf("after rotating, the order starts at %q — a race would undo the "+
+			"rotation on every reconnect", got[0])
+	}
+	// And it wraps rather than truncating: every address is still a candidate.
+	if got[1] != "c" || got[2] != "a" {
+		t.Fatalf("order = %v, want it to wrap round the list", got)
+	}
+}
+
+// A single endpoint is the ordinary case and must come back untouched.
+func TestPreferenceOrderOfOneAddress(t *testing.T) {
+	e := NewEndpoints("only")
+	got := e.InPreferenceOrder()
+	if len(got) != 1 || got[0] != "only" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestPreferenceOrderOfNothing(t *testing.T) {
+	var e *Endpoints
+	if got := e.InPreferenceOrder(); got != nil {
+		t.Fatalf("a nil list produced %v", got)
+	}
+}

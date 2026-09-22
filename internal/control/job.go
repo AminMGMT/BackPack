@@ -283,3 +283,35 @@ func (j *Jobs) Cancel(id string) bool {
 	e.cancel()
 	return true
 }
+
+// ResultOf reads a finished job's result as the type that kind produces.
+//
+// # Why Result is `any` and stays that way
+//
+// The obvious fix is to make Jobs generic over the result type. It does not
+// work: one registry holds every kind at once — a link test producing a
+// measurement, a fleet rollout producing a report — and a registry generic over
+// one T can hold only one of them. A registry per kind is more machinery for
+// less, and it loses the thing the registry is for, which is that "what is
+// running" has a single answer.
+//
+// So the type lives at the call site, and what this adds is that getting it
+// wrong says so. A bare assertion that fails produces the zero value and a
+// false, which at a call site that ignores the second return is a job that
+// silently reports nothing — the panel shows a spinner that never resolves and
+// no line anywhere says why.
+//
+// ok is false for a job that has not finished, one that failed, and one whose
+// result is not a T. The three are different and the caller usually wants to
+// distinguish them, which is why Job is returned rather than swallowed.
+func ResultOf[T any](j Job) (T, bool) {
+	var zero T
+	if j.State != Succeeded || j.Result == nil {
+		return zero, false
+	}
+	v, ok := j.Result.(T)
+	if !ok {
+		return zero, false
+	}
+	return v, true
+}

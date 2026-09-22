@@ -90,4 +90,5 @@ jobs:
             release/backpack_linux_*.tar.gz
             release/SHA256SUMS
             release/SHA256SUMS.sig
+            release/SBOM.txt
             install.sh

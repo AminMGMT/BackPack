@@ -60,10 +60,8 @@ var (
 var (
 	fileExists = core.FileExists
 	orDefault  = core.OrDefault
-	systemctl  = core.Systemctl
 	writeUnit  = core.WriteUnit
 	validName  = core.ValidName
-	errBadName = core.ErrBadName
 	checkName  = core.CheckName
 	directRole = core.DirectRole
 	l3Role     = core.L3Role
@@ -90,6 +88,12 @@ var (
 	WriteBackup       = backup.WriteBackup
 	BackupToFile      = backup.BackupToFile
 	Restore           = backup.Restore
+	OffsiteCommand    = backup.OffsiteCommand
+	SetOffsiteCommand = backup.SetOffsiteCommand
+	SendOffsite       = backup.SendOffsite
+	NewestBackup      = backup.NewestBackup
+	TestRestore       = backup.TestRestore
+
 	AutoBackupEnabled = backup.AutoBackupEnabled
 	SetAutoBackup     = backup.SetAutoBackup
 	RunAutoBackup     = backup.RunAutoBackup

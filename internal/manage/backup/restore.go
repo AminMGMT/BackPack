@@ -50,6 +50,12 @@ type restoreContents struct {
 	TelegramConfig   bool
 	SawTunnelConfig  bool
 	AutoRefreshHours int
+
+	// Warnings are things the restore carried on past and the operator should
+	// know about. A restore that half-worked and said so is recoverable; one
+	// that half-worked quietly is discovered weeks later, by the setting that
+	// stopped happening.
+	Warnings []string
 }
 
 // stageRestore builds the complete post-restore tree in stage: the current
@@ -90,8 +96,20 @@ func stageRestore(r io.Reader, configDir, stage string) (restoreContents, error)
 		if hdr.Name == backupMetaName {
 			var m backupMeta
 			if data, err := io.ReadAll(io.LimitReader(tr, maxRestoreFileBytes)); err == nil {
-				_ = json.Unmarshal(data, &m)
-				contents.AutoRefreshHours = m.AutoRefreshHours
+				if err := json.Unmarshal(data, &m); err != nil {
+					// The restore carries on — the tunnels are the part that
+					// matters and they are in the tree, not in here — but it
+					// must not carry on quietly. A damaged sidecar means a
+					// setting the operator had configured is silently missing
+					// from the machine they have just restored, and the only
+					// symptom is that it stopped happening.
+					contents.Warnings = append(contents.Warnings, fmt.Sprintf(
+						"the backup's settings sidecar is damaged (%v), so out-of-tree "+
+							"settings such as the automatic refresh interval were not "+
+							"restored — check them", err))
+				} else {
+					contents.AutoRefreshHours = m.AutoRefreshHours
+				}
 			}
 			continue
 		}

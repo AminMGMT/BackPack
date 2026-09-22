@@ -55,6 +55,10 @@ func NewLogger(logLevel string) *logrus.Logger {
 // structured fields, a log collector, a script. The default stays the coloured
 // text format, because the usual way these logs are read is a person running
 // journalctl on their own server, and JSON is worse for that.
+//
+// JSON entries also carry the identity of the tunnel this process is running,
+// which is what makes a shipped line findable. See logident.go and
+// docs/log-schema.md.
 func NewLoggerWithFormat(logLevel, format string) *logrus.Logger {
 	log := logrus.New()
 
@@ -67,9 +71,12 @@ func NewLoggerWithFormat(logLevel, format string) *logrus.Logger {
 	log.SetLevel(parseLevel)
 
 	if strings.EqualFold(strings.TrimSpace(format), "json") {
-		log.SetFormatter(&logrus.JSONFormatter{
+		// Wrapped so every line carries which tunnel, role, transport and host
+		// it came from. Without those, five servers shipped to one place are
+		// one stream nobody can search. See logident.go.
+		log.SetFormatter(identityFormatter{inner: &logrus.JSONFormatter{
 			TimestampFormat: time.RFC3339,
-		})
+		}})
 	} else {
 		log.SetFormatter(&CustomFormatter{})
 	}

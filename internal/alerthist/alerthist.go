@@ -9,6 +9,7 @@ package alerthist
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,7 +51,14 @@ func Load() State {
 	if err != nil {
 		return st
 	}
-	_ = json.Unmarshal(data, &st)
+	if err := json.Unmarshal(data, &st); err != nil {
+		// Reading a damaged file as empty keeps the product working, which
+		// is right. Doing it silently is not: every alert recorded before now is gone from the screen and from the bot,
+		// and empty looks exactly like a machine where nothing has
+		// happened yet.
+		log.Printf("alerts: %s is damaged and is being read as empty: %v", path(), err)
+		return State{}
+	}
 	return st
 }
 

@@ -41,6 +41,11 @@ type RestoreResult struct {
 	WebUIConfig      bool     // webui.json was present in the archive
 	TelegramConfig   bool     // telegram.json was present in the archive
 	AutoRefreshHours int      // auto-refresh interval restored from the archive
+
+	// Warnings are the things the restore carried on past. A restore that half
+	// worked and said so is recoverable; one that half worked quietly is
+	// discovered weeks later, by whatever stopped happening.
+	Warnings []string
 }
 
 // WriteBackup streams a gzip-compressed tar of the entire config directory.
@@ -363,6 +368,7 @@ func Restore(r io.Reader) (RestoreResult, error) {
 	res.WebUIConfig = contents.WebUIConfig
 	res.TelegramConfig = contents.TelegramConfig
 	res.AutoRefreshHours = contents.AutoRefreshHours
+	res.Warnings = append(res.Warnings, contents.Warnings...)
 	sawConfig := contents.SawTunnelConfig
 
 	if sawConfig {

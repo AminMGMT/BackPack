@@ -34,6 +34,10 @@ type wsGen struct {
 }
 
 type WsTransport struct {
+	// The listeners this transport is holding right now. Start waits on it, so
+	// "Start returned" means "the ports are free". See listeners.go.
+	listeners listenerSet
+
 	// The status shown in the panel. Behind a lock because the run being
 	// replaced and the run replacing it both write it. See tunnelStatus.
 	status    tunnelStatus
@@ -158,7 +162,18 @@ func (s *WsTransport) Restart() {
 		s.controlChannel.Close()
 	}
 
-	time.Sleep(2 * time.Second)
+	// Wait for the listeners rather than guessing at how long they take.
+	//
+	// This was a flat two-second sleep, and the comment next to it said what it
+	// was for: the run being replaced still holds the ports, and binding them
+	// again before it lets go fails. A sleep is a guess — usually long enough,
+	// never a guarantee, and silently wrong on a loaded machine, which is
+	// exactly when a restart is most likely to be happening.
+	//
+	// listenerSet answers the question instead of approximating it. It is also
+	// faster in the ordinary case: a listener closes in microseconds, so this
+	// returns at once rather than always costing two seconds.
+	s.listeners.wait(s.parentctx)
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -169,6 +184,22 @@ func (s *WsTransport) Restart() {
 		// The level was turned down to hide the timeouts a teardown produces;
 		// leaving it there would silence the shutdown itself.
 		s.logger.SetLevel(level)
+		// Abandoning is not a reason to keep claiming a peer.
+		//
+		// This branch used to return before the two lines below, which sit on
+		// the path that carries on — so a restart that gave up left the status
+		// reading "Connected" and left the peer published in the metrics
+		// snapshot. The process usually exits straight afterwards and the
+		// snapshot goes stale, which is why this was invisible; with a
+		// transport fallback chain it is not, because the chain cancels a
+		// candidate's context and the *process keeps running*. The snapshot
+		// then carries a fresh timestamp and a connected peer for a tunnel that
+		// is mid-rotation with nothing connected at all, and the watchdog
+		// reads that and calls it healthy.
+		//
+		// The run is over. Whatever ended it, there is no peer.
+		s.status.set("")
+		metrics.ClearPeer()
 		s.logger.Debug("restart abandoned: the tunnel is shutting down")
 		return
 	}
@@ -291,6 +322,11 @@ func (s *WsTransport) channelHandler(g *wsGen) {
 }
 
 func (s *WsTransport) tunnelListener(g *wsGen) {
+	// Counted while this goroutine holds a listener, so Start can wait for the
+	// port rather than sleeping and hoping. See listeners.go.
+	s.listeners.hold()
+	defer s.listeners.release()
+
 	addr := s.config.BindAddr
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:   16 * 1024,
@@ -506,6 +542,11 @@ func (s *WsTransport) parsePortMappings(g *wsGen) {
 }
 
 func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr string) {
+	// Counted while this goroutine holds a listener, so Start can wait for the
+	// port rather than sleeping and hoping. See listeners.go.
+	s.listeners.hold()
+	defer s.listeners.release()
+
 	portListener, err := net.Listen("tcp", localAddr)
 	if err != nil {
 		// One forwarded port, not the tunnel. See bindfail.go.

@@ -90,7 +90,6 @@ type SpoofTune struct {
 	SrcIPs    string `json:"srcIPs"`    // forged source(s), comma separated
 	PeerIP    string `json:"peerIP"`    // the peer's REAL IPv4 — required on the server
 	PeerSrcIP string `json:"peerSrcIP"` // the forged source expected from the peer
-	DstIP     string `json:"dstIP"`     // forged destination in the cosmetic shim
 	Interface string `json:"interface"` // egress device for the raw socket
 	XDPIface  string `json:"xdpIface"`  // NIC for the XDP receive fast path, empty = off
 
@@ -122,7 +121,6 @@ func spoofOf(s config.SpoofConfig) SpoofTune {
 		SrcIPs:      src,
 		PeerIP:      s.SpoofPeerIP,
 		PeerSrcIP:   s.SpoofPeerSrcIP,
-		DstIP:       s.SpoofDstIP,
 		Interface:   s.SpoofInterface,
 		XDPIface:    s.SpoofXDPInterface,
 		SockBuf:     s.SpoofSockBuf,
@@ -180,9 +178,6 @@ func (f SpoofTune) apply(s *config.SpoofConfig) error {
 		return err
 	}
 	if s.SpoofPeerSrcIP, err = optionalIPv4(f.PeerSrcIP, "the peer's forged source IPv4"); err != nil {
-		return err
-	}
-	if s.SpoofDstIP, err = optionalIPv4(f.DstIP, "the forged destination IPv4"); err != nil {
 		return err
 	}
 

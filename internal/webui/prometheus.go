@@ -1,7 +1,10 @@
 package webui
 
 import (
+	"time"
+
 	"fmt"
+	"github.com/backpack/backpack/internal/tunhist"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +23,11 @@ import (
 // session works too, so it can be inspected from a browser.
 func (s *server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
+
+	// The panel's own numbers first: it is the component an operator reaches
+	// for when something is wrong, and it was the one thing on the box with no
+	// numbers at all. See selfmetrics.go.
+	writePanelMetrics(&b)
 
 	m := sysstat.Get()
 	gauge(&b, "backpack_cpu_percent", "CPU usage percent", m.CPUPercent)
@@ -67,6 +75,41 @@ func (s *server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 		if snap.KCP != nil {
 			snap.Name = t.Name
 			kcpSnaps = append(kcpSnaps, snap)
+		}
+	}
+
+	// Uptime over the last week, per tunnel.
+	//
+	// The samples for it have been on disk since the history sampler existed —
+	// UpN of N checks per hour — and nothing turned them into the figure an
+	// operator is actually asked for. Both numbers are exported, not just the
+	// percentage: 100% over twelve checks and 100% over two thousand are
+	// different claims, and an alert built on the first is built on nothing.
+	//
+	// A tunnel nothing has sampled yet is absent rather than zero. Not measured
+	// is not the same as down, and a young tunnel published at 3% is a number
+	// somebody will page on.
+	{
+		var any bool
+		for _, t := range tunnels {
+			if _, _, ok := tunhist.UptimeOf(t.Name, 7*24*time.Hour); ok {
+				any = true
+				break
+			}
+		}
+		if any {
+			gaugeHead(&b, "backpack_tunnel_uptime_percent",
+				"Percentage of health checks in the last 7 days that saw the tunnel up")
+			gaugeHead(&b, "backpack_tunnel_uptime_checks",
+				"How many health checks that percentage rests on")
+			for _, t := range tunnels {
+				pct, checks, ok := tunhist.UptimeOf(t.Name, 7*24*time.Hour)
+				if !ok {
+					continue
+				}
+				fmt.Fprintf(&b, "backpack_tunnel_uptime_percent{name=%q} %.4f\n", t.Name, pct)
+				fmt.Fprintf(&b, "backpack_tunnel_uptime_checks{name=%q} %d\n", t.Name, checks)
+			}
 		}
 	}
 

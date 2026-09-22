@@ -193,7 +193,7 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 	}
 	url := panelURL(next.Scheme(), host, next.Port)
 
-	if next == c {
+	if next.Equal(c) {
 		writeJSON(w, map[string]any{"status": "unchanged", "url": url})
 		return
 	}

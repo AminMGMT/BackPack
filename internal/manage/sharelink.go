@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
+	"unicode/utf8"
 )
 
 // Handing a tunnel's settings to the other server.
@@ -103,6 +105,27 @@ type ShareLink struct {
 // settings.
 func (l ShareLink) Encode() (string, error) {
 	l.V = 1
+	// Refuse rather than corrupt.
+	//
+	// The payload is JSON, and encoding/json replaces any byte sequence that is
+	// not valid UTF-8 with U+FFFD. It does that silently and it does it to the
+	// token — so a token carrying a stray byte, from a paste or a terminal in
+	// another encoding, arrives at the other end as a *different* token. The
+	// tunnel then refuses every connection for the one reason nothing on either
+	// machine reports: the two ends do not hold the same secret. The whole point
+	// of a setup link is to remove the manual retyping step, so quietly changing
+	// the secret it carries is the worst thing it could do.
+	//
+	// Every string field is checked rather than a chosen few. The first version
+	// of this named four of them and the fuzzer immediately found a fifth; a
+	// hand-written list is a list that goes stale the next time this struct
+	// gains a field, and the failure it lets through is silent.
+	//
+	// Found by FuzzShareLinkRoundTrip.
+	if field, ok := firstUncarryableField(l); !ok {
+		return "", fmt.Errorf("the %s contains a byte that cannot be carried in a setup "+
+			"link — retype it, or the other end would receive something different", field)
+	}
 	raw, err := json.Marshal(l)
 	if err != nil {
 		return "", fmt.Errorf("could not build the setup link: %w", err)
@@ -462,4 +485,50 @@ func nonEmpty(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// firstUncarryableField reports the first string in a share link that JSON
+// cannot carry unchanged, named the way an operator would name it.
+//
+// It walks the struct rather than taking a list, so a field added above is
+// covered the moment it exists. The name comes from the json tag, which is
+// short — "t", "h" — so the map below gives the ones an operator sees a word
+// instead; anything not in it falls back to the Go field name, which is at
+// least something they can find.
+func firstUncarryableField(l ShareLink) (string, bool) {
+	spoken := map[string]string{
+		"Tok": "token", "Tr": "transport", "Host": "address", "Name": "name",
+		"Port": "port", "Encap": "encapsulation", "SNI": "SNI", "Kind": "tunnel kind",
+		"From": "side", "Preset": "preset", "Profile": "packet profile",
+		"LocalIP": "local address", "PeerIP": "peer address",
+		"Uplink": "uplink", "Downlink": "downlink", "SrcIPs": "source addresses",
+	}
+	v := reflect.ValueOf(l)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := v.Field(i)
+		switch f.Kind() {
+		case reflect.String:
+			if !utf8.ValidString(f.String()) {
+				return fieldName(t.Field(i).Name, spoken), false
+			}
+		case reflect.Slice:
+			if f.Type().Elem().Kind() != reflect.String {
+				continue
+			}
+			for j := 0; j < f.Len(); j++ {
+				if !utf8.ValidString(f.Index(j).String()) {
+					return fieldName(t.Field(i).Name, spoken), false
+				}
+			}
+		}
+	}
+	return "", true
+}
+
+func fieldName(goName string, spoken map[string]string) string {
+	if s, ok := spoken[goName]; ok {
+		return s
+	}
+	return goName
 }

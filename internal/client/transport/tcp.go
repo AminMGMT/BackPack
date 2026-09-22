@@ -139,6 +139,12 @@ func (c *TcpTransport) Restart() {
 		// The level was turned down to hide the timeouts a teardown produces;
 		// leaving it there would silence the shutdown itself.
 		c.logger.SetLevel(level)
+		// Abandoning is not a reason to keep claiming a peer. See the same
+		// branch in internal/server/transport — this end publishes the status
+		// the panel reads and the "connected" flag the watchdog reads, and both
+		// used to survive a restart that gave up.
+		c.status.set("")
+		metrics.ClearPeer()
 		c.logger.Debug("restart abandoned: the tunnel is shutting down")
 		return
 	}
@@ -184,18 +190,36 @@ func (c *TcpTransport) channelDialer() {
 		case <-c.state.Ctx().Done():
 			return
 		default:
+			// Raced across the endpoint list rather than tried one at a time.
+			//
+			// A filtered address does not refuse a connection, it swallows it,
+			// so walking the list sequentially costs a whole dial timeout per
+			// dead address on every reconnect. The race gives the preferred
+			// address a head start and only opens a second connection if that
+			// head start expires — so a working first address is never raced.
+			// See network.Race.
+			//
 			//set default behaviour of control channel to nodelay, also using default buffer parameters
-			rawConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, won, err := network.Race(c.state.Ctx(),
+				c.config.Endpoints.InPreferenceOrder(), network.RaceStagger,
+				func(ctx context.Context, addr string) (net.Conn, error) {
+					return network.TcpDialerVia(ctx, c.config.Outbound, addr,
+						c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+				})
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
-				// The current endpoint did not answer — move to the next one so a
-				// filtered IP or blocked port cannot stall the tunnel forever.
+				// Nothing answered. Rotate anyway so the next attempt prefers a
+				// different address: the race already tried them all, but the
+				// preference is what the health scorer and the pool read.
 				if next := c.config.Endpoints.Rotate(); c.config.Endpoints.Len() > 1 {
 					c.logger.Infof("trying next server endpoint: %s", next)
 				}
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			// Stay on whichever address won, so the data connections that
+			// follow go to the same server the control channel is on.
+			c.config.Endpoints.Prefer(won)
 
 			// In stealth mode the Noise handshake runs first, so the token and
 			// everything after it cross an already-encrypted, unfingerprintable

@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/backpack/backpack/internal/metrics"
 	"io"
 	"net"
 	"os"
@@ -365,9 +366,19 @@ func localTunnels() []TunnelState {
 			Active:  manage.IsActive(t.Service),
 			Enabled: manage.IsEnabled(t.Service),
 		}
-		// The one thing this end knows and the panel's end cannot.
-		if h := manage.TunnelHealth(t); h.ServiceDown != nil {
+		// The two things this end knows and the panel's end cannot.
+		h := manage.TunnelHealth(t)
+		if h.ServiceDown != nil {
 			st.ServiceDown = h.Detail
+		}
+		// What the engine says about its own control channel, which is a
+		// different question from whether systemd has a process. See
+		// TunnelState.Connected.
+		if snap, err := metrics.Read(app.ConfigDir, t.Name); err == nil && snap.Connected != nil {
+			if time.Since(snap.Taken) < nodeStateWindow {
+				connected := *snap.Connected
+				st.Connected = &connected
+			}
 		}
 		// What makes this tunnel identifiable as one half of a pair. Read from
 		// the same place the edit form reads it, so the two cannot disagree.
@@ -392,3 +403,9 @@ func fail(msg string) Response { return Response{Err: msg} }
 func failf(format string, a ...any) Response {
 	return Response{Err: fmt.Sprintf(format, a...)}
 }
+
+// nodeStateWindow is how old an engine's snapshot may be and still be reported
+// to the panel. A reading older than this says nothing about now, and a stale
+// "connected" is worse than no answer: a rollout would take it for a healthy
+// canary.
+const nodeStateWindow = 2 * time.Minute

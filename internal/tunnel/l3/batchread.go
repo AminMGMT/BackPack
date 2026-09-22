@@ -47,6 +47,28 @@ import "net"
 // allocation — batchSize × (maxMTU+256) — to well under a megabyte.
 const batchSize = 8
 
+// batchWriter is the same capability in the other direction: several datagrams
+// on the wire from one syscall.
+//
+// The send path is the side that already has a batch in hand. tun.Read returns
+// as many packets as the kernel had ready, they are all sealed in the same
+// loop, and they are all going to the same peer — so the gather costs nothing
+// to arrange. Each one was then written with its own syscall anyway.
+type batchWriter interface {
+	// WriteBatch sends bufs[0:n] to the same address and reports how many left.
+	// It never blocks waiting for room.
+	WriteBatch(bufs [][]byte, to net.Addr) (int, error)
+}
+
+// asBatchWriter returns the carrier's batch-send capability, or nil.
+func asBatchWriter(c DatagramCarrier) batchWriter {
+	bw, ok := c.(batchWriter)
+	if !ok {
+		return nil
+	}
+	return bw
+}
+
 // batchReader is a carrier that can hand over several datagrams from one
 // syscall. A carrier that cannot simply does not implement it, and the pump
 // reads it one datagram at a time exactly as it always did.

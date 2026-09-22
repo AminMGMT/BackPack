@@ -2,10 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"github.com/backpack/backpack/internal/metrics"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The whole point of Run returning a Result rather than printing is that this
@@ -190,5 +192,137 @@ func write(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("cannot write %s: %v", path, err)
+	}
+}
+
+// Traffic in the status output.
+//
+// The runbook's first question about a tunnel that looks healthy is whether it
+// is moving anything, and its second is which direction stopped. Neither could
+// be answered from a terminal before this: `state: online` is exactly the
+// answer that is wrong in the failure this product cares about most.
+
+func TestHumanBytesReadsAsASize(t *testing.T) {
+	for n, want := range map[uint64]string{
+		0:                  "0 B",
+		512:                "512 B",
+		1024:               "1.0 KB",
+		1536:               "1.5 KB",
+		1024 * 1024:        "1.0 MB",
+		1024 * 1024 * 1024: "1.0 GB",
+	} {
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+	// The point of the function: a big number has to read as big. Exact bytes
+	// are right in JSON, where something does arithmetic on them, and wrong on
+	// a screen, where the question is "is this a lot".
+	if got := humanBytes(1503238553); !strings.HasSuffix(got, "GB") {
+		t.Errorf("1.5 GB rendered as %q", got)
+	}
+}
+
+// A snapshot too old to mean anything must be left out entirely rather than
+// shown with a caveat: a figure on the screen is read as now.
+func TestAStaleSnapshotIsNotReported(t *testing.T) {
+	dir := t.TempDir()
+	old := stateDir
+	stateDir = dir
+	t.Cleanup(func() { stateDir = old })
+
+	stale := metrics.Snapshot{
+		Name: "t", Taken: time.Now().Add(-trafficWindow - time.Minute),
+		BytesIn: 1 << 20, BytesOut: 1 << 20,
+	}
+	writeSnapshot(t, dir, "t", stale)
+
+	var v tunnelView
+	attachTraffic(&v, "t")
+	if v.Traffic != nil {
+		t.Fatalf("a snapshot %v old was reported as current: %+v", trafficWindow+time.Minute, v.Traffic)
+	}
+}
+
+func TestAFreshSnapshotIsReportedWithItsAge(t *testing.T) {
+	dir := t.TempDir()
+	old := stateDir
+	stateDir = dir
+	t.Cleanup(func() { stateDir = old })
+
+	fresh := metrics.Snapshot{
+		Name: "t", Taken: time.Now().Add(-5 * time.Second),
+		BytesIn: 4096, BytesOut: 8192, Peer: "1.2.3.4:443",
+	}
+	writeSnapshot(t, dir, "t", fresh)
+
+	var v tunnelView
+	attachTraffic(&v, "t")
+	if v.Traffic == nil {
+		t.Fatal("a fresh snapshot was not reported")
+	}
+	if v.Traffic.BytesIn != 4096 || v.Traffic.BytesOut != 8192 {
+		t.Errorf("counters = %+v", v.Traffic)
+	}
+	if v.Traffic.Peer != "1.2.3.4:443" {
+		t.Errorf("peer = %q", v.Traffic.Peer)
+	}
+	// Undated is unusable: the reading has to say how old it is.
+	if v.Traffic.Age < 4 || v.Traffic.Age > 30 {
+		t.Errorf("age = %ds, want about 5", v.Traffic.Age)
+	}
+}
+
+// The last hop is the one place that says "the tunnel is fine and every
+// connection dies one step past the end of it".
+func TestAFailingLastHopIsReportedWithItsShape(t *testing.T) {
+	dir := t.TempDir()
+	old := stateDir
+	stateDir = dir
+	t.Cleanup(func() { stateDir = old })
+
+	snap := metrics.Snapshot{
+		Name: "t", Taken: time.Now(),
+		LocalService: &metrics.LocalServiceState{
+			Addr: "127.0.0.1:8080", Why: "refused", Failures: 42,
+		},
+	}
+	writeSnapshot(t, dir, "t", snap)
+
+	var v tunnelView
+	attachTraffic(&v, "t")
+	// A refusal is a service that is not running; a timeout is usually a
+	// firewall on the same machine. The two have different fixes, so the
+	// output has to carry which it was — and the address, and how many.
+	for _, want := range []string{"127.0.0.1:8080", "refused", "42"} {
+		if !strings.Contains(v.LocalService, want) {
+			t.Errorf("last hop %q does not mention %q", v.LocalService, want)
+		}
+	}
+}
+
+// A tunnel whose engine has never written a snapshot must report no traffic
+// rather than zeroes, which would read as "connected and carrying nothing".
+func TestNoSnapshotMeansNoTrafficRatherThanZero(t *testing.T) {
+	dir := t.TempDir()
+	old := stateDir
+	stateDir = dir
+	t.Cleanup(func() { stateDir = old })
+
+	var v tunnelView
+	attachTraffic(&v, "never-run")
+	if v.Traffic != nil {
+		t.Fatalf("invented traffic for a tunnel that has never run: %+v", v.Traffic)
+	}
+}
+
+func writeSnapshot(t *testing.T, dir, name string, s metrics.Snapshot) {
+	t.Helper()
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".metrics.json"), data, 0o644); err != nil {
+		t.Fatalf("writing: %v", err)
 	}
 }

@@ -108,7 +108,9 @@ type L3Config struct {
 	//
 	// Both ends must set the same pair: the scheme is not negotiated, and a
 	// receiver expecting a different one cannot rebuild anything.
-	FECData   int `toml:"fec_data"`
+	FECData int `toml:"fec_data"`
+	// FECParity is how many parity packets accompany each group. Both ends must
+	// agree on this and on fec_data.
 	FECParity int `toml:"fec_parity"`
 
 	// Paths spreads the udp carrier over this many sockets, on consecutive
@@ -179,7 +181,9 @@ type L3Config struct {
 	// carries whatever the kernel puts into the interface, which has no
 	// connections to count.
 	MaxConnections int `toml:"max_connections"`
-	BandwidthMbps  int `toml:"bandwidth_mbps"`
+	// BandwidthMbps caps total throughput across this tunnel, in megabits per
+	// second. 0 is unlimited.
+	BandwidthMbps int `toml:"bandwidth_mbps"`
 
 	// Embedded so the spoof_* keys sit at the top level of the [l3] table.
 	// This is the only table they are read from, and they are read only when

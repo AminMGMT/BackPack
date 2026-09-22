@@ -28,8 +28,24 @@ func TestIPv6Tunnel(t *testing.T) {
 		t.Skip("no IPv6 loopback on this machine")
 	}
 
-	for _, transport := range []string{"tcp", "tcpmux", "kcp"} {
+	// Every transport, not three of them.
+	//
+	// It used to be tcp, tcpmux and kcp — the three somebody happened to try.
+	// Address handling is per transport here: each builds its own dialler and
+	// its own listener, and the bug this catches is a literal glued to a port
+	// without brackets, which is a line of code that exists separately in each
+	// of them. Three of ten covered is a guard that names the transports
+	// already known to work.
+	//
+	// udp routes through carriesDatagrams for the same reason it does in the
+	// main matrix: its forwarded port is a datagram port, so dialling TCP at it
+	// asks the wrong question.
+	for _, transport := range allReverseTransports {
 		t.Run(transport, func(t *testing.T) {
+			if transport == "udp" {
+				carriesDatagramsOver(t, transport, "::1", "::")
+				return
+			}
 			backend := startEchoBackend(t) // backend stays on IPv4; the tunnel is what is under test
 
 			tunnelPort := freePort(t)

@@ -1,6 +1,9 @@
 package manage
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -125,12 +128,16 @@ func TestTheResponseIsGraduated(t *testing.T) {
 		t.Fatalf("acted inside the grace period: %v", action)
 	}
 
-	// Past it: restart, twice.
+	// Past it: restart, twice — and each one says which attempt it is, because
+	// "restarting it" twice in a row reads as a loop rather than a ladder.
 	for i := 1; i <= stallGiveUpAfter; i++ {
 		now = now.Add(stallRestartAfter + time.Second)
 		action, msg = w.decide("t", now)
 		if action != stallRestart {
 			t.Fatalf("rung %d = %v, want a restart", i, action)
+		}
+		if want := fmt.Sprintf("%d/%d", i, stallGiveUpAfter); !strings.Contains(msg, want) {
+			t.Errorf("restart %d reported %q, which does not say it is %s", i, msg, want)
 		}
 	}
 
@@ -216,5 +223,100 @@ func TestTheReportNamesTheFrozenDirection(t *testing.T) {
 	feed(in, "t", stallProgress, 0, stallChecks, t0)
 	if _, msg := in.decide("t", t0); !strings.Contains(msg, "nothing is going out") {
 		t.Fatalf("inbound stall reported as %q", msg)
+	}
+}
+
+// A watchdog restart must not forget what it was in the middle of.
+//
+// flowWatch lives in the watchdog's memory, so restarting the monitor service —
+// an update, a crash, an operator — reset every ladder mid-climb. That is
+// wrong in both directions: a tunnel two restarts into a stall got its count
+// back, and a tunnel the watchdog had deliberately *given up on* started being
+// restarted again every few minutes.
+//
+// The second is the one that matters. Giving up is a decision: the stall
+// survived two restarts, so restarting is not the fix, and the quiet period
+// exists to stop the churn. Forgetting it turns that decision into a loop.
+func TestTheStallLadderSurvivesAWatchdogRestart(t *testing.T) {
+	dir := t.TempDir()
+	old := flowStatePath
+	flowStatePath = filepath.Join(dir, "flow.json")
+	t.Cleanup(func() { flowStatePath = old })
+
+	t0 := time.Now()
+	w := newFlowWatch()
+	feed(w, "t", 0, stallProgress, stallChecks, t0)
+
+	// Climb the whole ladder: report, restart, restart, give up.
+	now := t0.Add(time.Duration(stallChecks) * wdInterval)
+	w.decide("t", now)
+	for i := 0; i < stallGiveUpAfter; i++ {
+		now = now.Add(stallRestartAfter + time.Second)
+		w.decide("t", now)
+	}
+	now = now.Add(stallRestartAfter + time.Second)
+	if action, _ := w.decide("t", now); action != stallGiveUp {
+		t.Fatalf("setup: expected the ladder to reach giving up, got %v", action)
+	}
+	w.save()
+
+	// The watchdog restarts.
+	next := newFlowWatch()
+	next.load()
+
+	// And it must still be quiet about this tunnel, rather than starting the
+	// ladder again from the bottom.
+	if action, _ := next.decide("t", now.Add(time.Minute)); action != stallWatch {
+		t.Fatalf("after a restart the watchdog wanted to %v a tunnel it had already "+
+			"given up on — which turns a decision into a loop", action)
+	}
+	// And the quiet period still ends when it was going to.
+	if action, _ := next.decide("t", now.Add(stallQuietFor+time.Minute)); action == stallWatch {
+		t.Fatal("the quiet period outlived the restart and never ended")
+	}
+}
+
+// A saved file that cannot be read is not a reason to stop watching. The
+// watchdog's job is to notice things; starting from nothing is a worse outcome
+// than starting from nothing *and* refusing to run.
+func TestAnUnreadableStallFileIsNotFatal(t *testing.T) {
+	dir := t.TempDir()
+	old := flowStatePath
+	flowStatePath = filepath.Join(dir, "flow.json")
+	t.Cleanup(func() { flowStatePath = old })
+
+	if err := os.WriteFile(flowStatePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	w := newFlowWatch()
+	w.load() // must not panic
+	if action, _ := w.decide("anything", time.Now()); action != stallWatch {
+		t.Fatalf("a corrupt file produced action %v", action)
+	}
+}
+
+// Saving must not leave a half-written file behind, because the next start
+// reads it.
+func TestTheStallFileIsWrittenWholeOrNotAtAll(t *testing.T) {
+	dir := t.TempDir()
+	old := flowStatePath
+	flowStatePath = filepath.Join(dir, "flow.json")
+	t.Cleanup(func() { flowStatePath = old })
+
+	w := newFlowWatch()
+	feed(w, "t", 0, stallProgress, stallChecks, time.Now())
+	w.decide("t", time.Now())
+	w.save()
+
+	info, err := os.Stat(flowStatePath)
+	if err != nil {
+		t.Fatalf("nothing was written: %v", err)
+	}
+	// It names tunnels and their state; root's business, nobody else's.
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		t.Errorf("mode = %v, want nothing for group or other", mode)
+	}
+	if _, err := os.Stat(flowStatePath + ".tmp"); err == nil {
+		t.Error("a temporary file was left behind")
 	}
 }

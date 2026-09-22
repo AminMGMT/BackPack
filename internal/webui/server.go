@@ -27,6 +27,9 @@ import (
 //go:embed assets/login.html
 var loginHTML []byte
 
+//go:embed assets/twofactor.html
+var twoFactorHTML []byte
+
 const sessionCookie = "backpack_session"
 
 // sessionTTL is how long a signed-in browser stays signed in. It was written
@@ -158,6 +161,21 @@ func (s *sessionStore) clear() {
 type server struct {
 	sessions *sessionStore
 
+	// pending holds logins that have passed the password and not yet the
+	// second factor. See totpauth.go for why it is a store of its own rather
+	// than a flag on a session.
+	pending *pendingStore
+
+	// enrolling is the secret being set up right now, held in memory until a
+	// code proves the authenticator app has it.
+	//
+	// Not written to the file, on purpose: a secret on disk that is not in
+	// force yet is a panel in a state nothing else understands, and an operator
+	// who closes the tab half way through should find the second factor off
+	// rather than half on. A panel restart loses it, which is the same thing.
+	enrolMu   sync.Mutex
+	enrolling string
+
 	// The things this panel operates on, which it reads rather than owns. They
 	// used to be package-level variables sitting beside the handlers; see
 	// internal/control for why they are not any more.
@@ -212,6 +230,7 @@ func Serve() error {
 	// session; the remote access token reaches the read-only ones only.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", srv.handleLogin)
+	mux.HandleFunc("/api/totp", srv.requireAuth(srv.handleTOTP))
 	mux.HandleFunc("/logout", srv.handleLogout)
 	// The panel, and everything it loads. Registered at "/", so it is also
 	// the catch-all for anything no other route claims. See panel.go.
@@ -405,7 +424,27 @@ func (s *server) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
 // Written here, the only way to act without being recorded is to act without
 // being authorised.
 func (s *server) guard(need Scope, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	// Counted outside the authorisation, so a request refused for a bad
+	// credential is counted too — that is the one most worth knowing about.
+	// See selfmetrics.go.
+	return instrument(func(w http.ResponseWriter, r *http.Request) {
+		// A presented credential that is wrong is a guess, and guesses are
+		// rate-limited wherever they arrive.
+		//
+		// The login form has been limited since there was a login form. Tokens
+		// arrived later and got none of it, so /metrics — an endpoint that
+		// exists to be polled by something that is not a browser — would answer
+		// an unlimited number of guesses at line rate. The same limiter is used
+		// rather than a second one: two rate limiters is how they drift, and an
+		// attacker does not care which door they are trying.
+		if secret := bearer(r); secret != "" {
+			if blocked, left := limiter.blocked(clientIP(r)); blocked {
+				http.Error(w, fmt.Sprintf("too many failed attempts — try again in %d minutes",
+					int(left.Minutes())+1), http.StatusTooManyRequests)
+				return
+			}
+		}
+
 		who, ok := s.identify(r)
 		if !ok || who.Scope < need {
 			// A browser gets sent to the login page; anything else gets a
@@ -433,11 +472,16 @@ func (s *server) guard(need Scope, next http.HandlerFunc) http.HandlerFunc {
 		rec := &statusRecorder{ResponseWriter: w}
 		next(rec, r)
 		s.note(r, who, rec.status)
-	}
+	})
 }
 
 // identify works out who is making a request: a panel session, or a scoped
 // token.
+//
+// A wrong token is counted against the address and a right one clears the
+// count, exactly as a wrong and a right password are. Clearing matters as much
+// as counting: a fleet behind one NAT address would otherwise have its working
+// scraper locked out by somebody else's typo.
 func (s *server) identify(r *http.Request) (caller, bool) {
 	ip := clientIP(r)
 	if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.valid(c.Value) {
@@ -449,8 +493,10 @@ func (s *server) identify(r *http.Request) (caller, bool) {
 	}
 	if secret := bearer(r); secret != "" {
 		if tok, ok := checkToken(secret); ok {
+			limiter.reset(ip)
 			return caller{Kind: "token", Name: tok.Name, Scope: tok.Scope, IP: ip}, true
 		}
+		limiter.fail(ip)
 	}
 	return caller{IP: ip}, false
 }
@@ -482,9 +528,42 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad login request", http.StatusBadRequest)
 			return
 		}
+		// The second step of a two-factor login: the password was accepted a
+		// moment ago and this is the code for it. Checked first, because a
+		// request carrying a pending token is never a password attempt.
+		if c, err := r.Cookie(twoFactorCookie); err == nil && s.pending.valid(c.Value, ip) {
+			if checkSecondFactor(r.FormValue("code")) {
+				s.pending.destroy(c.Value)
+				limiter.reset(ip)
+				http.SetCookie(w, clearedCookie(r, twoFactorCookie))
+				tok := s.sessions.create(ip)
+				http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
+				redirectTo(w, r, "/", http.StatusSeeOther)
+				return
+			}
+			// A wrong code counts against the address exactly as a wrong
+			// password does. The pending token is left alive so the operator
+			// can try again within its three minutes rather than starting from
+			// the password.
+			limiter.fail(ip)
+			time.Sleep(1 * time.Second)
+			s.serveSecondFactorPage(w, r, http.StatusUnauthorized)
+			return
+		}
+
 		given := r.FormValue("password")
 		// Constant-time comparison + small delay to slow brute force.
 		if subtle.ConstantTimeCompare([]byte(given), []byte(s.password())) == 1 {
+			// The password alone is a session only where there is no second
+			// factor. Where there is one, it buys the code prompt and nothing
+			// else — see totpauth.go.
+			if twoFactorOn() {
+				limiter.reset(ip)
+				tok := s.pending.create(ip)
+				http.SetCookie(w, authCookie(r, twoFactorCookie, tok, twoFactorTTL))
+				s.serveSecondFactorPage(w, r, http.StatusOK)
+				return
+			}
 			limiter.reset(ip)
 			tok := s.sessions.create(ip)
 			http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
@@ -498,8 +577,21 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		w.Write(withNonce(withBase(loginHTML, basePrefix()), r))
 		return
 	}
+
+	// A GET with a live pending token is somebody who reloaded the code page.
+	if c, err := r.Cookie(twoFactorCookie); err == nil && s.pending.valid(c.Value, clientIP(r)) {
+		s.serveSecondFactorPage(w, r, http.StatusOK)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(withNonce(withBase(loginHTML, basePrefix()), r))
+}
+
+// serveSecondFactorPage draws the code prompt.
+func (s *server) serveSecondFactorPage(w http.ResponseWriter, r *http.Request, status int) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	w.Write(withNonce(withBase(twoFactorHTML, basePrefix()), r))
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -737,6 +829,7 @@ func randomHex(n int) string {
 func newServer() *server {
 	return &server{
 		sessions: newSessionStore(),
+		pending:  newPendingStore(),
 		nodes:    &control.Fleet{},
 		net:      control.NewNet(),
 		jobs:     control.NewJobs(),

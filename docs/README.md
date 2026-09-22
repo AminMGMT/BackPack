@@ -26,6 +26,12 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [When a server is filtered, blocked, or dirty](filtered-or-dirty-ip.md)
 
 ### Per-tunnel settings
+- [Configuration reference](config-reference.md) — every key Backpack reads, generated from the declarations.
+- [Performance notes](performance-notes.md) — where the time goes, and the measurements that closed a question.
+- [Design decisions](design-decisions.md) — what Backpack deliberately does not do,
+  and the reason for each refusal.
+- [Releasing](releasing.md) — the checklist, and what happens if the signing key is lost.
+- [Troubleshooting](troubleshooting.md) — what to check when a tunnel is up and carrying nothing, in order.
 - [Access control](access-control.md) — scopes, API tokens for scrapers, and the record of what was done.
 - [Transport fallback](transport-fallback.md) — what a tunnel does when its carrier stops getting through.
 - [Port mappings](port-mappings.md) — every form `ports = [...]` accepts, including
@@ -39,6 +45,8 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 
 ### Monitoring
 - [Web panel](web-panel.md)
+- [The web panel, screen by screen](web-panel-screens.md) — every screen, its
+  address, and the CLI entry that does the same job
 - [Managed servers (nodes)](managed-servers.md) — register a foreign server with
   the panel once, then build both ends of a tunnel from one screen, with no SSH
   and no login held for that machine
@@ -47,6 +55,8 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [Tunnel Metrics](tunnel-metrics.md)
 - [Health Check](health-check.md)
 - [Monitor service](monitor-service.md)
+- [Shipping logs off the server](log-schema.md) — JSON logs, the field names, and
+  two collector recipes
 
 ### Maintenance
 - [Backup & restore](backup-restore.md)
@@ -76,3 +86,7 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 
 ---
 [← Back to the main README](../README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

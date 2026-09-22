@@ -214,6 +214,20 @@ export const sessionRevoke = id =>
 export const sessionRevokeOthers = () =>
   post('/api/sessions', new URLSearchParams({ action: 'others' }));
 export const setPassword = payload => post('/api/password', payload);
+
+/* Two-factor. The panel is root on this machine and a password is the
+   credential most likely to be reused or phished, so the second factor is the
+   one thing here that is about the panel itself rather than about a tunnel.
+
+   Four calls because it is four separate decisions: look at the state, begin
+   enrolling, prove the app holds the secret, and turn it off again — and the
+   last two are the ones that must not be one call, because confirming needs a
+   code and disabling needs the password. */
+export const totp         = () => get('/api/totp');
+export const totpStart    = () => post('/api/totp', new URLSearchParams({ action: 'start' }));
+export const totpConfirm  = code => post('/api/totp', new URLSearchParams({ action: 'confirm', code }));
+export const totpDisable  = password => post('/api/totp', new URLSearchParams({ action: 'disable', password }));
+export const totpRecovery = password => post('/api/totp', new URLSearchParams({ action: 'recovery', password }));
 export const setPanelPort = port => post('/api/panelport', new URLSearchParams({ port }));
 export const panelCertRead = () => get('/api/panelcert');
 /* Form-encoded, because the handler reads r.FormValue. `mode` is not optional:

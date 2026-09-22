@@ -1,0 +1,32 @@
+# Dependency updates.
+#
+# Two ecosystems, both of which have already cost something here:
+#
+#   - Go modules: govulncheck found 24 reachable standard-library CVEs on its
+#     first run, because the toolchain had been pinned and left. The pin is
+#     correct — an installer that fetches an unverified toolchain is worse —
+#     but a pin nobody moves is how that happens.
+#   - GitHub Actions: the release action is pinned to a commit SHA on purpose,
+#     which is the safe way to depend on an action and also the way that never
+#     gets updated by hand.
+#
+# Weekly, grouped, so this is one pull request to read rather than nine.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 5

@@ -1,6 +1,8 @@
 package menu
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -97,4 +99,108 @@ func TestTheRefreshLabelReadsAsOffWhenItIsOff(t *testing.T) {
 	if strings.Contains(got, "every 0h") || strings.Contains(got, "-") {
 		t.Fatalf("refreshLabel() = %q", got)
 	}
+}
+
+// A menu whose options and cases have drifted apart.
+//
+// manageMenu is a list of options and a switch on the index the user chose. The
+// two are held together by nothing but counting, so inserting an item in the
+// middle means renumbering every case after it by hand — which is exactly what
+// adding "Set up from a link" required.
+//
+// Half of that is already safe: a *duplicate* case is a compile error, and
+// writing one is how the mistake was noticed. The other half is not. A
+// **missing** case compiles perfectly and falls through to the default, which
+// in this switch returns to the previous screen — so the operator picks an item
+// and the menu simply redraws, with no error, no log line and nothing to
+// suggest the item was ever meant to do something.
+//
+// That is the shape this guards. It also catches the opposite: a case left
+// behind when its menu item was removed, which is a screen nobody can reach.
+func TestTheManageMenuHasACaseForEveryOption(t *testing.T) {
+	body, err := packageSource()
+	if err != nil {
+		t.Fatalf("reading the package: %v", err)
+	}
+
+	start := strings.Index(body, "func manageMenu()")
+	if start < 0 {
+		t.Fatal("manageMenu is gone — this guard needs updating")
+	}
+	end := strings.Index(body[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("could not find the end of manageMenu")
+	}
+	fn := body[start : start+end]
+
+	options := strings.Count(fn, "{Title:")
+	if options < 10 {
+		t.Fatalf("found %d options — the pattern has stopped matching", options)
+	}
+
+	// Every index from 0 to options-1 must be handled exactly once.
+	for i := 0; i < options; i++ {
+		label := fmt.Sprintf("case %d:", i)
+		switch n := strings.Count(fn, label); {
+		case n == 0:
+			t.Errorf("option %d (%q) has no case — picking it falls through to the "+
+				"default and returns to the previous screen with no explanation",
+				i, nthOption(fn, i))
+		case n > 1:
+			// Unreachable in practice — the compiler rejects a duplicate
+			// constant case before this runs — but counted rather than assumed,
+			// because the day this switch stops being a switch on a constant is
+			// the day that stops being true.
+			t.Errorf("option %d has %d cases", i, n)
+		}
+	}
+
+	// And nothing beyond the list, which would be a case for an option that was
+	// removed and a screen nobody can reach.
+	if strings.Contains(fn, fmt.Sprintf("case %d:", options)) {
+		t.Errorf("there is a case %d but only %d options; an action was left behind "+
+			"when its menu item went", options, options)
+	}
+}
+
+// nthOption pulls the title of the nth option out, for the error message.
+func nthOption(fn string, n int) string {
+	parts := strings.Split(fn, "{Title: ")
+	if n+1 >= len(parts) {
+		return "?"
+	}
+	rest := parts[n+1]
+	if i := strings.Index(rest, `"`); i >= 0 {
+		rest = rest[i+1:]
+		if j := strings.Index(rest, `"`); j >= 0 {
+			return rest[:j]
+		}
+	}
+	return "?"
+}
+
+// packageSource concatenates every non-test file in the package.
+//
+// The screens live one per file now, so a guard that reads the source has to
+// look at the package rather than at a filename — otherwise moving a screen
+// into its own file silently disarms the test that watches it.
+func packageSource() (string, error) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			return "", err
+		}
+		b.Write(src)
+		b.WriteString("\n")
+	}
+	return b.String(), nil
 }

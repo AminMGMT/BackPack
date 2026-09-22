@@ -302,3 +302,73 @@ func TestANilProgressIsSafe(t *testing.T) {
 	p.Step("this must not panic")
 	(&Progress{}).Step("nor this")
 }
+
+// Reading a result back as the type its kind produces.
+//
+// Result is `any` and stays that way: one registry holds every kind at once,
+// and a registry generic over one T can hold only one of them. What this adds
+// is that getting the type wrong says so rather than producing a zero value
+// nobody notices.
+
+func TestAResultComesBackAsItsOwnType(t *testing.T) {
+	j := NewJobs()
+	type measurement struct{ Ms int }
+
+	started, _ := j.Start(context.Background(), "linktest", "",
+		func(ctx context.Context, p *Progress) (any, error) {
+			return &measurement{Ms: 42}, nil
+		})
+	waitFor(t, time.Second, func() bool { g, _ := j.Get(started.ID); return g.State.Done() })
+
+	got, _ := j.Get(started.ID)
+	m, ok := ResultOf[*measurement](got)
+	if !ok {
+		t.Fatal("a result could not be read back as the type that produced it")
+	}
+	if m.Ms != 42 {
+		t.Fatalf("result = %+v", m)
+	}
+}
+
+// The wrong type is a false rather than a panic, and the zero value rather than
+// something half-built.
+func TestReadingAResultAsTheWrongTypeIsRefused(t *testing.T) {
+	j := NewJobs()
+	started, _ := j.Start(context.Background(), "linktest", "",
+		func(ctx context.Context, p *Progress) (any, error) { return "a string", nil })
+	waitFor(t, time.Second, func() bool { g, _ := j.Get(started.ID); return g.State.Done() })
+
+	got, _ := j.Get(started.ID)
+	if n, ok := ResultOf[int](got); ok || n != 0 {
+		t.Fatalf("a string came back as int %d", n)
+	}
+}
+
+// A job that failed has no result to read, however well the type matches. A
+// caller that skipped this would report the zero value as an answer.
+func TestAFailedJobHasNoResult(t *testing.T) {
+	j := NewJobs()
+	started, _ := j.Start(context.Background(), "linktest", "",
+		func(ctx context.Context, p *Progress) (any, error) {
+			return "partial", errors.New("the far end went away")
+		})
+	waitFor(t, time.Second, func() bool { g, _ := j.Get(started.ID); return g.State.Done() })
+
+	got, _ := j.Get(started.ID)
+	if s, ok := ResultOf[string](got); ok {
+		t.Fatalf("a failed job handed back %q as its result", s)
+	}
+}
+
+// And one that is still running.
+func TestARunningJobHasNoResultYet(t *testing.T) {
+	j := NewJobs()
+	release := make(chan struct{})
+	started, _ := j.Start(context.Background(), "linktest", "",
+		func(ctx context.Context, p *Progress) (any, error) { <-release; return "done", nil })
+
+	if _, ok := ResultOf[string](started); ok {
+		t.Fatal("a running job handed back a result")
+	}
+	close(release)
+}

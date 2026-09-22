@@ -101,6 +101,7 @@ const SHELL = `
     <span class="cnt" id="nCount">0</span>
     <span class="sp"></span>
     <button class="sb" id="nrollb" hidden>Upgrade the fleet</button>
+    <button class="sb warn" id="nrollstop" hidden>Stop the rollout</button>
     <button class="sb primary" id="naddb">Add a server</button>
   </div>
 
@@ -161,7 +162,26 @@ export function serversView(ctx) {
   const goB    = $('#asvgo', root);
   const fleet  = $('#fleet', root);
   const rollB  = $('#nrollb', root);
+  const stopB  = $('#nrollstop', root);
   const rollOut = $('#nroll', root);
+
+  /* Stopping a rollout that is under way.
+   *
+   * It stops *between* servers, never in the middle of one — interrupting an
+   * upgrade is how a machine ends up on neither version — so the wording says
+   * that rather than promising an immediate halt it cannot deliver. The
+   * servers already upgraded stay upgraded; this is not a rollback. */
+  stopB.addEventListener('click', async () => {
+    if (!await confirmBox({
+      title: 'Stop the rollout?',
+      body: 'It will finish the server it is on and then stop. Servers already '
+          + 'upgraded stay upgraded — this does not roll anything back.',
+      go: 'Stop it' })) return;
+    stopB.disabled = true;
+    try {
+      rollOut.textContent = (await api.nodeRolloutCancel()).message || 'Stopping…';
+    } catch (e) { oops(e); } finally { stopB.disabled = false; }
+  });
 
   /* Upgrading the whole fleet, staged.
    *
@@ -191,6 +211,7 @@ export function serversView(ctx) {
       go: 'Start the rollout' })) { rollB.disabled = false; return; }
 
     rollB.textContent = 'Rolling out…';
+    stopB.hidden = false;
     try {
       rollOut.textContent = (await api.nodeUpgradeAll()).message || 'Started.';
       /* The rollout outlives this request by design — a soak window and a
@@ -200,6 +221,7 @@ export function serversView(ctx) {
     } catch (e) { oops(e); } finally {
       rollB.disabled = false;
       rollB.textContent = 'Upgrade the fleet';
+      stopB.hidden = true;
     }
   });
 
@@ -215,9 +237,11 @@ export function serversView(ctx) {
       if (!r) return;
       if (r.running) {
         rollB.textContent = 'Rolling out…';
+        stopB.hidden = false;
         rollOut.textContent = r.step || 'Working…';
         continue;
       }
+      stopB.hidden = true;
       rollOut.textContent = r.message || `Rollout ${r.state}.`;
       return;
     }

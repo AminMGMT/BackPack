@@ -397,10 +397,36 @@ func (t *Tunnel) LocalAddr() net.Addr {
 }
 
 // Stats returns a snapshot for diagnostics.
+//
+// # Why the loads are in this order
+//
+// Six counters cannot be read in one step, so a snapshot is always slightly
+// behind. Behind is fine. *Impossible* is not, and "4 packets, 0 bytes" was
+// reachable: the writer bumped packets first, and a reader landing between the
+// two lines saw a tunnel that had carried packets containing nothing.
+//
+// That is not only ugly on a dashboard. bytesIn and bytesOut are what the
+// watchdog's stall detector watches, and a direction that reads as frozen for
+// an instant is precisely the signal it exists to act on.
+//
+// The fix is a pair of orderings that have to stay opposite:
+//
+//   - every writer adds **bytes, then packets**;
+//   - this reader loads **packets, then bytes**.
+//
+// Then a reader that sees P packets knows the bytes for all P were added before
+// the counter reached P, and the byte load that follows can only be larger. So
+// packets > 0 implies bytes > 0, always, and the snapshot is merely stale
+// rather than self-contradictory.
+//
+// Held by TestStatsAreNeverInternallyImpossible, which found the original by
+// reading flat out while packets crossed.
 func (t *Tunnel) Stats() Stats {
+	packetsIn := t.stats.packetsIn.Load()
+	packetsOut := t.stats.packetsOut.Load()
 	return Stats{
-		PacketsIn:  t.stats.packetsIn.Load(),
-		PacketsOut: t.stats.packetsOut.Load(),
+		PacketsIn:  packetsIn,
+		PacketsOut: packetsOut,
 		BytesIn:    t.stats.bytesIn.Load(),
 		BytesOut:   t.stats.bytesOut.Load(),
 		Dropped:    t.stats.dropped.Load(),
@@ -588,7 +614,30 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 	sizes := make([]int, batch)
 
 	frame := make([]byte, 0, t.cfg.MTU+t.encap.Overhead())
-	out := make([]byte, 0, t.cfg.MTU+t.encap.Overhead()+dataOverhead)
+
+	// Sealed packets, one slot per slot the TUN read filled.
+	//
+	// Separate buffers rather than one reused for every packet, because a batch
+	// send has to hold all of them at once — the single `out` buffer this used
+	// worked only because each packet was written before the next was sealed.
+	sealedSize := t.cfg.MTU + t.encap.Overhead() + dataOverhead
+	sealed := make([][]byte, batch)
+	for i := range sealed {
+		sealed[i] = make([]byte, 0, sealedSize)
+	}
+	// The slice handed to the carrier: the first k sealed packets of this
+	// round, re-sliced rather than rebuilt.
+	ready := make([][]byte, batch)
+	// The inner size of each one. The counters have always meant the bytes the
+	// tunnel *carried*, not the bytes it put on the wire — reporting the sealed
+	// size would make every tunnel look like it was moving more than it was,
+	// by exactly its own overhead.
+	payloads := make([]int, batch)
+
+	// sendmmsg, when the carrier has it. Only the plain UDP carrier does; the
+	// rest keep writing one datagram per syscall exactly as before. See
+	// batchread.go.
+	writer := asBatchWriter(t.carrier)
 
 	for {
 		count, err := t.tun.Read(bufs, sizes)
@@ -605,6 +654,14 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 		sess := t.sendSession()
 		peer := t.peerAddr()
 
+		// Seal everything this round first, then send it.
+		//
+		// The two used to be interleaved — seal one, write one — which is why
+		// a single sealing buffer sufficed. Separating them is what lets the
+		// whole round leave in one syscall, and it costs nothing when the
+		// carrier cannot batch: the send loop below is the old one.
+		k := 0
+		var payload int
 		for i := 0; i < count; i++ {
 			n := sizes[i]
 			if n == 0 {
@@ -624,24 +681,91 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 				t.log.Debugf("l3: not forwarding a packet off %s: %v", t.cfg.Iface, err)
 				continue
 			}
-			sealed, err := sess.seal(out[:0], wrapped)
+			out, err := sess.seal(sealed[k][:0], wrapped)
 			if err != nil {
 				t.stats.dropped.Add(1)
 				t.log.Warnf("l3: sealing a packet: %v", err)
 				continue
 			}
-			if _, err := t.carrier.WriteTo(sealed, peer); err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				t.stats.dropped.Add(1)
-				t.log.Debugf("l3: sending to %s: %v", peer, err)
-				continue
-			}
-			t.stats.packetsOut.Add(1)
-			t.stats.bytesOut.Add(uint64(n))
+			sealed[k] = out
+			ready[k] = out
+			payloads[k] = n
+			payload += n
+			k++
+		}
+		if k == 0 {
+			continue
+		}
+
+		if !t.send(ctx, writer, ready[:k], payloads[:k], peer, payload) {
+			return
 		}
 	}
+}
+
+// send puts a round of sealed packets on the wire, in one syscall where the
+// carrier allows it.
+//
+// It returns false only when the run is over, so the pump can stop. Everything
+// else — a short write, a refused datagram — is a drop, which is what a UDP
+// carrier does with them in any case.
+func (t *Tunnel) send(ctx context.Context, writer batchWriter, ready [][]byte,
+	payloads []int, peer net.Addr, payload int) bool {
+
+	if writer != nil && len(ready) > 1 {
+		sent, err := writer.WriteBatch(ready, peer)
+		if err == nil {
+			t.account(ready, sent, payload)
+			return true
+		}
+		if !errors.Is(err, errNoBatch) {
+			if ctx.Err() != nil {
+				return false
+			}
+			t.stats.dropped.Add(uint64(len(ready)))
+			t.log.Debugf("l3: sending a batch to %s: %v", peer, err)
+			return true
+		}
+		// The carrier declined to batch after all; fall through and write them
+		// one at a time rather than dropping a round over an optimisation.
+	}
+
+	for i, p := range ready {
+		if _, err := t.carrier.WriteTo(p, peer); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			t.stats.dropped.Add(1)
+			t.log.Debugf("l3: sending to %s: %v", peer, err)
+			continue
+		}
+		// Bytes before packets. See Stats for the pair of orderings this is
+		// half of. The inner size, not len(p): see payloads above.
+		t.stats.bytesOut.Add(uint64(payloads[i]))
+		t.stats.packetsOut.Add(1)
+	}
+	return true
+}
+
+// account records a batch that went out.
+//
+// payload is the inner bytes the round carried, which is what the counter has
+// always meant — not the sealed size, which includes the tunnel's own overhead
+// and would make a tunnel look like it was carrying more than it was.
+func (t *Tunnel) account(ready [][]byte, sent, payload int) {
+	if sent < len(ready) {
+		// The socket buffer filled. The rest are gone, which is what happens to
+		// a UDP datagram there is no room for either way.
+		t.stats.dropped.Add(uint64(len(ready) - sent))
+	}
+	if sent <= 0 {
+		return
+	}
+	// Apportioned, because a short write does not say which ones left. Over a
+	// round of packets that are all about the same size this is exact enough
+	// for a throughput figure, and the packet count is not approximated at all.
+	t.stats.bytesOut.Add(uint64(payload * sent / len(ready)))
+	t.stats.packetsOut.Add(uint64(sent))
 }
 
 // pumpFromCarrier reads datagrams off the carrier and routes them by kind.
@@ -913,14 +1037,22 @@ func (t *Tunnel) handleData(plain []byte, wbuf [][]byte, h header, body []byte, 
 		t.log.Debugf("l3: discarding a malformed inner packet from %s: %v", from, err)
 		return plain
 	}
+	// Counted before the packet is handed on, not after, and bytes before
+	// packets. See Stats for why the order is load-bearing.
+	//
+	// Counting first also matches what the name claims. A packet that arrived,
+	// authenticated and decrypted *was* received; if the interface then refuses
+	// it, that is a drop, and it is counted as one below. Received-and-dropped
+	// is a different fact from never-arrived, and only one of them is true here.
+	t.stats.bytesIn.Add(uint64(len(inner)))
+	t.stats.packetsIn.Add(1)
+
 	wbuf[0] = inner
 	if _, err := t.tun.Write(wbuf); err != nil {
 		t.stats.dropped.Add(1)
 		t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
 		return plain
 	}
-	t.stats.packetsIn.Add(1)
-	t.stats.bytesIn.Add(uint64(len(inner)))
 	return plain
 }
 

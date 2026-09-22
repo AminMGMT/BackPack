@@ -24,9 +24,36 @@ import (
 const monitorUnit = `[Unit]
 Description=Backpack Monitor (watchdog, Telegram bot and alerts)
 After=network.target
+# A crash loop has to end somewhere visible.
+#
+# Restart=always on its own never lets this unit reach "failed": it restarts for
+# ever, so systemctl status says "activating" a few seconds out of every ten and
+# an operator glancing at it sees a service that is running. With a start limit,
+# a monitor that cannot stay up stops trying and says so — and the heartbeat in
+# the config directory goes stale, which is what Diagnose and the panel read.
+#
+# Six attempts in five minutes is well past any transient cause. These belong in
+# [Unit] and not [Service]: systemd moved them, and the old placement is ignored
+# without a word on any version that matters.
+StartLimitIntervalSec=300
+StartLimitBurst=6
 
 [Service]
-Type=simple
+# notify rather than simple, so systemd knows the difference between a process
+# that exists and one that is working.
+#
+# This unit is the right place for a watchdog and a tunnel engine is not. What
+# it catches is a monitor wedged on a job that never returns — a goroutine
+# deadlocked, a socket that will never answer — which systemd is otherwise
+# perfectly happy with, and which looks from the outside exactly like a healthy
+# service with nothing to do. The cost of being wrong is a restart of the
+# watchdog; the cost of not noticing is a fleet with nothing watching it.
+#
+# WatchdogSec is generous on purpose: the heartbeat goes out every half of it,
+# and a machine under load must not be killed for being slow.
+Type=notify
+NotifyAccess=main
+WatchdogSec=120
 ExecStart=%s --monitor
 Restart=always
 RestartSec=5

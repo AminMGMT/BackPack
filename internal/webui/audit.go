@@ -3,6 +3,7 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/backpack/backpack/internal/alerthist"
 	"github.com/backpack/backpack/internal/app"
 )
 
@@ -70,7 +72,15 @@ func readAudit() []auditEntry {
 		return nil
 	}
 	var out []auditEntry
-	_ = json.Unmarshal(data, &out)
+	if err := json.Unmarshal(data, &out); err != nil {
+		// Reading a damaged record as empty is right — the panel must not stop
+		// working because its history did — but doing it silently is not. An
+		// audit record that has quietly become empty is indistinguishable from
+		// one nobody has written to, and the whole value of the thing is that
+		// it can be trusted after the fact.
+		log.Printf("audit: %s is damaged and is being read as empty: %v", AuditPath, err)
+		return nil
+	}
 	return out
 }
 
@@ -102,6 +112,11 @@ func Audit(limit int) []auditEntry {
 // more rigorous and in practice means a full disk locks the operator out of the
 // tool they need to fix it.
 func record(e auditEntry) {
+	// Off the machine first, for the entries that are worth it. Before the
+	// local write rather than after: if the disk is what is wrong, the copy
+	// somewhere else is the one that still happens.
+	forward(e)
+
 	auditMu.Lock()
 	defer auditMu.Unlock()
 
@@ -197,4 +212,79 @@ func describeAudit(e auditEntry) string {
 		line += fmt.Sprintf("  — refused (%d)", e.Status)
 	}
 	return line
+}
+
+// Getting the record off the machine it describes.
+//
+// The audit file lives at /etc/backpack/audit.json, owned by root, on the box
+// the panel runs on — and the panel is root on that box. So an attacker who
+// reaches it can rewrite the record of how they got there, and the record's
+// whole value is that it can be trusted afterwards.
+//
+// There is no way to make a local file tamper-proof against local root. What
+// there is, is a copy somewhere else, written *as it happens*, so that
+// rewriting the local one no longer rewrites the truth.
+//
+// # What is forwarded, and what is not
+//
+// Not everything. The panel is polled and most of what it records is somebody
+// looking at a page — forwarding that would be thousands of messages a day, and
+// a channel nobody reads is a channel that hides the one line that mattered.
+//
+// So: the actions that change who can do what, the ones that change the fleet,
+// and every refusal. Those are the lines somebody would want to alter, which is
+// exactly the test for whether they are worth copying.
+
+// worthForwarding reports whether an entry should leave the machine.
+func worthForwarding(e auditEntry) bool {
+	// Every refusal. A run of these is somebody trying credentials, and it is
+	// the earliest signal there is.
+	if e.Status >= 400 {
+		return true
+	}
+	switch e.Path {
+	case "/api/tokens":
+		// Issuing and revoking credentials.
+		return true
+	case "/api/security", "/api/sessions":
+		// The panel's password and its signed-in devices.
+		return true
+	case "/api/nodes", "/api/node/pair":
+		// Adding, removing or upgrading a managed server. A fleet that gains a
+		// machine nobody added is the thing this is for.
+		switch e.Action {
+		case "add", "remove", "credentials", "upgradeall", "pin", "unpin":
+			return true
+		}
+	}
+	return false
+}
+
+// forward copies one entry to the alert history, which the monitor relays to
+// Telegram — off the machine, within seconds, over a channel the attacker on
+// this box does not control.
+//
+// It reuses the alert path rather than adding a second delivery mechanism,
+// because a second one is a second thing to configure, to break, and to
+// discover was never working.
+func forward(e auditEntry) {
+	if !worthForwarding(e) {
+		return
+	}
+	what := e.Path
+	if e.Action != "" {
+		what += " (" + e.Action + ")"
+	}
+	from := e.IP
+	if from == "" {
+		from = "an unknown address"
+	}
+	if e.Status >= 400 {
+		alerthist.RecordEvent(fmt.Sprintf(
+			"🔒 Panel refused %s %s from %s (%s) — %d",
+			e.Method, what, from, e.Who, e.Status))
+		return
+	}
+	alerthist.RecordEvent(fmt.Sprintf(
+		"🔑 Panel: %s %s by %s from %s", e.Method, what, e.Who, from))
 }

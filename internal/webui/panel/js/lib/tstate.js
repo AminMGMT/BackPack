@@ -11,7 +11,9 @@
  * and the configuration is live, but nothing is answering on the other side.
  * Saying "Stopped" there sends somebody to restart a service that is running.
  */
-export const UP = 'online';
+/* Not exported: the state string is this module's business, and every screen
+ * that decided for itself got it wrong. Ask isUp. */
+const UP = 'online';
 
 export const isUp = t => !!t && t.state === UP;
 

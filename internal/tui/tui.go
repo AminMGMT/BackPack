@@ -8,6 +8,7 @@ package tui
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +29,23 @@ const (
 )
 
 var reader = bufio.NewReader(os.Stdin)
+
+// SetInput replaces the source every prompt reads from, and returns the
+// function that puts it back.
+//
+// It exists so the menus can be driven. `internal/menu` is a package of screens
+// that each read a choice and act on it, and the only way to exercise one
+// without a person at a keyboard is to hand it the keystrokes. Without this
+// seam the whole package is untestable — which is exactly what it was, at 3.2%
+// — and the screens are where an operator meets this product.
+//
+// It is not concurrency-safe and is not meant to be: prompts are read by one
+// goroutine because there is one terminal.
+func SetInput(r io.Reader) (restore func()) {
+	prev := reader
+	reader = bufio.NewReader(r)
+	return func() { reader = prev }
+}
 
 // Clear clears the terminal screen.
 func Clear() {

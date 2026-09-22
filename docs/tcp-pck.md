@@ -152,3 +152,7 @@ throttle می‌شود و علتش چیزی است که روی *اتصال* عم
 
 ---
 [← Back to the docs index](README.md) · [Step-by-step tutorial →](../tutorial/tcp-pck.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

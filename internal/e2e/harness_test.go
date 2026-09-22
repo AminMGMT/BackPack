@@ -268,7 +268,18 @@ func startClientOnly(t *testing.T, transport, remote, token string) *tunnel {
 	return &tunnel{cancel: cancel, wg: &wg}
 }
 
-// Stop tears the tunnel down and waits for its goroutines to finish.
+// Stop tears the tunnel down and waits for Start to return.
+//
+// It does **not** wait for the transport to have stopped, and the difference
+// has bitten: Start returns when the transport's supervisor stops, while the
+// goroutines it launched — listeners, diallers, pool maintainers — are still
+// winding down behind it. A test that starts a second tunnel on the same ports
+// or with the same token immediately after this can find the first one still
+// there. See the token note in TestEveryTransportComesBackAfterTheTunnelRestarts,
+// and waitPortFree for the ports.
+//
+// The comment used to say "waits for its goroutines to finish", which is a
+// promise this cannot keep and which is worth more as a warning.
 func (tn *tunnel) Stop() {
 	tn.cancel()
 	done := make(chan struct{})

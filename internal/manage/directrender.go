@@ -327,7 +327,6 @@ func writeSpoofKeys(b *strings.Builder, s config.SpoofConfig) {
 		writeKV(b, "spoof_src_pool", tomlList(s.SpoofSrcPool))
 	}
 	str("spoof_peer_ip", s.SpoofPeerIP)
-	str("spoof_dst_ip", s.SpoofDstIP)
 	str("spoof_interface", s.SpoofInterface)
 	str("spoof_xdp_interface", s.SpoofXDPInterface)
 	num("spoof_sockbuf", s.SpoofSockBuf)

@@ -630,3 +630,59 @@ func TestRunReturnsWhenTheDeviceFails(t *testing.T) {
 		})
 	}
 }
+
+// A reading is allowed to be behind; it is not allowed to be impossible.
+//
+// The two counters cannot be updated in one step, so a reader always risks
+// catching one and not the other. What must never happen is a snapshot saying
+// packets arrived and no bytes did — that is not staleness, it is a reading
+// that could not be true, and it reached the panel and the metrics file.
+//
+// It matters past looking wrong: bytesIn is what the watchdog's stall detector
+// watches, and a direction that reads as frozen for an instant is precisely
+// the signal it exists to act on.
+func TestStatsAreNeverInternallyImpossible(t *testing.T) {
+	p := established(t, "ipip", 0)
+
+	stop := make(chan struct{})
+	bad := make(chan string, 1)
+
+	// A reader running flat out while packets cross, which is what the panel
+	// and the metrics collector are.
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			in := p.listener.Stats()
+			if in.PacketsIn > 0 && in.BytesIn == 0 {
+				select {
+				case bad <- "listener reported packets with no bytes":
+				default:
+				}
+				return
+			}
+			out := p.dialer.Stats()
+			if out.PacketsOut > 0 && out.BytesOut == 0 {
+				select {
+				case bad <- "dialler reported packets with no bytes":
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 50; i++ {
+		across(t, p.dialDev, p.listenDev, ipv4Packet(1, 2, 3, byte(i)))
+	}
+	close(stop)
+
+	select {
+	case why := <-bad:
+		t.Fatal(why)
+	default:
+	}
+}

@@ -148,6 +148,100 @@ export function settingsView(ctx) {
         tg: val(tg), ses: val(ses), ab: val(ab), upd: val(upd), cert: val(cert),
       });
 
+      /* ---- Two-factor sign-in ----
+       *
+       * Built here rather than drawn in the preview's markup, because the
+       * preview's Security pane claimed "2FA on · 2 devices" on a panel that
+       * had no second factor at all — and the lesson of that line is not to put
+       * a feature's chrome on screen before the feature exists.
+       *
+       * The flow is three states and they are three because each one is a
+       * different decision: off, enrolling (a secret to scan, not yet in
+       * force), and on. Enrolling deliberately does not take effect until a
+       * code comes back: an operator who closes the tab after the QR code is an
+       * operator who would otherwise be locked out by a secret nothing holds. */
+      {
+        const pane = inPane('security');
+        const host = el('div', { class: 'grp2', id: 'twofagrp' });
+        pane?.insertBefore(host, root.querySelector('#tokgrp'));
+
+        const ask = (label, id) => `<div class="f2b"><label>${label}</label>`
+          + `<input id="${id}" type="password" placeholder="Panel password"></div>`;
+
+        const showCodes = codes => `<pre class="tokout">${esc(codes.join('\n'))}\n\n`
+          + `Keep these somewhere that is not this server. Each one signs you in once, `
+          + `and they are the way back if the phone is gone.</pre>`;
+
+        const draw = st => {
+          if (st.enabled) {
+            host.innerHTML = `<div class="gl2">Two-factor sign-in</div>
+              <div class="arow"><div class="tx"><b>On</b>
+                <span>${st.recoveryLeft} recovery ${st.recoveryLeft === 1 ? 'code' : 'codes'} unused</span></div>
+                <button class="btn2" id="tfnew">New recovery codes</button>
+                <button class="btn2 dgr" id="tfoff">Turn off</button></div>
+              ${ask('Confirm with the panel password', 'tfpw')}
+              <div id="tfout"></div>`;
+            return;
+          }
+          host.innerHTML = `<div class="gl2">Two-factor sign-in</div>
+            <p class="hint" style="margin:0 0 10px">This panel is root on this machine and one
+              password opens it. A code from an authenticator app is the second thing somebody
+              would have to have.</p>
+            <div class="arow"><div class="tx"><b>Off</b>
+              <span>The password is the whole login</span></div>
+              <button class="btn2 solid" id="tfon">Turn on</button></div>
+            <div id="tfout"></div>`;
+        };
+
+        const out = () => host.querySelector('#tfout');
+        const pw = () => host.querySelector('#tfpw')?.value || '';
+
+        let status = { enabled: false, recoveryLeft: 0 };
+        try { status = await api.totp(); } catch (e) { /* drawn as off */ }
+        draw(status);
+
+        host.addEventListener('click', async ev => {
+          const id = ev.target.id;
+          try {
+            if (id === 'tfon') {
+              const st = await api.totpStart();
+              out().innerHTML = `<pre class="tokout">${esc(st.secret)}</pre>
+                <p class="hint">Scan this in the app, or type the key above by hand.
+                  <a href="${esc(st.uri)}">Open in an authenticator app</a></p>
+                <div class="f2b"><label>The six digits it shows</label>
+                  <input id="tfcode" type="text" inputmode="numeric" maxlength="6" placeholder="000000"></div>
+                <button class="btn2 solid" id="tfconfirm">Confirm</button>`;
+              return;
+            }
+            if (id === 'tfconfirm') {
+              const code = host.querySelector('#tfcode')?.value.trim();
+              if (!code) { toast('Enter the code the app is showing.'); return; }
+              const r = await api.totpConfirm(code);
+              draw({ enabled: true, recoveryLeft: (r.recovery || []).length });
+              out().innerHTML = showCodes(r.recovery || []);
+              toast('Two-factor is on.');
+              return;
+            }
+            if (id === 'tfoff') {
+              if (!await confirmBox({
+                title: 'Turn two-factor off?',
+                body: 'The password becomes the whole login again, and the recovery codes stop working.',
+                go: 'Turn off' })) return;
+              await api.totpDisable(pw());
+              draw({ enabled: false, recoveryLeft: 0 });
+              toast('Two-factor is off.');
+              return;
+            }
+            if (id === 'tfnew') {
+              const r = await api.totpRecovery(pw());
+              draw({ enabled: true, recoveryLeft: (r.recovery || []).length });
+              out().innerHTML = showCodes(r.recovery || []);
+              toast('New recovery codes — the old ones no longer work.');
+            }
+          } catch (e) { oops(e); }
+        });
+      }
+
       /* ---- API tokens and the record ----
        *
        * Both live under Security because both answer the same question: who

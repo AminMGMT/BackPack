@@ -149,7 +149,15 @@ func (c *QuicTransport) Restart() {
 	// The whole tunnel may have been shut down while this restart was waiting.
 	// Rebuilding from a finished parent context would bind and close for nothing.
 	if c.parentctx.Err() != nil {
+		// The level was turned down to hide the timeouts a teardown produces;
+		// leaving it there would silence the shutdown itself.
 		c.logger.SetLevel(level)
+		// Abandoning is not a reason to keep claiming a peer. See the same
+		// branch in internal/server/transport — this end publishes the status
+		// the panel reads and the "connected" flag the watchdog reads, and both
+		// used to survive a restart that gave up.
+		c.status.set("")
+		metrics.ClearPeer()
 		c.logger.Debug("restart abandoned: the tunnel is shutting down")
 		return
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -139,7 +140,20 @@ func loadTokens() tokenStore {
 	if err != nil {
 		return s
 	}
-	_ = json.Unmarshal(data, &s)
+	if err := json.Unmarshal(data, &s); err != nil {
+		// A corrupt file means every token stops working, which is the safe
+		// direction and a terrible thing to discover in silence: the symptom is
+		// a scraper that suddenly gets 401s, and the token list on the screen
+		// says there are none, so the operator concludes somebody revoked them.
+		//
+		// Say so. The tokens are not recoverable from here — only their hashes
+		// were ever stored — but knowing the file is damaged rather than empty
+		// is the difference between reissuing one and hunting for who deleted
+		// them.
+		log.Printf("api tokens: %s is damaged and is being read as empty, so every "+
+			"token will be refused: %v", TokensPath, err)
+		return tokenStore{}
+	}
 	return s
 }
 

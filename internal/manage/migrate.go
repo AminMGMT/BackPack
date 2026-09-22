@@ -98,6 +98,67 @@ var configMigrations = []configMigration{
 				was, app.TunnelConfigMode)
 		},
 	},
+	{
+		// spoof_dst_ip described something that could not exist.
+		//
+		// The comment on the field said it was "a forged destination written
+		// only into the cosmetic L4 shim". There is nowhere for it to go: an
+		// IPv4 destination lives in exactly one place, the IP header, and that
+		// has to hold the peer's real address or the packet is not delivered.
+		// The L4 shim the spoof carrier writes is UDP, TCP or ICMP, and none of
+		// those contains an address — the only identifier it carries is a port,
+		// derived from the token so both ends agree without exchanging it.
+		//
+		// So the key was offered in the wizard, validated as an IPv4 address,
+		// written to the file and read back into a struct field that nothing
+		// downstream ever looked at. It is the one key the config-surface test
+		// had an exception for, and the exception was the honest way of saying
+		// this had not been settled.
+		//
+		// Removed rather than implemented. Stripping it from files that already
+		// carry it matters because the parser is strict about unknown keys on
+		// some paths, and because leaving it there invites somebody to set it.
+		id: "drop-spoof-dst-ip",
+		apply: func(f *configFile) string {
+			out, removed := dropTOMLKey(f.Body, "spoof_dst_ip")
+			if !removed {
+				return ""
+			}
+			f.Body = out
+			return "removed spoof_dst_ip — it was never read by anything; a forged " +
+				"destination has nowhere to live that is not the address the packet " +
+				"has to be routed to"
+		},
+	},
+}
+
+// dropTOMLKey removes an assignment to key, wherever it appears at the start of
+// a line.
+//
+// Line-based on purpose. The alternative is decoding the file and writing it
+// back, which reformats everything a person has done to it — comments, order,
+// spacing — to delete one line. A config file is something operators edit by
+// hand, and rewriting it wholesale to remove a key is a worse intrusion than
+// the key.
+func dropTOMLKey(body []byte, key string) ([]byte, bool) {
+	lines := strings.Split(string(body), "\n")
+	out := make([]string, 0, len(lines))
+	removed := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key) {
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+			if strings.HasPrefix(rest, "=") {
+				removed = true
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	if !removed {
+		return body, false
+	}
+	return []byte(strings.Join(out, "\n")), true
 }
 
 // systemMigrations run once each, against the machine.

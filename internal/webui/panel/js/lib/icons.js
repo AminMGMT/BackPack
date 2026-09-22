@@ -5,7 +5,8 @@
  * currentColor, which is what makes the set work in both themes.
  */
 
-export const ICONS = {
+/* Not exported: callers name an icon, they do not reach into the table. */
+const ICONS = {
   pack:   '<path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/>',
   burger: '<path d="M3 6h18M3 12h18M3 18h18"/>',
   close:  '<path d="M18 6L6 18M6 6l12 12"/>',

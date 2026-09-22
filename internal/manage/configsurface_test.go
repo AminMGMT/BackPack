@@ -54,12 +54,6 @@ var configSurfaceExceptions = map[string]string{
 	// A label, by design: the engine reads the values a preset expanded into,
 	// never the name it came from. config/l3.go says so on the field.
 	"preset": "a label recording which profile the values came from; the engine reads the values",
-
-	// Known gap, deliberately left open for now. See idea.md §2.1: the key is
-	// offered, validated, written and read back while reaching no carrier code.
-	// It is listed here so the test passes on a known state rather than being
-	// disabled — remove this line when the key is either wired or removed.
-	"spoof_dst_ip": "KNOWN GAP — wired nowhere; see idea.md §2.1, excluded from the current work",
 }
 
 var tomlTagRe = regexp.MustCompile(`^\s*([A-Z][A-Za-z0-9_]*)\s+[^\x60]+\x60toml:"([a-z_0-9]+)"`)

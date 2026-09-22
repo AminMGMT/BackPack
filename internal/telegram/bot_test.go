@@ -16,8 +16,29 @@ import (
 // An index into the list would not: adding a tunnel renumbers everything after
 // it, and yesterday's Stop button would then point at a different tunnel.
 func TestTunnelIDIsStableAndDistinct(t *testing.T) {
-	if tunnelID("germany") != tunnelID("germany") {
-		t.Error("the same name must always produce the same handle")
+	// Pinned, not compared against itself.
+	//
+	// This used to assert tunnelID("germany") != tunnelID("germany"), which is
+	// always false for any deterministic function and therefore asserts
+	// nothing. Worse, it checked the wrong property: what has to hold is not
+	// that the handle is the same *within one run* but that it is the same as
+	// the one already sitting in somebody's chat history. A change to the hash
+	// would break every button in every existing conversation — each one would
+	// resolve to a different tunnel or to none — and the old test would have
+	// passed through it without a word.
+	//
+	// These are the values this build produces. If they change, the buttons
+	// people already have stop working, and that has to be a decision rather
+	// than a side effect.
+	for name, want := range map[string]string{
+		"germany": "f319c7de",
+		"turkey":  "995fc0cf",
+		"":        "811c9dc5",
+	} {
+		if got := tunnelID(name); got != want {
+			t.Errorf("tunnelID(%q) = %q, want %q — every button already in a chat "+
+				"resolves through this, so changing it breaks them all", name, got, want)
+		}
 	}
 	seen := map[string]string{}
 	for _, name := range []string{"germany", "turkey", "sweden", "de1", "de2", "a", ""} {

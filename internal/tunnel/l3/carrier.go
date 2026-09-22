@@ -56,6 +56,17 @@ type udpCarrier struct {
 	v6      *ipv6.PacketConn
 	batchMu sync.Mutex
 	msgs    []ipv4.Message
+	// The send side's own array and lock. Separate from the receive side's:
+	// the two pumps are different goroutines and run at the same time, so one
+	// shared array would serialise them against each other for no reason.
+	wbatchMu sync.Mutex
+	wmsgs    []ipv4.Message
+	// The segmented-write scratch, under the send lock with the array above.
+	// gsoOff is set by the first refusal and never cleared: see gso.go for why
+	// support is found out by trying rather than by asking.
+	gsoBuf  []byte
+	gsoCmsg []byte
+	gsoOff  bool
 }
 
 func (c *udpCarrier) Overhead() int       { return c.overhead }

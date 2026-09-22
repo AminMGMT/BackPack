@@ -1,7 +1,10 @@
 package manage
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
@@ -253,4 +256,106 @@ func tunnelFlow(name string) (in, out uint64, ok bool) {
 		return 0, 0, false
 	}
 	return snap.BytesIn, snap.BytesOut, true
+}
+
+// Keeping the ladder across a watchdog restart.
+//
+// flowWatch lived only in the watchdog's memory, so restarting the monitor
+// service — an update, a crash, an operator — reset every ladder mid-climb.
+// That is wrong in both directions, and one of them is much worse than the
+// other.
+//
+// A tunnel two restarts into a stall getting its count back is merely
+// forgetful. A tunnel the watchdog had *given up on* is not: giving up is a
+// decision, made because the stall survived two restarts and therefore is not
+// something restarting fixes. The quiet period exists to stop the churn that
+// follows. Forgetting it turns a decision into a loop, and the loop restarts a
+// tunnel every few minutes for as long as the fault lasts.
+//
+// So the state is written down. It is small, it is rewritten a few times an
+// hour at most, and it is read once at start.
+
+// flowStatePath is where the ladder is kept. A variable so a test can point it
+// somewhere harmless rather than at the machine running the test.
+var flowStatePath = filepath.Join(app.ConfigDir, "stall-state.json")
+
+// persistedReading is flowReading in a shape that survives a round trip.
+// flowReading's fields are unexported and two of them are times, which is
+// exactly what JSON is bad at guessing.
+type persistedReading struct {
+	// One tag per field. Writing `json:"in,out"` for both — which is what this
+	// said first — is one tag applied to two fields, so both serialise as "in"
+	// and the second silently overwrites the first. staticcheck caught it
+	// within an hour of being added to CI.
+	In         uint64 `json:"in"`
+	Out        uint64 `json:"out"`
+	Runs       int    `json:"runs"`
+	Since      int64  `json:"since,omitempty"`
+	Direction  string `json:"direction,omitempty"`
+	Restarts   int    `json:"restarts"`
+	QuietUntil int64  `json:"quietUntil,omitempty"`
+	Reported   bool   `json:"reported,omitempty"`
+}
+
+// save writes the current ladders.
+//
+// A failure is not reported anywhere: the watchdog's job is to notice things,
+// and a full disk must not be a reason it stops. The cost of losing this file
+// is the forgetfulness described above, which is what happened every time
+// before it existed.
+func (w *flowWatch) save() {
+	out := make(map[string]persistedReading, len(w.seen))
+	for name, r := range w.seen {
+		p := persistedReading{
+			In: r.in, Out: r.out, Runs: r.runs,
+			Direction: r.direction, Restarts: r.restarts, Reported: r.reported,
+		}
+		if !r.since.IsZero() {
+			p.Since = r.since.Unix()
+		}
+		if !r.quietUntil.IsZero() {
+			p.QuietUntil = r.quietUntil.Unix()
+		}
+		out[name] = p
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return
+	}
+	// Written whole or not at all: the next start reads this, and a half-written
+	// file would be a corrupt ladder rather than an absent one.
+	tmp := flowStatePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, flowStatePath); err != nil {
+		_ = os.Remove(tmp)
+	}
+}
+
+// load reads them back. Anything unreadable is treated as nothing, because
+// starting from nothing is the behaviour this replaces and is never worse than
+// refusing to start.
+func (w *flowWatch) load() {
+	data, err := os.ReadFile(flowStatePath)
+	if err != nil {
+		return
+	}
+	var in map[string]persistedReading
+	if err := json.Unmarshal(data, &in); err != nil {
+		return
+	}
+	for name, p := range in {
+		r := &flowReading{
+			in: p.In, out: p.Out, runs: p.Runs,
+			direction: p.Direction, restarts: p.Restarts, reported: p.Reported,
+		}
+		if p.Since != 0 {
+			r.since = time.Unix(p.Since, 0)
+		}
+		if p.QuietUntil != 0 {
+			r.quietUntil = time.Unix(p.QuietUntil, 0)
+		}
+		w.seen[name] = r
+	}
 }

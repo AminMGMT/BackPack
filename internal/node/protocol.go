@@ -213,6 +213,19 @@ type TunnelState struct {
 	// Without this the operator's only route to the fact was to open the far
 	// server's journal and read it.
 	ServiceDown string `json:"serviceDown,omitempty"`
+
+	// Connected is the engine's own answer about its control channel, as
+	// distinct from Active, which is only systemd's answer about the process.
+	//
+	// The difference is the whole failure this product cares about: a unit that
+	// is running and a tunnel that is carrying are not the same claim, and a
+	// staged rollout that asks only the first will pass a canary whose binary
+	// came back and whose tunnel did not. A pointer because absent has to be
+	// distinguishable from false — a node still running an older build through
+	// an upgrade has no opinion here, and reading that as "not connected" would
+	// halt a rollout on every node until they had all been upgraded, which is
+	// the one thing a rollout cannot do.
+	Connected *bool `json:"connected,omitempty"`
 }
 
 // ApplyResult says what an apply did.

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // The QUIC carrier.
@@ -79,6 +81,11 @@ func quicConfig() *quic.Config {
 		// short enough that a dead path is noticed and rebuilt.
 		MaxIdleTimeout:  60 * time.Second,
 		KeepAlivePeriod: 15 * time.Second,
+		// quic-go's default first packet is 1308 bytes on the wire and cannot
+		// cross a 1280-byte path at all — which is exactly the path an l3
+		// tunnel most often rides, since it is frequently nested inside another
+		// one. See network.QUICInitialPacketSize for the measurement.
+		InitialPacketSize: network.QUICInitialPacketSize,
 	}
 }
 

@@ -54,3 +54,7 @@ forward می‌شود و **سمت خارج** اتصال بیرونی را برق
 
 ---
 [← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

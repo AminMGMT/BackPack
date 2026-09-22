@@ -81,3 +81,50 @@ func (c *udpCarrier) enableBatch() {
 	}
 	c.v4 = ipv4.NewPacketConn(c.UDPConn)
 }
+
+// WriteBatch puts several datagrams on the wire with one syscall.
+//
+// x/net's WriteBatch is sendmmsg on Linux. The message array is reused for the
+// same reason the read side reuses one: allocating it per call would hand back
+// on the heap what the syscall saving just won.
+//
+// It reports how many the kernel accepted. A short write is not an error — the
+// socket buffer filled — and the caller must treat the rest as dropped, which
+// is what a UDP carrier does with them anyway.
+func (c *udpCarrier) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
+	if len(bufs) == 0 {
+		return 0, errors.New("l3: nothing to send")
+	}
+	if c.v4 == nil && c.v6 == nil {
+		return 0, errNoBatch
+	}
+
+	c.wbatchMu.Lock()
+	defer c.wbatchMu.Unlock()
+
+	// One segmented write beats one sendmmsg by two to three times at the same
+	// batch — see gso.go for the measurement. It is tried first and falls
+	// through to the batch below on any refusal, having sent nothing.
+	if n, err := c.writeGSO(bufs, to); err == nil {
+		return n, nil
+	}
+
+	n := len(bufs)
+	if len(c.wmsgs) < n {
+		c.wmsgs = make([]ipv4.Message, n)
+		for i := range c.wmsgs {
+			c.wmsgs[i].Buffers = make([][]byte, 1)
+		}
+	}
+	msgs := c.wmsgs[:n]
+	for i := range msgs {
+		msgs[i].Buffers[0] = bufs[i]
+		msgs[i].Addr = to
+		msgs[i].N = 0
+	}
+
+	if c.v4 != nil {
+		return c.v4.WriteBatch(msgs, 0)
+	}
+	return c.v6.WriteBatch([]ipv6.Message(msgs), 0)
+}

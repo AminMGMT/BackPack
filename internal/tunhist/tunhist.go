@@ -15,6 +15,7 @@ package tunhist
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -77,7 +78,14 @@ func Load() File {
 	if err != nil {
 		return f
 	}
-	_ = json.Unmarshal(data, &f)
+	if err := json.Unmarshal(data, &f); err != nil {
+		// Reading a damaged file as empty keeps the product working, which
+		// is right. Doing it silently is not: the traffic charts and every uptime figure start again from zero,
+		// and empty looks exactly like a machine where nothing has
+		// happened yet.
+		log.Printf("history: %s is damaged and is being read as empty: %v", path(), err)
+		return File{Tunnels: map[string]*History{}}
+	}
 	if f.Tunnels == nil {
 		f.Tunnels = map[string]*History{}
 	}

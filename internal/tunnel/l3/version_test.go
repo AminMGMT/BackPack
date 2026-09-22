@@ -57,7 +57,7 @@ func TestANewDiallerFallsBackForAnOldListener(t *testing.T) {
 // listener must answer in the old shape — a version block would be an
 // encapsulation mismatch to a peer that compares the payload whole.
 func TestANewListenerAnswersAnOldDiallerInTheOldShape(t *testing.T) {
-	reply := replyPayload("ipip", versionLegacy, versionCurrent)
+	reply := replyPayload("ipip", versionCurrent, versionLegacy)
 	if reply != "ipip" {
 		t.Errorf("a new listener answered an old dialler with %q; anything but the bare "+
 			"encapsulation is a mismatch to a peer that compares it whole", reply)

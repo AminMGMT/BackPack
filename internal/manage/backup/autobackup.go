@@ -89,5 +89,28 @@ func autoBackupPass() {
 		alerthist.RecordEvent("💾 Weekly auto-backup FAILED: " + err.Error())
 		return
 	}
+
+	// And off the machine, if the operator said where.
+	//
+	// Reported separately from the backup itself, because they fail for
+	// completely different reasons and have completely different fixes — a
+	// backup that could not be written is a full disk, and a copy that could
+	// not be sent is a destination that has changed. Rolling them into one
+	// message would send somebody to look at the wrong one.
+	//
+	// A failure here is otherwise discovered weeks later, when the machine is
+	// gone and somebody goes looking for the copy that was supposed to be
+	// somewhere else.
+	if cmd := OffsiteCommand(); cmd != "" {
+		if err := SendOffsite(path); err != nil {
+			alerthist.RecordEvent("📤 Weekly auto-backup was saved locally but could " +
+				"NOT be copied off this machine: " + err.Error() +
+				" — the backup exists only on the server it describes")
+		} else {
+			alerthist.RecordEvent("💾 Weekly auto-backup saved and copied off the machine: " +
+				filepath.Base(path))
+			return
+		}
+	}
 	alerthist.RecordEvent("💾 Weekly auto-backup saved: " + filepath.Base(path))
 }

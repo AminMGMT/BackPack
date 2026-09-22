@@ -49,6 +49,21 @@ type Config struct {
 	HTTPS     bool   `json:"https,omitempty"`
 	TLSDomain string `json:"tls_domain,omitempty"`
 	TLSEmail  string `json:"tls_email,omitempty"`
+	// TOTPSecret is the shared secret of the panel's second factor, base32 as
+	// an authenticator app writes it. Empty means no second factor, which is
+	// the default and what every panel has until somebody enrols one.
+	//
+	// It is kept in the same file as the password because it protects the same
+	// thing and travels in the same backup; neither is a secret the file can
+	// keep from anybody who can read it, which is why that file is 0600 and why
+	// a backup of it is treated as a credential. See totp.go.
+	TOTPSecret string `json:"totp_secret,omitempty"`
+
+	// RecoveryHashes are the SHA-256 hashes of the single-use codes issued with
+	// the secret. Hashed because the codes are the way back in when the phone
+	// is gone, and a file that lists them is a file that is the second factor.
+	RecoveryHashes []string `json:"recovery_hashes,omitempty"`
+
 	// TLSSelfHost is an optional domain or IP to add to the self-signed
 	// certificate's SANs, for reaching the panel by a name that has no public
 	// DNS for Let's Encrypt (an internal domain, a host that is only in the
@@ -56,6 +71,32 @@ type Config struct {
 	// work — every local IP and loopback are always included — it only adds one
 	// the machine cannot discover on its own. Empty is the common case.
 	TLSSelfHost string `json:"tls_self_host,omitempty"`
+}
+
+// Equal reports whether two configurations say the same thing.
+//
+// It exists because Config grew a slice — the recovery-code hashes — and a
+// struct holding one cannot be compared with ==. The compiler catches that,
+// which is the good case; what it would not catch is somebody later adding a
+// field and forgetting it here, so this compares every field explicitly and the
+// test beside it fails when the count changes.
+func (c Config) Equal(other Config) bool {
+	if len(c.RecoveryHashes) != len(other.RecoveryHashes) {
+		return false
+	}
+	for i := range c.RecoveryHashes {
+		if c.RecoveryHashes[i] != other.RecoveryHashes[i] {
+			return false
+		}
+	}
+	return c.Password == other.Password &&
+		c.Port == other.Port &&
+		c.BasePath == other.BasePath &&
+		c.HTTPS == other.HTTPS &&
+		c.TLSDomain == other.TLSDomain &&
+		c.TLSEmail == other.TLSEmail &&
+		c.TLSSelfHost == other.TLSSelfHost &&
+		c.TOTPSecret == other.TOTPSecret
 }
 
 // Scheme is the URL scheme the panel answers on.
@@ -66,10 +107,29 @@ func (c Config) Scheme() string {
 	return "http"
 }
 
+// configOverride redirects the panel's configuration file.
+//
+// It exists for one reason and it is a good one: the login flow is the most
+// security-relevant code in this package and it was untestable, because Load
+// and Save name a path under /etc that a test process cannot write. Every
+// assertion about what a wrong password does, or what a second factor demands,
+// needed a config file the test could control.
+//
+// It is unexported and set only by useConfigFile, which lives in the test file.
+// Nothing in a running panel can move it.
+var configOverride string
+
+func configPath() string {
+	if configOverride != "" {
+		return configOverride
+	}
+	return app.WebUIConfig
+}
+
 // Load reads the saved config, filling defaults for missing fields.
 func Load() Config {
 	var c Config
-	if data, err := os.ReadFile(app.WebUIConfig); err == nil {
+	if data, err := os.ReadFile(configPath()); err == nil {
 		json.Unmarshal(data, &c)
 	}
 	if c.Port == 0 {
@@ -83,7 +143,7 @@ func Save(c Config) error {
 	data, _ := json.MarshalIndent(c, "", "  ")
 	// Atomic: the panel reads this on every login and the CLI shows the password
 	// from it, so a truncated read would look like a wrong password.
-	return app.WriteFileAtomic(app.WebUIConfig, data, 0600)
+	return app.WriteFileAtomic(configPath(), data, 0600)
 }
 
 // EnsurePassword returns the config, generating and saving an 8-digit password

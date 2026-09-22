@@ -83,3 +83,7 @@ automatically, and can reach it through a CDN edge instead of the origin:
 
 ---
 [← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

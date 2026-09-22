@@ -114,3 +114,7 @@ amd64 و `aarch64` یعنی arm64. بهترین راه این است که `insta
 
 ---
 [← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

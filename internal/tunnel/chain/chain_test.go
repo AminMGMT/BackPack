@@ -54,6 +54,34 @@ func TestNewDropsBlanksAndDuplicates(t *testing.T) {
 	}
 }
 
+// Single decides whether the rotation machinery runs at all, so getting it
+// wrong in the permissive direction silently disables fallback on every tunnel
+// configured for it — the chain would be built, reported, and never used.
+// Mutation testing found this: the suite covered Single indirectly and would
+// not have noticed the comparison inverted.
+func TestSingleOnlyWhenThereIsNothingToFallBackTo(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		primary    string
+		fallbacks  []string
+		wantSingle bool
+	}{
+		{"nothing configured", "", nil, true},
+		{"one candidate", "tcp", nil, true},
+		{"a duplicate is not a fallback", "tcp", []string{"tcp", ""}, true},
+		{"two candidates", "tcp", []string{"quic"}, false},
+		{"three candidates", "tcp", []string{"quic", "ws"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(tc.primary, tc.fallbacks, time.Second)
+			if got := c.Single(); got != tc.wantSingle {
+				t.Fatalf("Single() = %v with candidates %v, want %v",
+					got, c.Candidates(), tc.wantSingle)
+			}
+		})
+	}
+}
+
 // A chain with nothing to fall back to must behave exactly like the code it
 // replaces: start the one transport and wait. This is the default
 // configuration, so it is the case that must not regress.
@@ -230,6 +258,36 @@ func TestClientSweepsTheWholeListInsideOneServerDwell(t *testing.T) {
 	if sweep := client * time.Duration(len(c.Candidates())); sweep > server {
 		t.Fatalf("a client sweep takes %v but the server only holds for %v: "+
 			"the two ends can miss each other for ever", sweep, server)
+	}
+}
+
+// The rendezvous test above asserts a bound, which is the right shape for the
+// property but leaves the arithmetic untested: mutation testing showed that
+// "two candidates" could be treated as "one" — no division, so a client holds a
+// blocked carrier for the server's whole dwell — without a single test
+// noticing. These are the exact figures.
+func TestTheAttemptWindowIsTheDwellDividedByTheCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		primary    string
+		fallbacks  []string
+		dwell      time.Duration
+		sweep      bool
+		wantWindow time.Duration
+	}{
+		{"a server holds a candidate for the whole dwell", "a", []string{"b", "c"}, 60 * time.Second, false, 60 * time.Second},
+		{"one candidate is never divided", "a", nil, 60 * time.Second, true, 60 * time.Second},
+		{"two candidates halve it", "a", []string{"b"}, 60 * time.Second, true, 30 * time.Second},
+		{"three candidates take a third each", "a", []string{"b", "c"}, 60 * time.Second, true, 20 * time.Second},
+		{"the floor wins when the share is smaller", "a", []string{"b", "c", "d", "e", "f"}, 6 * time.Second, true, 5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(tc.primary, tc.fallbacks, tc.dwell)
+			if got := c.attemptWindow(tc.sweep); got != tc.wantWindow {
+				t.Fatalf("attemptWindow(%v) = %v with %d candidates and a %v dwell, want %v",
+					tc.sweep, got, len(c.Candidates()), tc.dwell, tc.wantWindow)
+			}
+		})
 	}
 }
 

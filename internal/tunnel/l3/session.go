@@ -373,7 +373,7 @@ func respondV(token string, id uint32, peerVersion int, msg []byte, encap string
 	// above — so it is not a stranger to be met with silence; it is the other
 	// half of a misconfigured tunnel, and it can only say so in its own log if
 	// it is told what this end uses.
-	reply, cs0, cs1, err := state.WriteMessage(nil, []byte(replyPayload(encap, peerVersion, versionCurrent)))
+	reply, cs0, cs1, err := state.WriteMessage(nil, []byte(replyPayload(encap, versionCurrent, peerVersion)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("l3: writing the handshake reply: %w", err)
 	}

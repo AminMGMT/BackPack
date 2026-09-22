@@ -25,6 +25,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The panel's own tests are plain `node --test` with no dependencies, and
+      # `go test ./internal/webui` runs them. That test skips when node is
+      # missing rather than failing — a Go toolchain is the only thing this
+      # repository requires — so node is pinned here to make sure the skip
+      # never happens in CI.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Verify formatting
         run: |
           unformatted="$(gofmt -l . || true)"
@@ -46,6 +55,135 @@ jobs:
         # Enforced. The transports are heavily concurrent and a data race there
         # corrupts traffic rather than crashing loudly, so this must stay clean.
         run: go test ./... -race -timeout 20m
+
+      - name: Coverage
+        # Measured with -coverpkg, which is the only way this number means
+        # anything here.
+        #
+        # Without it `go test` credits a package only for the lines its *own*
+        # tests reach. The two transport packages are driven almost entirely by
+        # the end-to-end suite in internal/e2e — ten transports, establish,
+        # restart, loss, soak — and none of that counted. They reported 13% and
+        # 18% while actually being covered at 68%, and a number that wrong is
+        # worse than no number: it argues for writing tests where they are not
+        # needed and hides the places they are.
+        #
+        # The floor only ever goes up. If this fails, look at what stopped being
+        # exercised before lowering it.
+        run: |
+          go test ./... -coverpkg=./... -coverprofile=coverage.out -timeout 20m
+          total="$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9.]+')"
+          echo "total coverage: ${total}%"
+          floor=45
+          awk -v t="$total" -v f="$floor" 'BEGIN {
+            if (t+0 < f+0) {
+              printf "coverage %.1f%% is below the floor of %d%%\n", t, f
+              exit 1
+            }
+          }'
+
+      - name: Per-package coverage floors
+        # A whole-project number hides a package falling off a cliff while
+        # another one rises. These are the packages where a drop means something
+        # specific, each with the reason it is on the list.
+        #
+        # Floors sit just under what each package measures today, so they are a
+        # ratchet rather than a target. If one fails, find out what stopped
+        # being exercised before lowering it — that is the entire point of the
+        # mechanism, and lowering it silently is how a coverage gate becomes
+        # decoration.
+        run: |
+          set -eu
+          check() {
+            pkg="$1"; floor="$2"; why="$3"
+            got="$(go tool cover -func=coverage.out \
+                    | grep "^github.com/backpack/backpack/$pkg/" \
+                    | awk '{gsub(/%/,"",$3); s+=$3; n++} END {if (n) printf "%.1f", s/n; else print "0"}')"
+            echo "  $pkg: ${got}% (floor ${floor}%) — $why"
+            awk -v g="$got" -v f="$floor" -v p="$pkg" 'BEGIN {
+              if (g+0 < f+0) { printf "%s fell below its floor\n", p; exit 1 }
+            }'
+          }
+          check internal/tunnel/l3      60 "the layer-3 data path"
+          check internal/tunnel/chain   80 "transport fallback: a wrong decision here takes a tunnel down"
+          check internal/control        50 "the fleet and the job runner"
+          check internal/cli            60 "the scriptable surface; scripts depend on its exit codes"
+          check internal/node           40 "the fleet RPC and the staged rollout"
+          check internal/metrics        60 "what every other component reads to decide anything"
+          check internal/menu           25 "the screens an operator actually meets this product through"
+
+  audit:
+    name: Vulnerabilities and static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Known vulnerabilities
+        # govulncheck reports only what this code actually *reaches*, which is
+        # what makes it worth failing on: a CVE in a dependency nothing calls is
+        # noise, and one on a path the panel serves HTTP over is not.
+        #
+        # It is the reason the toolchain moved from 1.26.0 to 1.26.6. That scan
+        # found 24 reachable vulnerabilities in the standard library — net/http,
+        # crypto/tls, crypto/x509, html/template, net/url — every one of them in
+        # code this product runs, and every one already fixed upstream. Nothing
+        # else in the repository was going to notice.
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Static analysis
+        # go vet catches a narrow, high-confidence set. staticcheck catches the
+        # next band out: values written and never read, an error checked against
+        # the wrong thing, a loop that cannot run, a comparison that is always
+        # true. None of those fail a build and all of them have been real bugs
+        # in code that compiled.
+        run: |
+          go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+
+  fuzz:
+    name: Fuzz the parsers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Fuzz
+        # Short runs, every push.
+        #
+        # This is not here to find deep bugs — an hour per target would, and
+        # that belongs in a nightly. It is here so the targets keep compiling
+        # and keep passing their seeds, because a fuzz target that has quietly
+        # stopped building is worth exactly nothing and nothing else notices.
+        #
+        # These parsers read what the network puts in front of the machine: a
+        # packet socket sees every frame on the interface, and the setup link is
+        # pasted in by a person from wherever it arrived. Both of the bugs found
+        # when these were written were found in the first minute.
+        run: |
+          set -eux
+          go test ./internal/tunnel/l3/        -run=X -fuzz=FuzzParseHeader        -fuzztime=30s
+          go test ./internal/tunnel/l3/        -run=X -fuzz=FuzzParseReplyPayload  -fuzztime=30s
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzParsePckFrame      -fuzztime=30s
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzDecodeXdiPayload   -fuzztime=30s
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzParseTCPFlags      -fuzztime=20s
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzParseSpoofProfile  -fuzztime=20s
+          go test ./internal/manage/           -run=X -fuzz=FuzzDecodeShareLink    -fuzztime=30s
+          go test ./internal/manage/           -run=X -fuzz=FuzzShareLinkRoundTrip -fuzztime=30s
+
+      - name: Report a crasher
+        if: failure()
+        # A failing input is written into testdata/fuzz and is the most valuable
+        # artifact this job can produce: it is a regression seed that will be
+        # checked on every run once it is committed.
+        run: |
+          echo "A fuzz target failed. The input that did it:"
+          find . -path '*/testdata/fuzz/*' -type f -print -exec cat {} \;
 
   soak:
     name: Sustained run

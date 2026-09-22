@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,7 +70,12 @@ func RunWatchdog(ctx context.Context) {
 	seenHealthy := map[string]bool{} // only "was up, then dropped" counts as a drop
 	// Health by what the tunnel is carrying, alongside health by whether it is
 	// connected. See throughputhealth.go for why silence is not the test.
+	//
+	// Loaded from disk, because a watchdog restart used to reset every ladder
+	// mid-climb — including a tunnel it had deliberately given up on, which
+	// turned that decision back into a restart loop.
 	flow := newFlowWatch()
+	flow.load()
 
 	ticker := time.NewTicker(wdInterval)
 	defer ticker.Stop()
@@ -107,6 +113,9 @@ func RunWatchdog(ctx context.Context) {
 					lastRestart[t.Name] = now
 					restarts[t.Name] = recentRestarts(restarts[t.Name], now)
 					reportRestart(t.Name, restarts[t.Name], lastFlapReport, now)
+					// And whether this is one tunnel or the machine. Checked
+					// after recording, so the restart that just happened counts.
+					reportFleetFlap(restarts, lastFlapReport, now)
 					fails[t.Name] = 0
 					// And whether it worked. Saying only that a restart
 					// happened leaves the operator with the half of the story
@@ -116,6 +125,10 @@ func RunWatchdog(ctx context.Context) {
 					go reportRecovery(t)
 				}
 			}
+			// One write per pass rather than per decision: the file is small,
+			// the pass is every 25 seconds, and a crash costs at most one
+			// interval of memory.
+			flow.save()
 		}
 	}
 }
@@ -403,4 +416,78 @@ func checkThroughput(t Tunnel, flow *flowWatch, lastRestart map[string]time.Time
 		return true
 	}
 	return false
+}
+
+// Noticing that it is not one tunnel.
+//
+// flapThreshold is per tunnel, and that is the right unit for the message it
+// produces — "try an MSS clamp on this one" is advice about a path. It is the
+// wrong unit for the question an operator actually needs answered when several
+// tunnels start flapping at once, which is *whether it is the tunnels at all*.
+//
+// Five tunnels each restarting twice is not five coincidences. It is almost
+// always the machine: the clock stepped, the network went away and came back,
+// an upgrade left half the fleet on one version, a sysctl was rewritten. None
+// of those are fixed by looking at a tunnel, and none of them are visible in
+// five separate reports that each say "this one is flapping".
+const (
+	// fleetFlapTunnels is how many tunnels have to be restarting inside the
+	// window before this is reported as one condition. Two is a coincidence;
+	// three on one machine is a pattern.
+	fleetFlapTunnels = 3
+
+	// fleetFlapEach is how many restarts each of them needs. Deliberately lower
+	// than flapThreshold: the point is to notice the pattern *before* any
+	// single tunnel has crossed its own bar, because by then the operator has
+	// already been sent to look at a path.
+	fleetFlapEach = 2
+)
+
+// reportFleetFlap says so when several tunnels are restarting at once.
+//
+// restarts is the same map the per-tunnel reporting reads, so the two cannot
+// disagree about what happened. It reports at most once a window, like the
+// per-tunnel one, for the same reason: the condition persists and repeating it
+// buries everything else.
+func reportFleetFlap(restarts map[string][]time.Time, lastReport map[string]time.Time, now time.Time) {
+	const key = "" // the fleet itself, which no tunnel can be called
+
+	var affected []string
+	for name, at := range restarts {
+		if countWithinWindow(at, now) >= fleetFlapEach {
+			affected = append(affected, name)
+		}
+	}
+	if len(affected) < fleetFlapTunnels {
+		return
+	}
+	if last, ok := lastReport[key]; ok && now.Sub(last) < flapWindow {
+		return
+	}
+	lastReport[key] = now
+
+	sort.Strings(affected)
+	alerthist.RecordEvent(fmt.Sprintf(
+		"⚠️ %d tunnels on this server are restarting at once (%s). Several tunnels "+
+			"failing together is usually the machine rather than any of them: the clock "+
+			"stepped, the network dropped and came back, an update left the two ends on "+
+			"different versions, or the socket tuning was rewritten. Check the server "+
+			"before looking at any one tunnel.",
+		len(affected), strings.Join(affected, ", ")))
+}
+
+// countWithinWindow counts restarts still inside the flap window.
+//
+// Separate from recentRestarts, which *records* one: that helper appends now to
+// what it returns, because every caller of it has just restarted something.
+// Counting with it would report one restart more than happened, which for a
+// threshold of two means reporting a tunnel that has restarted once.
+func countWithinWindow(at []time.Time, now time.Time) int {
+	n := 0
+	for _, t := range at {
+		if now.Sub(t) < flapWindow {
+			n++
+		}
+	}
+	return n
 }

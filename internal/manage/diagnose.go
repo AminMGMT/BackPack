@@ -198,8 +198,23 @@ func monitorChecks() []Check {
 			Fix:    "restart the CLI (sudo backpack); it installs the service on launch"})
 	}
 	if MonitorRunning() {
-		return append(out, Check{Group: g, Name: "Service", Level: CheckOK,
+		out = append(out, Check{Group: g, Name: "Service", Level: CheckOK,
 			Detail: "running — watchdog and alerts active"})
+		// Running is systemd's answer. Whether it is *doing* anything is a
+		// different question, and it is the one that matters: a monitor wedged
+		// on a job that never returns is a process systemd is perfectly happy
+		// with and a fleet with nothing watching it. See manage/heartbeat.go.
+		if silent, since := MonitorSilent(); silent {
+			out = append(out, Check{Group: g, Name: "Watchdog", Level: CheckFail,
+				Detail: fmt.Sprintf("the service is up but has not run a pass for %s — "+
+					"nothing is watching the tunnels", since.Round(time.Second)),
+				Fix: "systemctl restart " + app.MonitorService +
+					" (logs: journalctl -u " + app.MonitorService + " -n 50)"})
+		} else if at, ok := MonitorHeartbeat(); ok {
+			out = append(out, Check{Group: g, Name: "Watchdog", Level: CheckOK,
+				Detail: "last pass " + time.Since(at).Round(time.Second).String() + " ago"})
+		}
+		return out
 	}
 	return append(out, Check{Group: g, Name: "Service", Level: CheckFail,
 		Detail: "installed but not running — dropped tunnels will NOT be restarted",

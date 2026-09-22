@@ -228,3 +228,7 @@ UDP را می‌بندد ولی ICMP را نه) و *IP Spoofing* که مبدأ �
 
 ---
 [← Back to the docs index](README.md) · [Setup walkthroughs →](../tutorial/README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

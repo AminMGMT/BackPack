@@ -168,3 +168,83 @@ func eventually(limit time.Duration, cond func() bool) bool {
 	}
 	return cond()
 }
+
+// Start has to mean stopped.
+//
+// It returned when the transport's supervisor stopped, not when the goroutines
+// it launched had — so for a window afterwards the old run still held its
+// ports. Production papers over it: Restart sleeps two seconds for exactly
+// this, and the comment there says so.
+//
+// It is not cosmetic. A reload builds the next generation as soon as the
+// previous Start returns, so the two fight for the same ports and the sleep is
+// only *likely* to win. It also made a CI test flake, which is how it was
+// found.
+func TestStartDoesNotReturnUntilThePortsAreFree(t *testing.T) {
+	for _, tr := range []config.TransportType{
+		config.TCP, config.TCPMUX, config.WS, config.WSMUX,
+		config.KCP, config.QUIC, config.UDP,
+	} {
+		t.Run(string(tr), func(t *testing.T) {
+			cfg := baseConfig(t, tr)
+			s := testServer(cfg)
+
+			done := make(chan struct{})
+			go func() { defer close(done); s.Start() }()
+
+			// Wait until it is actually listening, rather than assuming.
+			if !eventually(5*time.Second, func() bool { return bound(cfg.BindAddr, tr) }) {
+				t.Fatalf("%s never bound %s", tr, cfg.BindAddr)
+			}
+
+			s.Stop()
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatalf("%s: Start did not return", tr)
+			}
+
+			// The moment Start returns, the port must be takeable. No polling,
+			// no grace: that is the whole claim.
+			if bound(cfg.BindAddr, tr) {
+				t.Fatalf("%s: Start returned while %s was still held — a reload "+
+					"starting the next generation here fights this one for its own "+
+					"ports", tr, cfg.BindAddr)
+			}
+		})
+	}
+}
+
+// bound reports whether something is holding addr, on whichever protocol this
+// transport listens with.
+//
+// udp is in both lists on purpose and it is not a mistake in the table: its
+// *data* is UDP and its *control channel* is TCP, so it holds both and either
+// one still being held is a port the next generation cannot take.
+func bound(addr string, tr config.TransportType) bool {
+	switch tr {
+	case config.KCP, config.QUIC:
+		return udpBound(addr)
+	case config.UDP:
+		return udpBound(addr) || tcpBound(addr)
+	}
+	return tcpBound(addr)
+}
+
+func tcpBound(addr string) bool {
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return true
+	}
+	l.Close()
+	return false
+}
+
+func udpBound(addr string) bool {
+	c, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return true
+	}
+	c.Close()
+	return false
+}

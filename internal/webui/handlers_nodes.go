@@ -129,11 +129,6 @@ func (s *server) writeNodeStateCached(w http.ResponseWriter) {
 	writeJSON(w, map[string]any{"nodes": rows})
 }
 
-// writeNodeWarning is the fleet state with one thing to say about it.
-func (s *server) writeNodeWarning(w http.ResponseWriter, warning string) {
-	s.writeNodeStateWith(w, map[string]any{"warning": warning})
-}
-
 // writeNodeMessage is the fleet state plus something to read — a rollout plan
 // or what a rollout did. Distinct from a warning: a plan is not a problem.
 func (s *server) writeNodeMessage(w http.ResponseWriter, message string) {
@@ -394,6 +389,7 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 					},
 				}
 				res := roll.Run(ctx, plan)
+				noteJob(nil)
 				return describeRollout(res), nil
 			})
 		var busy control.ErrBusy
@@ -419,7 +415,7 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 			"step":    job.Step,
 			"state":   string(job.State),
 		}
-		if text, isText := job.Result.(string); isText {
+		if text, isText := control.ResultOf[string](job); isText {
 			out["message"] = text
 		}
 		if job.Err != "" {

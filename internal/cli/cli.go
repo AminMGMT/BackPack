@@ -30,8 +30,11 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/tunhist"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
@@ -68,7 +71,7 @@ const (
 const usage = `backpack — non-interactive commands
 
   backpack tunnel list [--json]         every tunnel and its state
-  backpack tunnel status <name> [--json]  one tunnel
+  backpack tunnel status <name> [--json]  one tunnel: state, peer, and what it has carried
   backpack check -c <file>              validate a config without starting it
   backpack version [--json]
 
@@ -132,14 +135,113 @@ type tunnelView struct {
 	Ports     []string `json:"ports,omitempty"`
 	State     string   `json:"state"`
 	Detail    string   `json:"detail,omitempty"`
+
+	// Traffic is what the tunnel has actually carried, when the engine has
+	// written a snapshot recently enough to mean anything.
+	//
+	// It was not here, and writing the troubleshooting runbook is what made
+	// that obvious: the first question about a tunnel that looks healthy is
+	// whether it is *moving* anything, and the second is which direction has
+	// stopped. Neither could be answered from a terminal. "state: online" is
+	// exactly the answer that is wrong in the failure this product cares about
+	// most — a tunnel that holds its control channel and carries nothing.
+	Traffic *trafficView `json:"traffic,omitempty"`
+
+	// LocalService is the last hop, when the client has found it failing. The
+	// tunnel can be perfectly healthy and every connection die one step past
+	// the end of it, and this is the only place that says so.
+	LocalService string `json:"local_service,omitempty"`
+
+	// Uptime over the last week, when there is enough history to say. Absent
+	// rather than zero for a tunnel nothing has sampled yet: not measured is
+	// not the same as down, and a young tunnel reported at 3% is a number
+	// somebody will act on.
+	Uptime *uptimeView `json:"uptime,omitempty"`
+}
+
+// uptimeView carries the percentage with the number of checks behind it.
+//
+// Both, always. A percentage without its sample size is how "100% uptime" comes
+// to mean "we have looked once" — and this is the figure an operator repeats to
+// whoever is paying them.
+type uptimeView struct {
+	Percent float64 `json:"percent"`
+	Checks  int     `json:"checks"`
+	Window  string  `json:"window"`
+}
+
+// trafficView is the tunnel's counters, plus the derived answer the counters
+// are read for.
+type trafficView struct {
+	BytesIn  uint64 `json:"bytes_in"`
+	BytesOut uint64 `json:"bytes_out"`
+	// Peer is the far end, when the transport knows it.
+	Peer string `json:"peer,omitempty"`
+	// Age is how long ago the engine wrote these, in seconds. A reading nobody
+	// can date is a reading nobody can use.
+	Age int64 `json:"age_seconds"`
 }
 
 func viewOf(t manage.Tunnel, h manage.Health) tunnelView {
-	return tunnelView{
+	v := tunnelView{
 		Name: t.Name, Role: t.Role, Transport: t.Transport, Addr: t.Addr,
 		Ports: manage.VisiblePorts(t.Ports, manage.TunnelToken(t.Name)),
 		State: h.State, Detail: h.Detail,
 	}
+	attachTraffic(&v, t.Name)
+	attachUptime(&v, t.Name)
+	return v
+}
+
+// trafficWindow is how old a snapshot may be and still be reported.
+//
+// Longer than the engine's write interval by enough to survive a slow machine,
+// short enough that a stopped tunnel's last reading is not presented as
+// current. An older one is left out entirely rather than shown with a caveat:
+// a figure on the screen is read as now.
+const trafficWindow = 2 * time.Minute
+
+// stateDir is where the engines leave their snapshots. A variable rather than
+// app.ConfigDir directly so a test can point it at a temp directory — the
+// alternative is a status command that can only be tested on a machine that is
+// actually running tunnels.
+var stateDir = app.ConfigDir
+
+func attachTraffic(v *tunnelView, name string) {
+	snap, err := metrics.Read(stateDir, name)
+	if err != nil {
+		return
+	}
+	age := time.Since(snap.Taken)
+	if age > trafficWindow || age < 0 {
+		return
+	}
+	v.Traffic = &trafficView{
+		BytesIn: snap.BytesIn, BytesOut: snap.BytesOut,
+		Peer: snap.Peer, Age: int64(age.Seconds()),
+	}
+	// The last hop, named the way an operator can act on it: which address,
+	// what shape of failure, and how many connections have died that way. A
+	// refusal is a service that is not running; a timeout is usually a firewall
+	// on the same machine, and the two have different fixes.
+	if ls := snap.LocalService; ls != nil && ls.Why != "" {
+		v.LocalService = fmt.Sprintf("%s %s (%d failed)", ls.Addr, ls.Why, ls.Failures)
+	}
+}
+
+// uptimeWindow is what `tunnel status` reports over.
+//
+// A week rather than a month: it is long enough to cover a bad night and short
+// enough that a tunnel fixed on Monday does not read as broken all week. The
+// JSON says which window it is, so a script is never guessing.
+const uptimeWindow = 7 * 24 * time.Hour
+
+func attachUptime(v *tunnelView, name string) {
+	pct, checks, ok := tunhist.UptimeOf(name, uptimeWindow)
+	if !ok {
+		return
+	}
+	v.Uptime = &uptimeView{Percent: pct, Checks: checks, Window: "7d"}
 }
 
 func tunnelList(asJSON bool) Result {
@@ -184,6 +286,22 @@ func tunnelStatus(name string, asJSON bool) Result {
 		}
 		if len(v.Ports) > 0 {
 			fmt.Fprintf(&b, "ports     %s\n", strings.Join(v.Ports, ", "))
+		}
+		if t := v.Traffic; t != nil {
+			if t.Peer != "" {
+				fmt.Fprintf(&b, "peer      %s\n", t.Peer)
+			}
+			fmt.Fprintf(&b, "carried   %s in, %s out (%ds ago)\n",
+				humanBytes(t.BytesIn), humanBytes(t.BytesOut), t.Age)
+		}
+		if v.LocalService != "" {
+			fmt.Fprintf(&b, "last hop  %s\n", v.LocalService)
+		}
+		if u := v.Uptime; u != nil {
+			// The sample count is printed, not just the percentage. "100%
+			// over 12 checks" and "100% over 2,016" are different claims.
+			fmt.Fprintf(&b, "uptime    %.2f%% over %s (%d checks)\n",
+				u.Percent, u.Window, u.Checks)
 		}
 		r = ok(b.String())
 	}
@@ -302,4 +420,22 @@ func IsCommand(s string) bool {
 		return true
 	}
 	return false
+}
+
+// humanBytes renders a counter the way somebody reading a terminal wants it.
+//
+// Exact bytes are the right thing in JSON, where something is going to do
+// arithmetic on them, and the wrong thing on a screen, where the question is
+// "is this number big" and 1503238553 does not answer it.
+func humanBytes(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for v := n / unit; v >= unit && exp < 4; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTP"[exp])
 }

@@ -55,18 +55,31 @@ const (
 // protocol carried inside UDP datagrams. Every field is filled from the chosen
 // performance preset, so a config never has to be edited by hand.
 type KCPConfig struct {
-	MTU          int  `toml:"kcp_mtu"`
-	Interval     int  `toml:"kcp_interval"`
-	Resend       int  `toml:"kcp_resend"`
-	NoDelay      int  `toml:"kcp_nodelay"`
-	NoCongestion int  `toml:"kcp_nocongestion"`
-	SndWnd       int  `toml:"kcp_sndwnd"`
-	RcvWnd       int  `toml:"kcp_rcvwnd"`
-	AckNoDelay   bool `toml:"kcp_acknodelay"`
+	// MTU is the largest KCP packet, in bytes. Below the path MTU minus the
+	// carrier's overhead, or every packet fragments.
+	MTU int `toml:"kcp_mtu"`
+	// Interval is the ARQ tick in milliseconds. Lower reacts to loss faster and
+	// costs processor time.
+	Interval int `toml:"kcp_interval"`
+	// Resend is how many duplicate acknowledgements trigger a fast retransmit.
+	Resend int `toml:"kcp_resend"`
+	// NoDelay set to 1 enables KCP's low-latency ARQ mode.
+	NoDelay int `toml:"kcp_nodelay"`
+	// NoCongestion set to 1 disables KCP's own congestion window. Faster on a
+	// link you control, unfair on one you share.
+	NoCongestion int `toml:"kcp_nocongestion"`
+	// SndWnd is the send window in packets.
+	SndWnd int `toml:"kcp_sndwnd"`
+	// RcvWnd is the receive window in packets.
+	RcvWnd int `toml:"kcp_rcvwnd"`
+	// AckNoDelay acknowledges immediately rather than batching.
+	AckNoDelay bool `toml:"kcp_acknodelay"`
 	// DataShards/ParityShards enable forward error correction: for every
 	// DataShards packets, ParityShards extra packets are sent so that many
 	// losses are repaired instantly instead of waiting for a retransmit.
-	DataShards   int `toml:"kcp_datashards"`
+	DataShards int `toml:"kcp_datashards"`
+	// ParityShards is how many parity packets accompany each group of
+	// kcp_datashards. 0 turns error correction off.
 	ParityShards int `toml:"kcp_parityshards"`
 }
 
@@ -147,7 +160,9 @@ type SpoofConfig struct {
 	// UDP survives server→client. Uplink is client→server, downlink is
 	// server→client; both ends must set the same pair. Empty falls back to
 	// SpoofProfile, which is the symmetric case.
-	SpoofUplink   string `toml:"spoof_uplink"`
+	SpoofUplink string `toml:"spoof_uplink"`
+	// SpoofDownlink is the same for the listening side. For a symmetric tunnel
+	// the two are equal.
 	SpoofDownlink string `toml:"spoof_downlink"`
 	// SpoofSrcIP is the forged source address stamped on every outgoing packet.
 	// Empty leaves the host's real source in place, which spoofs nothing.
@@ -163,10 +178,6 @@ type SpoofConfig struct {
 	// themselves and must be told the client's real address. On the client it is
 	// optional and defaults to the host of RemoteAddr.
 	SpoofPeerIP string `toml:"spoof_peer_ip"`
-	// SpoofDstIP is a forged destination written only into the cosmetic L4 shim
-	// of the profiles that carry one; the packet is still routed to the real
-	// peer. Empty mirrors SpoofSrcIP. Ignored by the udp profile.
-	SpoofDstIP string `toml:"spoof_dst_ip"`
 	// SpoofInterface pins the raw socket to a named egress device (e.g. "eth0"),
 	// for a multi-homed host where the forged source would otherwise pick the
 	// wrong link. Empty lets the kernel route by the real destination.
@@ -222,13 +233,18 @@ type SpoofConfig struct {
 	// [SpoofPortMin,SpoofPortMax], so the flow does not sit on one source port.
 	// The destination port stays fixed, so the receiver's demux is unaffected.
 	SpoofShufflePort bool `toml:"spoof_shuffle_port"`
-	SpoofPortMin     int  `toml:"spoof_port_min"`
-	SpoofPortMax     int  `toml:"spoof_port_max"`
+	// SpoofPortMin and SpoofPortMax bound the port range the shim's cosmetic
+	// port is drawn from when shuffling is on. 0 uses the default range.
+	SpoofPortMin int `toml:"spoof_port_min"`
+	// SpoofPortMax is the upper bound; see SpoofPortMin.
+	SpoofPortMax int `toml:"spoof_port_max"`
 	// SpoofPadding appends 1..SpoofPaddingMax random bytes to every payload
 	// (self-describing, so the receiver strips them), defeating size fingerprints.
 	// Both ends must set it the same.
-	SpoofPadding    bool `toml:"spoof_padding"`
-	SpoofPaddingMax int  `toml:"spoof_padding_max"`
+	SpoofPadding bool `toml:"spoof_padding"`
+	// SpoofPaddingMax is the most random bytes appended to a datagram when
+	// padding is on. 0 uses the default.
+	SpoofPaddingMax int `toml:"spoof_padding_max"`
 	// SpoofFakeTLS prepends a fake TLS 1.2 record header to each TCP segment, so a
 	// middlebox reads it as TLS. TCP profile only; both ends must agree.
 	SpoofFakeTLS bool `toml:"spoof_fake_tls"`
@@ -259,7 +275,12 @@ type PckConfig struct {
 
 // ServerConfig represents the configuration for the server.
 type ServerConfig struct {
-	BindAddr  string        `toml:"bind_addr"`
+	// BindAddr is the address and port this server listens on for the
+	// control channel — "0.0.0.0:443" for every interface, or one address to pin
+	// it to a single local IP. The client's remote_addr must name the same port.
+	BindAddr string `toml:"bind_addr"`
+	// Transport is the carrier this tunnel uses. Both ends must name the same
+	// one; see docs/transports.md for what each is for.
 	Transport TransportType `toml:"transport"`
 	// FallbackTransports are additional carriers this tunnel may fall back to
 	// when the configured one stops getting through. Both ends carry the same
@@ -269,22 +290,55 @@ type ServerConfig struct {
 	FallbackTransports []TransportType `toml:"fallback_transports"`
 	// FallbackDwell is how many seconds the server holds one candidate before
 	// trying the next. 0 uses DefaultFallbackDwell.
-	FallbackDwell    int      `toml:"fallback_dwell"`
-	Token            string   `toml:"token"`
-	Nodelay          bool     `toml:"nodelay"`
-	Keepalive        int      `toml:"keepalive_period"`
-	ChannelSize      int      `toml:"channel_size"`
-	LogLevel         string   `toml:"log_level"`
-	LogFormat        string   `toml:"log_format"` // "" (text) or "json"
-	Ports            []string `toml:"ports"`
-	PPROF            bool     `toml:"pprof"`
-	MuxSession       int      `toml:"mux_session"`
-	MuxVersion       int      `toml:"mux_version"`
-	MaxFrameSize     int      `toml:"mux_framesize"`
-	MaxReceiveBuffer int      `toml:"mux_recievebuffer"`
-	MaxStreamBuffer  int      `toml:"mux_streambuffer"`
-	Sniffer          bool     `toml:"sniffer"`
-	WebPort          int      `toml:"web_port"`
+	FallbackDwell int `toml:"fallback_dwell"`
+	// Token is the shared secret. Both ends must hold exactly the same one, and
+	// a mismatch is refused without saying so — a peer without the token learns
+	// nothing, not even that something is listening.
+	Token string `toml:"token"`
+	// Nodelay disables Nagle's algorithm on the tunnel's sockets. On by default:
+	// it trades a little bandwidth for latency, which is what an interactive
+	// session wants and what a bulk transfer does not notice.
+	Nodelay bool `toml:"nodelay"`
+	// Keepalive is how often, in seconds, an idle connection is probed. It also
+	// decides how long a dead peer takes to notice — too low tears down a tunnel
+	// that is merely slow, which on a bad path is the difference between a
+	// working tunnel and one that flaps.
+	Keepalive int `toml:"keepalive_period"`
+	// ChannelSize is how many connections may queue between the accept loop and
+	// the handlers before new ones are dropped. A larger queue absorbs a burst;
+	// it does not make the tunnel faster.
+	ChannelSize int `toml:"channel_size"`
+	// LogLevel is one of trace, debug, info, warn, error or fatal. info is the
+	// default; trace on a busy tunnel writes a line per connection.
+	LogLevel string `toml:"log_level"`
+	// LogFormat is "" for human-readable output or "json" for machine parsing.
+	LogFormat string `toml:"log_format"` // "" (text) or "json"
+	// Ports are the forwarded ports this server exposes, as "443",
+	// "8080=127.0.0.1:80", "443-450" or "10.0.0.5:443". See docs/port-mappings.md
+	// for every form.
+	Ports []string `toml:"ports"`
+	// PPROF exposes Go's profiling endpoint on 127.0.0.1:6060. Off by default and
+	// loopback-only: its heap dump contains this tunnel's token.
+	PPROF bool `toml:"pprof"`
+	// MuxSession is how many multiplexed sessions the tunnel keeps open. Only the
+	// mux transports read it; a preset fills it in.
+	MuxSession int `toml:"mux_session"`
+	// MuxVersion is the smux protocol version. Negotiated with the peer, so the
+	// two ends may differ and the lower wins.
+	MuxVersion int `toml:"mux_version"`
+	// MaxFrameSize caps one smux frame, in bytes. Filled from a preset.
+	MaxFrameSize int `toml:"mux_framesize"`
+	// MaxReceiveBuffer is the per-session receive window, in bytes. Filled from a
+	// preset.
+	MaxReceiveBuffer int `toml:"mux_recievebuffer"`
+	// MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a
+	// preset.
+	MaxStreamBuffer int `toml:"mux_streambuffer"`
+	// Sniffer records per-port traffic for the monitor page. Off by default: it
+	// costs a write per connection and the page is reachable over SSH only.
+	Sniffer bool `toml:"sniffer"`
+	// WebPort is the port the per-tunnel monitor page listens on. 0 turns it off.
+	WebPort int `toml:"web_port"`
 	// WebBind is the address the sniffer/monitor page listens on. It has no
 	// authentication of any kind and reports the host's CPU, memory, disk and
 	// network along with the tunnel's status and per-port traffic, so it
@@ -292,15 +346,20 @@ type ServerConfig struct {
 	//   ssh -L 2060:127.0.0.1:2060 root@server
 	// Set it to 0.0.0.0 to serve it on every interface as it used to be, or
 	// to one address to serve it on a private network only.
-	WebBind     string `toml:"web_bind"`
-	SnifferLog  string `toml:"sniffer_log"`
+	WebBind string `toml:"web_bind"`
+	// SnifferLog is where the per-port traffic record is written.
+	SnifferLog string `toml:"sniffer_log"`
+	// TLSCertFile is a certificate to present, for the transports that terminate
+	// TLS. Empty generates a self-signed one.
 	TLSCertFile string `toml:"tls_cert"`
-	TLSKeyFile  string `toml:"tls_key"`
+	// TLSKeyFile is the private key for tls_cert.
+	TLSKeyFile string `toml:"tls_key"`
 	// ACMEDomain switches wss/wssmux to a Let's Encrypt certificate for this
 	// domain instead of the generated self-signed one. The domain must resolve
 	// to this server. Empty keeps the self-signed certificate.
 	ACMEDomain string `toml:"acme_domain"`
-	ACMEEmail  string `toml:"acme_email"`
+	// ACMEEmail is where Let's Encrypt sends expiry warnings. Optional.
+	ACMEEmail string `toml:"acme_email"`
 	// SimpleAuth authorises a wss tunnel by the raw token instead of a proof
 	// bound to the TLS session. It exists for one deployment the binding
 	// otherwise makes impossible: a TLS-terminating reverse proxy — typically
@@ -309,17 +368,31 @@ type ServerConfig struct {
 	// it hands the token to whoever terminates the TLS; turn it on only when a
 	// trusted proxy is doing so, and set it on both ends.
 	SimpleAuth bool `toml:"simple_auth"`
-	Heartbeat  int  `toml:"heartbeat"`
-	MuxCon     int  `toml:"mux_con"`
+	// Heartbeat is how often, in seconds, the server sends a liveness byte down
+	// the control channel. It is how a client notices a server that has gone
+	// away without closing the socket.
+	Heartbeat int `toml:"heartbeat"`
+	// MuxCon is how many concurrent streams one multiplexed session may carry
+	// before the next connection waits.
+	MuxCon int `toml:"mux_con"`
 	// AcceptUDP turns UDP forwarding on for the exposed ports. It is off unless
 	// set: a forwarded port carries TCP only until the operator asks for UDP as
 	// well. The pointer distinguishes "not set" (off) from an explicit
 	// accept_udp = true, so a config with no line does not forward UDP.
 	AcceptUDP *bool `toml:"accept_udp"`
-	SkipOptz  bool  `toml:"skip_optz"`
-	MSS       int   `toml:"mss"`
-	SO_RCVBUF int   `toml:"so_rcvbuf"`
-	SO_SNDBUF int   `toml:"so_sndbuf"`
+	// SkipOptz stops the engine applying its own socket and sysctl tuning at
+	// start. For a machine whose tuning is managed elsewhere.
+	SkipOptz bool `toml:"skip_optz"`
+	// MSS clamps the TCP maximum segment size on the tunnel's connections. Set it
+	// when the path cannot carry full-sized packets: that failure looks like a
+	// tunnel that connects and then stalls on the first real transfer. See
+	// docs/mss-clamp.md.
+	MSS int `toml:"mss"`
+	// SO_RCVBUF is the socket receive buffer in bytes. 0 leaves the kernel's
+	// default, which is right unless a measurement says otherwise.
+	SO_RCVBUF int `toml:"so_rcvbuf"`
+	// SO_SNDBUF is the socket send buffer in bytes. 0 leaves the kernel's default.
+	SO_SNDBUF int `toml:"so_sndbuf"`
 	// SOPinTCP restores the old behaviour of pinning SO_RCVBUF/SO_SNDBUF on
 	// TCP sockets. Off by default: pinning them stops the kernel auto-tuning
 	// the window, which costs a large multiple of the throughput on a fast
@@ -336,12 +409,18 @@ type ServerConfig struct {
 	// limit — anything else quietly keeps the buffered path.
 	ZeroCopy bool `toml:"zero_copy"`
 
+	// ProxyProtocol prefixes each forwarded connection with a PROXY protocol
+	// header, so the service behind the tunnel sees the user's real address
+	// rather than the tunnel's. The service has to be configured to expect it.
 	ProxyProtocol bool `toml:"proxy_protocol"`
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
 	MaxConnections int `toml:"max_connections"`
 	// BandwidthMbps caps total tunnel throughput in Mbit/s (0 = unlimited).
-	BandwidthMbps int    `toml:"bandwidth_mbps"`
-	Preset        string `toml:"preset"`
+	BandwidthMbps int `toml:"bandwidth_mbps"`
+	// Preset records which performance profile the tuning values came from —
+	// balance, turbo or aggressive. A label: the engine reads the values, never
+	// this. Set by hand only if you want the menu to stop offering to change them.
+	Preset string `toml:"preset"`
 	// Embedded so the kcp_* keys sit at the top level of the [server] table
 	// alongside every other tuning key.
 	KCPConfig
@@ -370,30 +449,69 @@ func (s ServerConfig) ForwardsUDP() bool {
 
 // ClientConfig represents the configuration for the client.
 type ClientConfig struct {
+	// RemoteAddr is the server's address and port, as the client dials it. The
+	// port must match the server's bind_addr.
 	RemoteAddr string `toml:"remote_addr"`
 	// FallbackAddrs are additional server addresses tried in order whenever the
 	// primary cannot be reached (a filtered IP, a blocked port, a CDN edge).
-	FallbackAddrs []string      `toml:"fallback_addrs"`
-	Transport     TransportType `toml:"transport"`
+	FallbackAddrs []string `toml:"fallback_addrs"`
+	// Transport is the carrier this tunnel uses. Both ends must name the same
+	// one; see docs/transports.md for what each is for.
+	Transport TransportType `toml:"transport"`
 	// FallbackTransports and FallbackDwell mirror the server's; see there.
 	// They must match the server's list for the two ends to meet.
 	FallbackTransports []TransportType `toml:"fallback_transports"`
-	FallbackDwell      int             `toml:"fallback_dwell"`
-	Token              string          `toml:"token"`
-	ConnectionPool     int             `toml:"connection_pool"`
-	RetryInterval      int             `toml:"retry_interval"`
-	Nodelay            bool            `toml:"nodelay"`
-	Keepalive          int             `toml:"keepalive_period"`
-	LogLevel           string          `toml:"log_level"`
-	LogFormat          string          `toml:"log_format"` // "" (text) or "json"
-	PPROF              bool            `toml:"pprof"`
-	MuxSession         int             `toml:"mux_session"`
-	MuxVersion         int             `toml:"mux_version"`
-	MaxFrameSize       int             `toml:"mux_framesize"`
-	MaxReceiveBuffer   int             `toml:"mux_recievebuffer"`
-	MaxStreamBuffer    int             `toml:"mux_streambuffer"`
-	Sniffer            bool            `toml:"sniffer"`
-	WebPort            int             `toml:"web_port"`
+	// FallbackDwell is how many seconds one transport candidate is held before
+	// the next is tried. 0 uses DefaultFallbackDwell.
+	FallbackDwell int `toml:"fallback_dwell"`
+	// Token is the shared secret. Both ends must hold exactly the same one, and
+	// a mismatch is refused without saying so — a peer without the token learns
+	// nothing, not even that something is listening.
+	Token string `toml:"token"`
+	// ConnectionPool is how many spare connections the client keeps warm, so a
+	// user's first request does not wait for a handshake. The pool grows past
+	// this under load; see aggressive_pool.
+	ConnectionPool int `toml:"connection_pool"`
+	// RetryInterval is how many seconds to wait before dialling again after a
+	// failed attempt.
+	RetryInterval int `toml:"retry_interval"`
+	// Nodelay disables Nagle's algorithm on the tunnel's sockets. On by default:
+	// it trades a little bandwidth for latency, which is what an interactive
+	// session wants and a bulk transfer does not notice.
+	Nodelay bool `toml:"nodelay"`
+	// Keepalive is how often, in seconds, an idle connection is probed. It also
+	// decides how long a dead peer takes to notice — too low tears down a tunnel
+	// that is merely slow, which on a bad path is the difference between a
+	// working tunnel and one that flaps.
+	Keepalive int `toml:"keepalive_period"`
+	// LogLevel is one of trace, debug, info, warn, error or fatal. info is the
+	// default; trace on a busy tunnel writes a line per connection.
+	LogLevel string `toml:"log_level"`
+	// LogFormat is "" for human-readable output or "json" for machine parsing.
+	LogFormat string `toml:"log_format"` // "" (text) or "json"
+	// PPROF exposes Go's profiling endpoint on loopback. Off by default, and
+	// loopback-only on purpose: its heap dump contains this tunnel's token.
+	PPROF bool `toml:"pprof"`
+	// MuxSession is how many multiplexed sessions the tunnel keeps open. Only the
+	// mux transports read it; a preset fills it in.
+	MuxSession int `toml:"mux_session"`
+	// MuxVersion is the smux protocol version. Negotiated with the peer, so the
+	// two ends may differ and the lower wins.
+	MuxVersion int `toml:"mux_version"`
+	// MaxFrameSize caps one smux frame, in bytes. Filled from a preset.
+	MaxFrameSize int `toml:"mux_framesize"`
+	// MaxReceiveBuffer is the per-session receive window, in bytes. Filled from a
+	// preset. (The spelling is a typo that shipped; it cannot be corrected
+	// without breaking every existing config.)
+	MaxReceiveBuffer int `toml:"mux_recievebuffer"`
+	// MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a
+	// preset.
+	MaxStreamBuffer int `toml:"mux_streambuffer"`
+	// Sniffer records per-port traffic for the monitor page. Off by default: it
+	// costs a write per connection.
+	Sniffer bool `toml:"sniffer"`
+	// WebPort is the port the per-tunnel monitor page listens on. 0 turns it off.
+	WebPort int `toml:"web_port"`
 	// WebBind is the address the sniffer/monitor page listens on. It has no
 	// authentication of any kind and reports the host's CPU, memory, disk and
 	// network along with the tunnel's status and per-port traffic, so it
@@ -401,11 +519,19 @@ type ClientConfig struct {
 	//   ssh -L 2060:127.0.0.1:2060 root@server
 	// Set it to 0.0.0.0 to serve it on every interface as it used to be, or
 	// to one address to serve it on a private network only.
-	WebBind        string `toml:"web_bind"`
-	SnifferLog     string `toml:"sniffer_log"`
-	DialTimeout    int    `toml:"dial_timeout"`
-	AggressivePool bool   `toml:"aggressive_pool"`
-	EdgeIP         string `toml:"edge_ip"`
+	WebBind string `toml:"web_bind"`
+	// SnifferLog is where the per-port traffic record is written.
+	SnifferLog string `toml:"sniffer_log"`
+	// DialTimeout is how many seconds a single connection attempt may take. It is
+	// also what a filtered address costs before the next one is tried — see
+	// fallback_addrs.
+	DialTimeout int `toml:"dial_timeout"`
+	// AggressivePool lets the pool grow faster under load, at the cost of holding
+	// more idle connections. Worth it on a path where a handshake is expensive.
+	AggressivePool bool `toml:"aggressive_pool"`
+	// EdgeIP dials a CDN edge address directly while still presenting the
+	// configured hostname, for the websocket transports behind a CDN.
+	EdgeIP string `toml:"edge_ip"`
 	// SimpleAuth authorises a wss tunnel by the raw token instead of a proof
 	// bound to the TLS session. It exists for one deployment the binding
 	// otherwise makes impossible: a TLS-terminating reverse proxy — typically
@@ -414,10 +540,19 @@ type ClientConfig struct {
 	// it hands the token to whoever terminates the TLS; turn it on only when a
 	// trusted proxy is doing so, and set it on both ends.
 	SimpleAuth bool `toml:"simple_auth"`
-	SkipOptz   bool `toml:"skip_optz"`
-	MSS        int  `toml:"mss"`
-	SO_RCVBUF  int  `toml:"so_rcvbuf"`
-	SO_SNDBUF  int  `toml:"so_sndbuf"`
+	// SkipOptz stops the engine applying its own socket and sysctl tuning at
+	// start, for a machine whose tuning is managed elsewhere.
+	SkipOptz bool `toml:"skip_optz"`
+	// MSS clamps the TCP maximum segment size on the tunnel's connections. Set it
+	// when the path cannot carry full-sized packets: that failure looks like a
+	// tunnel that connects and then stalls on the first real transfer. See
+	// docs/mss-clamp.md.
+	MSS int `toml:"mss"`
+	// SO_RCVBUF is the socket receive buffer in bytes. 0 leaves the kernel's
+	// default, which is right unless a measurement says otherwise.
+	SO_RCVBUF int `toml:"so_rcvbuf"`
+	// SO_SNDBUF is the socket send buffer in bytes. 0 leaves the kernel's default.
+	SO_SNDBUF int `toml:"so_sndbuf"`
 	// Proxy routes the connection to the tunnel server through a local or
 	// nearby proxy, for a client that cannot open an arbitrary outbound
 	// connection itself. One URL: "socks5://127.0.0.1:1080" or
@@ -456,6 +591,9 @@ type ClientConfig struct {
 	// limit — anything else quietly keeps the buffered path.
 	ZeroCopy bool `toml:"zero_copy"`
 
+	// Preset records which performance profile the tuning values came from —
+	// balance, turbo or aggressive. A label: the engine reads the values, never
+	// this.
 	Preset string `toml:"preset"`
 	// LoadBalance spreads the pool's data connections over every configured
 	// address instead of putting them all on the live one. All the addresses
@@ -477,7 +615,12 @@ type ClientConfig struct {
 
 // Config represents the complete configuration, including both server and client settings.
 type Config struct {
+	// Server is the reverse tunnel's Iran end: it listens for the client and
+	// exposes the forwarded ports. Present only in a configuration that asks for
+	// one; the three engines are mutually exclusive.
 	Server ServerConfig `toml:"server"`
+	// Client is the reverse tunnel's kharej end: it dials the server and delivers
+	// each connection to the service behind it.
 	Client ClientConfig `toml:"client"`
 	// L3 is a direct layer-3 tunnel, and is present only in a configuration
 	// that asks for one. It shares nothing with Server and Client: a file

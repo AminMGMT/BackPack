@@ -20,6 +20,7 @@ import (
 	"github.com/backpack/backpack/internal/alerthist"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
+	"github.com/backpack/backpack/internal/manage/core"
 	"github.com/backpack/backpack/internal/socks"
 	"github.com/backpack/backpack/internal/telegram"
 	"github.com/backpack/backpack/internal/tunhist"
@@ -150,12 +151,64 @@ func Run() {
 		}(job.name, job.fn)
 	}
 
+	// Tell systemd the service is up, and keep telling it.
+	//
+	// The unit is Type=notify with a WatchdogSec, so systemd learns the
+	// difference between a process that exists and one that is working — a
+	// monitor wedged on a job that never returns is a process systemd is
+	// otherwise perfectly happy with. See internal/manage/core/sdnotify.go.
+	core.NotifyReady()
+	if every, ok := core.WatchdogInterval(); ok {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					core.NotifyAlive()
+				}
+			}
+		}()
+	}
+
+	// Say, regularly, that this is still running.
+	//
+	// Nothing watched the watchdog. A crash brings it back — the unit says
+	// Restart=always — but a crash loop, a service somebody stopped to debug
+	// something and left stopped, and a machine old enough never to have had
+	// the unit all produce the same silence, and silence from a watchdog reads
+	// exactly like a fleet with nothing wrong.
+	//
+	// A heartbeat rather than a second watcher, because a second watcher needs
+	// a third. See manage.RecordMonitorHeartbeat.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		manage.RecordMonitorHeartbeat()
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				manage.RecordMonitorHeartbeat()
+			}
+		}
+	}()
+
 	// The monitor is a long-lived service; systemd stops it with SIGTERM.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 
 	logger.Info("backpack monitor stopping")
+	// So the time spent closing things is not mistaken for a hang.
+	core.NotifyStopping()
 	cancel()
 	wg.Wait()
 }

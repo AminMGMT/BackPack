@@ -253,3 +253,67 @@ func statMode(t *testing.T, path string) os.FileMode {
 	}
 	return st.Mode().Perm()
 }
+
+// Removing a key from files that already carry it.
+//
+// spoof_dst_ip described something that could not exist — an IPv4 destination
+// has one home, the IP header, and that has to hold the address the packet is
+// routed to. It was offered, validated, written and read into a field nothing
+// downstream looked at.
+//
+// The migration strips it. What it must not do is reformat the file around it:
+// these are edited by hand, and rewriting one wholesale to delete a line is a
+// worse intrusion than the line.
+
+func TestDroppingAKeyLeavesTheRestOfTheFileAlone(t *testing.T) {
+	body := []byte(`[l3]
+# The carrier this tunnel uses. Do not change without changing the other end.
+carrier = "spoof"
+
+spoof_src_ip   = "203.0.113.10"
+spoof_dst_ip   = "192.0.2.9"
+spoof_peer_ip  = "198.51.100.7"
+`)
+	out, removed := dropTOMLKey(body, "spoof_dst_ip")
+	if !removed {
+		t.Fatal("the key was not removed")
+	}
+	got := string(out)
+	if strings.Contains(got, "spoof_dst_ip") {
+		t.Fatalf("the key survived:\n%s", got)
+	}
+	// Everything else, exactly as it was — the comment, the spacing, the order.
+	for _, want := range []string{
+		"# The carrier this tunnel uses. Do not change without changing the other end.",
+		`carrier = "spoof"`,
+		`spoof_src_ip   = "203.0.113.10"`,
+		`spoof_peer_ip  = "198.51.100.7"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the migration disturbed the rest of the file; %q is gone:\n%s", want, got)
+		}
+	}
+}
+
+func TestDroppingAKeyThatIsNotThereChangesNothing(t *testing.T) {
+	body := []byte("[l3]\ncarrier = \"udp\"\n")
+	out, removed := dropTOMLKey(body, "spoof_dst_ip")
+	if removed {
+		t.Error("reported removing a key that was not there")
+	}
+	if string(out) != string(body) {
+		t.Error("the file changed anyway")
+	}
+}
+
+// A key whose name is a prefix of another must not take the other with it.
+func TestDroppingAKeyDoesNotMatchALongerName(t *testing.T) {
+	body := []byte("spoof_dst_ip_extra = \"keep me\"\nspoof_dst_ip = \"go\"\n")
+	out, removed := dropTOMLKey(body, "spoof_dst_ip")
+	if !removed {
+		t.Fatal("the key was not removed")
+	}
+	if !strings.Contains(string(out), "spoof_dst_ip_extra") {
+		t.Errorf("a longer key that merely starts the same way was removed too:\n%s", out)
+	}
+}

@@ -28,3 +28,7 @@ share one link and you want to stop any one of them from taking it all.
 
 ---
 [← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.8.2.*

@@ -85,13 +85,33 @@ func (s *Server) Start() {
 		s.logger.Infof("transport fallback chain: %v", ch.Candidates())
 	}
 	// The server holds each candidate for the whole dwell; the client sweeps.
+	//
+	// live is the transport currently running, so Start can wait for it below.
+	// The chain cancels a candidate's context when it rotates or stops; what it
+	// cannot know is when the listeners behind it have actually closed.
+	var live runner
 	ch.Run(s.ctx, false, func(ctx context.Context, name string) chain.Attempt {
 		r := s.startTransport(ctx, config.TransportType(name))
 		if r == nil {
 			return chain.Attempt{}
 		}
+		live = r
 		return chain.Attempt{Settled: r.Running}
 	})
+
+	// Start does not return until the ports are free.
+	//
+	// Without this it returned as soon as the chain stopped supervising, while
+	// the listeners were still closing — and a reload builds the next
+	// generation immediately, so the two fought for the same ports. Restart's
+	// two-second sleep was the workaround; this is the answer.
+	if live != nil {
+		// Not s.ctx: that is already cancelled by the time this runs, and
+		// waiting on a dead context would wait for nothing.
+		wait, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		live.Wait(wait)
+		cancel()
+	}
 
 	s.logger.Info("all workers stopped successfully")
 
@@ -106,10 +126,17 @@ func (s *Server) Stop() {
 	}
 }
 
-// runner is what a started transport gives the chain back: a way to ask
-// whether a client has paired with it. Every transport already answers it —
-// see internal/server/transport/status.go.
-type runner interface{ Running() bool }
+// runner is what a started transport gives the chain back.
+//
+// Running answers whether a client has paired with it, which is what a fallback
+// chain polls. Wait blocks until it has let go of its listeners, which is what
+// makes "Start returned" mean "the ports are free" — see
+// internal/server/transport/listeners.go for why that is not the same thing as
+// "the supervisor stopped".
+type runner interface {
+	Running() bool
+	Wait(context.Context)
+}
 
 // startTransport launches one transport under ctx and returns it. Cancelling
 // ctx tears it down, including the forwarded-port listeners, which is what lets

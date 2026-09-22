@@ -33,7 +33,7 @@ const l3RestartDelay = 5 * time.Second
 
 // runL3Tunnel keeps one layer-3 tunnel running until ctx ends.
 func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
-	logger := utils.NewLoggerWithFormat(l3LogLevel(cfg), "")
+	logger := utils.NewLoggerWithFormat(l3LogLevel(cfg), l3LogFormat(cfg))
 
 	tunnelCfg := l3.Config{
 		Mode:           cfg.L3.Mode,
@@ -145,6 +145,18 @@ func l3LogLevel(cfg *config.Config) string {
 		return cfg.Server.LogLevel
 	}
 	return cfg.Client.LogLevel
+}
+
+// l3LogFormat reads log_format from whichever of the two tables the file has,
+// the same way l3LogLevel reads the level.
+//
+// It was hardcoded to the text format, so `log_format = "json"` on a layer-3
+// tunnel was accepted, written into the file, shown in the menus, and ignored.
+func l3LogFormat(cfg *config.Config) string {
+	if cfg.Server.LogFormat != "" {
+		return cfg.Server.LogFormat
+	}
+	return cfg.Client.LogFormat
 }
 
 // l3Role is what the metrics file records. The geography is what an operator

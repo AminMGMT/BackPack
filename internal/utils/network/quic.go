@@ -21,6 +21,24 @@ import (
 // which doubles as a cheap first filter against anything that is not us.
 const quicALPN = "backpack-quic"
 
+// QUICInitialPacketSize is the UDP payload size QUIC starts from, before Path
+// MTU Discovery has measured the route.
+//
+// quic-go's own default is 1280 bytes of payload, which is 1308 bytes on the
+// wire over IPv4 and 1328 over IPv6. Any path whose MTU is 1280 — the standard
+// for an IPv6 tunnel, for most mobile carriers, and for anything already riding
+// inside another tunnel — drops every one of those packets, and because the
+// Initial packet is the first thing sent, the handshake never completes and the
+// transport reports nothing at all rather than a slow link. A netns run at MTU
+// 1280 reproduced it: nine transports carried 2 MB byte-identical and quic
+// carried zero bytes.
+//
+// 1232 is 1280 minus a 40-byte IPv6 header and an 8-byte UDP header, so it fits
+// a 1280-byte path in either address family. Starting low costs nothing on a
+// fat path: Path MTU Discovery is left enabled and climbs to the real figure
+// within the first few round trips, so only the handshake itself is smaller.
+const QUICInitialPacketSize = 1232
+
 // QUICSettings carries the tuning of a QUIC endpoint from the config down to the
 // socket. QUIC brings its own TLS 1.3, congestion control and loss recovery, so
 // unlike KCP there is nothing to hand-tune for the link itself — only the idle
@@ -49,6 +67,8 @@ func (s QUICSettings) quicConfig() *quic.Config {
 		MaxIncomingStreams: 1 << 16,
 		// Allow the datagram socket to be reused for a graceful restart.
 		Allow0RTT: false,
+		// Start small enough to cross a 1280-byte path; discovery grows it.
+		InitialPacketSize: QUICInitialPacketSize,
 	}
 }
 

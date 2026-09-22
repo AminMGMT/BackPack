@@ -108,8 +108,8 @@ func TestSpoofDrawerRoundTripsThroughTheSpec(t *testing.T) {
 	in := SpoofTune{
 		Profile: "icmp", Uplink: "udp", Downlink: "tcp",
 		SrcIPs: "203.0.113.10, 198.51.100.7", PeerIP: "192.0.2.5",
-		PeerSrcIP: "198.51.100.9", DstIP: "192.0.2.9",
-		SockBuf: 4194304, MTU: 1200,
+		PeerSrcIP: "198.51.100.9",
+		SockBuf:   4194304, MTU: 1200,
 		ICMPReply: true, TTLJitter: true, RandomDSCP: true,
 		ShufflePort: true, PortMin: 20000, PortMax: 40000,
 		Padding: true, PaddingMax: 128,

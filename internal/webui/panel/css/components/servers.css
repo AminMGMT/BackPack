@@ -403,3 +403,10 @@
 .np7 .pin7{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
   font-size:11px;background:color-mix(in srgb,var(--wr) 14%,transparent);color:var(--wr);
   border:1px solid color-mix(in srgb,var(--wr) 34%,transparent)}
+
+/* Stopping a rollout. Carries the warning colour because it interrupts
+   something that is under way, and sits next to the button that started it. */
+.np7 .sech2 .sb.warn{color:var(--er);
+  border-color:color-mix(in srgb,var(--er) 34%,transparent);
+  background:color-mix(in srgb,var(--er) 10%,transparent)}
+.np7 .sech2 .sb.warn:hover{background:color-mix(in srgb,var(--er) 18%,transparent)}
