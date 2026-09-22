@@ -2,12 +2,13 @@ package manage
 
 import (
 	"fmt"
-	"github.com/backpack/backpack/internal/manage/backup"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/backpack/backpack/internal/manage/backup"
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"

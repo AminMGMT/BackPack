@@ -158,20 +158,6 @@ func LoadSpec(name string) (TunnelSpec, error) {
 
 // addrHost returns the host part of a host:port address (brackets stripped for
 // IPv6), or fallback when it can't be parsed.
-func addrHost(addr, fallback string) string {
-	if h, _, err := net.SplitHostPort(addr); err == nil && h != "" {
-		return h
-	}
-	return fallback
-}
-
-// addrPort returns the port part of a host:port address, or "".
-func addrPort(addr string) string {
-	if _, p, err := net.SplitHostPort(addr); err == nil {
-		return p
-	}
-	return ""
-}
 
 // isBotRelayPort reports whether a port mapping is the hidden mapping to the
 // peer's built-in SOCKS5 proxy (used for the Telegram relay).

@@ -185,6 +185,10 @@ type server struct {
 	nodes *control.Fleet
 	net   *control.Net
 	jobs  *control.Jobs
+	// want is what the fleet is supposed to be running, so that a node which
+	// has drifted from it can be noticed rather than discovered. See
+	// internal/control/desired.go.
+	want *control.Desired
 
 	// ctx is the panel's own lifetime, which is what a background job is tied
 	// to. A job tied to the request that started it would be cancelled the
@@ -260,6 +264,7 @@ func Serve() error {
 	// building both ends of a tunnel in a single submission. See
 	// handlers_nodes.go.
 	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
+	mux.HandleFunc("/api/fleet/drift", srv.requireReadAuth(srv.handleDrift))
 	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
 	// Linking a tunnel that already exists to the server holding its other
 	// end. See handlers_adopt.go.
@@ -833,5 +838,6 @@ func newServer() *server {
 		nodes:    &control.Fleet{},
 		net:      control.NewNet(),
 		jobs:     control.NewJobs(),
+		want:     control.NewDesired(),
 	}
 }

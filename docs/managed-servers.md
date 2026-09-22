@@ -142,6 +142,36 @@ Deleting removes this end. The far end keeps running: a delete on this machine
 is not consent to one on another, and there is deliberately no operation that
 removes a tunnel on a managed server.
 
+## Checking the fleet is running what you asked for
+
+Every fleet operation is a one-way instruction: the panel tells a server to
+create a tunnel, the server says it has, and that used to be the end of it.
+Nothing remembered the instruction, so nothing could notice it had stopped
+being true.
+
+**Servers → Check the fleet** asks every managed server what it is running and
+compares it with what this panel asked for. It reports:
+
+| | |
+| --- | --- |
+| `missing` | the panel created it and the server does not have it — removed there, or an apply that reported success and did not last |
+| `stopped` | it is there and not running, and nothing here asked for it to be stopped |
+| `running` | it was stopped from here and is running there |
+| `changed` | the port or the role no longer match what was written — the two ends no longer meet, and both look fine from their own side |
+| `unexpected` | the server is running a tunnel this panel did not create: made on the machine itself, or left over from a panel restored from a backup |
+
+**It changes nothing.** It is a report, not a repair, and that is deliberate
+rather than unfinished: something that re-applied on its own would be a loop
+that can fight you in the middle of a change, and what it would be fighting over
+is the tunnel you are reaching the machine through. See
+[design decisions](design-decisions.md).
+
+A server that could not be reached is listed apart from one that has drifted.
+A machine that is down has not changed — it is simply not answering.
+
+It is a button rather than something that runs on a timer because it asks every
+server in turn over SSH, which is minutes on a large fleet.
+
 ## Logs from both ends
 
 A tunnel is one thing in two places and its log is not. The tunnel's **Logs**
@@ -236,6 +266,22 @@ log, sink a speed test — and refuses anything else. It is not meant to be type
 **ساختن تونل روی هر دو سر:** وقتی جفت را از پنل می‌سازی، **هر دو** سر نوشته
 می‌شود، پس تنظیم‌های جفتی (توکن، ترنسپورت، پورت) نمی‌توانند با هم اختلاف داشته
 باشند — که رایج‌ترین دلیل «وصل است ولی چیزی رد نمی‌شود» است.
+
+**بررسی اینکه ناوگان همانی را اجرا می‌کند که خواسته‌ای:** هر عملیات روی ناوگان یک
+دستور یک‌طرفه بود — پنل می‌گفت تونل بساز، سرور می‌گفت ساختم، و تمام. هیچ‌جا ثبت
+نمی‌شد، پس هیچ‌وقت هم معلوم نمی‌شد که دیگر درست نیست. با
+`Servers → Check the fleet` پنل از هر سرور می‌پرسد چه چیزی اجرا می‌کند و با چیزی
+که خودش خواسته بود مقایسه می‌کند: `missing` (ساخته شده و آنجا نیست)، `stopped`
+(هست و اجرا نمی‌شود، بدون اینکه کسی از اینجا گفته باشد بایستد)، `running` (از
+اینجا متوقف شده و آنجا در حال اجراست)، `changed` (پورت یا نقش با چیزی که نوشته
+شده نمی‌خواند — یعنی دو سر دیگر همدیگر را پیدا نمی‌کنند، و هر دو از دید خودشان
+سالم‌اند) و `unexpected` (تونلی که این پنل نساخته).
+
+**هیچ چیزی را عوض نمی‌کند** — گزارش است نه تعمیر، و این عمدی است: چیزی که خودش
+دوباره اعمال کند، حلقه‌ای است که می‌تواند وسط کار با تو بجنگد، و چیزی که سرش دعوا
+می‌شود همان تونلی است که از طریقش به ماشین رسیده‌ای. سروری که در دسترس نبوده جدا
+از سروری که drift کرده فهرست می‌شود؛ ماشینی که خاموش است تغییری نکرده، فقط جواب
+نمی‌دهد.
 
 </div>
 

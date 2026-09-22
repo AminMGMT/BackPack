@@ -36,6 +36,38 @@ BP=/tmp/bp-carrier
 CARRIER="$1"
 WORK=$(mktemp -d)
 
+# Everything this script starts, stopped — however it ends.
+#
+# It did not, and the cost was not theoretical: a full matrix run leaves two
+# engine processes and an `nc` per transport behind, the namespace they were in
+# disappears from under them, and they keep running as orphans for as long as
+# the machine is up. A day of running this left 324 of them holding six and a
+# half gigabytes, which is also enough to make every measurement taken
+# afterwards quietly wrong.
+#
+# Worse, they inherit this script's stdout. A caller that waits for the pipe to
+# close — which is what a shell, a CI step and a task runner all do — waits for
+# the orphans rather than for the test, so a run that finished in forty seconds
+# looks like it is still going hours later.
+#
+# The trap covers every exit including the interrupt, because the interrupt is
+# the case that leaks most: somebody stops a matrix half way through.
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM HUP
+  for pid in $PIDS; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  sleep 0.3
+  for pid in $PIDS; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  rm -rf "$WORK"
+  exit $status
+}
+PIDS=""
+trap cleanup EXIT INT TERM HUP
+
 mount -t tmpfs none /run/netns 2>/dev/null || true
 ip netns add iran
 ip netns add kharej
@@ -104,23 +136,26 @@ $SPOOF_K
 EOF
 
 ip netns exec iran   "$BP" -c "$WORK/iran.toml"   > "$WORK/iran.log"   2>&1 &
+PIDS="$PIDS $!"
 sleep 2
 ip netns exec kharej "$BP" -c "$WORK/kharej.toml" > "$WORK/kharej.log" 2>&1 &
+PIDS="$PIDS $!"
 sleep 4
 
 RC=1
 if ip netns exec kharej ping -c 3 -W 2 -q 10.10.0.1 > "$WORK/ping.log" 2>&1; then
   # Ping proves the tunnel is up; a real payload proves it carries data.
-  ip netns exec iran sh -c 'nc -l -p 7777 > /tmp/got.bin' &
+  ip netns exec iran sh -c "nc -l -p 7777 > $WORK/got.bin" &
+PIDS="$PIDS $!"
   sleep 1
   head -c 2000000 /dev/urandom > "$WORK/send.bin"
   if ip netns exec kharej sh -c "nc -w 5 10.10.0.1 7777 < $WORK/send.bin"; then
     sleep 2
-    if [ -f /tmp/got.bin ] && cmp -s "$WORK/send.bin" /tmp/got.bin; then
+    if [ -f "$WORK/got.bin" ] && cmp -s "$WORK/send.bin" "$WORK/got.bin"; then
       echo "RESULT $CARRIER: OK  ping + 2MB byte-identical"
       RC=0
     else
-      echo "RESULT $CARRIER: DATA MISMATCH ($(stat -c %s /tmp/got.bin 2>/dev/null || echo 0) of $(stat -c %s "$WORK/send.bin") bytes)"
+      echo "RESULT $CARRIER: DATA MISMATCH ($(stat -c %s "$WORK/got.bin" 2>/dev/null || echo 0) of $(stat -c %s "$WORK/send.bin") bytes)"
     fi
   else
     echo "RESULT $CARRIER: ping worked, payload transfer failed"
@@ -130,5 +165,4 @@ else
   tail -5 "$WORK/iran.log" | sed 's/^/  iran: /'
   tail -5 "$WORK/kharej.log" | sed 's/^/  kharej: /'
 fi
-rm -f /tmp/got.bin
 exit $RC

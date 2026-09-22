@@ -35,6 +35,38 @@ LOSS="${3:-0}"
 DELAY="${4:-0}"
 WORK=$(mktemp -d)
 
+# Everything this script starts, stopped — however it ends.
+#
+# It did not, and the cost was not theoretical: a full matrix run leaves two
+# engine processes and an `nc` per transport behind, the namespace they were in
+# disappears from under them, and they keep running as orphans for as long as
+# the machine is up. A day of running this left 324 of them holding six and a
+# half gigabytes, which is also enough to make every measurement taken
+# afterwards quietly wrong.
+#
+# Worse, they inherit this script's stdout. A caller that waits for the pipe to
+# close — which is what a shell, a CI step and a task runner all do — waits for
+# the orphans rather than for the test, so a run that finished in forty seconds
+# looks like it is still going hours later.
+#
+# The trap covers every exit including the interrupt, because the interrupt is
+# the case that leaks most: somebody stops a matrix half way through.
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM HUP
+  for pid in $PIDS; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  sleep 0.3
+  for pid in $PIDS; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  rm -rf "$WORK"
+  exit $status
+}
+PIDS=""
+trap cleanup EXIT INT TERM HUP
+
 mount -t tmpfs none /run/netns 2>/dev/null || true
 ip netns add iran
 ip netns add kharej
@@ -109,11 +141,14 @@ EOF
 # the right number of bytes and the wrong content — the previous run's payload.
 GOT="$WORK/got.bin"
 ip netns exec iran sh -c "nc -l -p 7778 > $GOT" &
+PIDS="$PIDS $!"
 sleep 1
 
 ip netns exec iran   "$BP" -c "$WORK/iran.toml"   > "$WORK/iran.log"   2>&1 &
+PIDS="$PIDS $!"
 sleep 2
 ip netns exec kharej "$BP" -c "$WORK/kharej.toml" > "$WORK/kharej.log" 2>&1 &
+PIDS="$PIDS $!"
 sleep 5
 
 LABEL="$TR mtu=$MTU"
@@ -140,5 +175,4 @@ else
   tail -6 "$WORK/iran.log"   | sed 's/^/  iran: /'
   tail -6 "$WORK/kharej.log" | sed 's/^/  kharej: /'
 fi
-rm -rf "$WORK"
 exit $RC

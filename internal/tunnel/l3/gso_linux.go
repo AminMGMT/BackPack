@@ -15,20 +15,24 @@ import (
 // the caller falls back from, not a failure to report.
 var errNoGSO = errors.New("l3: this carrier cannot segment a write")
 
-// writeGSO sends a whole batch as one segmented write.
+// writeGSO sends the longest run at the front of bufs as one segmented write.
 //
-// It reports how many datagrams the kernel took. A refusal comes back as
-// errNoGSO with nothing sent, so the caller can send the same batch the old way
-// without losing any of it — see gso.go for why that is a condition rather than
-// an error.
+// It reports how many datagrams the kernel took, which may be fewer than were
+// offered: a run ends at the first packet of a different size, at the kernel's
+// segment ceiling, or at the edge of one UDP payload. The caller sends what is
+// left the same way, or the old way.
+//
+// A refusal comes back as errNoGSO with nothing sent, so nothing is ever lost
+// by trying — see gso.go for why that is a condition rather than an error.
 func (c *udpCarrier) writeGSO(bufs [][]byte, to net.Addr) (int, error) {
 	if c.UDPConn == nil || c.gsoOff {
 		return 0, errNoGSO
 	}
-	segment, ok := gsoEligible(bufs)
+	n, segment, ok := gsoRun(bufs)
 	if !ok {
 		return 0, errNoGSO
 	}
+	bufs = bufs[:n]
 	sa, err := sockaddrOf(to)
 	if err != nil {
 		return 0, errNoGSO

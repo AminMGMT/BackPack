@@ -213,9 +213,6 @@ func (s TunnelSpec) writePck(p func(string, ...any)) {
 }
 
 // isMux reports whether a transport multiplexes over SMUX.
-func isMux(t string) bool {
-	return t == "tcpmux" || t == "wsmux" || t == "wssmux" || t == "kcp" || t == "xdi" || t == "pck"
-}
 
 // isKCP reports whether a transport rides on KCP — over UDP (kcp), over ICMP
 // echo (xdi), or over hand-built TCP segments (pck). All three are tuned by the
@@ -224,69 +221,22 @@ func isMux(t string) bool {
 // It used to say four and name spoof as one of them. Spoof is a direct-tunnel
 // carrier and has not been a reverse transport for some time, and the function
 // stopped covering it when it stopped being one — the sentence did not.
-func isKCP(t string) bool {
-	return t == "kcp" || t == "xdi" || t == "pck"
-}
 
 // IsDatagram reports whether a transport carries datagrams (UDP/KCP), for
 // callers outside the package — a TCP probe against one is meaningless.
 func IsDatagram(t string) bool { return isDatagram(t) }
 
-// isDatagram reports whether a transport is carried in UDP datagrams. Such a
-// tunnel never shows up in the TCP listen table and cannot be probed with a
-// TCP connect, so every check that assumes TCP has to skip it.
-func isDatagram(t string) bool {
-	// The two direct kinds carry their carrier in the name, so the bare
-	// comparisons below never match them. Answering "no" for a layer-3 tunnel
-	// was what made the web panel probe a pck tunnel with a TCP connect —
-	// against a carrier that has no socket to connect to — and then read the
-	// inevitable failure as the tunnel being down. The Iran card went offline
-	// while the tunnel was carrying traffic and the kharej card stayed green,
-	// because only the dialling side runs that probe.
-	if strings.HasPrefix(t, "l3/") {
-		// Every layer-3 carrier is a datagram one, and no reliable carrier can
-		// ever be added — see the l3 package doc.
-		return true
-	}
-	if strings.HasPrefix(t, "direct/") {
-		// All four direct transports are stream transports over TCP, so a TCP
-		// probe is exactly the right thing for them.
-		return false
-	}
-	return t == "udp" || t == "kcp" || t == "xdi" || t == "quic" || t == "pck"
-}
-
 // supportsProxyProtocol reports whether a transport can prepend the PROXY
 // protocol header. The plain websocket and raw UDP transports cannot: one has
 // no place to put it in its framing, the other carries datagrams with no
 // connection to describe.
-func supportsProxyProtocol(t string) bool {
-	switch t {
-	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth", "quic", "pck":
-		return true
-	}
-	return false
-}
 
 // isWS reports whether a transport rides over websocket.
-func isWS(t string) bool {
-	return t == "ws" || t == "wss" || t == "wsmux" || t == "wssmux"
-}
 
 // needsTLS reports whether a transport terminates TLS on the server and
 // therefore requires a certificate/key pair.
-func needsTLS(t string) bool {
-	return t == "wss" || t == "wssmux"
-}
 
 // validTransport reports whether t is one of the engine's supported transports.
-func validTransport(t string) bool {
-	switch t {
-	case "tcp", "tcpmux", "udp", "kcp", "ws", "wss", "wsmux", "wssmux", "stealth", "xdi", "quic", "pck":
-		return true
-	}
-	return false
-}
 
 // Render returns the TOML representation of the tunnel.
 func (s TunnelSpec) Render() string {

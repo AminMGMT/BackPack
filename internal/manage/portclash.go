@@ -96,11 +96,3 @@ func sameBindHost(a, b string) bool {
 	}
 	return strings.EqualFold(a, b)
 }
-
-func isWildcardBind(host string) bool {
-	switch strings.Trim(host, "[]") {
-	case "", "0.0.0.0", "::":
-		return true
-	}
-	return false
-}

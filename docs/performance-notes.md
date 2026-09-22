@@ -7,6 +7,19 @@ the reason they are not is a number rather than an opinion — which is the poin
 of writing them down: without this file the same idea is proposed again next
 year and measured again from scratch.
 
+## How these numbers were taken
+
+Every figure below is from this repository's own tests, run on an otherwise idle
+machine, and the second half of that sentence had to be learned. The netns
+harnesses used to leave the engine processes they started running as orphans —
+a day of matrix runs had left 324 of them holding six and a half gigabytes — and
+measurements taken beside them were quietly wrong in both directions. The
+harnesses reap what they start now (`tools/*test/*.sh`), and every number here
+was re-taken afterwards.
+
+If a figure here disagrees with one you measure, check what else is running
+before concluding anything about the code.
+
 ## Where the time actually goes
 
 Two profiles, taken 2026-09-22.
@@ -139,15 +152,23 @@ that could ship:
 
 | | syscalls | rate | vs sendmmsg |
 |---|---|---|---|
-| `sendmmsg`, 8 per call | 5,000 | ~255 kpps | — |
-| `UDP_SEGMENT`, 8 per call | 5,000 | ~700 kpps | **+123% … +229%** |
-| `UDP_SEGMENT`, 48 per call | 834 | ~1,190 kpps | +320% … +398% |
+| `sendmmsg`, 32 per call | 1,250 | ~265 kpps | — |
+| `UDP_SEGMENT`, 32 per call | 1,250 | ~1,050 kpps | **+206% … +377%** |
+| `UDP_SEGMENT`, 48 per call | 834 | ~1,170 kpps | +264% … +414% |
 
 **The middle row is the one that decided it.** Same batch, same number of
-syscalls, two to three times the rate — so the gain is the offload itself and
-not the batch size, and it is worth having at the batch of eight this carrier
-reads from the TUN today. The third row says what a larger read batch would be
-worth on top, which is a separate change.
+syscalls, three to four times the rate — so the gain is the offload itself and
+not the batch size.
+
+The third row is not just a curiosity: the TUN hands the send pump whatever the
+kernel had ready, which is far more than eight, so the carrier splits a batch
+into as many segmented writes as it can rather than taking one and refusing the
+rest. A run ends at the first packet of a different size, at the kernel's
+segment ceiling, or at the edge of one UDP payload — and a *short* packet does
+not merely end a run, it is that run's last segment, because the kernel's
+remainder is the final datagram. So a batch of full-sized packets with an
+acknowledgement in the middle of it goes out as two segmented writes rather than
+as none.
 
 Shipped with two conditions, both in `internal/tunnel/l3/gso.go`:
 
@@ -163,6 +184,52 @@ Shipped with two conditions, both in `internal/tunnel/l3/gso.go`:
 
 `TestGSOSendRate` is the measurement and it is kept, so the next person to ask
 gets a number from their own machine.
+
+## How wide a receive batch, and how many readers
+
+Two questions about the layer-3 receive path, asked together because the second
+one only makes sense once the first is answered. `TestBatchWidth` and
+`TestReadersPerSocket` are both kept.
+
+**The batch was eight and eight was an argument, not a measurement.** Four
+widths, three runs, 40,000 datagrams of 1,200 bytes:
+
+```
+width   1    ~50 kpps, and only half the datagrams arrive
+width   8   ~225 kpps
+width  32   ~300 kpps
+width 128   ~275 kpps
+```
+
+It is now thirty-two, and thirty-two is the peak rather than a compromise: a
+hundred and twenty-eight is no faster and sometimes slower, while costing 900 KB
+more of buffers per tunnel.
+
+The interesting part is not the rate. The batch rarely *fills* at any width —
+two to four datagrams per call, because the reader keeps up — so the gain is not
+in gathering more, it is in taking an occasional burst in one call rather than
+two. And in the first row: a reader taking one datagram at a time cannot keep up
+at all, and the socket drops nearly half of them.
+
+**One reading goroutine is not the bottleneck any deployment will meet.** With
+four senders pushing at once it takes 500–800 kpps and loses nothing. At
+1,200-byte inner packets that is five to eight gigabits a second of tunnelled
+traffic.
+
+**And the mechanism usually proposed for raising it does not apply here.**
+`SO_REUSEPORT` with N sockets distributes incoming datagrams across them **by
+flow**, and a layer-3 tunnel has exactly one flow: one peer, one source port.
+Every datagram hashes the same way, so N sockets would leave N-1 of them idle.
+That is a property of the protocol, not of this implementation.
+
+What is left is N goroutines reading the *same* socket, which the kernel allows
+and serialises. Measured, three runs, one/two/four readers against the same
+load: two and four are never faster than one and are usually slower. The
+serialisation is the ceiling, and adding goroutines adds contention to reach it.
+
+So the receive path stays one reader. The number to remember is the one that
+makes it a non-question: a tunnel would have to be carrying several gigabits a
+second before the reader was what limited it.
 
 ## Batching the reverse relay: there is nothing to gather
 

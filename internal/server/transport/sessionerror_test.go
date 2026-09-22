@@ -10,7 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// handleSessionError, on the three transports that multiplex.
+// muxSession.failed, on the three transports that multiplex.
 //
 // It runs on a session goroutine that has just failed and is about to return,
 // and it has three jobs: give back the session count, put the connection it was
@@ -27,7 +27,9 @@ import (
 // sessionErrorSubject is the shape the three transports share here.
 type sessionErrorSubject struct {
 	name string
-	// fail invokes handleSessionError with a local connection.
+	// fail invokes muxSession.failed with a local connection, through the
+	// transport's own adapter — so this also holds that the adapter binds the
+	// right channels and the right counters.
 	fail func(local *LocalTCPConn, err error)
 	// counters reads the two atomics back.
 	counters func() (session, stream int32)
@@ -53,10 +55,10 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 			localChannel:   make(chan LocalTCPConn, queueSize),
 			reqNewConnChan: make(chan struct{}, 1),
 		}
-		s := &TcpMuxTransport{logger: log, limits: lim}
+		s := &TcpMuxTransport{logger: log, limits: lim, config: &TcpMuxConfig{MuxCon: 8}}
 		subs = append(subs, sessionErrorSubject{
 			name: "tcpmux",
-			fail: func(c *LocalTCPConn, err error) { s.handleSessionError(g, c, err) },
+			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
 			counters: func() (int32, int32) {
 				return atomic.LoadInt32(&s.sessionCounter), atomic.LoadInt32(&s.streamCounter)
 			},
@@ -73,10 +75,10 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 			localChannel:   make(chan LocalTCPConn, queueSize),
 			reqNewConnChan: make(chan struct{}, 1),
 		}
-		s := &WsMuxTransport{logger: log, limits: lim}
+		s := &WsMuxTransport{logger: log, limits: lim, config: &WsMuxConfig{MuxCon: 8}}
 		subs = append(subs, sessionErrorSubject{
 			name: "wsmux",
-			fail: func(c *LocalTCPConn, err error) { s.handleSessionError(g, c, err) },
+			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
 			counters: func() (int32, int32) {
 				return atomic.LoadInt32(&s.sessionCounter), atomic.LoadInt32(&s.streamCounter)
 			},
@@ -93,10 +95,10 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 			localChannel:   make(chan LocalTCPConn, queueSize),
 			reqNewConnChan: make(chan struct{}, 1),
 		}
-		s := &KcpTransport{logger: log, limits: lim}
+		s := &KcpTransport{logger: log, limits: lim, config: &KcpConfig{MuxCon: 8}}
 		subs = append(subs, sessionErrorSubject{
 			name: "kcp",
-			fail: func(c *LocalTCPConn, err error) { s.handleSessionError(g, c, err) },
+			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
 			counters: func() (int32, int32) {
 				return atomic.LoadInt32(&s.sessionCounter), atomic.LoadInt32(&s.streamCounter)
 			},
@@ -212,7 +214,7 @@ func TestAFullRequestChannelDoesNotBlockTheFailingSession(t *testing.T) {
 			select {
 			case <-done:
 			case <-time.After(2 * time.Second):
-				t.Fatal("handleSessionError blocked on a full request channel, so the " +
+				t.Fatal("the session-failure path blocked on a full request channel, so the " +
 					"session goroutine never returns and its slot never comes back")
 			}
 		})

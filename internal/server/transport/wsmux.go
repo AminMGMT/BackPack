@@ -14,7 +14,6 @@ import (
 	"github.com/backpack/backpack/config" // for mode
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
-	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 	"github.com/xtaci/smux"
@@ -682,103 +681,6 @@ func (s *WsMuxTransport) handleLoop(g *wsMuxGen) {
 	}
 }
 
-func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
-	counter := make(chan struct{}, s.config.MuxCon)
-	defer session.Close()
-	defer close(counter)
-
-	for {
-		// +1 for mux connection counter
-		counter <- struct{}{}
-
-		select {
-		case <-g.ctx.Done():
-			return
-
-		case incomingConn := <-g.localChannel:
-			if nowMillis()-incomingConn.timeCreated > pairingTimeout.Milliseconds() {
-				s.logger.Debugf("timeouted local connection: %d ms", nowMillis()-incomingConn.timeCreated)
-				incomingConn.conn.Close()
-
-				// Free the slot this connection took on accept. It is otherwise
-				// released only by the handler goroutine, which never runs for a
-				// connection that timed out waiting to be paired — so a tunnel
-				// with max_connections set loses a slot to every timeout and
-				// eventually refuses everything. tcp and quic already do this;
-				// these four did not.
-				s.limits.release()
-
-				// Decrement the counter
-				atomic.AddInt32(&s.streamCounter, -1)
-				<-counter
-				continue
-			}
-
-			stream, err := session.OpenStream()
-			if err != nil {
-				s.handleSessionError(g, &incomingConn, err)
-				return
-			}
-
-			// Send the target port over the tunnel connection
-			if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
-				s.logger.Tracef("failed to send address over stream: %v", err)
-				// The stream is unusable and nothing else will close it.
-				stream.Close()
-
-				// Give back the mux slot this attempt took. It was not given
-				// back, so a session that failed this way MuxCon times stopped
-				// taking connections at all: the loop blocks at the top on a
-				// counter that is full, and the only goroutine that empties it
-				// is this one.
-				<-counter
-
-				// Back on the queue for another stream, without blocking — see
-				// requeueLocal. A connection that goes back is still in flight
-				// and stays counted; one there was no room for is counted out
-				// here, because nothing downstream will ever do it.
-				if !requeueLocal(g.localChannel, incomingConn, s.limits, s.logger) {
-					atomic.AddInt32(&s.streamCounter, -1)
-				}
-				continue
-			}
-
-			// Handle data exchange between connections
-			go func() {
-				// Free the connection slot once the transfer ends, or the
-				// limit would fill up permanently.
-				defer s.limits.release()
-				handlers.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol && !isUDPFlow(incomingConn.conn), incomingConn.conn, metrics.CountedConn(stream), s.logger, g.usageMonitor, localForwardPort(incomingConn.conn), s.config.Sniffer)
-				atomic.AddInt32(&s.streamCounter, -1)
-				<-counter // read signal from the channel
-			}()
-		}
-	}
-}
-
-func (s *WsMuxTransport) handleSessionError(g *wsMuxGen, incomingConn *LocalTCPConn, err error) {
-	s.logger.Tracef("failed to handle session: %v", err)
-
-	// decrease session value
-	atomic.AddInt32(&s.sessionCounter, -1)
-
-	// Back on the queue, without blocking. This runs on the session goroutine
-	// that has just failed and is about to return, so there may be no other
-	// goroutine left to drain the channel it is sending into. See requeueLocal.
-	// A connection there was no room for is counted out, since nothing
-	// downstream will do it.
-	if !requeueLocal(g.localChannel, *incomingConn, s.limits, s.logger) {
-		atomic.AddInt32(&s.streamCounter, -1)
-	}
-
-	// Attempt to request a new connection
-	select {
-	case g.reqNewConnChan <- struct{}{}:
-	default:
-		s.logger.Warn("request new connection channel is full")
-	}
-}
-
 // tlsSettings describes how this listener should obtain its certificate:
 // Let's Encrypt when a domain is configured, otherwise the PEM pair on disk.
 func (s *WsMuxTransport) tlsSettings() network.TLSSettings {
@@ -792,5 +694,29 @@ func (s *WsMuxTransport) tlsSettings() network.TLSSettings {
 		// even then — but a generated certificate that names the address it is
 		// served from reads as a certificate rather than as a mistake.
 		SelfSignedHost: certHost(s.config.BindAddr),
+	}
+}
+
+// handleSession carries connections over one session. The state machine is
+// muxSession's, shared with the other two mux transports — see muxsession.go.
+func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
+	s.session(g).run(session)
+}
+
+// session binds this transport's channels, counters and settings to the shared
+// loop. It is the whole of what is transport-specific about running a session.
+func (s *WsMuxTransport) session(g *wsMuxGen) muxSession {
+	return muxSession{
+		ctx:           g.ctx,
+		local:         g.localChannel,
+		usage:         g.usageMonitor,
+		reqNewConn:    g.reqNewConnChan,
+		muxCon:        s.config.MuxCon,
+		proxyProtocol: s.config.ProxyProtocol,
+		sniffer:       s.config.Sniffer,
+		limits:        s.limits,
+		log:           s.logger,
+		streams:       &s.streamCounter,
+		sessions:      &s.sessionCounter,
 	}
 }

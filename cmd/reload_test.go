@@ -63,7 +63,7 @@ func TestAwaitConfigChangeReturnsAChangedConfig(t *testing.T) {
 		writeConfig(t, path, serverConfig("3090"))
 	}()
 
-	next := awaitConfigChange(ctx, path, current)
+	next, _ := awaitConfigChange(ctx, context.Background(), path, current)
 	if next == nil {
 		t.Fatal("an edited configuration was never reported")
 	}
@@ -88,7 +88,7 @@ func TestAwaitConfigChangeIgnoresAnUnparseableFile(t *testing.T) {
 		writeConfig(t, path, "[server\nthis is not toml at all")
 	}()
 
-	if next := awaitConfigChange(ctx, path, current); next != nil {
+	if next, _ := awaitConfigChange(ctx, context.Background(), path, current); next != nil {
 		t.Fatalf("a file that does not parse was applied: %+v", next.Server)
 	}
 }
@@ -111,7 +111,7 @@ func TestAwaitConfigChangeIgnoresAMeaninglessRewrite(t *testing.T) {
 		writeConfig(t, path, "# edited by hand\n"+body+"\n")
 	}()
 
-	if next := awaitConfigChange(ctx, path, current); next != nil {
+	if next, _ := awaitConfigChange(ctx, context.Background(), path, current); next != nil {
 		t.Fatal("a rewrite that changed nothing restarted the tunnel")
 	}
 }
@@ -132,7 +132,7 @@ func TestAwaitConfigChangeIgnoresAnExplicitDefault(t *testing.T) {
 		writeConfig(t, path, serverConfig("3080")+"\nchannel_size = 2048\n")
 	}()
 
-	if next := awaitConfigChange(ctx, path, current); next != nil {
+	if next, _ := awaitConfigChange(ctx, context.Background(), path, current); next != nil {
 		t.Fatalf("writing out an already-default value restarted the tunnel: %+v", next.Server)
 	}
 }
@@ -151,7 +151,7 @@ func TestAwaitConfigChangeStopsWithTheContext(t *testing.T) {
 	}()
 
 	start := time.Now()
-	if next := awaitConfigChange(ctx, path, current); next != nil {
+	if next, _ := awaitConfigChange(ctx, context.Background(), path, current); next != nil {
 		t.Fatal("a cancelled context was reported as a configuration change")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -177,7 +177,7 @@ func TestAwaitConfigChangeSurvivesAMissingFile(t *testing.T) {
 		writeConfig(t, path, serverConfig("3090"))
 	}()
 
-	next := awaitConfigChange(ctx, path, current)
+	next, _ := awaitConfigChange(ctx, context.Background(), path, current)
 	if next == nil {
 		t.Fatal("the watcher gave up when the file briefly went missing")
 	}

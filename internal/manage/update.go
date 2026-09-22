@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/backpack/backpack/internal/manage/backup"
 	"io"
 	"net/http"
 	"os"
@@ -24,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/backpack/backpack/internal/manage/backup"
 
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"

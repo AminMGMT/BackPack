@@ -103,13 +103,26 @@ func (c *udpCarrier) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	defer c.wbatchMu.Unlock()
 
 	// One segmented write beats one sendmmsg by two to three times at the same
-	// batch — see gso.go for the measurement. It is tried first and falls
-	// through to the batch below on any refusal, having sent nothing.
-	if n, err := c.writeGSO(bufs, to); err == nil {
-		return n, nil
+	// batch — see gso.go for the measurement.
+	//
+	// A run ends wherever the packet sizes stop being uniform, so a batch off
+	// the TUN usually goes out as several: the loop takes as many runs as it
+	// can and whatever is left over falls through to the batch below. Nothing
+	// is lost by trying, because a refusal sends nothing.
+	done := 0
+	for done < len(bufs) {
+		n, err := c.writeGSO(bufs[done:], to)
+		if err != nil {
+			break
+		}
+		done += n
 	}
+	if done == len(bufs) {
+		return done, nil
+	}
+	rest := bufs[done:]
 
-	n := len(bufs)
+	n := len(rest)
 	if len(c.wmsgs) < n {
 		c.wmsgs = make([]ipv4.Message, n)
 		for i := range c.wmsgs {
@@ -118,7 +131,7 @@ func (c *udpCarrier) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	}
 	msgs := c.wmsgs[:n]
 	for i := range msgs {
-		msgs[i].Buffers[0] = bufs[i]
+		msgs[i].Buffers[0] = rest[i]
 		msgs[i].Addr = to
 		msgs[i].N = 0
 	}

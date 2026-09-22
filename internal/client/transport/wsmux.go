@@ -210,82 +210,19 @@ func (c *WsMuxTransport) channelDialer() {
 	}
 }
 
+// poolMaintainer keeps the pool the right size. The policy is poolSizer's,
+// shared with every other client transport — see poolmaintain.go.
 func (c *WsMuxTransport) poolMaintainer() {
-	for i := 0; i < c.config.ConnPoolSize; i++ { //initial pool filling
-		go c.tunnelDialer()
-	}
-
-	// factors
-	a := 4
-	b := 5
-	x := 3
-	y := 4.0
-
-	if c.config.AggressivePool {
-		c.logger.Info("aggressive pool management enabled")
-		a = 1
-		b = 2
-		x = 0
-		y = 0.75
-	}
-
-	tickerPool := time.NewTicker(time.Second * 1)
-	defer tickerPool.Stop()
-
-	tickerLoad := time.NewTicker(time.Second * 10)
-	defer tickerLoad.Stop()
-
-	newPoolSize := c.config.ConnPoolSize // intial value
-	var load poolLoad                    // throughput signal, see poolload.go
-	var poolConnectionsSum int32 = 0
-
-	for {
-		select {
-		case <-c.state.Ctx().Done():
-			return
-
-		case <-tickerPool.C:
-			// Accumulate pool connections over time (every second)
-			atomic.AddInt32(&poolConnectionsSum, atomic.LoadInt32(&c.poolConnections))
-
-		case <-tickerLoad.C:
-			// Calculate the loadConnections over the last 10 seconds
-			loadConnections := (int(atomic.LoadInt32(&c.loadConnections)) + 9) / 10 // +9 for ceil-like logic
-			atomic.StoreInt32(&c.loadConnections, 0)                                // Reset
-
-			// Calculate the average pool connections over the last 10 seconds
-			poolConnectionsAvg := (int(atomic.LoadInt32(&poolConnectionsSum)) + 9) / 10 // +9 for ceil-like logic
-			atomic.StoreInt32(&poolConnectionsSum, 0)                                   // Reset
-
-			// Throughput carried since the previous tick. A pool whose
-			// connections are each working hard should grow even when nobody
-			// is asking for new ones — see poolload.go.
-			mbps := load.mbps()
-
-			// The pool is allowed to outgrow its configured size, which from
-			// outside is indistinguishable from a leak. Publish what it is
-			// doing and why, so the panel can say "8 configured, 19 open,
-			// carrying 240 Mbit/s" instead of leaving somebody to guess.
-			metrics.ReportPool(poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize, mbps)
-
-			// Dynamically adjust the pool size based on current connections
-			if ((loadConnections+a) > poolConnectionsAvg*b && poolCanGrow(newPoolSize, c.config.ConnPoolSize)) ||
-				load.wantsMore(mbps, poolConnectionsAvg, newPoolSize, c.config.ConnPoolSize) {
-				c.logger.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s", newPoolSize, newPoolSize+1, poolConnectionsAvg, loadConnections, mbps)
-				newPoolSize++
-
-				// Add a new connection to the pool
-				go c.tunnelDialer()
-			} else if float64(loadConnections+x) < float64(poolConnectionsAvg)*y && newPoolSize > c.config.ConnPoolSize {
-				c.logger.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d", newPoolSize, newPoolSize-1, poolConnectionsAvg, loadConnections)
-				newPoolSize--
-
-				// send a signal to controlFlow
-				c.controlFlow <- struct{}{}
-			}
-		}
-	}
-
+	poolSizer{
+		ctx:        c.state.Ctx(),
+		log:        c.logger,
+		size:       c.config.ConnPoolSize,
+		aggressive: c.config.AggressivePool,
+		open:       &c.poolConnections,
+		taken:      &c.loadConnections,
+		shrink:     c.controlFlow,
+		dial:       c.tunnelDialer,
+	}.maintain()
 }
 
 func (c *WsMuxTransport) channelHandler() {

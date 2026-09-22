@@ -3,7 +3,6 @@ package manage
 import (
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/backpack/backpack/config"
@@ -441,9 +440,6 @@ func writeKV(b *strings.Builder, key, value string) {
 // typed. A mismatched token is answered with silence by design, so that second
 // case presents as a blocked port. This is what the reverse renderer has always
 // done, with %q.
-func quote(s string) string {
-	return strconv.Quote(s)
-}
 
 func tomlList(items []string) string {
 	quoted := make([]string, len(items))

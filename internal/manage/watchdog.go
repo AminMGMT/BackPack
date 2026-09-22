@@ -11,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/internal/alerthist"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/enginectl"
 	"github.com/backpack/backpack/internal/metrics"
 )
 
@@ -405,6 +406,24 @@ func checkThroughput(t Tunnel, flow *flowWatch, lastRestart map[string]time.Time
 	case stallReport, stallGiveUp:
 		alerthist.RecordEvent(message)
 		return true
+
+	case stallReload:
+		// The rung below a process restart: ask the engine to restart its own
+		// transport. See internal/enginectl.
+		//
+		// An engine with no socket falls straight through to the next rung
+		// rather than costing the tunnel a wasted interval. That is not a rare
+		// case and will not be for a while: the monitor and the engines are
+		// separate units and are not updated in the same instant, so a newer
+		// watchdog talking to an older engine is the ordinary state of a
+		// machine mid-update.
+		if err := enginectl.Ask(t.Name, enginectl.OpRestartTransport, nil); err == nil {
+			alerthist.RecordEvent(message)
+			go reportRecovery(t)
+			return true
+		}
+		fallthrough
+
 	case stallRestart:
 		if time.Since(lastRestart[t.Name]) <= wdCooldown {
 			return false

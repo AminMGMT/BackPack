@@ -1,4 +1,4 @@
-package manage
+package spec
 
 import (
 	"fmt"
@@ -30,22 +30,22 @@ import (
 // the wizard, the CLI's edit screen, EditTunnel, and the panel's create and
 // edit forms — goes through it.
 
-// tunnelBind is a control port as the operator wrote it. Host is empty when
+// TunnelBind is a control port as the operator wrote it. Host is empty when
 // they gave only a port, which is the case that has to keep meaning exactly
 // what it meant before.
-type tunnelBind struct {
+type TunnelBind struct {
 	Host string
 	Port string
 }
 
 // HasHost reports whether an address was named rather than left to the default.
-func (b tunnelBind) HasHost() bool { return b.Host != "" }
+func (b TunnelBind) HasHost() bool { return b.Host != "" }
 
 // Addr renders the value for BindAddr. ipv6 decides the wildcard family only
 // when no address was given: an operator who named one has already answered
 // that question, and overriding it with a checkbox would be ignoring what they
 // typed.
-func (b tunnelBind) Addr(ipv6 bool) string {
+func (b TunnelBind) Addr(ipv6 bool) string {
 	host := b.Host
 	if host == "" {
 		host = "0.0.0.0"
@@ -56,7 +56,7 @@ func (b tunnelBind) Addr(ipv6 bool) string {
 	return net.JoinHostPort(host, b.Port)
 }
 
-// parseTunnelBind reads a control port in either of the two forms:
+// ParseTunnelBind reads a control port in either of the two forms:
 //
 //	"443"                 every interface, exactly as before
 //	"0.0.0.0:443"         the same thing, said out loud
@@ -68,18 +68,18 @@ func (b tunnelBind) Addr(ipv6 bool) string {
 // address is a local interface, and a name that resolves to an address this
 // machine does not have fails inside the listener with "cannot assign requested
 // address" — an error that says nothing about the name that caused it.
-func parseTunnelBind(text string) (tunnelBind, error) {
+func ParseTunnelBind(text string) (TunnelBind, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return tunnelBind{}, fmt.Errorf("no tunnel port given")
+		return TunnelBind{}, fmt.Errorf("no tunnel port given")
 	}
 
 	// A bare port is the common case and the one that has to stay cheap.
 	if !strings.Contains(text, ":") {
-		if !validPort(text) {
-			return tunnelBind{}, fmt.Errorf("%q is not a port between 1 and 65535", text)
+		if !ValidPort(text) {
+			return TunnelBind{}, fmt.Errorf("%q is not a port between 1 and 65535", text)
 		}
-		return tunnelBind{Port: text}, nil
+		return TunnelBind{Port: text}, nil
 	}
 
 	host, port, err := net.SplitHostPort(text)
@@ -89,48 +89,48 @@ func parseTunnelBind(text string) (tunnelBind, error) {
 		// the same wording the forwarded-port parser uses, so an operator who
 		// has met one has met both.
 		if strings.Count(text, ":") > 1 && !strings.HasPrefix(text, "[") {
-			return tunnelBind{}, fmt.Errorf("%q looks like an IPv6 address; write it as [address]:port", text)
+			return TunnelBind{}, fmt.Errorf("%q looks like an IPv6 address; write it as [address]:port", text)
 		}
-		return tunnelBind{}, fmt.Errorf("%q is not an address:port", text)
+		return TunnelBind{}, fmt.Errorf("%q is not an address:port", text)
 	}
-	if !validPort(port) {
-		return tunnelBind{}, fmt.Errorf("%q is not a port between 1 and 65535", port)
+	if !ValidPort(port) {
+		return TunnelBind{}, fmt.Errorf("%q is not a port between 1 and 65535", port)
 	}
 
 	host = strings.TrimSpace(host)
 	if host == "" {
 		// ":443" — a port with the host left off, which is how a listen
 		// address is spelled everywhere else in this program.
-		return tunnelBind{Port: port}, nil
+		return TunnelBind{Port: port}, nil
 	}
 	if net.ParseIP(host) == nil {
-		return tunnelBind{}, fmt.Errorf("%q is not an IP address — the tunnel port binds a local "+
+		return TunnelBind{}, fmt.Errorf("%q is not an IP address — the tunnel port binds a local "+
 			"interface, so it takes an address this server holds (or just a port for all of them)", host)
 	}
-	return tunnelBind{Host: host, Port: port}, nil
+	return TunnelBind{Host: host, Port: port}, nil
 }
 
-// splitBindAddr is parseTunnelBind for a value already stored in a config,
+// SplitBindAddr is ParseTunnelBind for a value already stored in a config,
 // where the address has been through the parser once and is trusted. It exists
 // so the two callers that need the host and the port apart do not each write
 // their own SplitHostPort with their own idea of what a failure means.
-func splitBindAddr(addr string) tunnelBind {
+func SplitBindAddr(addr string) TunnelBind {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return tunnelBind{}
+		return TunnelBind{}
 	}
-	if isWildcardBind(host) {
+	if IsWildcardBind(host) {
 		host = ""
 	}
-	return tunnelBind{Host: host, Port: port}
+	return TunnelBind{Host: host, Port: port}
 }
 
-// bindHostOf is the address a server tunnel is pinned to, or "" when it listens
+// BindHostOf is the address a server tunnel is pinned to, or "" when it listens
 // on everything. It is what the panel shows back in the port field so the value
 // an operator typed is the value they see next time.
-func bindHostOf(addr string) string { return splitBindAddr(addr).Host }
+func BindHostOf(addr string) string { return SplitBindAddr(addr).Host }
 
-// localAddrExists reports whether an address is currently assigned to one of
+// LocalAddrExists reports whether an address is currently assigned to one of
 // this machine's interfaces.
 //
 // Used to warn, never to refuse. A floating address, a VIP that keepalived has
@@ -138,7 +138,7 @@ func bindHostOf(addr string) string { return splitBindAddr(addr).Host }
 // legitimate reasons to configure an address the machine does not have at this
 // instant — and net.ipv4.ip_nonlocal_bind exists precisely so that binding one
 // can be made to work. Refusing would break those setups to catch a typo.
-func localAddrExists(host string) bool {
+func LocalAddrExists(host string) bool {
 	want := net.ParseIP(host)
 	if want == nil {
 		return false

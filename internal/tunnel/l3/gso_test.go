@@ -14,36 +14,77 @@ import (
 // somebody's packets in the wrong places, which arrives at the far end as
 // corruption and nowhere as a message — so they are held here, exactly, rather
 // than inferred from whether a write happened to succeed.
-func TestOnlyAUniformRunIsSegmented(t *testing.T) {
+func TestWhereARunEnds(t *testing.T) {
 	buf := func(n int) []byte { return make([]byte, n) }
 
 	for _, tc := range []struct {
 		name    string
 		bufs    [][]byte
+		n       int
 		segment int
 		ok      bool
 	}{
-		{"a uniform run", [][]byte{buf(1200), buf(1200), buf(1200)}, 1200, true},
-		{"a short last one is allowed", [][]byte{buf(1200), buf(1200), buf(400)}, 1200, true},
-		{"two is a run", [][]byte{buf(1200), buf(1200)}, 1200, true},
+		{"a uniform batch is one run", [][]byte{buf(1200), buf(1200), buf(1200)}, 3, 1200, true},
+		{"two is a run", [][]byte{buf(1200), buf(1200)}, 2, 1200, true},
 
-		{"one is just a write", [][]byte{buf(1200)}, 0, false},
-		{"nothing at all", nil, 0, false},
-		{"a short one in the middle", [][]byte{buf(1200), buf(400), buf(1200)}, 0, false},
-		{"a long last one", [][]byte{buf(1200), buf(1201)}, 0, false},
-		{"an empty last one", [][]byte{buf(1200), buf(0)}, 0, false},
-		{"an empty first one", [][]byte{buf(0), buf(0)}, 0, false},
-		{"more than the kernel takes", make([][]byte, gsoMaxSegments+1), 0, false},
+		// A short packet does not merely end a run: it is that run's last
+		// segment, because the kernel's remainder is the final datagram. This
+		// is what makes the path useful on traffic that is not uniform.
+		{"a short one closes the run it is in", [][]byte{buf(1200), buf(1200), buf(400)}, 3, 1200, true},
+		{"and the rest is left for the next run", [][]byte{buf(1200), buf(400), buf(1200), buf(1200)}, 2, 1200, true},
+
+		{"one is just a write", [][]byte{buf(1200)}, 0, 0, false},
+		{"nothing at all", nil, 0, 0, false},
+		{"a longer one cannot be a segment", [][]byte{buf(1200), buf(1201)}, 0, 0, false},
+		{"an empty one ends it", [][]byte{buf(1200), buf(0)}, 0, 0, false},
+		{"an empty first one", [][]byte{buf(0), buf(0)}, 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			segment, ok := gsoEligible(tc.bufs)
+			n, segment, ok := gsoRun(tc.bufs)
 			if ok != tc.ok {
-				t.Fatalf("eligible = %v, want %v", ok, tc.ok)
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
 			}
-			if ok && segment != tc.segment {
+			if !ok {
+				return
+			}
+			if n != tc.n {
+				t.Fatalf("run of %d, want %d", n, tc.n)
+			}
+			if segment != tc.segment {
 				t.Fatalf("segment = %d, want %d", segment, tc.segment)
 			}
 		})
+	}
+}
+
+// The two ceilings end a run rather than refusing the batch, so a long batch
+// goes out as several segmented writes instead of falling back wholesale.
+func TestTheCeilingsEndARunRatherThanRefusingIt(t *testing.T) {
+	// More datagrams than the kernel segments in one go.
+	many := make([][]byte, gsoMaxSegments+10)
+	for i := range many {
+		many[i] = make([]byte, 100)
+	}
+	n, _, ok := gsoRun(many)
+	if !ok || n != gsoMaxSegments {
+		t.Fatalf("run of %d (ok=%v), want %d", n, ok, gsoMaxSegments)
+	}
+
+	// More bytes than one UDP payload describes.
+	big := make([][]byte, 64)
+	for i := range big {
+		big[i] = make([]byte, 1200)
+	}
+	n, _, ok = gsoRun(big)
+	if !ok {
+		t.Fatal("a long run of full-sized packets was refused outright")
+	}
+	if n*1200 > gsoMaxPayload {
+		t.Fatalf("a run of %d × 1200 is %d bytes, over the %d a UDP payload carries",
+			n, n*1200, gsoMaxPayload)
+	}
+	if n < 50 {
+		t.Fatalf("run of %d, and %d would fit", n, gsoMaxPayload/1200)
 	}
 }
 
@@ -51,22 +92,16 @@ func TestOnlyAUniformRunIsSegmented(t *testing.T) {
 // because the kernel refuses it outright and a refusal turns the feature off
 // for the life of the socket.
 func TestARunTooBigForOnePayloadIsRefusedFirst(t *testing.T) {
-	// 64 × 1200 is 76,800 — over the 65,507 a UDP payload can describe.
-	bufs := make([][]byte, 64)
-	for i := range bufs {
-		bufs[i] = make([]byte, 1200)
-	}
-	if _, ok := gsoEligible(bufs); ok {
-		t.Fatal("a run larger than one UDP payload was accepted")
-	}
-
-	// And the largest run that does fit is accepted.
 	fits := make([][]byte, 54)
 	for i := range fits {
 		fits[i] = make([]byte, 1200)
 	}
-	if _, ok := gsoEligible(fits); !ok {
-		t.Fatalf("a %d-byte run was refused and it fits", 54*1200)
+	n, _, ok := gsoRun(fits)
+	if !ok {
+		t.Fatal("a run that fits in one UDP payload was refused")
+	}
+	if n*1200 > gsoMaxPayload {
+		t.Fatalf("the run is %d bytes, over the %d limit", n*1200, gsoMaxPayload)
 	}
 }
 
@@ -152,10 +187,6 @@ func TestARaggedBatchStillGoesOutInFull(t *testing.T) {
 			b[j] = byte(i + 1)
 		}
 		bufs[i] = b
-	}
-
-	if _, ok := gsoEligible(bufs); ok {
-		t.Fatal("a ragged batch was judged eligible for segmenting")
 	}
 
 	sent, err := c.WriteBatch(bufs, sink.LocalAddr())

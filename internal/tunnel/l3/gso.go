@@ -19,8 +19,8 @@ package l3
 // `TestGSOSendRate` is the measurement and it is kept:
 //
 //	sendmmsg     8 per call   5,000 syscalls    ~255 kpps
-//	UDP_SEGMENT  8 per call   5,000 syscalls    ~700 kpps    +123% … +229%
-//	UDP_SEGMENT 48 per call     834 syscalls   ~1190 kpps    +320% … +398%
+//	UDP_SEGMENT  8 per call   5,000 syscalls    ~730 kpps    +150% … +229%
+//	UDP_SEGMENT 48 per call     834 syscalls   ~1190 kpps    +314% … +398%
 //
 // The middle row is the one that decided it: the same batch and the same number
 // of syscalls, two to three times the rate. The gain is the offload, not the
@@ -45,50 +45,62 @@ package l3
 
 // gsoMaxSegments is the most datagrams one offloaded write may carry.
 //
-// The kernel's own ceiling is 64. The binding limit here is lower and arrives
-// first: the whole run is one buffer as far as the send call is concerned, and
-// a UDP payload stops at 65,507 bytes, so a run of full-sized packets is
-// refused outright well before 64. The total is checked against that below;
-// this is only the count.
+// The kernel's own ceiling is 64. The binding limit is usually lower and
+// arrives first: the whole run is one buffer as far as the send call is
+// concerned, and a UDP payload stops at 65,507 bytes, so a run of full-sized
+// packets is cut off at about 54. Both limits end a run rather than refusing
+// the batch — the rest goes out as the next run.
 const gsoMaxSegments = 64
 
 // gsoMaxPayload is the largest buffer one write may describe: the UDP payload
 // ceiling, less nothing, because the segment size is carried out of band.
 const gsoMaxPayload = 65507
 
-// gsoEligible reports whether a batch can be sent as one segmented write, and
-// the segment size to declare if it can.
+// gsoRun measures the longest run at the front of bufs that can go out as one
+// segmented write, and the segment size to declare for it.
 //
-// The rules are the mechanism's: at least two datagrams (one is just a write),
-// every one the same size except the last, the last no larger than the rest,
-// and the whole run inside one UDP payload.
+// The rules are the mechanism's: every datagram the same size except the last,
+// which may be shorter — the kernel cuts a buffer of length L into ceil(L/S)
+// datagrams and the remainder is the final one. So a short packet does not
+// merely end a run, it is the run's last segment, which is what makes this
+// useful on traffic that is not uniform: a batch of full-sized packets with an
+// acknowledgement in the middle becomes two runs rather than none.
+//
+// A run of one is not a run — that is an ordinary write, and going through the
+// segmentation path for it would cost a copy to save nothing.
 //
 // It is a pure function so the rules can be tested without a socket, which
 // matters more here than usual: the failure mode of getting them wrong is not
 // an error, it is the kernel cutting somebody's packets in the wrong places.
-func gsoEligible(bufs [][]byte) (segment int, ok bool) {
-	if len(bufs) < 2 || len(bufs) > gsoMaxSegments {
-		return 0, false
+func gsoRun(bufs [][]byte) (n, segment int, ok bool) {
+	if len(bufs) < 2 {
+		return 0, 0, false
 	}
 	segment = len(bufs[0])
 	if segment == 0 || segment > gsoMaxPayload {
-		return 0, false
+		return 0, 0, false
 	}
+
 	total := 0
 	for i, b := range bufs {
-		switch {
-		case i == len(bufs)-1:
-			// The last one may be short, and may not be long.
-			if len(b) == 0 || len(b) > segment {
-				return 0, false
-			}
-		case len(b) != segment:
-			return 0, false
+		if i == gsoMaxSegments || total+len(b) > gsoMaxPayload {
+			break
+		}
+		if len(b) == 0 {
+			break
+		}
+		if len(b) > segment {
+			break
 		}
 		total += len(b)
+		n = i + 1
+		if len(b) < segment {
+			// A short one is the last segment of this run by definition.
+			break
+		}
 	}
-	if total > gsoMaxPayload {
-		return 0, false
+	if n < 2 {
+		return 0, 0, false
 	}
-	return segment, true
+	return n, segment, true
 }

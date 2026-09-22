@@ -223,6 +223,13 @@ func (s *server) alsoOnNode(name, action string) map[string]any {
 		return out
 	}
 	out["peer"] = map[string]any{"name": peer, "done": true}
+
+	// A tunnel stopped on purpose is not a tunnel that has drifted. Without
+	// this the drift report would name every deliberately-stopped far end for
+	// ever, which is how a report becomes something nobody opens.
+	if s.want != nil && action != "restart" {
+		_ = s.want.SetRunning(pair.Node, peer, action == "start")
+	}
 	return out
 }
 
@@ -339,6 +346,12 @@ func (s *server) handleTunnelAction(w http.ResponseWriter, r *http.Request) {
 					out["peerError"] = "this end is gone; " + pair.Node + " refused: " + derr.Error()
 					out["peerHint"] = "Remove " + peer + " on " + pair.Node + " by hand."
 					break
+				}
+				// Deleted on purpose, so it is no longer expected. A record
+				// left behind here would report a tunnel the operator
+				// themselves removed as missing.
+				if s.want != nil {
+					_ = s.want.Forget(pair.Node, peer)
 				}
 				out["note"] = "Removed from both servers."
 			}

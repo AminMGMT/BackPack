@@ -104,8 +104,9 @@ func TestCountersGoingBackwardsDoNotInventAStall(t *testing.T) {
 	}
 }
 
-// The ladder: notice it, restart it once it has persisted, and stop restarting
-// when restarting is plainly not the fix.
+// The ladder: notice it, ask the engine to restart its own transport, restart
+// the process once that has not helped, and stop restarting when restarting is
+// plainly not the fix.
 func TestTheResponseIsGraduated(t *testing.T) {
 	t0 := time.Now()
 	w := newFlowWatch()
@@ -128,8 +129,20 @@ func TestTheResponseIsGraduated(t *testing.T) {
 		t.Fatalf("acted inside the grace period: %v", action)
 	}
 
-	// Past it: restart, twice — and each one says which attempt it is, because
-	// "restarting it" twice in a row reads as a loop rather than a ladder.
+	// Past it: the cheap rung first. A transport restart keeps the process and
+	// everything it is holding, and it clears every stall that is about the
+	// transport rather than about the path — which is most of them.
+	now = now.Add(stallRestartAfter + time.Second)
+	action, msg = w.decide("t", now)
+	if action != stallReload {
+		t.Fatalf("the rung after the report was %v, want a transport restart", action)
+	}
+	if !strings.Contains(msg, "transport") {
+		t.Fatalf("the transport-restart report does not say what it is doing: %q", msg)
+	}
+
+	// And it is spent once. Repeating it would only delay the rung that might
+	// say something new.
 	for i := 1; i <= stallGiveUpAfter; i++ {
 		now = now.Add(stallRestartAfter + time.Second)
 		action, msg = w.decide("t", now)
@@ -247,10 +260,11 @@ func TestTheStallLadderSurvivesAWatchdogRestart(t *testing.T) {
 	w := newFlowWatch()
 	feed(w, "t", 0, stallProgress, stallChecks, t0)
 
-	// Climb the whole ladder: report, restart, restart, give up.
+	// Climb the whole ladder: report, transport restart, restart, restart,
+	// give up.
 	now := t0.Add(time.Duration(stallChecks) * wdInterval)
 	w.decide("t", now)
-	for i := 0; i < stallGiveUpAfter; i++ {
+	for i := 0; i < stallGiveUpAfter+1; i++ { // +1 for the transport-restart rung
 		now = now.Add(stallRestartAfter + time.Second)
 		w.decide("t", now)
 	}

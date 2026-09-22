@@ -2,7 +2,6 @@ package manage
 
 import (
 	"fmt"
-	"github.com/backpack/backpack/internal/manage/backup"
 	"math"
 	"net"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/backpack/backpack/internal/manage/backup"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"

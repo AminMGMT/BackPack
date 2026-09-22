@@ -23,11 +23,14 @@
 //     started them. See job.go for why there were three hand-rolled ones.
 //   - Net: the path measurement to every managed server.
 //   - Fleet: the runner that reaches them.
+//   - Desired: what each managed server is supposed to be running, and the
+//     comparison against what it reports. See desired.go.
 //
 // # What is deliberately not in here
 //
-// Desired state. It is the obvious next resident and it is a design in its own
-// right — what a node *should* be running, reconciled against what it is — and
-// putting a half of it here now would be the same mistake this package is
-// correcting.
+// Remediation. Desired state detects a difference and stops there, and that is
+// a design decision with a reason particular to this product rather than an
+// unfinished feature: a reconciler that re-applies on its own is a loop that
+// can fight an operator mid-change, and what it would be fighting over is the
+// tunnel that operator is reaching the machine through. See desired.go.
 package control

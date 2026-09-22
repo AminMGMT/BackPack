@@ -90,6 +90,14 @@ func Run(configPath string, ctx context.Context) {
 	// reload.
 	tuned := false
 
+	// The local control socket, so that whatever is watching this tunnel has a
+	// rung below `systemctl restart`. It lives for the whole process rather
+	// than for one generation: a caller asking what the engine is doing while
+	// it is between transports should get an answer, not a closed socket.
+	// See internal/enginectl.
+	ctl := &engineControl{name: tunnelNameFromPath(configPath)}
+	serveEngineControl(ctx, ctl)
+
 	for {
 		// The engine mutates the configuration it is given — the transports
 		// write their status back into it — so it gets its own copy and the
@@ -103,17 +111,30 @@ func Run(configPath string, ctx context.Context) {
 
 		runCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
+		// Ending this generation is exactly what a configuration change does,
+		// so a restart asked for over the socket takes the path a reload takes
+		// rather than a second way of stopping a transport.
+		ctl.setGeneration(cancel)
 		go func() {
 			defer close(done)
 			runEngine(&running, runCtx, configPath, applyTuning)
 		}()
 
-		next := awaitConfigChange(ctx, configPath, cfg)
+		next, why := awaitConfigChange(ctx, runCtx, configPath, cfg)
 		cancel()
 		<-done
 
-		if next == nil {
-			return // ctx ended: shutting down, not reloading
+		switch why {
+		case wakeShutdown:
+			return
+
+		case wakeRestart:
+			// A restart asked for over the control socket. It is not a reload
+			// and is not reported as one: the same configuration starts again,
+			// after its ports come free.
+			logger.Info("the transport was asked to restart; starting it again")
+			waitForPorts(ctx, portsInUse(cfg))
+			continue
 		}
 
 		logger.Info("the configuration file changed; restarting the tunnel with it")

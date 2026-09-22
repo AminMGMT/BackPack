@@ -196,12 +196,6 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	switch r.FormValue("action") {
 	case "add":
-		name := strings.TrimSpace(r.FormValue("name"))
-		host := strings.TrimSpace(r.FormValue("host"))
-		user := strings.TrimSpace(r.FormValue("user"))
-		if user == "" {
-			user = "root"
-		}
 		port := 22
 		if v := strings.TrimSpace(r.FormValue("sshPort")); v != "" {
 			n, err := strconv.Atoi(v)
@@ -211,43 +205,30 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 			}
 			port = n
 		}
-		if _, err := node.Add(name, host, port, user, r.FormValue("password")); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+		name := strings.TrimSpace(r.FormValue("name"))
 
-		// Reached once, now, while the operator is looking at the form.
-		//
-		// The alternative is to save the details and let the first real
-		// operation discover that the password is wrong — which is the shape
-		// the old flow had, and it is why a server could sit in the fleet doing
-		// nothing with nothing saying why. A server that cannot be reached is
-		// taken back out, because a fleet entry that has never worked is not a
-		// server, it is a typo.
-		var info node.Info
-		err := s.nodes.Runner().Call(name, node.OpHello, nil, &info)
-
-		// A machine that answers SSH and has no Backpack on it is the ordinary
-		// case, not a failure: it is a server the operator has just bought. The
-		// panel installs it rather than sending them to a terminal on it, which
-		// is the whole point of managing it from here.
-		if errors.Is(err, node.ErrNeedsInstall) {
-			inst, ok := s.nodes.Runner().(interface{ Install(string) (string, error) })
-			if ok && r.FormValue("install") != "0" {
-				if _, ierr := inst.Install(name); ierr != nil {
-					_ = node.Remove(name)
-					http.Error(w, ierr.Error(), http.StatusBadGateway)
-					return
-				}
-				err = s.nodes.Runner().Call(name, node.OpHello, nil, &info)
-			}
-		}
+		// The decision is control.Fleet.Join's — reach the machine now, install
+		// Backpack if it has none, take the entry back out if it cannot be
+		// reached. None of that is about HTTP, and having it here was why a CLI
+		// that wanted to add a server had to drive the panel. See
+		// internal/control/join.go.
+		_, err := s.nodes.Join(name, r.FormValue("host"), port,
+			r.FormValue("user"), r.FormValue("password"), r.FormValue("install") != "0")
 		if err != nil {
-			_ = node.Remove(name)
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			// The three stages fail for three different reasons and the
+			// operator is looking at the form: a rejected name or port is
+			// theirs to correct, a machine that will not answer is a
+			// credential or a firewall, and a failed install is the far
+			// machine's own words.
+			var je control.JoinError
+			status := http.StatusBadGateway
+			if errors.As(err, &je) && je.Stage == "register" {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
-		_ = node.NoteInfo(name, info)
+
 		// A server joining the fleet may already hold the far end of tunnels
 		// this panel has been managing alone. Offered, never linked — see
 		// suggestPairsOn.
@@ -463,6 +444,12 @@ func (s *server) nodeAction(w http.ResponseWriter, r *http.Request) {
 		// of them — keeping that would make a later edit report a node that is
 		// no longer in the fleet.
 		_ = manage.ForgetNodePairs(name)
+		// And what it was expected to be running, for the same reason: a node
+		// that has left the fleet cannot be asked, so every tunnel expected of
+		// it would be reported unreachable for ever.
+		if s.want != nil {
+			_ = s.want.ForgetNode(name)
+		}
 		if run := s.nodes.Runner(); run != nil {
 			run.Forget(name)
 		}
@@ -682,6 +669,22 @@ func (s *server) pushPeerEnd(run node.Runner, nodeName, tunnel string, peerConn 
 	if err := run.Call(nodeName, node.OpApply, req, &res); err != nil {
 		return nil, err
 	}
+
+	// Written down the moment the node says it has it. This is the only place
+	// the panel knows both that a far end was meant to exist and what it was
+	// meant to be, and neither fact can be recovered from the node afterwards:
+	// a tunnel that was deleted there and one that was never created look
+	// identical from here. A failure to record is not a failure to create —
+	// see internal/control/desired.go.
+	if s.want != nil {
+		_ = s.want.Record(nodeName, control.TunnelIntent{
+			Name:       form.Name,
+			Role:       peerRole(form.Kind, req),
+			TunnelPort: peerTunnelPort(req),
+			Running:    res.Active,
+		})
+	}
+
 	return map[string]any{
 		"service":  res.Service,
 		"active":   res.Active,
@@ -689,4 +692,25 @@ func (s *server) pushPeerEnd(run node.Runner, nodeName, tunnel string, peerConn 
 		"note":     form.Note,
 		"peerName": form.Name,
 	}, nil
+}
+
+// peerRole and peerTunnelPort read back the two facts that identify the far end
+// as one half of a pair, from the request that created it.
+//
+// They are read from the request rather than from the node's answer because the
+// answer says what the node did, and these say what it was asked to be. When
+// the two disagree that is exactly the drift worth reporting, and a record
+// taken from the answer could never show it.
+func peerRole(kind string, req node.ApplyRequest) string {
+	if kind == "direct" || req.Tunnel == nil {
+		return ""
+	}
+	return req.Tunnel.Role
+}
+
+func peerTunnelPort(req node.ApplyRequest) string {
+	if req.Tunnel == nil {
+		return ""
+	}
+	return req.Tunnel.TunnelPort
 }

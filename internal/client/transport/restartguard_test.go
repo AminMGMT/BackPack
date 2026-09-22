@@ -111,17 +111,36 @@ func TestTheControlWriteBoundMatchesTheServer(t *testing.T) {
 // the panel draws a card from it. ws did not, so that card was not empty or
 // zero on a ws or wss tunnel: it was absent, while every other transport had
 // one.
+//
+// This used to read the seven copies of the sizing loop looking for that call
+// in each. There is one copy now, so it reads that — and checks instead that
+// every transport still delegates to it, which is the stronger statement and
+// the one that stops an eighth copy appearing.
+//
+// **udp was excluded from the old list on a premise that was simply wrong.**
+// The comment said it "has no pool maintainer at all"; it has had one all
+// along, and it was the single transport that never reported its pool — so the
+// one exclusion in the list was the one case the test was written to catch.
 func TestEveryPooledClientEngineReportsItsPool(t *testing.T) {
-	// udp is not pooled in this sense — it has no pool maintainer at all.
-	for _, engine := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic"} {
+	for _, engine := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic", "udp"} {
 		src := readEngine(t, "client", engine)
 		if !strings.Contains(src, "poolMaintainer") {
 			t.Errorf("%s no longer maintains a pool; take it out of this list", engine)
 			continue
 		}
-		if !strings.Contains(src, "metrics.ReportPool(") {
-			t.Errorf("%s maintains a connection pool and never reports it, so the panel's "+
-				"pool card is missing entirely on that transport", engine)
+		if !strings.Contains(src, "poolSizer{") {
+			t.Errorf("%s has a pool maintainer that is not the shared one — if it has a "+
+				"copy of the sizing loop again, every fault fixed in poolmaintain.go "+
+				"has to be found and fixed here as well", engine)
 		}
+	}
+
+	shared, err := os.ReadFile("poolmaintain.go")
+	if err != nil {
+		t.Fatalf("reading the shared pool sizer: %v", err)
+	}
+	if !strings.Contains(string(shared), "metrics.ReportPool(") {
+		t.Error("the shared pool sizer never reports the pool, so the panel's pool " +
+			"card is missing on every transport at once")
 	}
 }

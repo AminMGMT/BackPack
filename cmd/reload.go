@@ -69,14 +69,32 @@ func fileFingerprint(path string) (fingerprint, error) {
 	return fingerprint{size: fi.Size(), modTime: fi.ModTime()}, nil
 }
 
-// awaitConfigChange blocks until the file at path holds a configuration that
-// differs from current, and returns it. It returns nil when ctx ends, which is
-// the caller's signal to shut down rather than reload.
+// wakeReason says why the wait ended.
+type wakeReason int
+
+const (
+	// wakeShutdown: the process is stopping.
+	wakeShutdown wakeReason = iota
+	// wakeConfig: the file changed and means something different.
+	wakeConfig
+	// wakeRestart: the running generation ended without the file changing,
+	// which is what a restart asked for over the control socket looks like
+	// from here. It is not a reload and must not be reported as one.
+	wakeRestart
+)
+
+// awaitConfigChange blocks until there is a reason to end the running
+// generation, and says which reason it was.
+//
+// It watches two things. The file, because that is what a reload is; and the
+// generation's own context, because the control socket ends a generation by
+// cancelling it and this loop would otherwise go on polling the file while
+// nothing was running. See internal/enginectl.
 //
 // current must be the configuration as it was loaded, not the one the tunnel is
 // running from: the transports write their status back into their own copy, so
 // a running configuration always differs from the file it came from.
-func awaitConfigChange(ctx context.Context, path string, current *config.Config) *config.Config {
+func awaitConfigChange(ctx, gen context.Context, path string, current *config.Config) (*config.Config, wakeReason) {
 	last, err := fileFingerprint(path)
 	if err != nil {
 		// The file was readable moments ago, when it was loaded. If it is not
@@ -93,7 +111,9 @@ func awaitConfigChange(ctx context.Context, path string, current *config.Config)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, wakeShutdown
+		case <-gen.Done():
+			return nil, wakeRestart
 		case <-ticker.C:
 		}
 
@@ -117,7 +137,7 @@ func awaitConfigChange(ctx context.Context, path string, current *config.Config)
 			logger.Debug("the configuration file changed but means the same thing; leaving the tunnel alone")
 			continue
 		}
-		return next
+		return next, wakeConfig
 	}
 }
 

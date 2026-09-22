@@ -90,8 +90,33 @@ func TestRequeueingWorksWithNoLimitsConfigured(t *testing.T) {
 // the address never popped its counter, so after MuxCon such failures the loop
 // blocked at the top on a counter only it could empty — the same deadlock by a
 // different channel.
+// It is read in one place now, because there is one copy. The three transports
+// that used to hold it are checked for still delegating rather than for holding
+// it correctly — which is the stronger statement of the two, and the one that
+// stops a fourth copy appearing.
 func TestNoMuxTransportBlocksPuttingAConnectionBack(t *testing.T) {
 	for _, name := range []string{"tcpmux", "wsmux", "kcp"} {
+		t.Run(name+" delegates", func(t *testing.T) {
+			src := readTransportSource(t, name+".go")
+			if !strings.Contains(src, ".run(session)") {
+				t.Errorf("%s.go no longer hands its session to the shared loop — if it "+
+					"has a copy of it again, every fault fixed in muxsession.go has to "+
+					"be found and fixed here as well", name)
+			}
+			for _, line := range strings.Split(src, "\n") {
+				trimmed := strings.TrimSpace(line)
+				// `case g.localChannel <- …` is the accept path offering a new
+				// connection and is allowed to be a select arm. A bare send is
+				// the one that blocks.
+				if strings.HasPrefix(trimmed, "g.localChannel <-") {
+					t.Errorf("%s.go puts a connection back with a blocking send:\n  %s",
+						name, trimmed)
+				}
+			}
+		})
+	}
+
+	for _, name := range []string{"muxsession"} {
 		t.Run(name, func(t *testing.T) {
 			src := readTransportSource(t, name+".go")
 			for _, line := range strings.Split(src, "\n") {
@@ -99,7 +124,7 @@ func TestNoMuxTransportBlocksPuttingAConnectionBack(t *testing.T) {
 				if strings.HasPrefix(trimmed, "//") {
 					continue
 				}
-				if strings.HasPrefix(trimmed, "g.localChannel <-") {
+				if strings.HasPrefix(trimmed, "m.local <-") {
 					t.Errorf("%s.go puts a connection back with a blocking send:\n  %s",
 						name, trimmed)
 				}

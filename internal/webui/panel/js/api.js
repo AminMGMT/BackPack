@@ -94,6 +94,14 @@ export const tunnelOptions = () => get('/api/tunnel/options');
    thing — the fleet — and each returns the state that follows, so the screen
    never has to guess what changed. */
 export const nodes = () => get('/api/nodes');
+
+/* What the fleet is supposed to be running, against what it is.
+ *
+ * Every fleet operation used to be imperative: the panel told a server to
+ * create a tunnel and nothing remembered the instruction, so nothing could
+ * notice it had stopped being true. This is the other half — it changes
+ * nothing, it only reports. */
+export const fleetDrift = () => get('/api/fleet/drift');
 /* The same fleet, answered from what the panel already knows and contacting no
    server. The fleet page draws this first — otherwise the page stands empty
    until the slowest machine in the fleet has answered — and then replaces it

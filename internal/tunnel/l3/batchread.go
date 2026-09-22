@@ -42,10 +42,30 @@ import "net"
 // batchSize is how many datagrams one recvmmsg may gather.
 //
 // The kernel fills as many as have arrived and returns; a larger array costs
-// only the address space it occupies. Eight is where the syscall saving has
-// already flattened out on a busy tunnel, and it keeps the per-pump buffer
-// allocation — batchSize × (maxMTU+256) — to well under a megabyte.
-const batchSize = 8
+// only the address space it occupies, and the pump holds one buffer of
+// maxMTU+256 per slot.
+//
+// It was eight, on the argument that the syscall saving flattens out by then.
+// That was an argument rather than a measurement, and the send side has since
+// shown how wrong an argument about syscalls can be. Measured instead
+// (TestBatchWidth, four widths, three runs):
+//
+//	width   1    ~50 kpps, and only half the datagrams arrive
+//	width   8   ~225 kpps
+//	width  32   ~300 kpps
+//	width 128   ~275 kpps
+//
+// Thirty-two is the peak rather than a compromise: a hundred and twenty-eight
+// is no faster and sometimes slower, and it would cost 900 KB more of buffers
+// per tunnel — putting the pump's own allocation over a megabyte, the figure
+// this constant was first written to stay under.
+//
+// The batch rarely *fills* at any width — two to four datagrams per call,
+// because the reader keeps up — so the gain is not in gathering more. It is in
+// taking an occasional burst in one call instead of two, and in the first row:
+// a reader taking one datagram at a time cannot keep up at all, and the socket
+// drops nearly half of them.
+const batchSize = 32
 
 // batchWriter is the same capability in the other direction: several datagrams
 // on the wire from one syscall.

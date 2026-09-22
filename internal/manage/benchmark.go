@@ -204,6 +204,13 @@ func SetFEC(name string, plan FECPlan) error {
 // an alternative to try instead, which is the honest place for it until it has
 // a track record here.
 func RecommendTransport(q PathQuality, current string) Recommendation {
+	return recommendWith(q, current, ProbeUDPEgress())
+}
+
+// recommendWith is RecommendTransport with the UDP reading supplied, so the
+// decision can be tested against a network that allows UDP and one that does
+// not without needing either.
+func recommendWith(q PathQuality, current string, udp UDPEgress) Recommendation {
 	r := Recommendation{Preset: PresetTurbo}
 
 	switch {
@@ -222,7 +229,7 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			fmt.Sprintf("%.0f%% of probes never completed — this link loses a lot of packets", q.LossPercent()),
 			"KCP repairs losses with error correction instead of waiting for retransmits, which is exactly this problem")
 		r.Caveats = append(r.Caveats,
-			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing",
+			udpUnknownCaveat,
 			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning",
 			"and if UDP itself is the problem here, TCP + PCK carries the same KCP inside TCP-shaped packets built below the kernel — Linux and root on both ends")
 
@@ -232,7 +239,7 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			fmt.Sprintf("%.0f%% packet loss measured — enough that TCP keeps backing off and losing speed", q.LossPercent()),
 			"KCP's error correction recovers those losses without a full round trip")
 		r.Caveats = append(r.Caveats,
-			"KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing",
+			udpUnknownCaveat,
 			"if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning",
 			"and if UDP itself is the problem here, TCP + PCK carries the same KCP inside TCP-shaped packets built below the kernel — Linux and root on both ends")
 
@@ -248,11 +255,15 @@ func RecommendTransport(q PathQuality, current string) Recommendation {
 			fmt.Sprintf("the link is clean and steady (%s, ±%s, no measurable loss)", shortDur(q.Avg), shortDur(q.Jitter)),
 			"with nothing to repair, plain multiplexed TCP is the fastest and the lightest on CPU")
 		r.Caveats = append(r.Caveats,
-			"this test is TCP only, so it cannot tell you whether UDP is throttled on your route — "+
-				"a clean result here says nothing either way about KCP or QUIC",
+			tcpOnlyCaveat,
 			"and it measures speed, not filtering: if the tunnel works but is throttled after a while, "+
 				"that is a filtering problem and the answer is a camouflaged transport rather than a faster one")
 	}
+
+	// The UDP reading, which can move the answer as well as explain it — see
+	// applyUDPFinding. It runs before the FEC plan below, because a
+	// recommendation that has just moved off KCP has no parity ratio to carry.
+	applyUDPFinding(&r, udp)
 
 	// When the answer is KCP, the parity ratio is the setting that most decides
 	// how it feels, so carry the measured recommendation alongside the transport.
@@ -340,4 +351,81 @@ func shortDur(d time.Duration) string {
 		return fmt.Sprintf("%.1fms", float64(d.Microseconds())/1000)
 	}
 	return fmt.Sprintf("%dms", d.Milliseconds())
+}
+
+// applyUDPFinding turns the measurement into the difference it should make.
+//
+// Every recommendation for a lossy link is a UDP carrier, and every one of them
+// used to carry the same sentence: test whether UDP works before committing.
+// That was the tool telling the operator to find out something the tool had not
+// asked. It asks now, and the answer changes the advice rather than decorating
+// it:
+//
+//   - UDP does not leave this machine → a UDP carrier is not a slower choice,
+//     it is one that cannot come up. The recommendation moves to the best
+//     carrier that does not need UDP, and says why it moved.
+//   - UDP works → the caveat that told the operator to go and check is replaced
+//     by the reading, because a caveat that has been answered and is still
+//     printed is one that teaches people to skip caveats.
+//   - The probe could not run → nothing changes. A measurement that was not
+//     taken is not a measurement that failed.
+func applyUDPFinding(r *Recommendation, udp UDPEgress) {
+	if !udp.Checked() {
+		return
+	}
+
+	// The two sentences this replaces, wherever they were added. Both were the
+	// tool telling the operator to go and find out something it had not asked.
+	kept := r.Caveats[:0]
+	for _, c := range r.Caveats {
+		if c != udpUnknownCaveat && c != tcpOnlyCaveat {
+			kept = append(kept, c)
+		}
+	}
+	r.Caveats = kept
+
+	if udp.Works() {
+		if needsUDP(r.Transport) {
+			r.Why = append(r.Why,
+				fmt.Sprintf("UDP leaves this machine and comes back (%s answered in %s), so a UDP carrier can work here",
+					udp.Via, shortDur(udp.RTT)))
+		}
+		return
+	}
+
+	if !needsUDP(r.Transport) {
+		// Nothing to move, but it is still worth saying: it rules out the
+		// alternatives the caveats offer.
+		r.Caveats = append(r.Caveats,
+			"UDP does not appear to leave this machine at all — none of the public resolvers answered — so kcp, quic and udp are not options on this network")
+		return
+	}
+
+	was := r.Label
+	r.Transport, r.Label = "tcpmux", "TCP Mux"
+	r.Why = append(r.Why,
+		"but UDP does not appear to leave this machine at all — none of the public resolvers answered — so "+was+" would not come up here, however well it would have suited the link",
+		"multiplexed TCP is the best of what is left: it rides a congested path far better than one connection per stream")
+	r.Caveats = append(r.Caveats,
+		"this is the second-best answer for this link. If UDP can be opened on this network, measure again — the loss on this path is exactly what KCP's error correction is for",
+		"TCP + PCK is the other route to that: it carries the same KCP inside TCP-shaped packets built below the kernel, so it needs no UDP at all. Linux and root on both ends")
+}
+
+// needsUDP reports whether a transport cannot run without UDP leaving the
+// machine. pck is deliberately absent: it carries KCP inside packets it builds
+// below the kernel, which is the whole reason it exists.
+// The two caveats the measurement answers, named so that the place that adds
+// them and the place that removes them cannot drift apart.
+const (
+	udpUnknownCaveat = "KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing"
+	tcpOnlyCaveat    = "this test is TCP only, so it cannot tell you whether UDP is throttled on your route — " +
+		"a clean result here says nothing either way about KCP or QUIC"
+)
+
+func needsUDP(transport string) bool {
+	switch transport {
+	case "kcp", "quic", "udp", "xdi":
+		return true
+	}
+	return false
 }

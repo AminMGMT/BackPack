@@ -69,9 +69,12 @@ func TestGSOSendRate(t *testing.T) {
 	)
 	payload := make([]byte, segment)
 
-	// sendmmsg, the path that ships today.
+	// sendmmsg alone — the baseline, which needs the offload turned off now
+	// that WriteBatch takes it by default. Without this the "before" column
+	// measures the "after" path and the comparison says nothing.
 	batched := func() (time.Duration, int) {
 		c := newLocalUDPCarrier(t)
+		c.gsoOff = true
 		bufs := make([][]byte, batchSize)
 		for i := range bufs {
 			bufs[i] = payload
@@ -94,7 +97,7 @@ func TestGSOSendRate(t *testing.T) {
 	}
 
 	// gsoN is the same write with a chosen run length.
-	gsoN := func(n int) (time.Duration, int, error) { return gsoRun(t, to, datagrams, segment, n) }
+	gsoN := func(n int) (time.Duration, int, error) { return gsoSendRun(t, to, datagrams, segment, n) }
 
 	// One sendmsg per run of segments, cut up by the kernel.
 	//
@@ -174,10 +177,10 @@ func TestGSOSendRate(t *testing.T) {
 		segments, gs, rate(gd), 100*(rate(gd)/rate(bd)-1))
 }
 
-// gsoRun sends total datagrams of segment bytes, perCall at a time, through one
+// gsoSendRun sends total datagrams of segment bytes, perCall at a time, through one
 // sendmsg carrying UDP_SEGMENT. It reports how long that took and how many
 // syscalls it was.
-func gsoRun(t *testing.T, to net.Addr, total, segment, perCall int) (time.Duration, int, error) {
+func gsoSendRun(t *testing.T, to net.Addr, total, segment, perCall int) (time.Duration, int, error) {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

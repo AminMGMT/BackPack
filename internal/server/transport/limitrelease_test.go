@@ -43,6 +43,12 @@ func TestEveryPairingTimeoutFreesItsConnectionSlot(t *testing.T) {
 			// reading it. What this still has to check for such a transport is
 			// the one release that stayed behind — the stale connection dropped
 			// before a pairing is ever started.
+			// A transport that hands its session to muxsession.go has nothing
+			// of this shape left: the timeout, the release and the counter all
+			// live in one place and are tested by running them.
+			if strings.Contains(string(src), ".run(session)") {
+				return
+			}
 			if strings.Contains(string(src), "}.run()") {
 				if !strings.Contains(string(src), "drop(localConn, s.limits") {
 					t.Errorf("%s.go hands connections to the shared pairing loop but "+

@@ -34,17 +34,25 @@ import (
 //
 // # Why the response is graduated
 //
-// Restarting is the only lever this side of the fence actually has: an engine
-// runs as its own process with no control socket, so "re-dial", "rebuild the
-// pool" and "restart the transport" are not available to ask for without
-// building an IPC channel first. Pretending otherwise would mean a ladder whose
-// rungs are all the same rung.
+// The engine has a control socket now, so there is a rung below restarting the
+// process: ask it to restart its own transport. That keeps the process, its
+// metrics history, its uptime, its accumulated counters and its log continuity,
+// and it clears every stall that is about the transport rather than about the
+// path — which is most of them. See internal/enginectl, and note that an engine
+// too old to have a socket falls straight through to the next rung rather than
+// costing the tunnel an interval.
 //
-// What is available is knowing when to stop. A stall that survives a restart is
-// not a tunnel that got stuck; it is a path, an MTU or a far-end service, and
-// restarting it every three minutes makes it worse while burying the evidence.
-// So the ladder here is: notice it and say so, restart once it has persisted,
-// and if restarting does not fix it, stop restarting and say what to look at.
+// "Rebuild the pool" is still not available and is deliberately not faked: an
+// op that reports success and changes nothing is worse than one that does not
+// exist, because a rung that does nothing is a rung whose failure is invisible.
+//
+// What is also available is knowing when to stop. A stall that survives a
+// restart is not a tunnel that got stuck; it is a path, an MTU or a far-end
+// service, and restarting it every three minutes makes it worse while burying
+// the evidence.
+// So the ladder here is: notice it and say so; ask the engine to restart its
+// transport; restart the process once that has not helped; and if restarting
+// does not fix it, stop restarting and say what to look at.
 
 const (
 	// stallProgress is how many bytes one direction must advance before its
@@ -106,6 +114,12 @@ type flowReading struct {
 	direction string
 	// restarts is how many restarts this stall has cost.
 	restarts int
+	// reloaded is whether the cheaper rung — asking the engine to restart its
+	// own transport — has already been spent on this stall. It is worth one
+	// attempt and not more: a transport restart that did not clear it is
+	// evidence about the path, and repeating it only delays the rung that
+	// might say something new.
+	reloaded bool
 	// quietUntil suppresses action after giving up.
 	quietUntil time.Time
 	// reported is whether the current stall has been announced.
@@ -187,6 +201,7 @@ type stallAction int
 const (
 	stallWatch   stallAction = iota // nothing yet
 	stallReport                     // say it out loud, take no action
+	stallReload                     // ask the engine to restart its transport
 	stallRestart                    // restart the unit
 	stallGiveUp                     // stop restarting and say why
 )
@@ -210,6 +225,18 @@ func (w *flowWatch) decide(name string, now time.Time) (stallAction, string) {
 	}
 	if now.Sub(r.since) < stallRestartAfter {
 		return stallWatch, ""
+	}
+	// The cheap rung first. A transport restart keeps the process, its metrics
+	// history, its uptime and its log continuity, and it clears every stall
+	// that is about the transport rather than about the path — which is most
+	// of them. Only when it has been tried does this spend a process restart.
+	if !r.reloaded {
+		r.reloaded = true
+		r.since = now
+		return stallReload, fmt.Sprintf(
+			"🟠 Tunnel %s has been connected but %s for %s — asking it to restart its "+
+				"transport, which keeps the process and everything it is holding.",
+			name, r.direction, stallRestartAfter)
 	}
 	if r.restarts >= stallGiveUpAfter {
 		r.quietUntil = now.Add(stallQuietFor)
@@ -295,6 +322,10 @@ type persistedReading struct {
 	Restarts   int    `json:"restarts"`
 	QuietUntil int64  `json:"quietUntil,omitempty"`
 	Reported   bool   `json:"reported,omitempty"`
+	// Reloaded has to survive with the rest of the ladder. Without it a
+	// watchdog restart would hand the tunnel a second free transport restart,
+	// which is the forgetfulness this file exists to stop — in miniature.
+	Reloaded bool `json:"reloaded,omitempty"`
 }
 
 // save writes the current ladders.
@@ -309,6 +340,7 @@ func (w *flowWatch) save() {
 		p := persistedReading{
 			In: r.in, Out: r.out, Runs: r.runs,
 			Direction: r.direction, Restarts: r.restarts, Reported: r.reported,
+			Reloaded: r.reloaded,
 		}
 		if !r.since.IsZero() {
 			p.Since = r.since.Unix()
@@ -349,6 +381,7 @@ func (w *flowWatch) load() {
 		r := &flowReading{
 			in: p.In, out: p.Out, runs: p.Runs,
 			direction: p.Direction, restarts: p.Restarts, reported: p.Reported,
+			reloaded: p.Reloaded,
 		}
 		if p.Since != 0 {
 			r.since = time.Unix(p.Since, 0)

@@ -130,6 +130,89 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Added
 
+- **The tool now measures whether UDP works here instead of asking you to.**
+
+  Every recommendation for a lossy link is a UDP carrier — KCP, QUIC, plain UDP
+  — and every one of them carried the same sentence: *"KCP runs over UDP — if
+  your provider throttles UDP this will be worse, not better, so test it before
+  committing."* That was an admission. The tool measured the path with TCP,
+  concluded the link was lossy, recommended a UDP carrier, and then told the
+  operator to go and find out something the tool had not asked — which they
+  mostly cannot, because the far end refuses to answer an unauthenticated
+  datagram by design and there is nothing to test against.
+
+  It asks now: a DNS query to three public resolvers on different networks,
+  stopping at the first answer. If UDP leaves the machine and comes back, the
+  reading is reported and the caveat is gone. If none of them answer, **the
+  recommendation moves** — a UDP carrier there is not a slower choice, it is one
+  that never comes up — and it says what it moved off, that this is the second
+  best answer for this link, and that `pck` carries the same KCP inside
+  TCP-shaped packets and needs no UDP at all.
+
+  A caveat that has been answered and is still printed teaches people to skip
+  caveats, so both of the ones this measurement answers are removed rather than
+  left beside it. A probe that could not be taken changes nothing, which is not
+  the same as one that failed.
+
+  What it does not claim, and says so where the code is: it answers "can UDP
+  leave here", not "can UDP reach that port on that server". The narrower
+  question needs a far end that will answer.
+
+- **The engine has a local control socket, and the watchdog has a rung below
+  restarting it.** `/run/backpack/<name>.sock`, 0600, in a directory only root
+  can enter.
+
+  The graduated response to a stalled tunnel had one lever and said so: an
+  engine ran as its own process with no way to be asked for anything, so the
+  only thing the watchdog could do was `systemctl restart`. A ladder whose rungs
+  are all the same rung.
+
+  The engine can now be asked to restart its own transport. That keeps the
+  process, its metrics history, its uptime, its accumulated counters and its log
+  continuity, and it clears every stall that is about the transport rather than
+  about the path — which is most of them. A stall that clears there never
+  reaches the `systemctl` rung.
+
+  It is safe because it is not a new way of stopping a transport: a restart
+  asked for over the socket ends the running generation exactly as a
+  configuration change does, which is the path with years of production behind
+  it. And it degrades — an engine too old to have a socket falls straight
+  through to the next rung, which is the ordinary state of a machine mid-update,
+  since the monitor and the engines are separate units and are not updated in
+  the same instant.
+
+  **"Rebuild the pool" is deliberately absent.** The engine cannot genuinely do
+  it, and an operation that reports success and changes nothing is worse than
+  one that does not exist: a rung that does nothing is a rung whose failure is
+  invisible.
+
+- **The panel can tell you whether the fleet is running what you asked for.**
+  `Servers → Check the fleet`.
+
+  Every fleet operation was a one-way instruction: the panel told a server to
+  create a tunnel, the server said it had, and that was the end of it. Nothing
+  remembered the instruction, so nothing could notice that it had stopped being
+  true — a tunnel removed on the far machine by somebody with a terminal, a unit
+  disabled during an incident and never re-enabled, an apply that reported
+  success and then lost its config to a rollback. All of them leave a fleet that
+  looks correct on the panel and is not, and the only way to find out was to go
+  and look.
+
+  The panel now writes down what it asked for, and the report compares that with
+  what each server says it has: missing, stopped, running when it was stopped,
+  changed beyond what was written, or a tunnel this panel did not create.
+
+  **It changes nothing.** That is a decision rather than an unfinished feature:
+  something that re-applied on its own would be a loop that can fight an
+  operator in the middle of a change, and what it would be fighting over is the
+  tunnel that operator is reaching the machine through.
+
+  Two things it deliberately does not call drift, because either would turn a
+  useful report into one nobody opens: a field an older node does not report,
+  and a tunnel that was stopped from the panel on purpose. A server that could
+  not be reached is listed apart from one that has drifted — a machine that is
+  down has not changed, it is simply not answering.
+
 - **The layer-3 carrier hands whole runs of packets to the kernel to cut up.**
   UDP segmentation offload, on the send path.
 
@@ -141,14 +224,19 @@ raw-socket carriers need capabilities a test process does not have.
   nothing about that.
 
   `UDP_SEGMENT` does. Measured three ways, so the gain could not be mistaken for
-  a bigger batch: at the **same batch of eight and the same 5,000 syscalls it is
-  two to three times the rate**, and six times fewer syscalls on top of that at
-  48 per call. The middle figure is the one that decided it.
+  a bigger batch: at the **same batch and the same number of syscalls it is
+  three to four times the rate**, with fewer syscalls on top of that at a longer
+  run. The middle figure is the one that decided it.
 
-  Two conditions, both written where the code is. Every segment but the last has
-  to be the same size — the mechanism's rule, so a transfer through the tunnel
-  qualifies and the ragged traffic in between takes the old path untouched. And
-  support is found out by trying, because it depends on the kernel, the address
+  Every segment but the last has to be the same size — that is the mechanism,
+  not the implementation — so the carrier splits a batch into as many segmented
+  writes as it can rather than taking one and refusing the rest. A *short*
+  packet does not merely end a run, it is that run's last segment, because the
+  kernel's remainder is the final datagram; a batch of full-sized packets with
+  an acknowledgement in the middle goes out as two segmented writes rather than
+  as none.
+
+  Support is found out by trying, because it depends on the kernel, the address
   family and the route: the first refusal turns it off for the life of the
   socket and re-sends the same batch the old way, so nothing is dropped.
 
@@ -618,6 +706,110 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Changed
 
+- **Adding a server to the fleet is a decision, not a form handler.** It moved
+  to `control.Fleet.Join`, which is the package that owns the fleet.
+
+  It is the one fleet action with real logic in it: reach the machine while the
+  operator is still looking at the form, install Backpack when the machine has
+  none, and take the entry back out when it cannot be reached at all — because a
+  fleet entry that has never worked is not a server, it is a typo, and leaving
+  it is how a fleet fills with servers that do nothing and say nothing about
+  why.
+
+  None of that is about HTTP. Being reachable only through a POST is why
+  anything else that wanted to add a server had to drive the panel or write the
+  sequence again, and a sequence written twice is one where the second copy
+  forgets the back-out. The three ways it can fail are now named apart, because
+  they have three different fixes: a rejected name or port is the operator's to
+  correct, a machine that will not answer is a credential or a firewall, and a
+  failed install is the far machine's own words.
+
+- **The seven client transports share one pool-sizing loop.** Each kept its own
+  copy of the loop that decides how big the connection pool should be — the same
+  two tickers, the same four factors, the same growth and shrink conditions.
+  495 lines removed, 84 left.
+
+  Three of the seven were still identical. The other four had each been edited
+  at a different time, and two of the differences were faults rather than
+  formatting:
+
+  **A udp tunnel never reported its pool**, so the panel's connection-pool card
+  was not empty or zero on one — it was absent, while every other transport had
+  one. **And it never grew its pool on throughput**: the signal that lets a pool
+  grow when its connections are each working hard, rather than only when
+  somebody is waiting for one, was added to the others and not to it, so a udp
+  tunnel under sustained load sat at its configured size while the same load
+  grew every other transport's pool. Both are fixed by having one copy.
+
+  The test that should have caught the first of those was excluding the only
+  case it would have found: it left udp out of its list with the comment that
+  udp "has no pool maintainer at all", which it has had all along. It covers all
+  seven now, and checks that each delegates rather than checking seven copies
+  for the same call.
+
+- **The three mux transports share one session loop.** `tcpmux`, `wsmux` and
+  `kcp` reach the same place by different roads — a smux session over TCP, over
+  a websocket, or over KCP — and from there they did exactly the same thing in
+  three copies that were character-for-character identical apart from the
+  receiver's type and two comments. 279 lines removed, 60 left.
+
+  The history is the argument for doing it. Every fault in that loop had to be
+  found three times: the pooled connection slot that was not released when a
+  connection timed out waiting to be paired, so a tunnel with `max_connections`
+  lost one to every timeout until it refused everything; the mux slot that was
+  not given back when announcing the backend failed, so after `MuxCon` such
+  failures the session stopped taking connections at all, blocked on a counter
+  only it could empty; and a connection that could not be requeued being left
+  counted.
+
+  Two tests that read the three files looking for the same fix in each were
+  replaced by ones that read the single copy and additionally check that all
+  three transports still delegate to it — which is the stronger statement, and
+  the one that stops a fourth copy appearing.
+
+- **The layer-3 receive batch is thirty-two datagrams, not eight.** Eight was
+  set on the argument that the syscall saving flattens out by then, which the
+  send path has since shown is exactly the kind of argument that turns out to be
+  wrong. Measured at four widths: ~50, ~225, ~300 and ~275 kpps for 1, 8, 32 and
+  128.
+
+  Thirty-two is the peak rather than a compromise — a hundred and twenty-eight
+  is no faster and sometimes slower, and would cost 900 KB more of buffers per
+  tunnel. The first figure is the one worth keeping, though: a reader taking one
+  datagram at a time cannot keep up at all, and the socket drops nearly half of
+  them.
+
+  The measurement also answered the question behind it, and the answer was no:
+  one reading goroutine takes 500–800 kpps with four senders pushing at once and
+  loses nothing — five to eight gigabits a second of tunnelled traffic — and
+  neither of the ways of adding more helps. `SO_REUSEPORT` distributes by
+  *flow*, and this tunnel has exactly one, so N sockets would leave N-1 idle;
+  and N goroutines on one socket are serialised by the kernel and measured no
+  faster than one. Both are written up in `docs/performance-notes.md` with the
+  numbers.
+
+- **`internal/manage` has a leaf underneath it: `internal/manage/spec`.** The
+  transport predicates, the address and port helpers, the forwarded-port syntax
+  and the control-port bind type — about 500 lines that every one of that
+  package's sixty-two files uses and that use nothing themselves.
+
+  It is the layer the split plan had missed. Measuring the package before moving
+  anything showed that the three files the cycle runs through cannot be taken
+  together either: forty-seven unexported identifiers cross that boundary, and
+  under all three sits this vocabulary, which every attempt to move a larger
+  piece was dragging along. With it underneath rather than inside, the crossings
+  for those three files fall from forty-seven to sixteen.
+
+  Nothing that calls into `manage` changed. Every name is re-declared under the
+  name it had, the way `core_alias.go` already does for `manage/core`: six
+  packages and the CLI call into this one, and a refactor whose diff is every
+  call site is a refactor nobody can review.
+
+  The rule that keeps the new package a leaf is written in its doc, because it
+  is the only thing preventing it becoming a second dumping ground: nothing in
+  it knows what a tunnel is. A function there answers a question about a string
+  and never reads a file, runs a command or looks at a config.
+
 - **`internal/menu` is one file per screen.** `menu.go` was 1,462 lines with one
   function per screen and `Run()` a long switch over all of them. It is 179 now
   — the root screen and the helpers every screen shares — and the screens live
@@ -703,6 +895,29 @@ raw-socket carriers need capabilities a test process does not have.
   and the sentence did not.
 
 ### Fixed
+
+- **The network-namespace test harnesses left everything they started running.**
+  `tools/transporttest` and `tools/carriertest` each start two engine processes
+  and a listener inside a namespace, and never stopped them. The namespace
+  disappears when the run ends; the processes do not, because they are not in a
+  PID namespace — they carry on as orphans for as long as the machine is up.
+
+  A day of matrix runs had left **324 of them holding six and a half
+  gigabytes**, and that is the smaller half of the problem. They inherit the
+  script's standard output, so anything that waits for the pipe to close — a
+  shell, a CI step, a task runner — waits for the orphans instead of for the
+  test. A run that finished in forty seconds looked like it was still going
+  eight hours later.
+
+  Both harnesses now reap what they start, on every exit including the
+  interrupt, which is the case that leaks most: somebody stopping a matrix half
+  way through. `carriertest` also picked up the fix `transporttest` already had
+  — a capture file per run rather than a shared `/tmp/got.bin`, which one
+  leftover listener from a previous run is enough to corrupt.
+
+  **Every performance figure in `docs/performance-notes.md` was re-taken
+  afterwards**, and some of them moved: the batch-width table in particular had
+  128 looking nine per cent faster than 32, which on an idle machine it is not.
 
 - **Two allocation-budget tests were flaky, about one run in five.** Both drive
   a real socket, and when the far side falls behind, the send or receive path
