@@ -112,6 +112,17 @@ func startForwarder(t *testing.T, specs []string, acceptUDP bool) {
 	done := make(chan struct{})
 	var runErr error
 	go func() { defer close(done); runErr = forwarder.Run(ctx) }()
+
+	// This comment used to say the helper waited for the listeners, and it did
+	// not — it returned the moment the goroutine was started, and every caller
+	// was left to work out for itself whether anything was bound yet. The TCP
+	// tests did, with dialUntilReady. The UDP one could not, and guessed.
+	select {
+	case <-forwarder.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the forwarder's listeners never came up")
+	}
+
 	t.Cleanup(func() {
 		cancel()
 		<-done
@@ -244,10 +255,17 @@ func TestForwarderCarriesUDP(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// The listener comes up in its own goroutine, and UDP gives no signal that
-	// it has, so the first datagram may be sent into a closed port.
+	// startForwarder has waited for the listener, so the first datagram has
+	// somewhere to land. The retry that remains is for the flow setup behind
+	// it, and it is bounded by the clock rather than by a count of attempts:
+	// an attempt costs the read deadline only when something is listening. A
+	// datagram sent to a port nothing has bound draws an ICMP port-unreachable
+	// that fails the next Read at once, so sixty attempts that look like
+	// twelve seconds can be over in 725µs — which is how this test came to
+	// report "no reply" against a forwarder that was merely a moment late, in
+	// an elapsed time of 0.00s.
 	buf := make([]byte, 64)
-	for attempt := 0; attempt < 60; attempt++ {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		if _, err := conn.Write([]byte("ping")); err != nil {
 			t.Fatalf("write: %v", err)
 		}
@@ -259,6 +277,7 @@ func TestForwarderCarriesUDP(t *testing.T) {
 			}
 			return
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("no reply came back through the udp forwarder")
 }

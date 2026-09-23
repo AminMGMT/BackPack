@@ -77,6 +77,14 @@ type Forwarder struct {
 		active   atomic.Int64
 	}
 
+	// ready closes once every listener has finished trying to bind, so a
+	// caller can wait for the sockets to exist instead of guessing. UDP is
+	// why it is here: a TCP client can dial until it connects, but a UDP
+	// sender gets no signal at all, and the guess that stood in for one was
+	// wrong in a way that only showed under load. See Ready.
+	ready     chan struct{}
+	readyOnce sync.Once
+
 	// reach records, per mapping, whether its backend is currently answering,
 	// so the log can report the transition rather than the traffic.
 	reach struct {
@@ -114,6 +122,7 @@ func NewForwarder(cfg Config, log *logrus.Logger) (*Forwarder, error) {
 		mappings:  mappings,
 		acceptUDP: cfg.AcceptUDP,
 		log:       log,
+		ready:     make(chan struct{}),
 		limiter: limits.New(limits.Config{
 			MaxConnections: cfg.MaxConnections,
 			BandwidthMbps:  cfg.BandwidthMbps,
@@ -131,16 +140,47 @@ func (f *Forwarder) Stats() ForwardStats {
 }
 
 // Run serves every mapping until ctx ends.
+// Ready is closed once every listener has finished trying to bind. It says
+// the sockets are no longer on their way, not that they all came up: a bind
+// that failed is reported by Run and logged, and closing here regardless is
+// what stops a failure becoming a hang.
+//
+// It exists for UDP. A TCP client can dial until it connects, which is what
+// dialUntilReady does in the tests; a UDP sender has nothing equivalent, and
+// the retry loop written in place of one was measurably not the wait it
+// appeared to be — see TestTheForwarderSaysWhenItsListenersAreUp.
+//
+// Waiting on this before Run has been called will block, because nothing is
+// binding yet.
+func (f *Forwarder) Ready() <-chan struct{} { return f.ready }
+
 func (f *Forwarder) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	var firstErr error
 	var errOnce sync.Once
 
+	// One count per listener, dropped as soon as that listener has finished
+	// trying to bind — whether it succeeded or not. Run cannot report
+	// readiness from out here because the binds happen inside the serve
+	// loops, so each of them says when it is past that point.
+	var binding sync.WaitGroup
+	binding.Add(len(f.mappings))
+	if f.acceptUDP {
+		binding.Add(len(f.mappings))
+	}
+	go func() {
+		binding.Wait()
+		f.readyOnce.Do(func() { close(f.ready) })
+	}()
+	// And if Run returns before every listener got that far — a bind that
+	// fails outright takes this path — nobody is left waiting.
+	defer f.readyOnce.Do(func() { close(f.ready) })
+
 	for _, mapping := range f.mappings {
 		wg.Add(1)
 		go func(m portmap.Mapping) {
 			defer wg.Done()
-			if err := f.serveTCP(ctx, m); err != nil && ctx.Err() == nil {
+			if err := f.serveTCP(ctx, m, binding.Done); err != nil && ctx.Err() == nil {
 				// Said out loud as well as returned. A listener that cannot
 				// bind is the single most likely thing to go wrong here, and
 				// what it looks like from the outside is a port that quietly
@@ -154,7 +194,7 @@ func (f *Forwarder) Run(ctx context.Context) error {
 			wg.Add(1)
 			go func(m portmap.Mapping) {
 				defer wg.Done()
-				if err := f.serveUDP(ctx, m); err != nil && ctx.Err() == nil {
+				if err := f.serveUDP(ctx, m, binding.Done); err != nil && ctx.Err() == nil {
 					f.log.Errorf("l3: udp forwarder for %s stopped: %v", m.Listen, err)
 					errOnce.Do(func() { firstErr = err })
 				}
@@ -176,8 +216,12 @@ func (f *Forwarder) Run(ctx context.Context) error {
 
 // ---------------------------------------------------------------- tcp
 
-func (f *Forwarder) serveTCP(ctx context.Context, m portmap.Mapping) error {
+func (f *Forwarder) serveTCP(ctx context.Context, m portmap.Mapping, bound func()) error {
 	listener, err := net.Listen("tcp", m.Listen)
+	// Fired on both paths on purpose: readiness means the socket is no longer
+	// on its way, and a failed bind is as settled as a successful one. Firing
+	// only on success would turn a bind error into a waiter that hangs.
+	bound()
 	if err != nil {
 		return err
 	}
@@ -342,8 +386,9 @@ func (f *udpFlow) idle(now time.Time, limit time.Duration) bool {
 	return now.Sub(time.Unix(0, f.lastSeen.Load())) > limit
 }
 
-func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping) error {
+func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func()) error {
 	conn, err := net.ListenPacket("udp", m.Listen)
+	bound()
 	if err != nil {
 		return err
 	}
