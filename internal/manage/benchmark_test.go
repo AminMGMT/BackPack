@@ -16,7 +16,7 @@ func quality(avg, max, jitter time.Duration, sent, received int) PathQuality {
 func TestRecommendTransportCleanLink(t *testing.T) {
 	// Steady, lossless link: nothing to repair, so plain multiplexed TCP.
 	q := quality(40*time.Millisecond, 45*time.Millisecond, 3*time.Millisecond, 12, 12)
-	got := RecommendTransport(q, "tcp")
+	got := RecommendTransport(q, "tcp", UDPEgress{})
 	if got.Transport != "tcpmux" {
 		t.Fatalf("Transport = %q, want tcpmux on a clean link", got.Transport)
 	}
@@ -28,7 +28,7 @@ func TestRecommendTransportCleanLink(t *testing.T) {
 func TestRecommendTransportLossyPicksKCP(t *testing.T) {
 	// 3 of 12 probes lost is 25% — squarely KCP territory.
 	q := quality(90*time.Millisecond, 200*time.Millisecond, 30*time.Millisecond, 12, 9)
-	got := RecommendTransport(q, "tcp")
+	got := RecommendTransport(q, "tcp", UDPEgress{})
 	if got.Transport != "kcp" {
 		t.Fatalf("Transport = %q, want kcp on a lossy link", got.Transport)
 	}
@@ -44,7 +44,7 @@ func TestRecommendTransportLossyPicksKCP(t *testing.T) {
 func TestRecommendTransportJitteryPicksMux(t *testing.T) {
 	// No loss, but latency swings wildly — a shaped path.
 	q := quality(60*time.Millisecond, 300*time.Millisecond, 40*time.Millisecond, 12, 12)
-	got := RecommendTransport(q, "tcp")
+	got := RecommendTransport(q, "tcp", UDPEgress{})
 	if got.Transport != "tcpmux" {
 		t.Fatalf("Transport = %q, want tcpmux on a jittery link", got.Transport)
 	}
@@ -52,7 +52,7 @@ func TestRecommendTransportJitteryPicksMux(t *testing.T) {
 
 func TestRecommendTransportUnreachablePicksCamouflage(t *testing.T) {
 	q := quality(0, 0, 0, 12, 0)
-	got := RecommendTransport(q, "tcp")
+	got := RecommendTransport(q, "tcp", UDPEgress{})
 	if got.Transport != "wss" {
 		t.Fatalf("Transport = %q, want wss when nothing answers", got.Transport)
 	}

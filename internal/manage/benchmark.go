@@ -203,14 +203,15 @@ func SetFEC(name string, plan FECPlan) error {
 // its handshake outright on links where KCP ran at full speed. It is named as
 // an alternative to try instead, which is the honest place for it until it has
 // a track record here.
-func RecommendTransport(q PathQuality, current string) Recommendation {
-	return recommendWith(q, current, ProbeUDPEgress())
-}
-
-// recommendWith is RecommendTransport with the UDP reading supplied, so the
-// decision can be tested against a network that allows UDP and one that does
-// not without needing either.
-func recommendWith(q PathQuality, current string, udp UDPEgress) Recommendation {
+// The UDP reading is an argument rather than something this takes for itself,
+// and that is worth saying because the first version did take it for itself.
+// A live DNS query inside a decision function makes every test of the decision
+// a test of the network the test is running on — which is exactly how it
+// failed: the unit tests passed on a machine with working UDP and failed on a
+// CI runner without it, on a difference that has nothing to do with the code
+// being tested. The two callers that already do network I/O pass
+// ProbeUDPEgress(); everything else passes what it knows, or nothing.
+func RecommendTransport(q PathQuality, current string, udp UDPEgress) Recommendation {
 	r := Recommendation{Preset: PresetTurbo}
 
 	switch {

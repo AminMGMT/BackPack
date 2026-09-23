@@ -99,7 +99,7 @@ func LinkTest() {
 		offerKeepAlive(target, q)
 	}
 
-	rec := RecommendTransport(q, target.Transport)
+	rec := RecommendTransport(q, target.Transport, ProbeUDPEgress())
 
 	tui.Title("Recommendation: " + rec.Label)
 	fmt.Println()

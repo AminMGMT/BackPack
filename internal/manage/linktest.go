@@ -61,7 +61,7 @@ func MeasureLink(t Tunnel) LinkTestResult {
 		res.Error = q.Err.Error()
 		return res
 	}
-	rec := RecommendTransport(q, t.Transport)
+	rec := RecommendTransport(q, t.Transport, ProbeUDPEgress())
 	res.RecLabel = rec.Label
 	res.RecWhy = rec.Why
 	res.Caveats = rec.Caveats
