@@ -1,4 +1,4 @@
-<p align="center"><img src="img/cover.png" alt="Backpack" width="100%"></p>
+<p align="center"><img src="img/image.png" alt="Backpack" width="100%"></p>
 
 # Backpack 🎒
 
