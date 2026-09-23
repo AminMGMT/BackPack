@@ -50,9 +50,12 @@ import (
 // The range ports are drawn from: below the lowest ephemeral range of any
 // platform this is tested on, so the kernel never hands one of these out as the
 // source port of somebody else's connection.
+// The range is half-open: low is a port that may be handed out, high is not.
+// Both the wrap in Free and the start in startFor depend on that, and the wrap
+// once got it wrong in the one direction that puts a port outside the range.
 const (
 	low  = 12000
-	high = 30000
+	high = 30000 // exclusive
 )
 
 // The sequence starts somewhere different in every test binary.
@@ -100,7 +103,7 @@ func Free(t *testing.T) int {
 	for attempts := 0; attempts < 4000; attempts++ {
 		port := next
 		next++
-		if next > high {
+		if next >= high {
 			next = low
 		}
 		if issued[port] || !IsFree(port) {

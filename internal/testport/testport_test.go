@@ -47,3 +47,30 @@ func TestFreeHandsOutDistinctPortsInRange(t *testing.T) {
 		seen[p] = true
 	}
 }
+
+// The top of the range is exclusive, and the walk has to stop below it.
+//
+// The sequence wrapped on `next > high`, which let `next` become high itself
+// and be handed out once before the wrap — a port outside the range, on a run
+// whose walk happened to reach the top. Which run that is depends on the
+// process id, so this failed on CI perhaps one run in a hundred and never on a
+// laptop, and read as flakiness in a package written to remove flakiness.
+//
+// Starting the walk one below the top makes the case certain instead of lucky.
+func TestFreeStaysBelowTheTopOfTheRange(t *testing.T) {
+	mu.Lock()
+	saveNext, saveIssued := next, issued
+	next, issued = high-1, map[int]bool{}
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		next, issued = saveNext, saveIssued
+		mu.Unlock()
+	})
+
+	for i := 0; i < 3; i++ {
+		if p := Free(t); p < low || p >= high {
+			t.Fatalf("Free() = %d, outside [%d,%d)", p, low, high)
+		}
+	}
+}
