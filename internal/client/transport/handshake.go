@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -287,4 +289,31 @@ func (b *beatClock) deadline(keepAlive time.Duration) time.Duration {
 	}
 	d := max(3*worst, livenessFloor)
 	return min(d, base)
+}
+
+// explain says, when a control read timed out, what the silence most likely
+// means — or nothing, for any other error.
+//
+// A client that gives up after one and a half keepalives on a server that
+// heartbeats less often than that reconnects over and over, and each
+// reconnect looked like the one before: a tunnel dropping every half minute
+// with nothing in either log to say why (issue #45). The client cannot tell a
+// slow server from a dead one, but it can tell whether a heartbeat has ever
+// arrived on this channel — and if none has, a heartbeat setting longer than
+// its own patience is the likeliest cause, and the one worth naming.
+func (b *beatClock) explain(err error, keepAlive time.Duration) string {
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() {
+		return ""
+	}
+	window := b.deadline(keepAlive).Round(time.Second)
+	if !b.last.IsZero() {
+		return fmt.Sprintf("nothing heard from the server for %s after it had been heartbeating — "+
+			"the server has gone, or the path is dropping packets. Reconnecting.", window)
+	}
+	return fmt.Sprintf("no heartbeat has arrived on this control channel in %s. If the server's "+
+		"heartbeat setting is longer than that, this client gives up before the first one and "+
+		"reconnects every time — raise keepalive_period on this side to at least two thirds of "+
+		"the server's heartbeat, or upgrade the server (from v1.8.2 it heartbeats every 10 "+
+		"seconds whatever its setting). Reconnecting.", window)
 }

@@ -304,7 +304,26 @@ func Serve() error {
 		log.Printf("no fallback certificate (%v) — if Let's Encrypt cannot issue, "+
 			"this panel will refuse every connection", err)
 	}
-	if settings.ACMEDomain == "" {
+	ownCert := false
+	if cfg.OwnCert() {
+		// The operator's own certificate, served as it is. See OwnCert.
+		//
+		// Checked before it is committed to: a certificate that cannot be
+		// read — moved, deleted, a renewal half written — would otherwise stop
+		// the panel from starting at all, and the panel is where it would be
+		// fixed. So the self-signed pair is served instead, and the reason is
+		// said.
+		own := network.TLSSettings{CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile}
+		if _, err := network.HTTPSConfig(own, nil); err != nil {
+			log.Printf("the panel's own certificate (%s, %s) cannot be used: %v — serving the "+
+				"self-signed certificate instead so the panel stays reachable",
+				cfg.TLSCertFile, cfg.TLSKeyFile, err)
+			settings.ACMEDomain = ""
+		} else {
+			settings, ownCert = own, true
+		}
+	}
+	if !ownCert && settings.ACMEDomain == "" {
 		// EnsurePanelCert builds the SAN set from the machine's own interfaces
 		// (plus loopback, the public IP when reachable, and an optional operator
 		// host), so the certificate validates on whatever address the panel is

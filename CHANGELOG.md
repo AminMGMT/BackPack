@@ -951,6 +951,71 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Fixed
 
+- **High CPU.** Measured on every transport, idle and under load, in two
+  network namespaces; four causes found and fixed:
+  - **The panel, on a busy server.** Each tunnel poll ran `ss -tin` once per
+    listening tunnel, from every open tab, and each dumped the TCP state of
+    every socket on the machine. With 40,000 connections, five tunnels and one
+    tab: **45% of a core**. The kernel now filters to the tunnels' own ports,
+    once per poll for all of them, shared between tabs for 3 s: **6%**. (Quiet
+    server: 5.8% → 2.5%.)
+  - **xdi, client side.** Each pooled session had its own raw ICMP socket, and
+    the kernel hands every one of them every ICMP packet the host receives.
+    A socket filter now gives each only its own echo replies: a 256 MB transfer
+    went from **54 CPU-seconds to 13**, and faster (541 → 669 Mbit/s).
+  - **KCP-family tunnels on the kernel's default socket buffer.** A config
+    without `so_rcvbuf`/`so_sndbuf` (the presets set them; hand-written and old
+    ones may not) ran KCP, xdi, pck, QUIC and UDP on ~200 KB. Under many
+    connections that overflows and the reliability layer retransmits instead
+    of carrying: 16 concurrent streams over KCP did **188 Mbit/s for 21
+    CPU-seconds**. They now default to 4 MB (capped by the kernel):
+    **2,089 Mbit/s for 11**.
+  - **Idle KCP, pck and xdi.** kcp-go spreads its per-session flush timers
+    over one scheduler per CPU, so an idle tunnel woke every core: **6% of a
+    core doing nothing** on a 16-core machine, against 0.15% for every TCP
+    transport. One scheduler: **3%**, with the same CPU per byte under load.
+
+- **The panel could not use a certificate obtained any other way than its own
+  Let's Encrypt run** (#49). Where Let's Encrypt could not verify the server —
+  port 80 taken, or its validators unable to reach it — there was no way out: a
+  certificate copied into place was overwritten by the self-signed one, which
+  did not name the server's addresses. There is now a fourth option, *HTTPS, my
+  own certificate*, in the panel and the CLI: two PEM paths (certbot's
+  `fullchain.pem` and `privkey.pem`), checked before they are saved, re-read on
+  renewal without a restart, and — if they ever become unreadable — replaced by
+  the self-signed certificate rather than a panel that will not start.
+- **A tunnel whose server heartbeat was longer than the client could wait
+  reconnected every half minute, with nothing in the log to say why** (#45).
+  A client gives up after one and a half keepalives (at least 30 s); a server
+  with `heartbeat = 60` never sends one in time. Reproduced on v1.8.1 — four
+  reconnects in 150 s. The server's control heartbeat is now at most 10 s
+  whatever the setting, which ends it for every client, old ones included (0
+  reconnects measured). A new client talking to an old server still cannot
+  tell a slow heartbeat from a dead server, so it now says which setting to
+  change instead of blaming the path.
+- **A tunnel could not be put on Turbo — it always came back as Balanced.**
+  The edit form posts its whole Fine-tune section along with the preset, and
+  those fields still held the old preset's numbers. The server applied them
+  after the preset and, because a number had been set by hand, cleared the
+  preset: the tunnel ended up with Balanced's values and no preset, which the
+  form then displayed as "Balanced". Reproduced on v1.8.1. The server now
+  applies only the Fine-tune fields that actually changed from what the form
+  was filled with, and only those clear the preset; a switch unrelated to the
+  preset (log level, MSS, zero-copy, UDP) no longer does. A tunnel with no
+  preset now shows "Custom — tuned by hand" instead of "Balanced".
+- **Health Check kept failing after Optimize.** Two causes:
+  - Optimize wrote `/etc/sysctl.d/99-backpack.conf`, which at boot is read
+    *before* `99-sysctl.conf` — the link to `/etc/sysctl.conf`, where other
+    installers and panels write their own values. Theirs won after every
+    reboot. The file is now `zz-backpack.conf`, applied last; the old one is
+    removed the next time Optimize runs, which `update` does on its own.
+  - On a container VPS (OpenVZ, LXC) the kernel refuses most `net.core.*`
+    keys, and Optimize said nothing about it. It now lists every key that was
+    not applied and why.
+  Health Check no longer answers every miss with "run Optimize": when Optimize
+  has already run it names the file that overrides the value, or says the
+  kernel or the container refused it.
+
 - **Every systemd operation failed.** When the service helpers moved into
   `internal/manage/core`, renaming the function `systemctl` to `Systemctl` also
   renamed the program it runs, and no Linux has a `Systemctl`. Starting,

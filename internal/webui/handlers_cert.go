@@ -2,9 +2,12 @@ package webui
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +65,12 @@ type certView struct {
 	// ACMEPath explains how validation would happen: "alpn" when the panel is
 	// on 443 and the listener can answer for itself, "http01" when port 80 is
 	// free, or "" when neither is available.
+	// CertFile and KeyFile are the operator's own certificate, in "own" mode,
+	// and Names what it covers.
+	CertFile string   `json:"certFile,omitempty"`
+	KeyFile  string   `json:"keyFile,omitempty"`
+	Names    []string `json:"names,omitempty"`
+
 	ACMEPath string `json:"acmePath"`
 	ACMENote string `json:"acmeNote,omitempty"`
 }
@@ -84,6 +93,14 @@ func certSnapshot() certView {
 	switch {
 	case !c.HTTPS:
 		v.Mode = "http"
+	case c.OwnCert():
+		v.Mode = "own"
+		v.CertFile, v.KeyFile = c.TLSCertFile, c.TLSKeyFile
+		if names, notAfter, err := CheckOwnCert(c.TLSCertFile, c.TLSKeyFile); err == nil {
+			v.Names = names
+			v.Expires = notAfter.Format("2006-01-02")
+			v.ExpiresDays = int(time.Until(notAfter).Hours() / 24)
+		}
 	case c.TLSDomain != "":
 		v.Mode = "acme"
 	default:
@@ -158,9 +175,21 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 	c := Load()
 	next := c
 
+	// Every mode but "own" forgets a brought certificate; "own" sets it.
+	next.TLSCertFile, next.TLSKeyFile = "", ""
+
 	switch mode {
 	case "http":
 		next.HTTPS, next.TLSDomain, next.TLSEmail, next.TLSSelfHost = false, "", "", ""
+	case "own":
+		certFile := strings.TrimSpace(r.FormValue("certFile"))
+		keyFile := strings.TrimSpace(r.FormValue("keyFile"))
+		if _, _, err := CheckOwnCert(certFile, keyFile); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		next.HTTPS, next.TLSDomain, next.TLSEmail, next.TLSSelfHost = true, "", "", ""
+		next.TLSCertFile, next.TLSKeyFile = certFile, keyFile
 	case "self":
 		// The domain field is optional for self-signed: an extra SAN, not a
 		// requirement. An IP typed here is fine too. Every local address is
@@ -202,7 +231,7 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 	// a failure is reported into this response — where someone is looking —
 	// instead of into a log after the panel has already restarted onto a
 	// listener that cannot complete a handshake.
-	if next.HTTPS && next.TLSDomain == "" {
+	if next.HTTPS && next.TLSDomain == "" && !next.OwnCert() {
 		if _, _, err := manage.EnsurePanelCert(next.TLSSelfHost); err != nil {
 			http.Error(w, "could not generate a certificate: "+err.Error(),
 				http.StatusInternalServerError)
@@ -224,7 +253,7 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 		// The browser will refuse a self-signed certificate until someone
 		// accepts it by hand, and a page that redirects into that warning with
 		// no explanation reads as the panel having broken.
-		"warns":  next.HTTPS && next.TLSDomain == "",
+		"warns":  next.HTTPS && next.TLSDomain == "" && !next.OwnCert(),
 		"issues": mode == "acme",
 	})
 	go func() {
@@ -327,4 +356,40 @@ func validHostname(h string) bool {
 		}
 	}
 	return false
+}
+
+// CheckOwnCert refuses a brought certificate the panel could not serve: files
+// that cannot be read, a key that is not the certificate's, a certificate that
+// has already expired. Said now, while the operator is at the form, rather
+// than as a panel that does not come back after the restart.
+//
+// It reports what the certificate names, so the screen can show whether it
+// covers the address the panel is reached on.
+func CheckOwnCert(certFile, keyFile string) (names []string, notAfter time.Time, err error) {
+	if certFile == "" || keyFile == "" {
+		return nil, time.Time{}, fmt.Errorf("give both files: the certificate (certbot's " +
+			"fullchain.pem) and its private key (privkey.pem)")
+	}
+	if !filepath.IsAbs(certFile) || !filepath.IsAbs(keyFile) {
+		return nil, time.Time{}, fmt.Errorf("give full paths, starting with /")
+	}
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("the certificate and key cannot be used together: %v "+
+			"— they must be PEM files, the certificate first in its file, and the key must be "+
+			"the one the certificate was issued for", err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("the certificate cannot be read: %v", err)
+	}
+	if time.Now().After(leaf.NotAfter) {
+		return nil, time.Time{}, fmt.Errorf("the certificate expired on %s",
+			leaf.NotAfter.Format("2006-01-02"))
+	}
+	names = append(names, leaf.DNSNames...)
+	for _, ip := range leaf.IPAddresses {
+		names = append(names, ip.String())
+	}
+	return names, leaf.NotAfter, nil
 }

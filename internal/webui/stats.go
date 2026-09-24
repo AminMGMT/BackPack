@@ -3,6 +3,7 @@ package webui
 import (
 	"net"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -496,6 +497,17 @@ func gatherTunnels(run node.Runner) []TunnelInfo {
 	// datagram listener has none.
 	health := manage.AllHealth()
 
+	// The peers of every listening tunnel, read once for all of them. See
+	// listeningPeers.
+	var listenPorts []string
+	for _, t := range tunnels {
+		if !manage.DialsOut(t) {
+			_, p := splitHostPort(t.Addr)
+			listenPorts = append(listenPorts, p)
+		}
+	}
+	peersByPort := listeningPeers(listenPorts)
+
 	var wg sync.WaitGroup
 	for i, t := range tunnels {
 		wg.Add(1)
@@ -536,7 +548,8 @@ func gatherTunnels(run node.Runner) []TunnelInfo {
 				// but we can detect the connected client(s) — the kharej peers
 				// dialing in — and measure/geo-locate them. This gives the Iran
 				// web panel real per-tunnel health + latency to each kharej.
-				peers := serverPeers(t.Addr)
+				_, tport := splitHostPort(t.Addr)
+				peers := peersByPort[tport]
 				// A datagram listener has no peers in the socket table — the
 				// kernel genuinely does not know. The transport does, and writes
 				// it to the metrics file, so fall back to that rather than
@@ -671,35 +684,84 @@ type peerConn struct {
 	RTT int
 }
 
-// serverPeers returns the unique remote peers connected to the tunnel's control
-// port — i.e. the client (kharej) servers dialed in — using `ss -tin`. The
-// `-i` flag adds a second, indented info line per socket containing `rtt:`,
-// which is the real latency of the tunnel connection (no ICMP needed).
-func serverPeers(bindAddr string) []peerConn {
-	_, tport := splitHostPort(bindAddr)
-	if tport == "" {
+// peerConn's are read with `ss -tin`: the `-i` flag adds a second, indented
+// info line per socket containing `rtt:`, which is the real latency of the
+// tunnel connection (no ICMP needed).
+//
+// The peers of every listening tunnel, from one read of the socket table.
+//
+// This was one `ss -tin state established` per listening tunnel on every
+// tunnel poll — every six seconds, from every open tab — and each of them
+// dumped the TCP state of every established socket on the machine, to keep the
+// handful on one port. On a server that is what these usually are, a proxy
+// carrying tens of thousands of connections, that was the panel's cost:
+// measured with 40,000 sockets, five tunnels and one tab open, 45% of a core.
+//
+// Now the kernel does the filtering — ss hands the port list to it, so only the
+// tunnels' own sockets come back — it happens once per poll for all tunnels,
+// and the answer is shared for a few seconds, so a second tab costs nothing.
+var peerCache struct {
+	mu     sync.Mutex
+	key    string
+	at     time.Time
+	byPort map[string][]peerConn
+}
+
+// peerCacheTTL is how long one read of the peers is reused. Under the panel's
+// own poll interval, so every poll sees a fresh-enough answer.
+const peerCacheTTL = 3 * time.Second
+
+// listeningPeers returns, for each port, the remote peers established on it.
+func listeningPeers(ports []string) map[string][]peerConn {
+	want := map[string]bool{}
+	var list []string
+	for _, p := range ports {
+		if p != "" && !want[p] {
+			want[p] = true
+			list = append(list, p)
+		}
+	}
+	if len(list) == 0 {
 		return nil
 	}
-	out, err := exec.Command("ss", "-Htin", "state", "established").Output()
+	sort.Strings(list)
+	key := strings.Join(list, ",")
+
+	peerCache.mu.Lock()
+	defer peerCache.mu.Unlock()
+	if peerCache.key == key && time.Since(peerCache.at) < peerCacheTTL {
+		return peerCache.byPort
+	}
+
+	filter := make([]string, 0, len(list))
+	for _, p := range list {
+		filter = append(filter, "sport = :"+p)
+	}
+	out, err := exec.Command("ss", "-Htin", "state", "established",
+		"( "+strings.Join(filter, " or ")+" )").Output()
 	if err != nil {
 		return nil
 	}
+	byPort := parsePeers(string(out), want)
+	peerCache.key, peerCache.at, peerCache.byPort = key, time.Now(), byPort
+	return byPort
+}
 
-	seen := map[string]struct{}{}
-	var peers []peerConn
+// parsePeers reads `ss -Htin` output into the peers on each wanted local port,
+// one entry per remote address.
+func parsePeers(out string, want map[string]bool) map[string][]peerConn {
+	byPort := map[string][]peerConn{}
+	seen := map[string]bool{}
 	var cur *peerConn
-
+	var curPort string
 	flush := func() {
-		if cur != nil {
-			if _, dup := seen[cur.IP]; !dup {
-				seen[cur.IP] = struct{}{}
-				peers = append(peers, *cur)
-			}
-			cur = nil
+		if cur != nil && !seen[curPort+"|"+cur.IP] {
+			seen[curPort+"|"+cur.IP] = true
+			byPort[curPort] = append(byPort[curPort], *cur)
 		}
+		cur = nil
 	}
-
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
 			continue
 		}
@@ -717,17 +779,18 @@ func serverPeers(bindAddr string) []peerConn {
 			continue
 		}
 		local, peer := f[len(f)-2], f[len(f)-1]
-		if _, lp := splitHostPort(local); lp != tport {
+		_, lp := splitHostPort(local)
+		if !want[lp] {
 			continue
 		}
 		ph, _ := splitHostPort(peer)
 		if ph == "" || ph == "127.0.0.1" || ph == "::1" {
 			continue
 		}
-		cur = &peerConn{IP: ph, RTT: -1}
+		cur, curPort = &peerConn{IP: ph, RTT: -1}, lp
 	}
 	flush()
-	return peers
+	return byPort
 }
 
 // parseRTT extracts the smoothed RTT (in ms) from an `ss -i` info line.

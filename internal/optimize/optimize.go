@@ -120,7 +120,20 @@ func EngineStartupTuning() [][2]string {
 // Optimize has run here. A var rather than a const so a test can point it at a
 // temp directory instead of writing to /etc — the same way node.StorePath and
 // manage.NodePairPath are overridden.
-var sysctlFile = "/etc/sysctl.d/99-backpack.conf"
+//
+// It is named to come last. The kernel's settings are applied at boot file by
+// file in name order, and the last to set a key wins. It was 99-backpack.conf,
+// which sorts before 99-sysctl.conf — the link to /etc/sysctl.conf that Debian
+// and Ubuntu install, and the file every other installer and "VPS optimizer"
+// script writes to. So on the next boot anything those had put there quietly
+// replaced what Optimize set, and Health Check went on saying "run Optimize" to
+// somebody who had, as many times as they liked. zz- sorts after every
+// numbered file.
+var sysctlFile = "/etc/sysctl.d/zz-backpack.conf"
+
+// legacySysctlFile is where an older Optimize wrote the same thing. Apply
+// removes it, so the two cannot disagree; WasApplied still counts it.
+var legacySysctlFile = "/etc/sysctl.d/99-backpack.conf"
 
 const limitsFile = "/etc/security/limits.d/99-backpack.conf"
 
@@ -168,16 +181,37 @@ func Apply(logf func(string), reserve []int) {
 		logf("Could not write " + sysctlFile + ": " + err.Error())
 	} else {
 		logf("Wrote persistent settings to " + sysctlFile)
+		if legacySysctlFile != sysctlFile {
+			_ = os.Remove(legacySysctlFile)
+		}
 	}
 
 	// Apply live (best effort per key so one failure doesn't abort the rest).
+	//
+	// A key the kernel refuses is named, with the kernel's reason. It used to
+	// be counted and nothing more — "Applied 21/24" — which left the operator
+	// to find out from Health Check which three, and never why. The usual why
+	// is a container VPS (OpenVZ, LXC) whose host does not let a guest change
+	// the socket buffers or the congestion control; no retry from here fixes
+	// that, and saying so saves running Optimize again.
 	applied := 0
 	for _, kv := range rows {
-		if err := exec.Command("sysctl", "-w", kv[0]+"="+kv[1]).Run(); err == nil {
+		out, err := exec.Command("sysctl", "-w", kv[0]+"="+kv[1]).CombinedOutput()
+		if err == nil {
 			applied++
+			continue
 		}
+		why := strings.TrimSpace(string(out))
+		if why == "" {
+			why = err.Error()
+		}
+		logf(fmt.Sprintf("  not applied: %s = %s — %s", kv[0], kv[1], why))
 	}
 	logf(fmt.Sprintf("Applied %d/%d kernel parameters live.", applied, len(rows)))
+	if applied < len(rows) {
+		logf("The ones not applied are refused by this server's kernel. On a container VPS " +
+			"(OpenVZ, LXC) the host controls them, and only the provider can change them.")
+	}
 
 	// Persist file limits.
 	if err := os.WriteFile(limitsFile, []byte(limitsContent), 0644); err != nil {
@@ -201,8 +235,106 @@ func Apply(logf func(string), reserve []int) {
 // else rewrites that file, so the old values would otherwise outlive every
 // update.
 func WasApplied() bool {
-	_, err := os.Stat(sysctlFile)
-	return err == nil
+	for _, f := range []string{sysctlFile, legacySysctlFile} {
+		if _, err := os.Stat(f); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Wanted returns the value Optimize sets for key, and whether it sets one.
+func Wanted(key string) (string, bool) {
+	for _, kv := range sysctls {
+		if kv[0] == key {
+			return kv[1], true
+		}
+	}
+	return "", false
+}
+
+// sysctlDirs are the directories the boot-time sysctl service reads, in the
+// order systemd documents; a file name in an earlier one shadows the same
+// name in a later one, and all files are then applied in name order.
+// procpsConf is /etc/sysctl.conf; a var so a test can move it.
+var procpsConf = "/etc/sysctl.conf"
+
+var sysctlDirs = []string{"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"}
+
+// WhyNot explains why key is not at the value Optimize sets, once Optimize
+// has run: which file sets it to something else after ours — so a reboot
+// puts that value back — or, when none does, that the kernel refused it or
+// something changed it since. Empty when there is nothing to explain.
+func WhyNot(key, live string) string {
+	want, ok := Wanted(key)
+	if !ok || !WasApplied() || sameValue(live, want) {
+		return ""
+	}
+	if f, v := lastSetting(key); f != "" && f != sysctlFile && !sameValue(v, want) {
+		return fmt.Sprintf("Optimize set it to %q, but %s sets %q and is applied after it — "+
+			"remove or change the line there (it was probably put there by another installer)",
+			want, f, v)
+	}
+	return fmt.Sprintf("Optimize set it to %q, but the kernel is at %q — either this server's "+
+		"kernel does not allow it (a container VPS such as OpenVZ or LXC, where only the provider "+
+		"can change it) or something changed it after Optimize ran", want, live)
+}
+
+// lastSetting returns the file that sets key last at boot, and its value.
+func lastSetting(key string) (file, value string) {
+	byName := map[string]string{}
+	for _, d := range sysctlDirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".conf") {
+				continue
+			}
+			if _, seen := byName[e.Name()]; !seen {
+				byName[e.Name()] = d + "/" + e.Name()
+			}
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	files := make([]string, 0, len(names)+1)
+	for _, n := range names {
+		files = append(files, byName[n])
+	}
+	// Read last by procps' `sysctl --system`, after every directory.
+	files = append(files, procpsConf)
+
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || line[0] == '#' || line[0] == ';' {
+				continue
+			}
+			k, v, found := strings.Cut(strings.TrimPrefix(line, "-"), "=")
+			if !found {
+				continue
+			}
+			if strings.ReplaceAll(strings.TrimSpace(k), "/", ".") == key {
+				file, value = f, strings.TrimSpace(v)
+			}
+		}
+	}
+	return file, value
+}
+
+// sameValue compares two sysctl values the way the kernel prints them: runs
+// of whitespace (the tabs in a port range) are one space.
+func sameValue(a, b string) bool {
+	return strings.Join(strings.Fields(a), " ") == strings.Join(strings.Fields(b), " ")
 }
 
 // ApplyQuiet runs Apply discarding output — used by the Best Performance flow.

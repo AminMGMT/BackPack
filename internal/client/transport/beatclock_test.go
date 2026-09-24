@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,5 +61,29 @@ func TestTheLongestGapDecidesAndTheFloorHolds(t *testing.T) {
 	}
 	if got := fast.deadline(75 * time.Second); got != livenessFloor {
 		t.Fatalf("deadline = %s, want the floor %s", got, livenessFloor)
+	}
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+// A reconnect loop caused by a server heartbeat longer than this client's
+// patience must say so (#45: a tunnel dropping every half minute with nothing
+// in either log to explain it).
+func TestASilenceBeforeAnyHeartbeatIsExplained(t *testing.T) {
+	var b beatClock
+	hint := b.explain(timeoutErr{}, 20*time.Second)
+	if !strings.Contains(hint, "keepalive_period") || !strings.Contains(hint, "heartbeat") {
+		t.Fatalf("hint = %q, want it to name the setting to change", hint)
+	}
+	b.beat(time.Now())
+	if hint := b.explain(timeoutErr{}, 20*time.Second); strings.Contains(hint, "keepalive_period") {
+		t.Fatalf("after a heartbeat, the hint still blames the setting: %q", hint)
+	}
+	if hint := b.explain(errors.New("EOF"), 20*time.Second); hint != "" {
+		t.Fatalf("a non-timeout error was explained as silence: %q", hint)
 	}
 }

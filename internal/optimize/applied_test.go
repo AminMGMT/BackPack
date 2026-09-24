@@ -12,8 +12,9 @@ import (
 // and true on an untouched one retunes a kernel nobody consented to.
 func TestWasAppliedFollowsTheFileOptimizeOwns(t *testing.T) {
 	dir := t.TempDir()
-	old := sysctlFile
-	t.Cleanup(func() { sysctlFile = old })
+	old, oldLegacy := sysctlFile, legacySysctlFile
+	t.Cleanup(func() { sysctlFile, legacySysctlFile = old, oldLegacy })
+	legacySysctlFile = filepath.Join(t.TempDir(), "legacy.conf")
 
 	sysctlFile = filepath.Join(dir, "99-backpack.conf")
 	if WasApplied() {

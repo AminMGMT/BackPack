@@ -71,7 +71,22 @@ type Config struct {
 	// work — every local IP and loopback are always included — it only adds one
 	// the machine cannot discover on its own. Empty is the common case.
 	TLSSelfHost string `json:"tls_self_host,omitempty"`
+
+	// TLSCertFile and TLSKeyFile are a certificate the operator brings: PEM,
+	// the full chain in one file and its private key in the other — what
+	// certbot writes as fullchain.pem and privkey.pem. Set, they are served
+	// as they are, in place of Let's Encrypt and the self-signed pair, and
+	// re-read whenever the certificate file changes, so a renewal lands
+	// without a restart. (#49: a panel whose server cannot pass Let's
+	// Encrypt's check from here had no way to use a certificate obtained any
+	// other way — a copied-in one was overwritten by the self-signed pair,
+	// which did not name this server's addresses.)
+	TLSCertFile string `json:"tls_cert,omitempty"`
+	TLSKeyFile  string `json:"tls_key,omitempty"`
 }
+
+// OwnCert reports whether the panel serves a certificate the operator brought.
+func (c Config) OwnCert() bool { return c.TLSCertFile != "" && c.TLSKeyFile != "" }
 
 // Equal reports whether two configurations say the same thing.
 //
@@ -96,6 +111,8 @@ func (c Config) Equal(other Config) bool {
 		c.TLSDomain == other.TLSDomain &&
 		c.TLSEmail == other.TLSEmail &&
 		c.TLSSelfHost == other.TLSSelfHost &&
+		c.TLSCertFile == other.TLSCertFile &&
+		c.TLSKeyFile == other.TLSKeyFile &&
 		c.TOTPSecret == other.TOTPSecret
 }
 

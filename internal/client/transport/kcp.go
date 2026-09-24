@@ -417,27 +417,17 @@ func (c *KcpTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
+					if hint := beats.explain(err, c.config.KeepAlive); hint != "" && ctx.Err() == nil {
+						c.logger.Warn(hint)
+					}
 					if ctx.Err() == nil {
-						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-							// Said as a measurement, because the number is what
-							// separates the two things this can mean.
-							//
-							// "No heartbeat within the keepalive period" reads
-							// as one missed beat. It is not: the window is one
-							// and a half keepalives, and the server sends on its
-							// own shorter timer, so reaching this means several
-							// in a row were lost — a path dropping packets, not
-							// a server that was briefly busy. On a FEC tunnel
-							// that is the first thing to check, because the
-							// parity traffic multiplies what the path has to
-							// carry.
-							c.logger.Warnf("nothing heard from the server for %s — the server "+
-								"heartbeats on a shorter timer than that, so several in a row "+
-								"were lost rather than one being late. That is the path "+
-								"dropping packets. On a FEC tunnel look there first: parity "+
-								"multiplies what the path has to carry. Reconnecting.",
-								window.Round(time.Second))
-						} else {
+						// A timeout is said above, by beats.explain, which can
+						// tell a server that stopped heartbeating from one
+						// whose heartbeat never reached this client in time.
+						// The line that stood here always blamed the path,
+						// which on a heartbeat longer than the keepalive sent
+						// people looking at the wrong thing (#45).
+						if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
 							c.logger.Error("failed to read from control channel. ", err)
 						}
 						go c.Restart()

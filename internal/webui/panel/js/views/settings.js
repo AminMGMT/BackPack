@@ -84,7 +84,7 @@ function summarise(root, { tg, ses, ab, upd, cert }) {
    * the same question: a panel reached through a reverse proxy is https to the
    * browser and plain http to itself, and the port it is actually served on is
    * the one an operator needs when they are about to change it. */
-  const certLabel = { acme: "Let's Encrypt", self: 'self-signed HTTPS', http: 'plain HTTP' };
+  const certLabel = { acme: "Let's Encrypt", self: 'self-signed HTTPS', http: 'plain HTTP', own: 'own certificate' };
   say('Panel access', cert
     ? [cert.port ? 'Port ' + cert.port : null, certLabel[cert.mode] || null]
       .filter(Boolean).join(' · ')
@@ -408,8 +408,13 @@ export function settingsView(ctx) {
            optional extra name, and on plain HTTP it means nothing at all. */
         const domRow = root.querySelector('[name="domain"]')?.closest('.f2b');
         const mailRow = root.querySelector('[name="email"]')?.closest('.f2b');
-        if (domRow) domRow.hidden = certMode === 'http';
+        if (domRow) domRow.hidden = certMode === 'http' || certMode === 'own';
         if (mailRow) mailRow.hidden = certMode !== 'acme';
+        /* The two files belong to "my own certificate" and to nothing else. */
+        for (const n of ['certFile', 'keyFile']) {
+          const row = root.querySelector(`[name="${n}"]`)?.closest('.f2b');
+          if (row) row.hidden = certMode !== 'own';
+        }
         if (applyCertBtn) {
           applyCertBtn.textContent = certMode === 'http' ? 'Turn HTTPS off' : 'Apply certificate';
         }
@@ -433,10 +438,16 @@ export function settingsView(ctx) {
         const uPath = root.querySelector('#uPath');
         if (uPath) uPath.textContent = api.base() + '/';
         const lock = root.querySelector('#lockw');
-        if (lock) lock.className = 'lockw ' + (certMode === 'acme' ? 'safe' : certMode === 'self' ? 'warn' : 'off');
+        if (lock) lock.className = 'lockw ' + (certMode === 'acme' || certMode === 'own' ? 'safe'
+          : certMode === 'self' ? 'warn' : 'off');
         const note = root.querySelector('#uNote');
         if (note) {
-          note.innerHTML = certMode === 'acme'
+          note.innerHTML = certMode === 'own'
+            ? (snap.mode === 'own' && snap.names
+                ? `<b>Your certificate.</b> For ${esc(snap.names.join(', '))}`
+                  + (snap.expires ? ` — until ${esc(snap.expires)}.` : '.')
+                : '<b>Your certificate.</b> Trusted if it was issued for the name you open the panel by.')
+            : certMode === 'acme'
             ? `<b>Trusted by every browser.</b> ${esc(snap.acmeNote || '')}`
             : certMode === 'self'
               ? '<b>The browser warns once.</b> It works on a bare IP, and the warning '
@@ -469,6 +480,10 @@ export function settingsView(ctx) {
         if (e2) e2.value = certSnap.email || '';
         const pp = root.querySelector('[name="port"]');
         if (pp && certSnap.port) pp.value = certSnap.port;
+        const cf = root.querySelector('[name="certFile"]');
+        if (cf) cf.value = certSnap.certFile || '';
+        const kf = root.querySelector('[name="keyFile"]');
+        if (kf) kf.value = certSnap.keyFile || '';
       } /* else the section still selects, it just starts on self-signed */
       certOpts.forEach(o => o.addEventListener('click', () => {
         certMode = o.dataset.mode;
@@ -571,17 +586,21 @@ export function settingsView(ctx) {
       applyCertBtn?.addEventListener('click', async () => {
         const domain = root.querySelector('[name="domain"]')?.value.trim() || '';
         const email = root.querySelector('[name="email"]')?.value.trim() || '';
+        const certFile = root.querySelector('[name="certFile"]')?.value.trim() || '';
+        const keyFile = root.querySelector('[name="keyFile"]')?.value.trim() || '';
         if (certMode === 'acme' && !domain) return toast('Let’s Encrypt needs a domain pointed at this server.', true);
+        if (certMode === 'own' && (!certFile || !keyFile)) return toast('Give both files: the certificate and its key.', true);
         if (!await confirmBox({
           title: certMode === 'http' ? 'Serve the panel over plain HTTP?'
                : certMode === 'self' ? 'Use a self-signed certificate?'
+               : certMode === 'own' ? 'Serve the panel with your certificate?'
                : 'Get a certificate from Let’s Encrypt?',
           body: 'The panel restarts and its address changes. This page follows it; '
               + 'if it does not, open the address shown above.',
           go: 'Apply', danger: certMode === 'http',
         })) return;
         try {
-          const r = await api.panelCert({ mode: certMode, domain, email });
+          const r = await api.panelCert({ mode: certMode, domain, email, certFile, keyFile });
           if (r.status === 'unchanged') return toast('That is already how the panel is served.');
           toast(r.issues
             ? 'Asking Let’s Encrypt for a certificate — the panel is restarting.'

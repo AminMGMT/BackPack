@@ -16,6 +16,37 @@ also cover update, panel port and password). Open the port first:
 sudo ufw allow 7777
 ```
 
+## Using your own certificate (certbot or any other)
+
+If Let's Encrypt cannot verify this server from here — port 80 is taken, or
+inbound traffic from its validators does not reach the machine — get the
+certificate your own way and give the panel the two files.
+
+- **Format:** PEM. The certificate file holds the certificate followed by its
+  chain; the key file holds its private key. From certbot these are
+  `fullchain.pem` and `privkey.pem`, for example:
+
+  ```
+  /etc/letsencrypt/live/panel.example.com/fullchain.pem
+  /etc/letsencrypt/live/panel.example.com/privkey.pem
+  ```
+
+- **Where:** anywhere on the server; give full paths. Nothing is copied — the
+  panel reads the files where they are.
+- **Panel:** Settings → Panel access → Certificate → *HTTPS, my own
+  certificate*. **CLI:** Web Panel → Certificate → *HTTPS, my own certificate*.
+- Both check the pair before saving: a key that is not the certificate's, an
+  expired certificate or an unreadable file is refused there and then.
+- **Renewals** are picked up on the next connection, with no restart: point the
+  panel at certbot's `live/` paths and let certbot renew as usual.
+- If the files later disappear or become unreadable, the panel does not lock
+  you out: it serves its self-signed certificate instead and says why in its
+  log (`journalctl -u backpack-webui`).
+
+For a **tunnel** (WSS / WSS Mux), the setup wizard's *Use existing
+certificate/key files* does the same, and writes `tls_cert` and `tls_key` into
+the server's config.
+
 ## Two-factor sign-in
 
 The panel is root on this machine, and by default one password opens it. A

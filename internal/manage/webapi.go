@@ -1,9 +1,11 @@
 package manage
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -133,6 +135,84 @@ type FineTune struct {
 	KCPParityShards int `json:"kcpParityShards"`
 
 	ZeroCopy bool `json:"zeroCopy"` // plain TCP only
+
+	// sent is the set of keys a form actually posted, when it came from JSON.
+	// See UnmarshalJSON. Nil means built in code, where every field counts.
+	sent map[string]bool
+}
+
+// UnmarshalJSON records which keys the form sent as well as their values.
+//
+// A zero or a false in this struct was ambiguous: "the operator set it off" or
+// "the form never mentioned it". The Add form posts only the boxes that were
+// filled in, so a tunnel created with one Fine Tune switch touched had every
+// other knob read as zero — heartbeat off, Nagle back on, FEC off — and its
+// preset cleared. Knowing what was sent is what lets a missing key mean
+// "leave the preset's value", which is what the form means by it.
+func (f *FineTune) UnmarshalJSON(data []byte) error {
+	type plain FineTune
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+	*f = FineTune(v)
+	f.sent = make(map[string]bool, len(keys))
+	for k := range keys {
+		f.sent[k] = true
+	}
+	return nil
+}
+
+// has reports whether the form sent this key; code-built values have them all.
+func (f FineTune) has(key string) bool { return f.sent == nil || f.sent[key] }
+
+// fineTuneKeys maps each JSON key to its field index, once.
+var fineTuneKeys = func() map[string]int {
+	t := reflect.TypeOf(FineTune{})
+	m := map[string]int{}
+	for i := 0; i < t.NumField(); i++ {
+		if tag := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]; tag != "" && tag != "-" {
+			m[tag] = i
+		}
+	}
+	return m
+}()
+
+// notPreset are the knobs no preset sets. Changing them is not a departure
+// from the profile, so it does not clear the tunnel's preset.
+var notPreset = map[string]bool{"logLevel": true, "logJSON": true, "acceptUDP": true, "mss": true, "zeroCopy": true}
+
+// changedFrom keeps only what the form changed from the values it was filled
+// with. The Edit form posts every field it shows, and it shows the tunnel's
+// current values — so a preset changed on the same form came with the old
+// preset's numbers beside it, and applying them all put the old numbers back
+// over the new preset and cleared its name: a tunnel moved to Turbo stayed on
+// Balance's settings and read "Custom" (reported as "it always goes back to
+// Balance"). Unchanged fields now leave whatever the preset chose.
+func (f FineTune) changedFrom(before FineTune) FineTune {
+	out := f
+	out.sent = map[string]bool{}
+	fv, bv := reflect.ValueOf(f), reflect.ValueOf(before)
+	for key, i := range fineTuneKeys {
+		if f.has(key) && !reflect.DeepEqual(fv.Field(i).Interface(), bv.Field(i).Interface()) {
+			out.sent[key] = true
+		}
+	}
+	return out
+}
+
+// touchesPreset reports whether applying f moves the tunnel off its preset.
+func (f FineTune) touchesPreset() bool {
+	for key := range fineTuneKeys {
+		if f.has(key) && !notPreset[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // tuneOf reads the current advanced settings off a spec, so the panel's Fine
@@ -173,13 +253,23 @@ func tuneOf(s TunnelSpec) FineTune {
 // the tunnel a zero window or no heartbeat at all — the preset's value is the
 // right answer there. The booleans are genuine answers and always applied.
 func (f FineTune) apply(s *TunnelSpec) {
-	s.Nodelay = f.Nodelay
-	s.AggressivePool = f.AggressivePool
-	s.AcceptUDP = f.AcceptUDP
-	s.ZeroCopy = f.ZeroCopy && s.Transport == "tcp"
+	if f.has("nodelay") {
+		s.Nodelay = f.Nodelay
+	}
+	if f.has("aggressivePool") {
+		s.AggressivePool = f.AggressivePool
+	}
+	if f.has("acceptUDP") {
+		s.AcceptUDP = f.AcceptUDP
+	}
+	if f.has("zeroCopy") {
+		s.ZeroCopy = f.ZeroCopy && s.Transport == "tcp"
+	}
 	// Heartbeat is the one number whose zero is meaningful — it disables the
 	// heartbeat, which the CLI offers in as many words.
-	s.Heartbeat = f.Heartbeat
+	if f.has("heartbeat") {
+		s.Heartbeat = f.Heartbeat
+	}
 
 	setInt(&s.KeepAlive, f.KeepAlive)
 	setInt(&s.ChannelSize, f.ChannelSize)
@@ -198,20 +288,36 @@ func (f FineTune) apply(s *TunnelSpec) {
 	// same shape of answer: zero means "let the kernel choose", which is a
 	// setting rather than a blank, and clearing the box has to be able to
 	// restore it.
-	s.KCPDataShards = f.KCPDataShards
-	s.KCPParityShards = f.KCPParityShards
-	s.MSS = f.MSS
+	if f.has("kcpDataShards") {
+		s.KCPDataShards = f.KCPDataShards
+	}
+	if f.has("kcpParityShards") {
+		s.KCPParityShards = f.KCPParityShards
+	}
+	if f.has("mss") {
+		s.MSS = f.MSS
+	}
 
-	switch strings.ToLower(strings.TrimSpace(f.LogLevel)) {
-	case "debug", "info", "warn", "error":
-		s.LogLevel = strings.ToLower(strings.TrimSpace(f.LogLevel))
+	if f.has("logLevel") {
+		switch strings.ToLower(strings.TrimSpace(f.LogLevel)) {
+		case "debug", "info", "warn", "error":
+			s.LogLevel = strings.ToLower(strings.TrimSpace(f.LogLevel))
+		}
 	}
-	if f.LogJSON {
-		s.LogFormat = "json"
-	} else {
-		s.LogFormat = ""
+	if f.has("logJSON") {
+		if f.LogJSON {
+			s.LogFormat = "json"
+		} else {
+			s.LogFormat = ""
+		}
 	}
-	s.Preset = ""
+	// Like the CLI's manual tuning, a changed number clears the preset: the
+	// settings no longer match any profile, and leaving the label on would let
+	// a later preset change overwrite them silently. A log level or the UDP
+	// switch is not a departure from the profile, and leaves it.
+	if f.touchesPreset() {
+		s.Preset = ""
+	}
 }
 
 // setInt copies v over dst unless v is zero, which means "unanswered".
@@ -472,6 +578,9 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 		return err
 	}
 	changed := false
+	// What the form was filled with, so only what the operator changed on it
+	// is applied. See changedFrom.
+	shown := tuneOf(s)
 
 	if t := strings.ToLower(strings.TrimSpace(e.Transport)); t != "" && t != s.Transport {
 		if err := switchTransport(&s, t); err != nil {
@@ -488,7 +597,11 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 	// The preset is re-applied before the manual knobs, so a form that changes
 	// both ends up with the preset as the baseline and the edits on top — the
 	// order the CLI uses.
-	if p := strings.TrimSpace(e.Preset); p != "" && (p != s.Preset || e.Tune != nil) {
+	if e.Tune != nil {
+		t := e.Tune.changedFrom(shown)
+		e.Tune = &t
+	}
+	if p := strings.TrimSpace(e.Preset); p != "" && p != s.Preset {
 		if !validPreset(p) {
 			return fmt.Errorf("unknown preset %q", p)
 		}
@@ -502,7 +615,7 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 		ApplyPreset(&s, p)
 		changed = true
 	}
-	if e.Tune != nil {
+	if e.Tune != nil && len(e.Tune.sent) > 0 {
 		e.Tune.apply(&s)
 		changed = true
 	}

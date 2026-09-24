@@ -358,7 +358,7 @@ range can never be taken this way either.
 
 ```bash
 cat /proc/sys/net/ipv4/ip_local_port_range      # expect: 32768   60999
-grep -r ip_local_port_range /etc/sysctl.d/
+grep -r ip_local_port_range /etc/sysctl.conf /etc/sysctl.d/
 ss -tnp | grep <the port>                       # -tnp, not -tlnp
 ```
 

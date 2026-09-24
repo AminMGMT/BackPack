@@ -353,6 +353,9 @@ func (c *QuicTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
+					if hint := beats.explain(err, c.config.KeepAlive); hint != "" && ctx.Err() == nil {
+						c.logger.Warn(hint)
+					}
 					if ctx.Err() == nil {
 						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 							c.logger.Warn("no heartbeat from the server within the keepalive period, reconnecting")

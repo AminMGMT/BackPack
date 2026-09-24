@@ -90,6 +90,7 @@ func newICMPServerConn(token string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	attachICMPFilter(pc, uint8(icmpEchoRequest), -1)
 	return newICMPServerConnWith(pc, token), nil
 }
 
@@ -106,7 +107,9 @@ func newICMPClientConn(token string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newICMPClientConnWith(pc, token), nil
+	c := newICMPClientConnWith(pc, token)
+	attachICMPFilter(pc, uint8(icmpEchoReply), int(c.(*icmpConn).id))
+	return c, nil
 }
 
 // newICMPClientConnWith is the constructor the tests use, with the socket
@@ -185,6 +188,16 @@ func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		n, peer, err := c.pc.ReadFrom(buf)
 		if err != nil {
 			return 0, nil, err
+		}
+		// The cheap refusals first, from the raw bytes, before a parse that
+		// allocates: the type, and on the client the echo identifier. The
+		// socket filter normally keeps these away already; this is what is
+		// left where it could not be attached.
+		if n < 8 || buf[0] != byte(wantType) {
+			continue
+		}
+		if !c.server && (int(buf[4])<<8|int(buf[5])) != int(c.id) {
+			continue
 		}
 		msg, err := icmp.ParseMessage(c.proto, buf[:n])
 		if err != nil || msg.Type != wantType {

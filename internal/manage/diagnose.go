@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"github.com/backpack/backpack/internal/optimize"
 	"math"
 	"net"
 	"os"
@@ -113,12 +114,14 @@ func systemChecks() []Check {
 			out = append(out, Check{Group: g, Name: "Congestion control", Level: CheckOK, Detail: "bbr"})
 		} else {
 			out = append(out, Check{Group: g, Name: "Congestion control", Level: CheckWarn,
-				Detail: v + " (bbr gives better throughput)", Fix: "run Optimize from the main menu"})
+				Detail: v + " (bbr gives better throughput)",
+				Fix:    optimizeFix("net.ipv4.tcp_congestion_control", v, "run Optimize from the main menu")})
 		}
 	}
 	if v := sysctlValue("net.core.default_qdisc"); v != "" && v != "fq" {
 		out = append(out, Check{Group: g, Name: "Queue discipline", Level: CheckWarn,
-			Detail: v + " (fq pairs with bbr)", Fix: "run Optimize from the main menu"})
+			Detail: v + " (fq pairs with bbr)",
+			Fix:    optimizeFix("net.core.default_qdisc", v, "run Optimize from the main menu")})
 	}
 	if v := sysctlValue("net.core.rmem_max"); v != "" {
 		n, _ := strconv.Atoi(v)
@@ -127,12 +130,13 @@ func systemChecks() []Check {
 		} else {
 			out = append(out, Check{Group: g, Name: "Socket buffers", Level: CheckWarn,
 				Detail: humanSize(n) + " max — small for high-latency links",
-				Fix:    "run Optimize from the main menu"})
+				Fix:    optimizeFix("net.core.rmem_max", v, "run Optimize from the main menu")})
 		}
 	}
 	if v := sysctlValue("net.ipv4.ip_forward"); v == "0" {
 		out = append(out, Check{Group: g, Name: "IP forwarding", Level: CheckWarn,
-			Detail: "disabled", Fix: "run Optimize (needed for some forwarding setups)"})
+			Detail: "disabled",
+			Fix:    optimizeFix("net.ipv4.ip_forward", v, "run Optimize (needed for some forwarding setups)")})
 	}
 
 	// The ephemeral port range decides whether the services on this machine can
@@ -149,7 +153,8 @@ func systemChecks() []Check {
 			out = append(out, Check{Group: g, Name: "Ephemeral port range", Level: CheckWarn,
 				Detail: fmt.Sprintf("%d-%d — services on ports in this range can lose them "+
 					"to an outgoing connection", lo, hi),
-				Fix: "run Optimize from the main menu — it restores 32768-60999"})
+				Fix: optimizeFix("net.ipv4.ip_local_port_range", v,
+					"run Optimize from the main menu — it restores 32768-60999")})
 		} else {
 			out = append(out, Check{Group: g, Name: "Ephemeral port range", Level: CheckOK,
 				Detail: fmt.Sprintf("%d-%d", lo, hi)})
@@ -831,4 +836,18 @@ func rpFilterCheck(g string, l config.L3Config) Check {
 		return Check{Group: g, Name: "Reverse-path filter", Level: CheckInfo,
 			Detail: "could not read rp_filter; ensure it is 0 or 2 on the receiving host"}
 	}
+}
+
+// optimizeFix is what a system check tells the operator to do.
+//
+// It was "run Optimize" every time, including to somebody who just had — the
+// value was overwritten at boot by another file, or the kernel refused it — so
+// they ran it again and got the same warning, which is the loop users
+// reported. Once Optimize has run, the check says instead what stands in its
+// way. See optimize.WhyNot.
+func optimizeFix(key, live, otherwise string) string {
+	if why := optimize.WhyNot(key, live); why != "" {
+		return why
+	}
+	return otherwise
 }

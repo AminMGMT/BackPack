@@ -280,6 +280,9 @@ func (c *UdpTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
+					if hint := beats.explain(err, 0); hint != "" && ctx.Err() == nil {
+						c.logger.Warn(hint)
+					}
 					if ctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()

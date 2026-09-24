@@ -371,6 +371,9 @@ func (c *TcpTransport) channelHandler() {
 				}
 				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
 				if err != nil {
+					if hint := beats.explain(err, c.config.KeepAlive); hint != "" && ctx.Err() == nil {
+						c.logger.Warn(hint)
+					}
 					if ctx.Err() == nil {
 						c.logger.Error("failed to read from control channel. ", err)
 						go c.Restart()

@@ -252,6 +252,9 @@ func (c *WsTransport) channelHandler() {
 				}
 				messageType, msg, err := c.state.WSConn().ReadMessage()
 				if err != nil {
+					if hint := beats.explain(err, c.config.KeepAlive); hint != "" && ctx.Err() == nil {
+						c.logger.Warn(hint)
+					}
 					if ctx.Err() == nil {
 						c.logger.Error("failed to read from channel connection. ", err)
 						go c.Restart()

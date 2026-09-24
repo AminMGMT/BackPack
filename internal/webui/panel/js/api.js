@@ -240,8 +240,8 @@ export const setPanelPort = port => post('/api/panelport', new URLSearchParams({
 export const panelCertRead = () => get('/api/panelcert');
 /* Form-encoded, because the handler reads r.FormValue. `mode` is not optional:
    without it the endpoint has nothing to apply and refuses the whole request. */
-export const panelCert   = ({ mode, domain = '', email = '' }) =>
-  post('/api/panelcert', new URLSearchParams({ mode, domain, email }));
+export const panelCert   = ({ mode, domain = '', email = '', certFile = '', keyFile = '' }) =>
+  post('/api/panelcert', new URLSearchParams({ mode, domain, email, certFile, keyFile }));
 
 /* ---- CLI: 7 Telegram Bot ------------------------------------------------- */
 export const telegram     = () => get('/api/telegram');

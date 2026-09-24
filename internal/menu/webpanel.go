@@ -175,6 +175,8 @@ func panelCertDesc(cfg webui.Config) string {
 	switch {
 	case !cfg.HTTPS:
 		return "plain HTTP — no certificate"
+	case cfg.OwnCert():
+		return "HTTPS with your own certificate (" + cfg.TLSCertFile + ")"
 	case cfg.TLSDomain != "":
 		return "Let's Encrypt for " + cfg.TLSDomain + " (renews itself)"
 	default:
@@ -203,7 +205,13 @@ func panelCertMenu(cfg webui.Config) {
 		{Title: "Plain HTTP", Desc: "no certificate — the default"},
 		{Title: "HTTPS, self-signed", Desc: "works on a bare IP; the browser warns once"},
 		{Title: "HTTPS, Let's Encrypt", Desc: "trusted certificate — needs a domain and port 80"},
+		{Title: "HTTPS, my own certificate", Desc: "one you already have — from certbot or anywhere"},
 	})
+
+	// Every choice but the last forgets a brought certificate.
+	if idx >= 0 && idx < 3 {
+		cfg.TLSCertFile, cfg.TLSKeyFile = "", ""
+	}
 
 	switch idx {
 	case 0:
@@ -223,6 +231,27 @@ func panelCertMenu(cfg webui.Config) {
 		}
 		email := strings.TrimSpace(tui.PromptDefault("Email for expiry warnings (optional)", cfg.TLSEmail))
 		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail = true, domain, email
+	case 3:
+		fmt.Println()
+		tui.Info("Two PEM files: the certificate with its chain, and its private key.")
+		tui.Info("From certbot they are, for example:")
+		tui.Info("  /etc/letsencrypt/live/panel.example.com/fullchain.pem")
+		tui.Info("  /etc/letsencrypt/live/panel.example.com/privkey.pem")
+		tui.Info("A renewal is picked up on its own — no restart needed.")
+		fmt.Println()
+		certFile := strings.TrimSpace(tui.PromptDefault("Certificate file", cfg.TLSCertFile))
+		keyFile := strings.TrimSpace(tui.PromptDefault("Private key file", cfg.TLSKeyFile))
+		names, notAfter, err := webui.CheckOwnCert(certFile, keyFile)
+		if err != nil {
+			tui.Error(err.Error())
+			tui.Warn("Nothing changed.")
+			tui.PressEnter()
+			return
+		}
+		tui.Success(fmt.Sprintf("Certificate for %s, valid until %s.",
+			strings.Join(names, ", "), notAfter.Format("2006-01-02")))
+		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail, cfg.TLSSelfHost = true, "", "", ""
+		cfg.TLSCertFile, cfg.TLSKeyFile = certFile, keyFile
 	default:
 		return
 	}
