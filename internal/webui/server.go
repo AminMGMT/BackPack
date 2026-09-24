@@ -230,81 +230,9 @@ func Serve() error {
 
 	// The panel shows live stats, tunnel state and logs, and — through the
 	// /api/tunnel/* endpoints below — creates, edits and drives tunnels the same
-	// way the CLI menu does. Every mutating endpoint sits behind a browser
-	// session; the remote access token reaches the read-only ones only.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/login", srv.handleLogin)
-	mux.HandleFunc("/api/totp", srv.requireAuth(srv.handleTOTP))
-	mux.HandleFunc("/logout", srv.handleLogout)
-	// The panel, and everything it loads. Registered at "/", so it is also
-	// the catch-all for anything no other route claims. See panel.go.
-	mux.HandleFunc("/", srv.requireAuth(srv.handlePanel))
-	// Where the panel answered while there were two of them.
-	mux.HandleFunc(panelPrefix, srv.requireAuth(srv.handleOldPanelPath))
-	// Read-only endpoints also accept the remote access token, so a peer panel
-	// or a Prometheus scraper can watch without holding a browser session.
-	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
-	mux.HandleFunc("/api/tunnels", srv.requireReadAuth(srv.handleTunnels))
-	mux.HandleFunc("/metrics", srv.requireReadAuth(srv.handlePrometheus))
-	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
-	// Tunnel management — the CLI's setup wizard, edit screen and service
-	// actions, reachable from the browser.
-	mux.HandleFunc("/api/tunnel/options", srv.requireAuth(srv.handleTunnelOptions))
-	mux.HandleFunc("/api/tunnel/suggest", srv.requireAuth(srv.handleTunnelSuggest))
-	mux.HandleFunc("/api/tunnel/defaults", srv.requireAuth(srv.handleTunnelDefaults))
-	mux.HandleFunc("/api/tunnel/create", srv.requireAuth(srv.handleTunnelCreate))
-	// The direct half, on its own endpoints so the reverse ones are untouched.
-	mux.HandleFunc("/api/direct/options", srv.requireAuth(srv.handleDirectOptions))
-	mux.HandleFunc("/api/direct/defaults", srv.requireAuth(srv.handleDirectDefaults))
-	mux.HandleFunc("/api/direct/create", srv.requireAuth(srv.handleDirectCreate))
-	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
-	// Handing a tunnel's paired settings to the other server, and taking them
-	// from it. See handleShareLink.
-	// Managed servers: the fleet, the login each one is reached with, and
-	// building both ends of a tunnel in a single submission. See
-	// handlers_nodes.go.
-	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
-	mux.HandleFunc("/api/fleet/drift", srv.requireReadAuth(srv.handleDrift))
-	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
-	// Linking a tunnel that already exists to the server holding its other
-	// end. See handlers_adopt.go.
-	mux.HandleFunc("/api/tunnel/adopt", srv.requireAuth(srv.handleTunnelAdopt))
-	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
-	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
-	mux.HandleFunc("/api/password", srv.requireAuth(srv.handlePassword))
-	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
-	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
-	mux.HandleFunc("/api/panelport", srv.requireAuth(srv.handlePanelPort))
-	mux.HandleFunc("/api/panelcert", srv.requireAuth(srv.handlePanelCert))
-	mux.HandleFunc("/api/backup/export", srv.requireAuth(srv.handleBackupExport))
-	mux.HandleFunc("/api/backup/import", srv.requireAuth(srv.handleBackupImport))
-	mux.HandleFunc("/api/telegram", srv.requireAuth(srv.handleTelegram))
-	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
-	mux.HandleFunc("/api/relays", srv.requireAuth(srv.handleRelayOptions))
-	mux.HandleFunc("/api/health", srv.requireAuth(srv.handleHealth))
-	mux.HandleFunc("/api/alerts", srv.requireReadAuth(srv.handleAlerts))
-	mux.HandleFunc("/api/linktest", srv.requireAuth(srv.handleLinkTest))
-	mux.HandleFunc("/api/confhist", srv.requireAuth(srv.handleConfHistory))
-	mux.HandleFunc("/api/confhist/restore", srv.requireAuth(srv.handleConfRestore))
-	mux.HandleFunc("/api/speedtest/plan", srv.requireAuth(srv.handleSpeedTestPlan))
-	mux.HandleFunc("/api/speedtest", srv.requireAuth(srv.handleSpeedTestRun))
-	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
-	// Access control. Issuing a credential is guarded harder than using one:
-	// a write token must not be able to mint itself a better one. See access.go.
-	mux.HandleFunc("/api/tokens", srv.guard(ScopeAdmin, srv.handleTokens))
-	mux.HandleFunc("/api/audit", srv.guard(ScopeAdmin, srv.handleAudit))
-	mux.HandleFunc("/api/sessions", srv.requireAuth(srv.handleSessions))
-	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
-	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
-	mux.HandleFunc("/api/channel", srv.requireAuth(srv.handleChannel))
-	// The manifest, icons and service worker are what let the panel install as
-	// an app; the browser fetches them before any login, so they carry no data
-	// and no auth. The worker is required for an install offer and must be
-	// served from the root to control the whole origin.
-	mux.HandleFunc("/manifest.json", handleManifest)
-	mux.HandleFunc("/icon.svg", handleIcon)
-	mux.HandleFunc("/icons/", handleIconPNG)
-	mux.HandleFunc("/sw.js", handleServiceWorker)
+	// way the CLI menu does. Every endpoint is behind a session or a scoped
+	// token; which scope each one needs is in routes().
+	mux := srv.routes()
 
 	// Ready to reach the fleet. Nothing is contacted here and nothing can
 	// fail: the panel dials out when it has something to ask, so a server that
@@ -397,6 +325,89 @@ func Serve() error {
 	return httpServer.ListenAndServeTLS("", "")
 }
 
+// routes is every endpoint the panel answers and the scope each one needs.
+//
+// It is a function of its own so the whole table can be tested as it is
+// actually wired: the guard was tested on its own and the table was not, which
+// is how the endpoints that hand out access came to sit at the same scope as
+// the ones that restart a tunnel.
+func (srv *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/login", srv.handleLogin)
+	mux.HandleFunc("/api/totp", srv.requireAdmin(srv.handleTOTP))
+	mux.HandleFunc("/logout", srv.handleLogout)
+	// The panel, and everything it loads. Registered at "/", so it is also
+	// the catch-all for anything no other route claims. See panel.go.
+	mux.HandleFunc("/", srv.requireAuth(srv.handlePanel))
+	// Where the panel answered while there were two of them.
+	mux.HandleFunc(panelPrefix, srv.requireAuth(srv.handleOldPanelPath))
+	// The read-scoped endpoints, so a Prometheus scraper or a status page can
+	// watch with a read token and no browser session.
+	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
+	mux.HandleFunc("/api/tunnels", srv.requireReadAuth(srv.handleTunnels))
+	mux.HandleFunc("/metrics", srv.requireReadAuth(srv.handlePrometheus))
+	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
+	// Tunnel management — the CLI's setup wizard, edit screen and service
+	// actions, reachable from the browser.
+	mux.HandleFunc("/api/tunnel/options", srv.requireAuth(srv.handleTunnelOptions))
+	mux.HandleFunc("/api/tunnel/suggest", srv.requireAuth(srv.handleTunnelSuggest))
+	mux.HandleFunc("/api/tunnel/defaults", srv.requireAuth(srv.handleTunnelDefaults))
+	mux.HandleFunc("/api/tunnel/create", srv.requireAuth(srv.handleTunnelCreate))
+	// The direct half, on its own endpoints so the reverse ones are untouched.
+	mux.HandleFunc("/api/direct/options", srv.requireAuth(srv.handleDirectOptions))
+	mux.HandleFunc("/api/direct/defaults", srv.requireAuth(srv.handleDirectDefaults))
+	mux.HandleFunc("/api/direct/create", srv.requireAuth(srv.handleDirectCreate))
+	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
+	// Handing a tunnel's paired settings to the other server, and taking them
+	// from it. See handleShareLink.
+	// Managed servers: the fleet, the login each one is reached with, and
+	// building both ends of a tunnel in a single submission. See
+	// handlers_nodes.go.
+	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
+	mux.HandleFunc("/api/fleet/drift", srv.requireReadAuth(srv.handleDrift))
+	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
+	// Linking a tunnel that already exists to the server holding its other
+	// end. See handlers_adopt.go.
+	mux.HandleFunc("/api/tunnel/adopt", srv.requireAuth(srv.handleTunnelAdopt))
+	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
+	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
+	mux.HandleFunc("/api/password", srv.requireAdmin(srv.handlePassword))
+	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
+	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
+	mux.HandleFunc("/api/panelport", srv.requireAdmin(srv.handlePanelPort))
+	mux.HandleFunc("/api/panelcert", srv.requireAdmin(srv.handlePanelCert))
+	mux.HandleFunc("/api/backup/export", srv.requireAdmin(srv.handleBackupExport))
+	mux.HandleFunc("/api/backup/import", srv.requireAdmin(srv.handleBackupImport))
+	mux.HandleFunc("/api/telegram", srv.requireAdmin(srv.handleTelegram))
+	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
+	mux.HandleFunc("/api/relays", srv.requireAuth(srv.handleRelayOptions))
+	mux.HandleFunc("/api/health", srv.requireAuth(srv.handleHealth))
+	mux.HandleFunc("/api/alerts", srv.requireReadAuth(srv.handleAlerts))
+	mux.HandleFunc("/api/linktest", srv.requireAuth(srv.handleLinkTest))
+	mux.HandleFunc("/api/confhist", srv.requireAuth(srv.handleConfHistory))
+	mux.HandleFunc("/api/confhist/restore", srv.requireAuth(srv.handleConfRestore))
+	mux.HandleFunc("/api/speedtest/plan", srv.requireAuth(srv.handleSpeedTestPlan))
+	mux.HandleFunc("/api/speedtest", srv.requireAuth(srv.handleSpeedTestRun))
+	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
+	// Access control. Issuing a credential is guarded harder than using one:
+	// a write token must not be able to mint itself a better one. See access.go.
+	mux.HandleFunc("/api/tokens", srv.guard(ScopeAdmin, srv.handleTokens))
+	mux.HandleFunc("/api/audit", srv.guard(ScopeAdmin, srv.handleAudit))
+	mux.HandleFunc("/api/sessions", srv.requireAdmin(srv.handleSessions))
+	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
+	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
+	mux.HandleFunc("/api/channel", srv.requireAuth(srv.handleChannel))
+	// The manifest, icons and service worker are what let the panel install as
+	// an app; the browser fetches them before any login, so they carry no data
+	// and no auth. The worker is required for an install offer and must be
+	// served from the root to control the whole origin.
+	mux.HandleFunc("/manifest.json", handleManifest)
+	mux.HandleFunc("/icon.svg", handleIcon)
+	mux.HandleFunc("/icons/", handleIconPNG)
+	mux.HandleFunc("/sw.js", handleServiceWorker)
+	return mux
+}
+
 // requireAuth wraps a handler, redirecting unauthenticated users to /login
 // (or 401 for API calls).
 func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -418,6 +429,18 @@ func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 // were last used so a dead one can be recognised. See access.go.
 func (s *server) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
 	return s.guard(ScopeRead, next)
+}
+
+// requireAdmin guards the endpoints that decide who can get in: the password,
+// the second factor, the signed-in devices, the Telegram admins, the panel's
+// own address and certificate, and the backup — which carries the password out
+// in one direction and can replace every credential file in the other.
+//
+// Any one of them turns a write token into the panel password, and the panel
+// password is admin. Guarding /api/tokens at admin while these sat at write
+// was a door locked beside one standing open.
+func (s *server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return s.guard(ScopeAdmin, next)
 }
 
 // guard is the one place a request is authorised, and therefore the one place
@@ -461,7 +484,8 @@ func (s *server) guard(need Scope, next http.HandlerFunc) http.HandlerFunc {
 					// It proved who it is and is not allowed to do this, which
 					// is a different answer and a more useful one.
 					s.note(r, who, http.StatusForbidden)
-					http.Error(w, "this credential is read-only", http.StatusForbidden)
+					http.Error(w, fmt.Sprintf("this credential is %s and this needs %s", who.Scope, need),
+						http.StatusForbidden)
 					return
 				}
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -494,7 +518,7 @@ func (s *server) identify(r *http.Request) (caller, bool) {
 		// operators at lesser levels are a separate credential — a token —
 		// because a second password on the same login form would be a second
 		// thing to brute force against the same rate limiter.
-		return caller{Kind: "session", Scope: ScopeAdmin, IP: ip}, true
+		return caller{Kind: "session", Name: sessionID(c.Value), Scope: ScopeAdmin, IP: ip}, true
 	}
 	if secret := bearer(r); secret != "" {
 		if tok, ok := checkToken(secret); ok {

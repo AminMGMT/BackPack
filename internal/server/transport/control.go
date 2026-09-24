@@ -246,3 +246,43 @@ func writeControl(conn *websocket.Conn, payload []byte) error {
 }
 
 var errNoControlChannel = errors.New("no control channel")
+
+// farewell is how a datagram transport's listener knows the client has been
+// told the server is going.
+//
+// Over TCP the goodbye is free: the socket closes and the client reads a FIN.
+// Over KCP there is no connection for the kernel to close — the listener is one
+// unconnected UDP socket — so the only goodbye the client can hear is the
+// SG_Closed the channel handler writes. That write only queues a segment, and
+// the listener closing the socket in the same instant is what used to drop it.
+// A client whose server had only restarted then sat on a dead session until its
+// control deadline ran out: a minute and fifty-three seconds, measured, with the
+// default keepalive.
+//
+// The listener waits for this before it lets go of the socket, bounded, so a
+// channel handler that is stuck cannot hold a restart hostage.
+type farewell struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func newFarewell() *farewell { return &farewell{done: make(chan struct{})} }
+
+// said marks the goodbye as sent, or as never going to be. Safe to call more
+// than once and from any exit path.
+func (f *farewell) said() { f.once.Do(func() { close(f.done) }) }
+
+// wait blocks until said, or for at most d.
+func (f *farewell) wait(d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-f.done:
+	case <-t.C:
+	}
+}
+
+// farewellWait bounds how long a listener holds its socket for the goodbye.
+// The goodbye itself costs one write and kcpFarewellFlush; the bound is for
+// the handler that never gets there.
+const farewellWait = time.Second

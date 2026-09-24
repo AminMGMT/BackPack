@@ -50,13 +50,16 @@ import (
 type Scope int
 
 const (
-	// ScopeRead may look at anything: status, metrics, logs, the fleet.
+	// ScopeRead may look at what a scraper needs: metrics, status, the
+	// tunnels, alerts and fleet drift.
 	ScopeRead Scope = iota
-	// ScopeWrite may change things: create and edit tunnels, restart services,
-	// upgrade servers.
+	// ScopeWrite may run things: create and edit tunnels, restart services,
+	// read logs, upgrade servers.
 	ScopeWrite
 	// ScopeAdmin may change who has access, which is separate from write
-	// because handing out credentials is not the same act as using them.
+	// because handing out credentials is not the same act as using them. That
+	// includes everything that is a credential in another form — the password,
+	// the second factor, the Telegram admins, a backup. See requireAdmin.
 	ScopeAdmin
 )
 
@@ -299,8 +302,8 @@ func noteTokenUse(name string, now time.Time) {
 	}
 }
 
-// bearer pulls a token out of the request, from the Authorization header or,
-// for a scraper that cannot set one, a query parameter.
+// bearer pulls a token out of the Authorization header. Only there: a secret
+// in a query string is written to every access log and proxy on the way.
 func bearer(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); h != "" {
 		if after, found := strings.CutPrefix(h, "Bearer "); found {
@@ -313,8 +316,11 @@ func bearer(r *http.Request) string {
 // caller is who is making a request, once the guard has worked it out.
 type caller struct {
 	// Kind is "session" or "token".
-	Kind  string
-	Name  string // the token's name; empty for a session
+	Kind string
+	// Name is the token's name, or for a session its public id — the one the
+	// signed-in devices list shows, so a line in the record can be traced to
+	// the device that did it and that device signed out.
+	Name  string
 	Scope Scope
 	IP    string
 }
@@ -322,6 +328,9 @@ type caller struct {
 func (c caller) describe() string {
 	if c.Kind == "token" {
 		return "token " + c.Name
+	}
+	if c.Name != "" {
+		return "the panel (session " + c.Name + ")"
 	}
 	return "the panel"
 }

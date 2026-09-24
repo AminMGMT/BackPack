@@ -21,7 +21,7 @@ given at the bottom of this page.
 | **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root | [→](../tutorial/tcp-pck.md) |
 | UDP | UDP | — | — | UDP open | [→](../tutorial/udp.md) |
 | **UDP + KCP + FEC** | UDP | ✅ (token key) | ✅ | UDP open | [→](../tutorial/udp-kcp-fec.md) |
-| UDP + QUIC | UDP | ✅ (TLS 1.3) | ✅ | UDP open | [→](../tutorial/udp-quic.md) |
+| UDP + QUIC | UDP | ◐ (TLS 1.3, passive only) | ✅ | UDP open | [→](../tutorial/udp-quic.md) |
 | WS | WebSocket | — | — | — | [→](../tutorial/websocket.md) |
 | WS Mux | WebSocket | — | ✅ | — | [→](../tutorial/websocket.md) |
 | WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
@@ -31,6 +31,14 @@ given at the bottom of this page.
 "Encrypted handshake" means the tunnel's own credential is protected on the
 wire. On the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) the token is sent
 as-is, so use one of the encrypted transports on an untrusted path.
+
+QUIC is half a mark on purpose. Its TLS hides the token from anyone who only
+watches, but the client does not check the server's certificate and then sends
+the token itself — so something that terminates the TLS on the path reads it.
+WSS closed the same gap by proving the token over the TLS session instead of
+sending it (see below); QUIC has not yet, because that is a wire change both
+ends must speak. On a path you suspect of interception, prefer Stealth, KCP or
+WSS.
 
 Every transport can carry **UDP on its forwarded ports** — it is a per-tunnel
 setting, off by default, and independent of the transport. See
@@ -85,8 +93,10 @@ ends must be on it. See [TCP + PCK](tcp-pck.md).
 ## UDP family
 
 ### UDP
-Raw datagrams, for forwarding UDP-based services. No reliability layer — packets
-that are lost stay lost, which is correct for protocols that expect that.
+Raw datagrams, for forwarding UDP-based services — and only those: the exposed
+ports listen on UDP and nothing else, so a TCP service is not carried at all.
+No reliability layer — packets that are lost stay lost, which is correct for
+protocols that expect that.
 
 ### UDP + KCP + FEC
 A **low-latency gaming tunnel**: a reliable, ordered protocol built on top of

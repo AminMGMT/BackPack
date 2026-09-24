@@ -1,5 +1,8 @@
 # Build artifacts
 /backpack
+# Compiled test binaries (go test -c). Two were committed once: 45 MB of
+# machine-specific ELF carrying the build machine's paths.
+*.test
 /dist/
 /release/
 

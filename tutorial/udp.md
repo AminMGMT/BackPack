@@ -42,10 +42,15 @@ Two differences:
 **The firewall rule is `udp`, not `tcp`:**
 
 ```bash
-ufw allow 8443/udp      # the tunnel port — this transport binds UDP
-ufw allow 443/tcp       # forwarded ports, as usual
-ufw allow 443/udp       # …plus this, if you turned UDP forwarding on
+ufw allow 8443/tcp      # the tunnel port's control channel
+ufw allow 8443/udp      # the tunnel port's data — this transport binds both
+ufw allow 443/udp       # forwarded ports — UDP only, see below
 ```
+
+**It forwards UDP and nothing else.** The exposed ports listen on UDP only;
+a TCP connection to one of them is refused, whatever the UDP-forwarding switch
+says. To carry a TCP service and its UDP side together, use any other transport
+with [UDP forwarding](udp-forwarding.md) turned on.
 
 **No PROXY protocol.** The real-client-IP header needs a stream to prefix, so the
 question is not asked on this transport. If your panel needs per-user device

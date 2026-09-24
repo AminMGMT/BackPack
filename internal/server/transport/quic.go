@@ -29,6 +29,9 @@ type quicGen struct {
 	localChannel   chan LocalTCPConn
 	reqNewConnChan chan struct{}
 	usageMonitor   *web.Usage
+	// bye is said once the client has been told this run is ending. See
+	// farewell.
+	bye *farewell
 }
 
 // QuicTransport is the server side of the QUIC transport. One QUIC connection
@@ -138,6 +141,7 @@ func (s *QuicTransport) Start() {
 		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
 		usageMonitor: web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx,
 			s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
+		bye: newFarewell(),
 	})
 }
 
@@ -257,6 +261,7 @@ func (s *QuicTransport) Restart() {
 		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
 		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
+		bye:            newFarewell(),
 	}
 
 	// Re-initialise the per-run state.
@@ -270,6 +275,12 @@ func (s *QuicTransport) Restart() {
 
 	go s.start(g)
 }
+
+// quicFarewellFlush is how long a goodbye is given to leave before what carries
+// it is closed: SG_Closed before the connection, CONNECTION_CLOSE before the
+// socket. Each is a write handed to a sender goroutine, not a write that has
+// happened.
+const quicFarewellFlush = 150 * time.Millisecond
 
 // tunnelListener accepts QUIC connections for the whole run and hands each to
 // handleConn, which sorts its streams into the control stream and data streams.
@@ -299,23 +310,66 @@ func (s *QuicTransport) tunnelListener(g *quicGen, handshake chan<- net.Conn) {
 
 	s.logger.Infof("server started successfully, listening on address: %s (QUIC)", listener.Addr().String())
 
+	// Every connection this listener accepted is told the server is going
+	// before the socket goes.
+	//
+	// Closing the listener closes the transport under it, and quic-go ends the
+	// connections on a closed transport without a word to the peer. Over TCP a
+	// closed socket is a FIN the client reads at once; over QUIC it was
+	// silence, so a client whose server had merely restarted — a config edit,
+	// an update, systemctl restart — sat on a dead connection until its control
+	// deadline ran out: a minute and fifty-three seconds of outage, measured,
+	// for a restart that took one. CloseWithError sends CONNECTION_CLOSE, which
+	// the client reads as an error on the control stream and redials at once.
+	var connsMu sync.Mutex
+	conns := map[*quic.Conn]struct{}{}
+
 	defer listener.Close()
-	go func() {
-		<-g.ctx.Done()
-		listener.Close()
-	}()
+
+	// goodbye runs on the way out, in this goroutine and before the deferred
+	// Close — which is what releases the port and lets Start return and the
+	// process exit. It used to run in a goroutine of its own, and lost that
+	// race every time: Accept takes the context and returns the instant it is
+	// cancelled, so the listener was gone before the goodbye had begun.
+	goodbye := func() {
+		// First the client's own goodbye, SG_Closed on the control stream,
+		// which channelHandler writes. It is the one the client acts on by
+		// itself; CONNECTION_CLOSE below is the second chance.
+		if s.controlChannel.IsSet() {
+			g.bye.wait(farewellWait)
+		}
+		connsMu.Lock()
+		told := len(conns) > 0
+		for conn := range conns {
+			_ = conn.CloseWithError(0, "server stopping")
+		}
+		connsMu.Unlock()
+		if told {
+			time.Sleep(quicFarewellFlush)
+		}
+	}
 
 	for {
 		conn, err := listener.Accept(g.ctx)
 		if err != nil {
 			if g.ctx.Err() != nil {
+				goodbye()
 				return
 			}
 			s.logger.Debugf("failed to accept quic connection on %s: %v", listener.Addr().String(), err)
 			continue
 		}
 
-		go s.handleConn(g, conn, handshake)
+		connsMu.Lock()
+		conns[conn] = struct{}{}
+		connsMu.Unlock()
+
+		go func() {
+			s.handleConn(g, conn, handshake)
+			connsMu.Lock()
+			delete(conns, conn)
+			connsMu.Unlock()
+		}()
 	}
 }
 
@@ -412,6 +466,10 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 }
 
 func (s *QuicTransport) channelHandler(g *quicGen) {
+	// Every way out releases the listener, including the ones that never say
+	// goodbye. See farewell.
+	defer g.bye.said()
+
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -448,7 +506,10 @@ func (s *QuicTransport) channelHandler(g *quicGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout)
+			// The listener holds the connection open until this has left.
+			if utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout) == nil {
+				time.Sleep(quicFarewellFlush)
+			}
 			return
 
 		case <-g.reqNewConnChan:

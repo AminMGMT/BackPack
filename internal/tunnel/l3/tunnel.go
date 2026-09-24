@@ -74,11 +74,28 @@ const (
 
 	// previousGrace is how long a replaced session keeps decrypting.
 	previousGrace = 30 * time.Second
-
-	// rekeyCheck is how often the dialling side looks at whether the current
-	// session is due for replacement.
-	rekeyCheck = 5 * time.Second
 )
+
+// rekeyCheck is how often the dialling side looks at whether the current
+// session is due for replacement, or has stopped being answered. A variable so
+// the test that restarts a listener under a live dialler need not wait on it.
+var rekeyCheck = 5 * time.Second
+
+// peerSilentAfter is how long the dialling side keeps sending into a session
+// that nothing comes back on before it handshakes again.
+//
+// There was no such limit. A listener that restarted — an update, a config
+// edit, a reboot — came back with no memory of the session, dropped every
+// packet sealed under it, and the dialler went on sealing under it until the
+// routine rekey two minutes later, then logged that rekey as "the tunnel did
+// not drop". Measured: 122 seconds of black hole after a one-second restart.
+//
+// Fifteen seconds is WireGuard's number for the same question (keepalive plus
+// rekey timeout), and for the same reason: long enough that a pause in a
+// reply-less flow is not mistaken for a dead peer, short enough to be a blip.
+// The cost of being wrong is one handshake — the old session keeps decrypting
+// through previousGrace — so erring early is cheap.
+var peerSilentAfter = 15 * time.Second
 
 // Stats is what the tunnel reports about itself.
 type Stats struct {
@@ -234,6 +251,14 @@ type Tunnel struct {
 	// handshake loop. Buffered so the pump never blocks on it, and answers
 	// that arrive with nobody waiting are simply dropped.
 	replies chan handshakeReply
+
+	// unanswered is when the dialling side sent the first packet that nothing
+	// has come back after, as unix nanoseconds; zero once anything authentic
+	// arrives. See peerSilentAfter.
+	unanswered atomic.Int64
+	// silentRekey marks the handshake that unanswered started, so it is not
+	// reported as a routine rekey.
+	silentRekey atomic.Bool
 
 	// The listening side answers a retransmitted first message with the
 	// identical reply rather than starting a second handshake, which would
@@ -490,6 +515,14 @@ func (t *Tunnel) installDialed(sess *session) {
 	t.mu.Unlock()
 	t.stats.handshakes.Add(1)
 	t.publishPeer()
+	t.noteAnswered()
+
+	// A handshake the silence started is a recovery, not a routine rekey, and
+	// must not say the tunnel held — it did not.
+	if t.silentRekey.Swap(false) && replaced {
+		t.log.Infof("l3: session %08x re-established after the peer went silent", sess.id)
+		return
+	}
 
 	// A rekey is not a reconnection, and saying "established" for both made a
 	// healthy tunnel look like one that drops every two minutes. Somebody read
@@ -696,6 +729,7 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 		if k == 0 {
 			continue
 		}
+		t.noteSent()
 
 		if !t.send(ctx, writer, ready[:k], payloads[:k], peer, payload) {
 			return
@@ -1030,6 +1064,7 @@ func (t *Tunnel) handleData(plain []byte, wbuf [][]byte, h header, body []byte, 
 		t.promote(sess)
 	}
 	t.notePeer(from)
+	t.noteAnswered()
 
 	inner, err := t.encap.Unwrap(opened)
 	if err != nil {
@@ -1086,7 +1121,12 @@ func (t *Tunnel) handshakeLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		if t.needsSession() {
+		if t.peerSilent(time.Now()) {
+			t.log.Warnf("l3: nothing has come back from the peer for %s while this end "+
+				"was sending — handshaking again (it may have restarted)", peerSilentAfter)
+			t.silentRekey.Store(true)
+		}
+		if t.silentRekey.Load() || t.needsSession() {
 			if err := t.negotiate(ctx); err != nil {
 				if ctx.Err() != nil {
 					return
@@ -1106,6 +1146,36 @@ func (t *Tunnel) handshakeLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// noteSent records that the dialling side has sent something that has not
+// been answered yet. Once per batch, and a single load when a send is already
+// outstanding, so the data path pays nothing it would notice.
+func (t *Tunnel) noteSent() {
+	if t.cfg.Mode != ModeDial || t.unanswered.Load() != 0 {
+		return
+	}
+	t.unanswered.CompareAndSwap(0, time.Now().UnixNano())
+}
+
+// noteAnswered records that the peer is demonstrably alive.
+func (t *Tunnel) noteAnswered() {
+	if t.unanswered.Load() != 0 {
+		t.unanswered.Store(0)
+	}
+}
+
+// peerSilent reports whether the dialling side has been sending into silence
+// for long enough to conclude the peer has lost the session.
+func (t *Tunnel) peerSilent(now time.Time) bool {
+	first := t.unanswered.Load()
+	if first == 0 || now.Sub(time.Unix(0, first)) < peerSilentAfter {
+		return false
+	}
+	// Cleared so the next window starts from the next send, not from this one:
+	// a handshake that fails is retried by the loop, not re-triggered here.
+	t.unanswered.Store(0)
+	return true
 }
 
 // needsSession reports whether a handshake should be started.

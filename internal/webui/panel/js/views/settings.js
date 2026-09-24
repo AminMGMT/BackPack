@@ -286,15 +286,14 @@ export function settingsView(ctx) {
             title: `Revoke ${esc(name)}?`,
             body: 'Anything still using it stops working immediately. It cannot be undone — a new token would be a new secret.',
             go: 'Revoke' })) return;
-          try { drawTokens((await api.tokenRevoke(name)).tokens || []); toast(`${name} revoked.`); }
+          try { drawTokens((await api.tokenRevoke(name)).tokens || []); toast(`${name} revoked.`); drawAudit(); }
           catch (e) { oops(e); }
         });
 
         root.querySelector('#tokmake')?.addEventListener('click', async () => {
           const name = root.querySelector('[name="tokName"]')?.value.trim();
           if (!name) { toast('Give the token a name.'); return; }
-          const scopeText = root.querySelector('[data-name="tokScope"]')?.textContent || '';
-          const scope = /write/i.test(scopeText) ? 'write' : 'read';
+          const scope = root.querySelector('[data-name="tokScope"]')?.dataset.value || 'read';
           const days = parseInt(root.querySelector('[name="tokDays"]')?.value, 10) || 90;
           try {
             const r = await api.tokenIssue({ name, scope, days });
@@ -307,14 +306,21 @@ export function settingsView(ctx) {
                 + `Use it as:  Authorization: Bearer <token>`;
             }
             root.querySelector('[name="tokName"]').value = '';
+            drawAudit();
           } catch (e) { oops(e); }
         });
 
-        try {
-          const lines = (await api.audit(200)).lines || [];
-          if (log) log.textContent = lines.length ? lines.join('\n')
-            : 'Nothing has been changed through this panel yet.';
-        } catch (e) { if (log) log.textContent = 'Could not read the record.'; }
+        /* Redrawn after an issue or a revoke too: both are recorded, and a
+           record that does not show the line just written reads as one that
+           did not write it. */
+        const drawAudit = async () => {
+          try {
+            const lines = (await api.audit(200)).lines || [];
+            if (log) log.textContent = lines.length ? lines.join('\n')
+              : 'Nothing has been changed through this panel yet.';
+          } catch (e) { if (log) log.textContent = 'Could not read the record.'; }
+        };
+        await drawAudit();
       }
 
       /* The footer note.
@@ -748,7 +754,16 @@ export function settingsView(ctx) {
         relayMode: [{ value: 'auto', label: 'Automatic — through a tunnel when one is up' },
                     { value: 'direct', label: 'Direct — never through a tunnel' }],
         lang: [{ value: 'en', label: 'English' }, { value: 'fa', label: 'فارسی' }],
+        /* The token's scope. It had no entry here, so the menu never opened
+           and every token the panel issued was read-only — the backend has
+           always taken all three. */
+        tokScope: [{ value: 'read', label: 'Read only' },
+                   { value: 'write', label: 'Read and change' },
+                   { value: 'admin', label: 'Everything, including access' }],
       };
+      /* Menus that only pick a value for a form on this screen. Every other
+         menu here saves the Telegram settings on a pick. */
+      const localOnly = new Set(['tokScope']);
 
       /* Naming one tunnel is the third answer this setting has, and the one the
          panel never offered: the handler takes a tunnel name and opens a SOCKS
@@ -781,6 +796,7 @@ export function settingsView(ctx) {
             sel.childNodes[0].textContent = c.label;
             menu.hidden = true;
             sel.classList.remove('open');
+            if (localOnly.has(name)) return;
             try {
               if (name === 'channelBeta') {
                 await api.setChannel(c.value === '1');

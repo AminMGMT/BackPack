@@ -10,14 +10,19 @@ Three things changed.
 Every request is authorised at one function — `guard` in
 `internal/webui/server.go` — against one of three scopes:
 
-| Scope   | May                                                         |
-|---------|-------------------------------------------------------------|
-| `read`  | look at status, metrics, logs and the fleet                 |
-| `write` | also create and edit tunnels, restart services, upgrade     |
-| `admin` | also hand out and revoke credentials                        |
+| Scope   | May                                                                 |
+|---------|---------------------------------------------------------------------|
+| `read`  | `/metrics`, `/api/stats`, `/api/tunnels`, `/api/alerts`, `/api/fleet/drift` |
+| `write` | also everything else that runs the tunnels and the fleet: create, edit, restart, logs, speed tests, updates |
+| `admin` | also everything that decides who gets in: tokens, the record, the password, the second factor, signed-in devices, the Telegram admins, the panel's port and certificate, and backup export and restore |
 
 Signing in with the panel password is `admin`. Handing out a credential is
-separate from using one, so a `write` token cannot mint itself a better one.
+separate from using one, so a `write` token cannot mint itself a better one —
+nor reach anything that would amount to the same thing. The password, the
+Telegram admin list and a backup (which carries the password out, and on
+restore replaces every credential file) are each a way to become `admin`, so
+they are `admin` too. The whole table is tested as it is wired, in
+`internal/webui/routes_test.go`.
 
 The vocabulary is the Telegram bot's, deliberately. The bot has had
 `ReadOnly` / `canWrite` for a while; two permission models in one product is
@@ -71,7 +76,10 @@ being authorised.
 Reads are not recorded. The panel polls itself every few seconds, and thousands
 of those lines would bury the handful that matter.
 
-Refused attempts *are* recorded, and are often the more interesting line.
+Refused attempts by a known credential *are* recorded, and are often the more
+interesting line. A token nobody issued is not: it is counted against the
+address by the same limiter as a wrong password, and it is not written down,
+because an unauthenticated caller must not be able to fill the record.
 
 The record lives at `/etc/backpack/audit.json`, holds the last 5,000 entries,
 and is readable only by root. An audit file that cannot be written never blocks
@@ -88,9 +96,10 @@ fix it.
 را عوض کند، و بعدش هم هیچ‌جا نوشته نمی‌شد. سه چیز عوض شد.
 
 **Scope‌ها.** هر درخواست در یک تابع — `guard` — در برابر یکی از سه سطح مجاز
-می‌شود: `read` (دیدن وضعیت، متریک، لاگ و ناوگان)، `write` (به‌علاوهٔ ساختن و
-ویرایش تونل، ری‌استارت سرویس، ارتقا) و `admin` (به‌علاوهٔ دادن و پس‌گرفتن
-اعتبارنامه). ورود با رمز پنل یعنی `admin`. *دادن* یک اعتبارنامه از *استفاده* از
+می‌شود: `read` (فقط `/metrics` و وضعیت، تونل‌ها، هشدارها و drift)، `write` (به‌علاوهٔ
+ساختن و ویرایش تونل، ری‌استارت سرویس، لاگ، ارتقا) و `admin` (به‌علاوهٔ هر چیزی که
+تعیین می‌کند چه کسی وارد شود: توکن‌ها، سابقه، رمز پنل، 2FA، دستگاه‌های واردشده،
+ادمین‌های تلگرام، پورت و گواهی پنل، و backup/restore). ورود با رمز پنل یعنی `admin`. *دادن* یک اعتبارنامه از *استفاده* از
 آن جداست، پس یک توکن `write` نمی‌تواند برای خودش توکن بهتری بسازد. واژگان عمداً
 همان واژگان ربات تلگرام است؛ دو مدل دسترسیِ متفاوت در یک محصول، همان‌جایی است که
 شکاف باز می‌شود.

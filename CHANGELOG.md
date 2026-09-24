@@ -25,6 +25,23 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Security
 
+- **A `write` API token could make itself `admin`.** `/api/tokens` and
+  `/api/audit` were guarded at `admin`, but everything else that decides who gets
+  in sat at `write`: the panel password, the second factor, the signed-in
+  devices, the Telegram admin list, the panel's port and certificate, and backup
+  export and restore. A backup carries the password out, and a restore replaces
+  every credential file, so any one of them turned a `write` token into the
+  panel password — which is `admin`. They are all `admin` now, and the whole
+  route table is tested as it is wired (`internal/webui/routes_test.go`), not
+  only the guard on its own. The refusal names the scope held and the scope
+  needed instead of calling every credential "read-only".
+- **Changing the panel password or the second factor was never forwarded off the
+  machine.** The forwarding list named `/api/security`, which is not a route. It
+  now names the real ones, and every `admin` route is on it.
+- **An audit line written from the browser said only "the panel".** It now names
+  the session by the id the signed-in devices list shows, so a line can be traced
+  to a device and that device signed out.
+
 - **The Go toolchain moved from 1.26.0 to 1.26.6, which closes 24 known
   vulnerabilities.** Every one of them is in the standard library, every one was
   already fixed upstream, and every one is on code this product actually runs —
@@ -895,6 +912,33 @@ raw-socket carriers need capabilities a test process does not have.
   and the sentence did not.
 
 ### Fixed
+
+- **A clean restart of the Iran side cost a quic, kcp, xdi or pck tunnel almost
+  two minutes.** Over TCP a stopping server's socket closes and the client reads
+  the FIN at once. Over UDP the goodbye was lost with the socket: quic-go ends a
+  closed transport's connections without a CONNECTION_CLOSE, and kcp-go marks a
+  session dead before its final flush, so the `SG_Closed` the server wrote never
+  left. The client heard nothing and waited out its control deadline — 112
+  seconds at the default keepalive — after a restart that took one. Measured in
+  two network namespaces: 113s before, 2–4s after, on all four. The server now
+  closes each QUIC connection with CONNECTION_CLOSE and gives the goodbye a
+  moment to leave before the socket goes; `TestAStoppedServerIsNoticedAtOnce`
+  runs at the production keepalive, which the existing recovery test did not.
+- **A layer-3 dialler did not notice its listener had restarted.** The listener
+  came back with no session, dropped everything sealed under the old one, and
+  the dialler kept sealing into it until the routine two-minute rekey — then
+  logged that as "the tunnel did not drop". Measured: 122 seconds of black hole.
+  The dialler now handshakes again after 15 seconds of sending with nothing
+  authentic coming back (WireGuard's rule), and says so.
+- **The panel could only issue read-only API tokens.** The scope menu had no
+  choices wired, so it never opened and every token came out `read`. It offers
+  read, write and admin now, and the record under it refreshes after an issue or
+  a revoke.
+- **Two compiled test binaries (45 MB, `e2e.test` and `l3.test`) were committed**
+  with the build machine's paths in them. Untracked, and `*.test` is ignored.
+- **The `udp` transport's guide said TCP ports are forwarded "as usual".** They
+  are not: this transport's exposed ports listen on UDP only. The guide and the
+  transport page say so now.
 
 - **The network-namespace test harnesses left everything they started running.**
   `tools/transporttest` and `tools/carriertest` each start two engine processes

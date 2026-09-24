@@ -28,7 +28,8 @@ func TestEveryRefusalIsForwarded(t *testing.T) {
 func TestCredentialAndFleetChangesAreForwarded(t *testing.T) {
 	for _, e := range []auditEntry{
 		{Path: "/api/tokens", Method: "POST", Status: 200},
-		{Path: "/api/security", Method: "POST", Status: 200},
+		{Path: "/api/password", Method: "POST", Status: 200},
+		{Path: "/api/totp", Method: "POST", Status: 200},
 		{Path: "/api/sessions", Method: "POST", Status: 200},
 		{Path: "/api/nodes", Method: "POST", Action: "add", Status: 200},
 		{Path: "/api/nodes", Method: "POST", Action: "remove", Status: 200},

@@ -246,10 +246,18 @@ func worthForwarding(e auditEntry) bool {
 	case "/api/tokens":
 		// Issuing and revoking credentials.
 		return true
-	case "/api/security", "/api/sessions":
-		// The panel's password and its signed-in devices.
+	case "/api/password", "/api/totp", "/api/sessions", "/api/telegram",
+		"/api/backup/import", "/api/panelport", "/api/panelcert":
+		// Everything guarded at admin: the password, the second factor, the
+		// signed-in devices, the Telegram admins, a restore that replaces every
+		// credential file, and where and how the panel answers.
+		//
+		// This named "/api/security", which is not a route. The password and
+		// the second factor are separate endpoints, so changing either was
+		// recorded here and never left the machine — the one line an intruder
+		// who had just taken the panel would most want to rewrite.
 		return true
-	case "/api/nodes", "/api/node/pair":
+	case "/api/nodes":
 		// Adding, removing or upgrading a managed server. A fleet that gains a
 		// machine nobody added is the thing this is for.
 		switch e.Action {

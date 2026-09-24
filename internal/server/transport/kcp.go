@@ -32,6 +32,9 @@ type kcpGen struct {
 	localChannel     chan LocalTCPConn
 	reqNewConnChan   chan struct{}
 	usageMonitor     *web.Usage
+	// bye is said once the client has been told this run is ending. See
+	// farewell.
+	bye *farewell
 }
 
 // KcpTransport is the server side of the KCP transport: a reliable,
@@ -209,6 +212,7 @@ func (s *KcpTransport) Start() {
 		localChannel:     s.localChannel,
 		reqNewConnChan:   s.reqNewConnChan,
 		usageMonitor:     s.usageMonitor,
+		bye:              newFarewell(),
 	})
 }
 
@@ -320,6 +324,7 @@ func (s *KcpTransport) Restart() {
 		localChannel:     make(chan LocalTCPConn, s.config.ChannelSize),
 		reqNewConnChan:   make(chan struct{}, s.config.ChannelSize),
 		usageMonitor:     web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
+		bye:              newFarewell(),
 	}
 
 	// Re-initialize variables
@@ -358,7 +363,18 @@ func (s *KcpTransport) channelHandshake(g *kcpGen) {
 	}
 }
 
+// kcpFarewellFlush is how long the goodbye is given to leave before the
+// session is closed: many KCP update intervals, which is when a queued segment
+// is sent, and still far below anything an operator would notice in a stop.
+// 150ms lost the goodbye about one stop in six under the race detector, which
+// is what a heavily loaded machine looks like; 300ms has not.
+const kcpFarewellFlush = 300 * time.Millisecond
+
 func (s *KcpTransport) channelHandler(g *kcpGen) {
+	// Every way out of here releases the listener, including the ones that
+	// never say goodbye.
+	defer g.bye.said()
+
 	ticker := time.NewTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
@@ -388,7 +404,22 @@ func (s *KcpTransport) channelHandler(g *kcpGen) {
 	for {
 		select {
 		case <-g.ctx.Done():
-			_ = utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout)
+			// Written here while the listener is still holding the socket for
+			// it: SG_Closed is what lets the client redial at once instead of
+			// waiting out its deadline. See farewell.
+			//
+			// Then a moment before the close. A KCP write only hands the
+			// segment to the session's sender goroutine, and kcp-go's Close
+			// marks the session dead before its final flush — so a close
+			// straight after the write drops the very segment it was meant to
+			// flush. That was measured, not guessed: with the close right
+			// behind the write the client still waited out its full deadline.
+			if control := s.controlChannel.Get(); control != nil {
+				if utils.SendBinaryByteWithin(control, utils.SG_Closed, controlWriteTimeout) == nil {
+					time.Sleep(kcpFarewellFlush)
+				}
+				_ = control.Close()
+			}
 			return
 
 		case <-g.reqNewConnChan:
@@ -461,6 +492,10 @@ func (s *KcpTransport) tunnelListener(g *kcpGen) {
 	go s.acceptTunnelConn(g, listener)
 
 	<-g.ctx.Done()
+	// The socket stays open until the client has been told. See farewell.
+	if s.controlChannel.IsSet() {
+		g.bye.wait(farewellWait)
+	}
 }
 
 func (s *KcpTransport) acceptTunnelConn(g *kcpGen, listener *kcp.Listener) {
