@@ -356,6 +356,17 @@ top of that:
   altered in flight.
 - Sessions **rekey** every two minutes, with the old keys kept briefly so
   in-flight packets are not lost.
+- The dialler's handshake carries a **timestamp** inside its encrypted,
+  authenticated payload, and the listener refuses one that is not newer than
+  the last it accepted — WireGuard's rule — so a handshake recorded off the
+  wire cannot be replayed to keep the tunnel from coming up. Against a listener
+  from before v1.8.2 the dialler falls back to the older handshake, on the
+  listener's own authenticated answer and on nothing weaker, and tries again
+  every half hour; the old listener logs one "wrap packets differently" line
+  each time until it is upgraded.
+- If the listener restarts, the dialler notices within about twenty seconds —
+  nothing comes back for fifteen while it is sending — and handshakes again,
+  instead of sending into a session the listener no longer has.
 - A peer without the token gets **no reply at all** — a scanner finds a socket
   that never answers.
 - The peer's address is only ever learned from a packet that has already
@@ -373,8 +384,11 @@ and it is why the kernel's own tunnels are not used here.
 
 - **Linux only**, and needs root or `CAP_NET_ADMIN`. The obfuscated carriers
   need `CAP_NET_RAW` as well.
-- **QUIC datagrams are not wired up yet.** The four carriers above are what
-  there is.
+- **`quic` needs room for QUIC's own framing.** A DATAGRAM frame can carry
+  only what the connection's current packet size allows, which starts at 1232
+  and grows as QUIC discovers the path. Leave `auto_mtu` on (the default) and
+  the tunnel measures what actually fits; a fixed `mtu` on a narrow path can
+  be too big for it, and the packets that do not fit are dropped.
 - **No reliable carrier, ever.** `tcp`, `ws` and `kcp` are refused by design:
   an IP packet already belongs to something that handles its own loss, and
   stacking two retransmit timers makes throughput collapse under loss rather

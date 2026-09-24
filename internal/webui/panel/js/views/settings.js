@@ -313,11 +313,19 @@ export function settingsView(ctx) {
         /* Redrawn after an issue or a revoke too: both are recorded, and a
            record that does not show the line just written reads as one that
            did not write it. */
+        /* The record is a hash chain (see audit.go): the first line says
+           whether it still holds, and names its head — the same number every
+           line forwarded to Telegram carries, which is how a rewrite that
+           recomputed the chain is still caught. */
         const drawAudit = async () => {
           try {
-            const lines = (await api.audit(200)).lines || [];
-            if (log) log.textContent = lines.length ? lines.join('\n')
-              : 'Nothing has been changed through this panel yet.';
+            const a = await api.audit(200);
+            const lines = a.lines || [];
+            const seal = a.intact === false
+              ? `⚠ This record has been altered: entry ${a.brokenAt + 1} from the top does not follow from the one before it.`
+              : (a.head ? `Record intact · head #${a.head} — compare with the number on the latest Telegram notice.` : '');
+            if (log) log.textContent = (seal ? seal + '\n\n' : '') + (lines.length ? lines.join('\n')
+              : 'Nothing has been changed through this panel yet.');
           } catch (e) { if (log) log.textContent = 'Could not read the record.'; }
         };
         await drawAudit();

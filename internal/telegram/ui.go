@@ -173,9 +173,9 @@ func route(c Config, u tgUser, data string) reply {
 		// Most screens are readings, and a reading is answered for anyone on the
 		// admin list. A few are not readings at all — they print a credential —
 		// and those are gated here. See secretScreens.
-		if secretScreens[rest] && !c.canWrite(strconv.FormatInt(u.ID, 10)) {
+		if secretScreens[rest] && !c.isOwner(strconv.FormatInt(u.ID, 10)) {
 			r := navigate(c, lang, "home")
-			r.toast = tr(lang, "Your access is read-only.")
+			r.toast = tr(lang, "Only the bot's owner can see this.")
 			r.alert = true
 			return r
 		}

@@ -406,7 +406,14 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 	}
 	stream.SetReadDeadline(time.Time{})
 
-	if !tokenMatches(token, s.config.Token) {
+	// A client from v1.8.2 on proves the token, bound to this connection's TLS
+	// session; an older one sends the token itself. Both are accepted, so the
+	// server can be upgraded first and its old clients keep working until they
+	// are upgraded too. What a bound client never does is fall back to sending
+	// the token — that would let anything between them force the old handshake
+	// by dropping the new one. See network/quicbind.go.
+	bound := network.QUICProofMatches(conn, s.config.Token, token)
+	if !bound && !tokenMatches(token, s.config.Token) {
 		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
 			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
 		// wrapped, not the bare stream: it is what every other read and write
@@ -417,9 +424,20 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 
 	switch signal {
 	case utils.SG_Chan:
-		// The control stream. Answering with the token proves to the client that
-		// this server knows the secret too.
-		if err := utils.SendBinaryTransportString(wrapped, s.config.Token, utils.SG_Chan); err != nil {
+		// The control stream. The answer proves this server holds the token
+		// too: to a bound client, the server's own proof; to an old client, the
+		// token, which is what that client already sent in the clear.
+		answer := s.config.Token
+		if bound {
+			proof, err := network.QUICServerProof(conn, s.config.Token)
+			if err != nil {
+				s.logger.Errorf("could not bind the answer to the QUIC session: %v", err)
+				stream.Close()
+				return
+			}
+			answer = proof
+		}
+		if err := utils.SendBinaryTransportString(wrapped, answer, utils.SG_Chan); err != nil {
 			s.logger.Errorf("failed to send security token: %v", err)
 			stream.Close()
 			return
@@ -470,7 +488,7 @@ func (s *QuicTransport) channelHandler(g *quicGen) {
 	// goodbye. See farewell.
 	defer g.bye.said()
 
-	ticker := time.NewTicker(s.config.Heartbeat)
+	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
 	defer ticker.Stop()
 
 	messageChan := make(chan byte, 1)

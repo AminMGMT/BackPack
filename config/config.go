@@ -370,7 +370,9 @@ type ServerConfig struct {
 	SimpleAuth bool `toml:"simple_auth"`
 	// Heartbeat is how often, in seconds, the server sends a liveness byte down
 	// the control channel. It is how a client notices a server that has gone
-	// away without closing the socket.
+	// away without closing the socket. The control channel beats at least every
+	// 10 seconds whatever is set here, so a client can give up on a crashed
+	// server in about 30 rather than waiting out its keepalive.
 	Heartbeat int `toml:"heartbeat"`
 	// MuxCon is how many concurrent streams one multiplexed session may carry
 	// before the next connection waits.

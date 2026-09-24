@@ -375,7 +375,7 @@ func (s *KcpTransport) channelHandler(g *kcpGen) {
 	// never say goodbye.
 	defer g.bye.said()
 
-	ticker := time.NewTicker(s.config.Heartbeat)
+	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
 	defer ticker.Stop()
 
 	messageChan := make(chan byte, 1)
@@ -567,6 +567,27 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 
 	switch signal {
 	case utils.SG_Chan:
+		// A control claim while one is already established means the client
+		// restarted on its own and re-dialed, while this run never noticed
+		// because the old session has not failed a read yet. channelHandshake
+		// only reads one claim per run, so without this the re-dial would be
+		// discarded, leaving the tunnel dead until the server was restarted by
+		// hand. Restart to adopt the new client.
+		//
+		// Decided before answering. Answering the claim as
+		// granted and then dropping it is, over KCP, a drop the client never
+		// hears: it believed itself connected and waited out its whole control
+		// deadline (116 seconds after a crash, measured). So it is told the
+		// server is restarting for it, and claims again once that is done.
+		if s.controlChannel.IsSet() {
+			s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
+			if utils.SendBinaryTransportString(session, utils.RefusedRestarting, utils.SG_Refused) == nil {
+				time.Sleep(kcpFarewellFlush) // see kcpFarewellFlush: a close straight after drops it
+			}
+			session.Close()
+			go s.Restart()
+			return
+		}
 		// A peer claiming the control channel. Answering with the token is what
 		// proves to the client that this server knows the secret too.
 		if err := utils.SendBinaryTransportString(session, s.config.Token, utils.SG_Chan); err != nil {
@@ -576,21 +597,6 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 		}
 		// The control channel carries small, latency-critical signals.
 		session.SetACKNoDelay(true)
-
-		// A control claim while one is already established means the client
-		// restarted on its own and re-dialed, while this run never noticed
-		// because the old session has not failed a read yet. channelHandshake
-		// only reads one claim per run, so without this the re-dial would fall
-		// through to the default below and be discarded, leaving the tunnel dead
-		// until the server was restarted by hand. Restart to adopt the new
-		// client — the listener it is retrying against comes back up as part of
-		// that restart.
-		if s.controlChannel.IsSet() {
-			s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
-			session.Close()
-			go s.Restart()
-			return
-		}
 
 		select {
 		case g.handshakeChannel <- session: // ok

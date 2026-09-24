@@ -223,3 +223,68 @@ func announcePoolConn(conn net.Conn, nonce string) error {
 	}
 	return utils.SendBinaryTransportString(conn, nonce, utils.SG_Pool)
 }
+
+// restartingRefusal reports whether a control claim was answered "come back in
+// a moment" — the server took the token and is restarting its run to adopt this
+// client — rather than refused for cause.
+func restartingRefusal(ack string, signal byte) bool {
+	return signal == utils.SG_Refused && ack == utils.RefusedRestarting
+}
+
+// beatClock learns how often the server's heartbeat actually arrives, so a
+// dead server is noticed in a few beats rather than in a keepalive and a half.
+//
+// The control deadline was one and a half keepalives — 112 seconds at the
+// default — because the client had no other idea how long silence could
+// legitimately last. On TCP that rarely mattered: a crashed server's kernel
+// answers with a reset. Over KCP and QUIC there is no kernel to answer, and a
+// server that crashed or rebooted cost the tunnel the full 112 seconds,
+// measured, on every one of those transports.
+//
+// The server says how often it beats by beating. Once three gaps have been
+// seen, the deadline is three of the longest gap — two lost beats in a row
+// tolerated — floored so a quick server cannot make a lossy path look dead,
+// and never longer than the keepalive rule it replaces. Against a server that
+// beats every forty seconds that is 120, above the old rule, so nothing
+// changes; against one that beats every ten it is thirty.
+//
+// It is per control channel: a new one starts with a new clock, so a server
+// replaced by an older, slower one is not held to the faster one's rhythm.
+// Only the reader goroutine touches it.
+type beatClock struct {
+	last time.Time
+	gaps []time.Duration
+}
+
+// beatHistory is how many recent gaps are kept; the longest of them decides.
+const beatHistory = 4
+
+// beatsToLearn is how many gaps have to be seen before the clock is trusted.
+const beatsToLearn = 3
+
+// livenessFloor is the shortest deadline the clock will ever set.
+const livenessFloor = 15 * time.Second
+
+func (b *beatClock) beat(now time.Time) {
+	if !b.last.IsZero() {
+		b.gaps = append(b.gaps, now.Sub(b.last))
+		if len(b.gaps) > beatHistory {
+			b.gaps = b.gaps[1:]
+		}
+	}
+	b.last = now
+}
+
+// deadline is how long the next read may wait for anything from the server.
+func (b *beatClock) deadline(keepAlive time.Duration) time.Duration {
+	base := controlDeadline(keepAlive)
+	if len(b.gaps) < beatsToLearn {
+		return base
+	}
+	var worst time.Duration
+	for _, g := range b.gaps {
+		worst = max(worst, g)
+	}
+	d := max(3*worst, livenessFloor)
+	return min(d, base)
+}

@@ -286,3 +286,27 @@ func (f *farewell) wait(d time.Duration) {
 // The goodbye itself costs one write and kcpFarewellFlush; the bound is for
 // the handler that never gets there.
 const farewellWait = time.Second
+
+// livenessBeat is how often the control channel carries a heartbeat: the
+// configured interval, but never longer than maxLivenessBeat.
+//
+// The heartbeat was only ever a keepalive, and forty seconds is plenty for
+// that. It is also the only thing a client over KCP or QUIC can hear from a
+// server that has died — there is no kernel on the far side to send a reset —
+// and a client can only conclude "dead" after a few missed beats. At forty
+// seconds that was the client's whole 112-second fallback; at ten, a client
+// that has learned the rhythm (see beatClock on the client side) gives up after
+// thirty.
+//
+// A byte every ten seconds is nothing on any path this runs over, and a client
+// too old to learn the rhythm is not affected at all: it waits exactly as long
+// as it always did, for beats that now arrive more often.
+func livenessBeat(configured time.Duration) time.Duration {
+	if configured <= 0 || configured > maxLivenessBeat {
+		return maxLivenessBeat
+	}
+	return configured
+}
+
+// maxLivenessBeat is the longest the control channel goes without a heartbeat.
+const maxLivenessBeat = 10 * time.Second

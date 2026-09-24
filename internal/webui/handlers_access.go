@@ -77,7 +77,9 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries {
 		lines = append(lines, describeAudit(e))
 	}
-	writeJSON(w, map[string]any{"entries": entries, "lines": lines})
+	intact, brokenAt, head := AuditIntegrity()
+	writeJSON(w, map[string]any{"entries": entries, "lines": lines,
+		"intact": intact, "brokenAt": brokenAt, "head": shortHash(head)})
 }
 
 // tokenView is a token as the panel shows it — never the secret, which only

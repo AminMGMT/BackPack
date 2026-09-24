@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -74,19 +76,51 @@ func openQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
 	return dialQuic(cfg)
 }
 
+// How quickly a dead QUIC connection is given up on.
+//
+// The listener used to hold its one connection for a 60-second idle timeout
+// with a 15-second keepalive, and the dialler the same. A peer that crashed
+// therefore cost a minute before either end even noticed, and the tunnel's own
+// liveness check (peerSilentAfter) could not help: it handshakes again, but over
+// the same dead connection. A PING every five seconds is a few dozen bytes a
+// minute, and twenty seconds of silence on a path that is being pinged that
+// often is a peer that is gone.
+const (
+	quicKeepAlive   = 5 * time.Second
+	quicIdleTimeout = 20 * time.Second
+)
+
 func quicConfig() *quic.Config {
 	return &quic.Config{
+		// Required: the carrier is DATAGRAM frames or nothing.
 		EnableDatagrams: true,
-		// Long enough that an idle tunnel is not torn down between keepalives,
-		// short enough that a dead path is noticed and rebuilt.
-		MaxIdleTimeout:  60 * time.Second,
-		KeepAlivePeriod: 15 * time.Second,
-		// quic-go's default first packet is 1308 bytes on the wire and cannot
-		// cross a 1280-byte path at all — which is exactly the path an l3
-		// tunnel most often rides, since it is frequently nested inside another
-		// one. See network.QUICInitialPacketSize for the measurement.
+		MaxIdleTimeout:  quicIdleTimeout,
+		KeepAlivePeriod: quicKeepAlive,
+		// Start small enough to cross a 1280-byte path; discovery grows it.
 		InitialPacketSize: network.QUICInitialPacketSize,
 	}
+}
+
+// quicResetKey is the listener's stateless-reset key, derived from the token so
+// that it is the same across restarts.
+//
+// A listener that restarts has lost every connection it had, and the dialler's
+// next data packet arrives for a connection nothing knows. With a key that
+// survives the restart, the new listener answers it with a stateless reset,
+// which the dialler takes as the end of the connection at once and redials.
+// With a random key, or none, it answers nothing and the dialler waits out its
+// idle timeout. (quic-go resets only packets over 42 bytes, against
+// amplification, so a dialler with nothing to send still waits the idle
+// timeout: twenty seconds.)
+//
+// Derived rather than stored: the token is already the shared secret both ends
+// hold, and a key on disk would be one more file to protect. Anybody who holds
+// the token can reset a connection, which is far less than the token already
+// lets them do.
+func quicResetKey(token string) *quic.StatelessResetKey {
+	sum := sha256.Sum256([]byte("backpack l3 quic stateless reset v1\x00" + token))
+	k := quic.StatelessResetKey(sum)
+	return &k
 }
 
 func dialQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
@@ -107,7 +141,9 @@ func dialQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
 		conn.CloseWithError(0, "no datagrams")
 		return nil, nil, err
 	}
-	return &quicCarrier{conn: conn, peer: conn.RemoteAddr()}, conn.RemoteAddr(), nil
+	c := newQuicCarrier()
+	c.conn = conn
+	return c, conn.RemoteAddr(), nil
 }
 
 func listenQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
@@ -115,14 +151,26 @@ func listenQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	ln, err := quic.ListenAddr(cfg.Addr, tlsCfg, quicConfig())
+	addr, err := net.ResolveUDPAddr("udp", cfg.Addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("l3: quic: listening on %s: %w", cfg.Addr, err)
 	}
-	// The peer is not known until it arrives, so the carrier accepts on first
-	// use. Returning a nil address is how every listening carrier says "learn
-	// it from the packets", and the tunnel already understands that.
-	return &quicCarrier{ln: ln}, nil, nil
+	udp, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("l3: quic: listening on %s: %w", cfg.Addr, err)
+	}
+	tr := &quic.Transport{Conn: udp, StatelessResetKey: quicResetKey(cfg.Token)}
+	ln, err := tr.Listen(tlsCfg, quicConfig())
+	if err != nil {
+		udp.Close()
+		return nil, nil, fmt.Errorf("l3: quic: listening on %s: %w", cfg.Addr, err)
+	}
+	c := newQuicCarrier()
+	c.ln, c.tr, c.udp = ln, tr, udp
+	c.peers = map[string]*quicPeer{}
+	c.in = make(chan quicDatagram, quicInbox)
+	go c.acceptLoop()
+	return c, nil, nil
 }
 
 // datagramsAgreed refuses a peer that will not carry datagrams.
@@ -136,80 +184,214 @@ func datagramsAgreed(conn *quic.Conn) error {
 	return nil
 }
 
-// quicCarrier presents one QUIC connection as a net.PacketConn.
-//
-// A tunnel is point to point, so there is exactly one peer and one connection.
-// The listening side accepts it lazily, on the first read, because that is when
-// the tunnel starts waiting for something to arrive.
-type quicCarrier struct {
-	ln   *quic.Listener
-	conn *quic.Conn
-	peer net.Addr
+// errNoDialler is a write on the listening side to an address no connection
+// has.
+var errNoDialler = errors.New("l3: quic: no connection from that address")
 
-	mu       sync.Mutex
-	accepted bool
+// quicCarrier presents QUIC connections as a net.PacketConn.
+//
+// The dialling side has one connection and reads it directly. The listening
+// side behaves like an unconnected UDP socket: it keeps every connection it
+// accepts, reads datagrams from all of them tagged with the address each came
+// from, and writes to whichever connection the address names. Which of them is
+// the tunnel's peer is not decided here — it is decided where it already was,
+// in the tunnel, which moves its peer only on a packet that authenticated.
+//
+// It accepted exactly one connection, lazily, and kept it for the life of the
+// process, so a dialler that crashed and came back was never accepted again
+// (measured: no recovery inside 200 seconds). The first fix took the newest
+// connection instead, which let anyone who could reach the port — no token
+// needed — take the slot from the real dialler and close its connection, over
+// and over. Keeping them all, and letting authentication pick, is both.
+type quicCarrier struct {
+	ln  *quic.Listener
+	tr  *quic.Transport
+	udp *net.UDPConn
+
+	// conn is the dialling side's one connection.
+	conn *quic.Conn
+
+	// The listening side's connections, by remote address, and the datagrams
+	// read from all of them.
+	mu     sync.Mutex
+	peers  map[string]*quicPeer
+	in     chan quicDatagram
+	closed bool
+	done   chan struct{}
 
 	deadlineMu sync.Mutex
 	readAt     time.Time
 }
 
+// quicPeer is one accepted connection.
+type quicPeer struct {
+	conn *quic.Conn
+	// wrote is when this end last sent on it, as unix nanoseconds: the
+	// tunnel only writes to a peer that authenticated (and to a handshake it
+	// is answering), so the connection written to most recently is the one
+	// the tunnel trusts, and the last to be evicted.
+	wrote atomic.Int64
+}
+
+type quicDatagram struct {
+	data []byte
+	from net.Addr
+}
+
+// quicMaxPeers bounds how many connections the listener holds. A stranger can
+// open connections without the token; past this the least recently written-to
+// goes, which is never the one the tunnel is talking to.
+const quicMaxPeers = 16
+
+// quicInbox is how many read datagrams may wait for the tunnel.
+const quicInbox = 512
+
+func newQuicCarrier() *quicCarrier {
+	return &quicCarrier{done: make(chan struct{})}
+}
+
 func (c *quicCarrier) CarrierName() string { return CarrierQuic }
 func (c *quicCarrier) Overhead() int       { return quicOverhead }
 
-// session returns the connection, accepting one first on the listening side.
-func (c *quicCarrier) session() (*quic.Conn, error) {
+// acceptLoop takes every connection the listener is offered.
+func (c *quicCarrier) acceptLoop() {
+	for {
+		conn, err := c.ln.Accept(context.Background())
+		if err != nil {
+			return
+		}
+		if err := datagramsAgreed(conn); err != nil {
+			conn.CloseWithError(0, "no datagrams")
+			continue
+		}
+		if !c.addPeer(conn) {
+			conn.CloseWithError(0, "")
+			return
+		}
+		go c.readPeer(conn)
+	}
+}
+
+// addPeer registers conn, evicting the least recently written-to connection
+// when the listener is full. A second connection from the same address
+// replaces the first.
+func (c *quicCarrier) addPeer(conn *quic.Conn) bool {
+	key := conn.RemoteAddr().String()
+	p := &quicPeer{conn: conn}
+	p.wrote.Store(time.Now().UnixNano())
+
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn != nil {
-		return c.conn, nil
+	if c.closed {
+		c.mu.Unlock()
+		return false
 	}
-	if c.ln == nil {
-		return nil, net.ErrClosed
+	var evict []*quic.Conn
+	if old, ok := c.peers[key]; ok {
+		evict = append(evict, old.conn)
+	} else if len(c.peers) >= quicMaxPeers {
+		var oldestKey string
+		var oldest int64
+		for k, q := range c.peers {
+			if w := q.wrote.Load(); oldestKey == "" || w < oldest {
+				oldestKey, oldest = k, w
+			}
+		}
+		evict = append(evict, c.peers[oldestKey].conn)
+		delete(c.peers, oldestKey)
 	}
-	conn, err := c.ln.Accept(context.Background())
-	if err != nil {
-		return nil, err
+	c.peers[key] = p
+	c.mu.Unlock()
+
+	for _, e := range evict {
+		e.CloseWithError(0, "replaced")
 	}
-	if err := datagramsAgreed(conn); err != nil {
-		conn.CloseWithError(0, "no datagrams")
-		return nil, err
+	return true
+}
+
+// readPeer feeds one connection's datagrams to ReadFrom until it ends.
+func (c *quicCarrier) readPeer(conn *quic.Conn) {
+	from := conn.RemoteAddr()
+	for {
+		msg, err := conn.ReceiveDatagram(context.Background())
+		if err != nil {
+			c.mu.Lock()
+			if p, ok := c.peers[from.String()]; ok && p.conn == conn {
+				delete(c.peers, from.String())
+			}
+			c.mu.Unlock()
+			return
+		}
+		select {
+		case c.in <- quicDatagram{data: msg, from: from}:
+		case <-c.done:
+			return
+		}
 	}
-	c.conn, c.peer, c.accepted = conn, conn.RemoteAddr(), true
-	return conn, nil
 }
 
 func (c *quicCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
-	conn, err := c.session()
-	if err != nil {
-		return 0, nil, err
-	}
-	ctx := context.Background()
 	c.deadlineMu.Lock()
 	at := c.readAt
 	c.deadlineMu.Unlock()
-	if !at.IsZero() {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, at)
-		defer cancel()
-	}
-	msg, err := conn.ReceiveDatagram(ctx)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return 0, nil, os.ErrDeadlineExceeded
+
+	if c.ln == nil {
+		// Dialling: the one connection, read directly. A context only when a
+		// deadline asks for one, so the ordinary read allocates nothing.
+		ctx, cancel := context.Background(), context.CancelFunc(func() {})
+		if !at.IsZero() {
+			ctx, cancel = context.WithDeadline(ctx, at)
 		}
-		return 0, nil, err
+		msg, err := c.conn.ReceiveDatagram(ctx)
+		cancel()
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return 0, nil, os.ErrDeadlineExceeded
+			}
+			return 0, nil, err
+		}
+		return copy(p, msg), c.conn.RemoteAddr(), nil
 	}
-	n := copy(p, msg)
-	return n, conn.RemoteAddr(), nil
+
+	var deadline <-chan time.Time
+	if !at.IsZero() {
+		t := time.NewTimer(time.Until(at))
+		defer t.Stop()
+		deadline = t.C
+	}
+	select {
+	case d := <-c.in:
+		return copy(p, d.data), d.from, nil
+	case <-deadline:
+		return 0, nil, os.ErrDeadlineExceeded
+	case <-c.done:
+		return 0, nil, net.ErrClosed
+	}
 }
 
-// WriteTo ignores the address: a QUIC connection has exactly one peer, and the
-// tunnel only ever writes back to the one it read from.
-func (c *quicCarrier) WriteTo(p []byte, _ net.Addr) (int, error) {
-	conn, err := c.session()
-	if err != nil {
-		return 0, err
+// WriteTo sends to the connection addr names. The dialling side has only one,
+// and ignores addr.
+func (c *quicCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
+	conn := c.conn
+	if c.ln != nil {
+		if addr == nil {
+			return 0, errNoDialler
+		}
+		c.mu.Lock()
+		peer, ok := c.peers[addr.String()]
+		closed := c.closed
+		c.mu.Unlock()
+		if closed {
+			return 0, net.ErrClosed
+		}
+		if !ok {
+			return 0, errNoDialler
+		}
+		peer.wrote.Store(time.Now().UnixNano())
+		conn = peer.conn
 	}
+	// Errors go back as they are, including a datagram larger than the
+	// connection can carry right now; the tunnel counts it dropped and a
+	// failed write never ends a generation.
 	if err := conn.SendDatagram(p); err != nil {
 		return 0, err
 	}
@@ -218,30 +400,41 @@ func (c *quicCarrier) WriteTo(p []byte, _ net.Addr) (int, error) {
 
 func (c *quicCarrier) Close() error {
 	c.mu.Lock()
-	conn, ln := c.conn, c.ln
-	c.conn, c.ln = nil, nil
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	close(c.done)
+	var conns []*quic.Conn
+	for _, p := range c.peers {
+		conns = append(conns, p.conn)
+	}
+	c.peers = nil
 	c.mu.Unlock()
-	if conn != nil {
+
+	if c.conn != nil {
+		_ = c.conn.CloseWithError(0, "")
+	}
+	for _, conn := range conns {
 		_ = conn.CloseWithError(0, "")
 	}
-	if ln != nil {
-		return ln.Close()
+	if c.ln != nil {
+		c.ln.Close()
+		c.tr.Close()
+		return c.udp.Close()
 	}
 	return nil
 }
 
 func (c *quicCarrier) LocalAddr() net.Addr {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.ln != nil {
 		return c.ln.Addr()
 	}
-	if c.conn != nil {
-		return c.conn.LocalAddr()
-	}
-	return nil
+	return c.conn.LocalAddr()
 }
 
+// SetDeadline and SetReadDeadline bound the next ReceiveDatagram.
 func (c *quicCarrier) SetDeadline(t time.Time) error {
 	return c.SetReadDeadline(t)
 }

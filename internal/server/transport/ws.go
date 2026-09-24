@@ -233,7 +233,7 @@ func (s *WsTransport) Restart() {
 }
 
 func (s *WsTransport) channelHandler(g *wsGen) {
-	ticker := time.NewTicker(s.config.Heartbeat)
+	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
 	defer ticker.Stop()
 
 	// Channel to receive the message or error

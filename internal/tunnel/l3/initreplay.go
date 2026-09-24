@@ -13,22 +13,13 @@ import "time"
 // peer's data packets then find no session and are dropped. One recorded
 // packet, reusable indefinitely, keeps a tunnel from establishing.
 //
-// # Why this is not the timestamp
+// # And the timestamp
 //
-// The proper fix is WireGuard's: a monotonic timestamp inside the encrypted
-// payload, refused unless it advances. It cannot ship yet, and the reason is
-// the compatibility problem the version negotiation next door exists to solve.
-// An old responder compares the initiator's payload *whole* against its own
-// encapsulation identifier, so a new initiator that adds anything to that
-// payload is refused by every listener already in the field. The negotiation
-// only learns the peer's version from the *reply*, which arrives after the
-// message that would need to carry the timestamp.
-//
-// So the timestamp is a version 2 change, and version 1 is what this release
-// introduces. Shipping both at once would mean the freshness only works between
-// two builds that both have it, which is the population that does not exist
-// yet. freshnessRequired below is the switch, and the note there says what has
-// to be true before it is flipped.
+// The proper fix is WireGuard's — a timestamp inside the encrypted payload,
+// refused unless it advances — and it is protocol version 2, in freshness.go.
+// This memory stays: it costs nothing, it covers the legacy handshake an older
+// dialler still sends, and it turns a flood of one replayed packet into one
+// answer.
 //
 // # What this does instead, and what it is worth
 //
@@ -104,19 +95,3 @@ func (s *seenInits) expire(now time.Time) {
 		s.when = s.when[cut:]
 	}
 }
-
-// freshnessRequired reports whether a negotiated version carries a timestamp
-// this end can insist on.
-//
-// It is false for every version this build knows, and that is the point: the
-// check below is written, tested and inert until version 2 exists. Flipping it
-// on needs two things to be true, in this order —
-//
-//  1. a release carrying version 1 has been in the field long enough that a new
-//     initiator can assume its peer understands a versioned payload, and
-//  2. version 2 is defined as "the initiator's payload carries a monotonic
-//     timestamp", with the responder refusing one that does not advance.
-//
-// Until then an initiator cannot put a timestamp in the first message without
-// being refused by every listener already running.
-func freshnessRequired(version int) bool { return version >= 2 }

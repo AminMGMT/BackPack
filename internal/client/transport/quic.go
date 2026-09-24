@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"strings"
@@ -212,10 +213,20 @@ func (c *QuicTransport) channelDialer() {
 			}
 			control := network.NewQUICStreamConn(stream, conn)
 
-			// Sending security token
-			if err := utils.SendBinaryTransportString(control, c.config.Token, utils.SG_Chan); err != nil {
-				c.logger.Errorf("failed to send security token: %v", err)
-				_ = conn.CloseWithError(0, "token send failed")
+			// A proof of the token, bound to this TLS session, rather than the
+			// token itself — see network/quicbind.go. The certificate is not
+			// verified, so whatever answered this dial may not be the server,
+			// and the token is the one thing it must not be handed.
+			proof, err := network.QUICClientProof(conn, c.config.Token)
+			if err != nil {
+				c.logger.Errorf("could not bind the credential to the QUIC session: %v", err)
+				_ = conn.CloseWithError(0, "binding failed")
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			if err := utils.SendBinaryTransportString(control, proof, utils.SG_Chan); err != nil {
+				c.logger.Errorf("failed to send the control channel claim: %v", err)
+				_ = conn.CloseWithError(0, "claim send failed")
 				bo.Wait(c.state.Ctx())
 				continue
 			}
@@ -227,7 +238,7 @@ func (c *QuicTransport) channelDialer() {
 				continue
 			}
 
-			message, _, err := utils.ReceiveBinaryTransportString(control)
+			message, answer, err := utils.ReceiveBinaryTransportString(control)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					c.logger.Warn("timeout while waiting for control channel response")
@@ -246,9 +257,25 @@ func (c *QuicTransport) channelDialer() {
 
 			control.SetReadDeadline(time.Time{})
 
-			if message != c.config.Token {
-				c.logger.Errorf("invalid token received (does not match the server's token). Retrying...")
-				_ = conn.CloseWithError(0, "bad token")
+			if why, refused := refusalReason(message, answer); refused {
+				// A server before v1.8.2 compares what it is sent with the
+				// token and so refuses a proof as a wrong token. Said here
+				// because it is the likelier reading right after an upgrade.
+				c.logger.Errorf("%s. If the server runs a version older than v1.8.2, upgrade "+
+					"it: since then this client proves the token instead of sending it, and an "+
+					"older server reads the proof as a wrong token. Retrying...", why)
+				_ = conn.CloseWithError(0, "refused")
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			want, err := network.QUICServerProof(conn, c.config.Token)
+			if err != nil || subtle.ConstantTimeCompare([]byte(message), []byte(want)) != 1 {
+				// Not the server's proof: whatever answered does not hold the
+				// token, or holds a different TLS session from ours — which is
+				// what something terminating the TLS in between looks like.
+				c.logger.Errorf("the server did not prove it holds the token (a different token, or " +
+					"something between here and the server terminating the TLS). Retrying...")
+				_ = conn.CloseWithError(0, "bad proof")
 				bo.Wait(c.state.Ctx())
 				continue
 			}
@@ -288,6 +315,9 @@ func (c *QuicTransport) poolMaintainer() {
 }
 
 func (c *QuicTransport) channelHandler() {
+	// See beatClock: learns how often the server really heartbeats.
+	beats := &beatClock{}
+
 	msgChan := make(chan byte, 1000)
 
 	// The generation this handler belongs to, captured once.
@@ -316,7 +346,7 @@ func (c *QuicTransport) channelHandler() {
 				// The server heartbeats regularly, so silence for longer than the
 				// keepalive period means the peer is gone. QUIC's own idle timeout
 				// would eventually notice too, but this reconnects promptly.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
+				if err := c.state.Conn().SetReadDeadline(time.Now().Add(beats.deadline(c.config.KeepAlive))); err != nil {
 					c.logger.Errorf("failed to set control channel deadline: %v", err)
 					go c.Restart()
 					return
@@ -332,6 +362,9 @@ func (c *QuicTransport) channelHandler() {
 						go c.Restart()
 					}
 					return
+				}
+				if msg == utils.SG_HB {
+					beats.beat(time.Now())
 				}
 				msgChan <- msg
 			}
@@ -389,9 +422,16 @@ func (c *QuicTransport) tunnelDialer() {
 	}
 	data := network.NewQUICStreamConn(stream, qc)
 
-	// Announce the stream with the token so the server can authenticate it and
-	// file it as a data stream.
-	if err := utils.SendBinaryTransportString(data, c.config.Token, utils.SG_TCP); err != nil {
+	// Announce the stream with the connection's proof so the server can
+	// authenticate it and file it as a data stream. The proof, not the token,
+	// for the reason the control claim uses one.
+	proof, err := network.QUICClientProof(qc, c.config.Token)
+	if err != nil {
+		c.logger.Errorf("could not bind the credential to the QUIC session: %v", err)
+		stream.Close()
+		return
+	}
+	if err := utils.SendBinaryTransportString(data, proof, utils.SG_TCP); err != nil {
 		c.logger.Errorf("failed to announce tunnel stream: %v", err)
 		stream.Close()
 		return

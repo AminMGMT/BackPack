@@ -152,3 +152,17 @@ func AdminsSummary(c Config) string {
 	}
 	return out.String()
 }
+
+// isOwner reports whether id is the bot's own admin — the one the panel set
+// up, as opposed to the others added beside it.
+//
+// Two things the bot can hand out are the panel's credentials in another
+// form: the Web Panel screen shows the panel password, and a backup carries it
+// in the archive. The panel password is full access, including who else gets
+// access; in the panel that is the admin scope, and a write credential cannot
+// reach it. A second admin with write access in the bot was the same gap the
+// panel had: write turned into everything. So those two are the owner's, and
+// the other admins keep what write means — running the tunnels.
+func (c Config) isOwner(id string) bool {
+	return id != "" && id == c.AdminID
+}

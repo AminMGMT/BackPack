@@ -328,6 +328,9 @@ func (c *TcpTransport) poolMaintainer() {
 }
 
 func (c *TcpTransport) channelHandler() {
+	// See beatClock: learns how often the server really heartbeats.
+	beats := &beatClock{}
+
 	msgChan := make(chan byte, 1000)
 
 	// The generation this handler belongs to, captured once.
@@ -359,7 +362,7 @@ func (c *TcpTransport) channelHandler() {
 				// eleven minutes to give up on the default keepalive_period,
 				// and the watchdog sees an ESTABLISHED socket for every
 				// second of it. See controlDeadline.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
+				if err := c.state.Conn().SetReadDeadline(time.Now().Add(beats.deadline(c.config.KeepAlive))); err != nil {
 					if ctx.Err() == nil {
 						c.logger.Errorf("failed to set control channel deadline: %v", err)
 						go c.Restart()
@@ -373,6 +376,9 @@ func (c *TcpTransport) channelHandler() {
 						go c.Restart()
 					}
 					return
+				}
+				if msg == utils.SG_HB {
+					beats.beat(time.Now())
 				}
 				msgChan <- msg
 			}

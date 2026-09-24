@@ -21,7 +21,7 @@ given at the bottom of this page.
 | **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root | [→](../tutorial/tcp-pck.md) |
 | UDP | UDP | — | — | UDP open | [→](../tutorial/udp.md) |
 | **UDP + KCP + FEC** | UDP | ✅ (token key) | ✅ | UDP open | [→](../tutorial/udp-kcp-fec.md) |
-| UDP + QUIC | UDP | ◐ (TLS 1.3, passive only) | ✅ | UDP open | [→](../tutorial/udp-quic.md) |
+| UDP + QUIC | UDP | ✅ (TLS 1.3, session-bound) | ✅ | UDP open | [→](../tutorial/udp-quic.md) |
 | WS | WebSocket | — | — | — | [→](../tutorial/websocket.md) |
 | WS Mux | WebSocket | — | ✅ | — | [→](../tutorial/websocket.md) |
 | WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
@@ -32,13 +32,15 @@ given at the bottom of this page.
 wire. On the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) the token is sent
 as-is, so use one of the encrypted transports on an untrusted path.
 
-QUIC is half a mark on purpose. Its TLS hides the token from anyone who only
-watches, but the client does not check the server's certificate and then sends
-the token itself — so something that terminates the TLS on the path reads it.
-WSS closed the same gap by proving the token over the TLS session instead of
-sending it (see below); QUIC has not yet, because that is a wire change both
-ends must speak. On a path you suspect of interception, prefer Stealth, KCP or
-WSS.
+QUIC binds the credential to its TLS session, as WSS does. The client does
+not verify the server's certificate — the tunnel trusts its token — so it does
+not send the token either: it proves it holds it with an HMAC over keying
+material exported from the TLS session, and the server answers with a proof of
+its own. Something that terminates the TLS on the path holds a different
+session with each end, so neither proof means anything to it and neither
+reveals the token. **Upgrade the Iran server first**: a new server still takes
+an older client's plain token, but a new client never sends one, so an older
+server refuses it (the client's log says so).
 
 Every transport can carry **UDP on its forwarded ports** — it is a per-tunnel
 setting, off by default, and independent of the transport. See

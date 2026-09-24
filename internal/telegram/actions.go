@@ -48,6 +48,13 @@ func propose(c Config, u tgUser, lang, rest string) reply {
 
 	switch action {
 	case "backup":
+		// The archive carries the panel password: the owner's. See isOwner.
+		if !c.isOwner(strconv.FormatInt(u.ID, 10)) {
+			r := navigate(c, lang, "home")
+			r.toast = tr(lang, "Only the bot's owner can see this.")
+			r.alert = true
+			return r
+		}
 		return backupReply(c, u, lang)
 
 	case "start":

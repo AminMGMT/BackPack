@@ -276,20 +276,31 @@ type initiatorHandshake struct {
 	// agreement is confirmed inside the encrypted reply.
 	announced int
 	agreed    int
+
+	// fresh is the timestamp this attempt carries in its payload, or zero for
+	// the legacy payload an older listener can read. See freshness.go.
+	fresh uint64
 }
 
 // beginHandshake starts an attempt, returning the state and the message to
 // send. avoid is the id of the session being replaced, so a rekey cannot
 // accidentally reuse it.
 func beginHandshake(token string, avoid uint32, encap string) (*initiatorHandshake, error) {
+	return beginHandshakeFresh(token, avoid, encap, 0)
+}
+
+// beginHandshakeFresh is beginHandshake with a timestamp in the payload, or
+// the legacy payload when fresh is zero.
+func beginHandshakeFresh(token string, avoid uint32, encap string, fresh uint64) (*initiatorHandshake, error) {
 	state, err := newHandshakeState(token, true)
 	if err != nil {
 		return nil, fmt.Errorf("l3: building the handshake: %w", err)
 	}
 	// -> psk, e, and the encapsulation this end will use. NNpsk0 mixes the
 	// pre-shared key in before the first message, so the payload is encrypted
-	// and authenticated like everything else.
-	msg, _, _, err := state.WriteMessage(nil, []byte(encap))
+	// and authenticated like everything else — including the timestamp, which
+	// is why it lives here and not in the header.
+	msg, _, _, err := state.WriteMessage(nil, []byte(initPayload(encap, fresh)))
 	if err != nil {
 		return nil, fmt.Errorf("l3: writing the first handshake message: %w", err)
 	}
@@ -301,6 +312,7 @@ func beginHandshake(token string, avoid uint32, encap string) (*initiatorHandsha
 		id: id, state: state, msg: msg, encap: encap,
 		announced: versionCurrent,
 		agreed:    versionLegacy, // until the reply says otherwise
+		fresh:     fresh,
 	}, nil
 }
 
@@ -338,6 +350,14 @@ func (h *initiatorHandshake) complete(reply []byte) (*session, error) {
 	if theirVersion > versionLegacy && sawMine != h.announced {
 		return nil, errDowngraded(h.announced, sawMine)
 	}
+	// A timestamped attempt answered by a listener that does not read
+	// timestamps was refused by it: it compared the whole payload with its
+	// encapsulation, found them different, and answered only so this end
+	// would know. The answer is authenticated — only a holder of the token
+	// can write it — so falling back on it cannot be forced by the path.
+	if h.fresh != 0 && theirVersion < version2 {
+		return nil, errPeerLegacy
+	}
 	h.agreed = agreedVersion(h.announced, theirVersion)
 	// The initiator sends under cs0 and receives under cs1; the responder
 	// mirrors it. Getting this pair the wrong way round would produce a
@@ -357,15 +377,31 @@ func respond(token string, id uint32, msg []byte, encap string) (*session, []byt
 // not care, and so there is exactly one place that decides what a reply looks
 // like.
 func respondV(token string, id uint32, peerVersion int, msg []byte, encap string) (*session, []byte, error) {
+	sess, reply, _, err := respondFresh(token, id, peerVersion, msg, encap)
+	return sess, reply, err
+}
+
+// respondFresh is respondV that also reports the timestamp the dialler's
+// payload carried, zero for a legacy payload. Judging it is the caller's: it
+// is the one that remembers what was seen before.
+func respondFresh(token string, id uint32, peerVersion int, msg []byte, encap string) (*session, []byte, uint64, error) {
 	state, err := newHandshakeState(token, false)
 	if err != nil {
-		return nil, nil, fmt.Errorf("l3: building the handshake: %w", err)
+		return nil, nil, 0, fmt.Errorf("l3: building the handshake: %w", err)
 	}
 	payload, _, _, err := state.ReadMessage(nil, msg)
 	if err != nil {
 		// Anything that does not hold the token lands here, and gets no reply.
 		// A scanner finds a socket that never answers.
-		return nil, nil, fmt.Errorf("l3: handshake rejected: %w", err)
+		return nil, nil, 0, fmt.Errorf("l3: handshake rejected: %w", err)
+	}
+
+	// The dialler's payload is the encapsulation, and from v2 on a timestamp
+	// after it (initPayload). An old listener compares the payload whole,
+	// which is what tells a v2 dialler it has met one; this one reads both.
+	theirs, fresh, err := parseInitPayload(string(payload))
+	if err != nil {
+		return nil, nil, 0, err
 	}
 
 	// The reply is built even when the encapsulation disagrees, and carries
@@ -373,24 +409,36 @@ func respondV(token string, id uint32, peerVersion int, msg []byte, encap string
 	// above — so it is not a stranger to be met with silence; it is the other
 	// half of a misconfigured tunnel, and it can only say so in its own log if
 	// it is told what this end uses.
-	reply, cs0, cs1, err := state.WriteMessage(nil, []byte(replyPayload(encap, versionCurrent, peerVersion)))
+	//
+	// A timestamped payload is answered with a version block whatever the
+	// header claimed. The header is not authenticated: rewritten to version 0,
+	// it used to draw a reply with no block — the shape an old listener gives —
+	// and the dialler fell back to the replayable handshake on the say-so of a
+	// byte flipped in transit. Answering what was really read (v2, saw 0) lets
+	// the dialler's downgrade check refuse it instead. The payload is the part
+	// that is authenticated, so it is what decides.
+	var answer string
+	if fresh != 0 {
+		answer = replyPayloadBlock(encap, versionCurrent, peerVersion)
+	} else {
+		answer = replyPayload(encap, versionCurrent, peerVersion)
+	}
+	reply, cs0, cs1, err := state.WriteMessage(nil, []byte(answer))
 	if err != nil {
-		return nil, nil, fmt.Errorf("l3: writing the handshake reply: %w", err)
+		return nil, nil, 0, fmt.Errorf("l3: writing the handshake reply: %w", err)
 	}
 	hdr := header{kind: typeResp, session: id, counter: 0}.bytes()
 	datagram := append(hdr[:], reply...)
 
-	// The dialler's payload is still just the encapsulation: it cannot carry a
-	// version block, because an old listener compares it whole.
-	if theirs := string(payload); theirs != "" && theirs != encap {
-		return nil, datagram, errEncapMismatch(encap, theirs)
+	if theirs != "" && theirs != encap {
+		return nil, datagram, 0, errEncapMismatch(encap, theirs)
 	}
 
 	sess, err := newSession(id, cs1, cs0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return sess, datagram, nil
+	return sess, datagram, fresh, nil
 }
 
 // newSessionID draws a random identifier, never zero and never the one being

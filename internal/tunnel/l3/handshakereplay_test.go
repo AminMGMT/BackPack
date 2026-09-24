@@ -167,19 +167,3 @@ func TestTheHandshakeMemoryIsBounded(t *testing.T) {
 			"be refused for ever")
 	}
 }
-
-// The timestamp switch is deliberately off. It is written and tested so that
-// turning it on later is a one-line change rather than a design problem, and
-// off because an initiator cannot put a timestamp in its first message without
-// being refused by every listener already in the field.
-func TestTheFreshnessSwitchIsOffUntilVersionTwoExists(t *testing.T) {
-	for v := versionLegacy; v <= versionCurrent; v++ {
-		if freshnessRequired(v) {
-			t.Errorf("freshness is required at v%d, but no version this build speaks "+
-				"carries a timestamp — every handshake would be refused", v)
-		}
-	}
-	if !freshnessRequired(2) {
-		t.Error("freshnessRequired(2) is false; the switch has nothing to turn on")
-	}
-}

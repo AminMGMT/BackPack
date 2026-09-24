@@ -26,6 +26,23 @@ Buttons and commands for **Status**, **System**, **Alerts**, **Backup**,
 **Web UI** and **Support**. Internal plumbing — the relay port, any SOCKS port,
 the API host — never appears in a message.
 
+## Who may do what
+
+The admin set up with the bot is its **owner**. Further admins can be added
+beside it, each with full or read-only (`:ro`) access:
+
+| | Owner | Admin | Read-only admin |
+|---|:--:|:--:|:--:|
+| Status, tunnels, alerts, health, history | ✅ | ✅ | ✅ |
+| Start, stop, restart tunnels | ✅ | ✅ | — |
+| **Web UI** (the panel's address *and password*) | ✅ | — | — |
+| **Backup** (the archive carries the panel password) | ✅ | — | — |
+
+The last two are the owner's alone because the panel password is full access —
+including who else gets in — which is the panel's `admin` scope. An added admin
+is the bot's equivalent of a `write` token, and a write token cannot reach it
+either. See [access control](access-control.md).
+
 ---
 
 <div dir="rtl">

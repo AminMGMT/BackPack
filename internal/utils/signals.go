@@ -52,6 +52,16 @@ const (
 	// somebody else — two clients dialling one server with the same token, or
 	// an old service left running beside its replacement.
 	RefusedInUse = "in-use"
+
+	// RefusedRestarting is a claim the server accepted the token of and is
+	// about to adopt: it restarts its run to take the new client, and the
+	// client should claim again in a moment rather than back off.
+	//
+	// It used to answer such a claim as if it had been granted and then drop
+	// it. Over TCP and QUIC the drop is a close the client reads; over KCP it
+	// is silence, so a client that had crashed and come back believed it was
+	// connected and sat out its full control deadline — 116 seconds, measured.
+	RefusedRestarting = "restarting"
 )
 
 // WebSocketSignal reads one control-channel signal out of a WebSocket frame.

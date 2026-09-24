@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -47,6 +49,68 @@ type auditEntry struct {
 	// distinguishable from one that went through. A failed attempt is often
 	// the more interesting line.
 	Status int `json:"status,omitempty"`
+
+	// Prev and Hash chain the record: Hash covers this entry and Prev, and
+	// Prev is the Hash of the entry before. See chainAudit.
+	Prev string `json:"prev,omitempty"`
+	Hash string `json:"hash,omitempty"`
+}
+
+// The record is a hash chain.
+//
+// The file is root's on a box the panel is root on, so nothing stops somebody
+// who has taken the box from rewriting it — that is what forwarding is for.
+// What the chain adds is that a rewrite can no longer be quiet. Deleting or
+// editing a line breaks every link after it, and the panel says so where the
+// record is read. And the head of the chain travels with every line that is
+// forwarded off the machine, so even a rewrite that recomputes the whole chain
+// disagrees with the heads already sitting in Telegram, where the intruder
+// cannot reach them.
+//
+// Entries written before the chain existed carry no hash and are skipped by
+// verification rather than counted as tampering; the chain starts at the first
+// entry that has one.
+
+// auditHash is what an entry's Hash is: SHA-256 over the entry with Hash
+// cleared, which includes Prev.
+func auditHash(e auditEntry) string {
+	e.Hash = ""
+	data, _ := json.Marshal(e)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:16])
+}
+
+// chainAudit links e to the entry before it.
+func chainAudit(prev []auditEntry, e auditEntry) auditEntry {
+	if n := len(prev); n > 0 {
+		e.Prev = prev[n-1].Hash
+	}
+	e.Hash = auditHash(e)
+	return e
+}
+
+// verifyAudit reports whether the chain holds, and if not, the index of the
+// first entry that does not follow from the one before it. The oldest kept
+// entry's Prev points at one the cap has already dropped, so it is not held to
+// it.
+func verifyAudit(all []auditEntry) (intact bool, brokenAt int) {
+	started := false
+	for i, e := range all {
+		if e.Hash == "" {
+			if started {
+				return false, i // a line without a hash after the chain began
+			}
+			continue
+		}
+		if auditHash(e) != e.Hash {
+			return false, i
+		}
+		if started && e.Prev != all[i-1].Hash {
+			return false, i
+		}
+		started = true
+	}
+	return true, -1
 }
 
 // auditKeep is how many entries are held. Enough to cover the window anyone
@@ -112,16 +176,17 @@ func Audit(limit int) []auditEntry {
 // more rigorous and in practice means a full disk locks the operator out of the
 // tool they need to fix it.
 func record(e auditEntry) {
-	// Off the machine first, for the entries that are worth it. Before the
-	// local write rather than after: if the disk is what is wrong, the copy
-	// somewhere else is the one that still happens.
-	forward(e)
-
 	auditMu.Lock()
 	defer auditMu.Unlock()
 
 	all := readAudit()
+	e = chainAudit(all, e)
 	all = append(all, e)
+
+	// Off the machine before the local write, for the entries that are worth
+	// it: if the disk is what is wrong, the copy somewhere else is the one
+	// that still happens. After the chaining, so the copy carries the head.
+	forward(e)
 	if len(all) > auditKeep {
 		all = all[len(all)-auditKeep:]
 	}
@@ -289,10 +354,35 @@ func forward(e auditEntry) {
 	}
 	if e.Status >= 400 {
 		alerthist.RecordEvent(fmt.Sprintf(
-			"🔒 Panel refused %s %s from %s (%s) — %d",
-			e.Method, what, from, e.Who, e.Status))
+			"🔒 Panel refused %s %s from %s (%s) — %d · record #%s",
+			e.Method, what, from, e.Who, e.Status, shortHash(e.Hash)))
 		return
 	}
 	alerthist.RecordEvent(fmt.Sprintf(
-		"🔑 Panel: %s %s by %s from %s", e.Method, what, e.Who, from))
+		"🔑 Panel: %s %s by %s from %s · record #%s", e.Method, what, e.Who, from, shortHash(e.Hash)))
+}
+
+// shortHash is the head as it is shown off the machine: enough to compare by
+// eye against the panel, short enough not to crowd the message.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
+
+// AuditIntegrity verifies the whole record and returns the head of the chain.
+// brokenAt counts from the newest entry, as the panel lists them, or -1.
+func AuditIntegrity() (intact bool, brokenAt int, head string) {
+	auditMu.Lock()
+	defer auditMu.Unlock()
+	all := readAudit()
+	intact, at := verifyAudit(all)
+	if n := len(all); n > 0 {
+		head = all[n-1].Hash
+	}
+	if at >= 0 {
+		at = len(all) - 1 - at
+	}
+	return intact, at, head
 }

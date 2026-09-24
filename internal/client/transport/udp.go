@@ -235,6 +235,9 @@ func (c *UdpTransport) poolMaintainer() {
 }
 
 func (c *UdpTransport) channelHandler() {
+	// See beatClock: learns how often the server really heartbeats.
+	beats := &beatClock{}
+
 	msgChan := make(chan byte, 1000)
 
 	// The generation this handler belongs to, captured once.
@@ -268,7 +271,7 @@ func (c *UdpTransport) channelHandler() {
 				// server heartbeats, so silence past the deadline is the peer
 				// being gone. See controlDeadline; UdpConfig carries no
 				// keepalive period, so this takes the fallback.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(controlDeadline(0))); err != nil {
+				if err := c.state.Conn().SetReadDeadline(time.Now().Add(beats.deadline(0))); err != nil {
 					if ctx.Err() == nil {
 						c.logger.Errorf("failed to set control channel deadline: %v", err)
 						go c.Restart()
@@ -282,6 +285,9 @@ func (c *UdpTransport) channelHandler() {
 						go c.Restart()
 					}
 					return
+				}
+				if msg == utils.SG_HB {
+					beats.beat(time.Now())
 				}
 				msgChan <- msg
 			}

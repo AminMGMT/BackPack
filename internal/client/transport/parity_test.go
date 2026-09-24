@@ -95,7 +95,9 @@ func TestEveryClientEngineIsCovered(t *testing.T) {
 func TestEveryClientEngineBoundsItsControlChannel(t *testing.T) {
 	for _, name := range clientEngines {
 		src := readEngine(t, "client", name)
-		if !strings.Contains(src, "controlDeadline(") {
+		// beats.deadline is controlDeadline once it has learned the server's
+		// rhythm, and controlDeadline until then (see beatClock).
+		if !strings.Contains(src, "controlDeadline(") && !strings.Contains(src, "beats.deadline(") {
 			t.Errorf("the %s client never bounds its control channel read, so a tunnel "+
 				"whose peer has gone silently is noticed only when TCP gives up — or "+
 				"never, on a datagram carrier", name)

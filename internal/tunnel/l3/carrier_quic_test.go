@@ -3,6 +3,7 @@ package l3
 import (
 	"bytes"
 	"context"
+	"net"
 	"testing"
 	"time"
 )
@@ -21,14 +22,15 @@ func TestQuicCarrierMovesDatagramsBothWays(t *testing.T) {
 
 	addr := listener.LocalAddr().String()
 	type read struct {
-		b   []byte
-		err error
+		b    []byte
+		from net.Addr
+		err  error
 	}
 	got := make(chan read, 1)
 	go func() {
 		buf := make([]byte, 2048)
-		n, _, err := listener.ReadFrom(buf)
-		got <- read{append([]byte(nil), buf[:n]...), err}
+		n, from, err := listener.ReadFrom(buf)
+		got <- read{append([]byte(nil), buf[:n]...), from, err}
 	}()
 
 	dialer, peer, err := openQuic(Config{Mode: ModeDial, Addr: addr, Carrier: CarrierQuic})
@@ -41,11 +43,13 @@ func TestQuicCarrierMovesDatagramsBothWays(t *testing.T) {
 	if _, err := dialer.WriteTo(up, peer); err != nil {
 		t.Fatalf("write up: %v", err)
 	}
+	var from net.Addr
 	select {
 	case r := <-got:
 		if r.err != nil {
 			t.Fatalf("read up: %v", r.err)
 		}
+		from = r.from
 		if !bytes.Equal(r.b, up) {
 			t.Fatalf("up: got %q want %q", r.b, up)
 		}
@@ -53,9 +57,10 @@ func TestQuicCarrierMovesDatagramsBothWays(t *testing.T) {
 		t.Fatal("nothing arrived at the listener")
 	}
 
-	// And back, which is the direction that has to find the peer for itself.
+	// And back, to the address the read reported — which is how the tunnel
+	// writes: to the peer its last authenticated packet came from.
 	down := []byte("sealed bytes, down")
-	if _, err := listener.WriteTo(down, nil); err != nil {
+	if _, err := listener.WriteTo(down, from); err != nil {
 		t.Fatalf("write down: %v", err)
 	}
 	buf := make([]byte, 2048)

@@ -66,9 +66,14 @@ const (
 	// impossible.
 	version1 = 1
 
+	// version2 puts a monotonic timestamp inside the dialler's encrypted
+	// handshake payload, and a listener that speaks it refuses one that does
+	// not advance. See freshness.go.
+	version2 = 2
+
 	// versionCurrent is what this build announces and the highest it
 	// understands.
-	versionCurrent = version1
+	versionCurrent = version2
 )
 
 // versionSep separates the encapsulation identifier from the version block in
@@ -95,7 +100,13 @@ func replyPayload(encap string, mine, saw int) string {
 		// be the shape it expects: the encapsulation and nothing else.
 		return encap
 	}
-	return encap + versionSep + "v" + strconv.Itoa(mine) + "," + strconv.Itoa(saw)
+	return replyPayloadBlock(encap, mine, saw)
+}
+
+// replyPayloadBlock is the reply with its version block, even for a header
+// that announced nothing. See respondFresh for when that is the right answer.
+func replyPayloadBlock(encap string, mine, saw int) string {
+	return encap + versionSep + "v" + strconv.Itoa(mine) + "," + strconv.Itoa(max(saw, 0))
 }
 
 // parseReplyPayload splits a reply into the encapsulation and what the peer

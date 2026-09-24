@@ -115,6 +115,7 @@ var fa = map[string]string{
 	"Too quick — try again in %ds.":                          "کمی سریع بود — %d ثانیه دیگر دوباره تلاش کنید.",
 	"That confirmation has expired — please try again.":      "این تأیید منقضی شده — دوباره تلاش کنید.",
 	"Your access is read-only.":                              "دسترسی شما فقط خواندنی است.",
+	"Only the bot's owner can see this.":                     "فقط مالک ربات می‌تواند این را ببیند.",
 
 	// Traffic
 	"Last 24 hours": "۲۴ ساعت گذشته",

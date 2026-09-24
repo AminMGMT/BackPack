@@ -8,6 +8,10 @@
 <!-- The browser paints its own chrome from this; it has to follow the theme,
      so js/main.js rewrites it whenever the ground changes. -->
 <meta name="theme-color" content="#070707">
+<!-- Named, so the browser does not go looking for /favicon.ico at the host's
+     root: the panel answers nowhere outside its base path, and every page load
+     logged a 404 for it. -->
+<link rel="icon" href="__BASE_PATH__/icon.svg" type="image/svg+xml">
 
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/base.css">

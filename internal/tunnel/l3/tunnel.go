@@ -252,6 +252,13 @@ type Tunnel struct {
 	// that arrive with nobody waiting are simply dropped.
 	replies chan handshakeReply
 
+	// fresh is the listener's memory of handshake timestamps, and freshClock
+	// the dialler's source of them; legacyUntil is when a dialler that met a
+	// listener without timestamps tries them again. Under mu. See freshness.go.
+	fresh       freshJudge
+	freshClock  freshClock
+	legacyUntil time.Time
+
 	// unanswered is when the dialling side sent the first packet that nothing
 	// has come back after, as unix nanoseconds; zero once anything authentic
 	// arrives. See peerSilentAfter.
@@ -266,13 +273,10 @@ type Tunnel struct {
 	lastInitID uint32
 	lastReply  []byte
 
-	// seenInits refuses a handshake this end has already answered. See
-	// initreplay.go: the protocol has no freshness in it, so a recorded
-	// typeInit stays valid for ever and can be replayed to keep a tunnel from
-	// establishing. This does not close that — the proper fix is a timestamp
-	// and it needs a version both ends understand — but it does stop the same
-	// packet being replayed over and over, which is the attack rather than the
-	// theory.
+	// seenInits refuses a handshake this end has already answered, for the
+	// legacy handshake an older dialler still sends; a v2 dialler's handshake
+	// carries a timestamp that fresh judges instead. See initreplay.go and
+	// freshness.go.
 	seenInits seenInits
 
 	stats struct {
@@ -954,7 +958,21 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 	// The counter on a handshake message is the dialler's announced protocol
 	// version; every build before this one sent 0 there and ignored it. See
 	// version.go.
-	sess, reply, err := respondV(t.cfg.Token, h.session, int(h.counter), body, encapID(t.encap))
+	sess, reply, fresh, err := respondFresh(t.cfg.Token, h.session, int(h.counter), body, encapID(t.encap))
+	if err == nil {
+		// Judged only once the handshake has authenticated: a stranger's
+		// timestamp is not allowed to move what this end remembers. And
+		// refused in silence, like anything else that is not answered — a
+		// replay learns nothing, not even that it was recognised.
+		t.mu.Lock()
+		if why := t.fresh.admit(fresh); why != nil {
+			t.mu.Unlock()
+			t.stats.dropped.Add(1)
+			t.log.Warnf("l3: refusing a handshake from %s: %v", from, why)
+			return
+		}
+		t.mu.Unlock()
+	}
 	if err != nil {
 		// A mismatched encapsulation is a misconfiguration, not an intruder:
 		// the peer proved it holds the token, so it is told, loudly, and its
@@ -978,10 +996,10 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 	// The address is provisional until a data packet confirms it, which is
 	// also what promotes the session.
 	//
-	// Only when no peer is known at all. The handshake carries no freshness of
-	// any kind — NNpsk0 has none, and the payload holds the encapsulation and
-	// nothing else — so a recorded typeInit datagram stays valid forever and
-	// this end cannot tell a replay from a first contact. It used to be enough
+	// Only when no peer is known at all. A legacy handshake carries no
+	// freshness of any kind — NNpsk0 has none, and its payload holds the
+	// encapsulation and nothing else — so a recorded one stays valid forever
+	// and this end cannot tell its replay from a first contact. It used to be enough
 	// that no session was CURRENT, and retireSessions clears current after
 	// rejectAfterTime: five idle minutes reopened the window on every tunnel,
 	// and one replayed datagram from a forged source then pointed this end's
@@ -991,10 +1009,9 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 	//
 	// Pinning it to "no peer has ever been seen" narrows that to the first
 	// handshake after a restart, and the first authenticated packet from the
-	// real peer corrects it through notePeer. The residual is the protocol's,
-	// not this function's: closing it properly means putting a monotonic
-	// timestamp in the init payload and refusing one that does not advance,
-	// which is WireGuard's rule and a wire change both ends have to agree on.
+	// real peer corrects it through notePeer. The residual — a replay
+	// accepted as that first handshake — is closed by the timestamp between
+	// two v2 builds (freshness.go), and stays open only for a legacy dialler.
 	if t.current == nil && t.peer == nil {
 		t.peer = from
 	}
@@ -1207,7 +1224,16 @@ func (t *Tunnel) negotiate(ctx context.Context) error {
 	}
 	t.mu.RUnlock()
 
-	attempt, err := beginHandshake(t.cfg.Token, avoid, encapID(t.encap))
+	// A timestamp unless this listener was recently found not to read them.
+	// See freshness.go for why falling back is safe to do on its answer.
+	t.mu.Lock()
+	var fresh uint64
+	if time.Now().After(t.legacyUntil) {
+		fresh = t.freshClock.next(time.Now())
+	}
+	t.mu.Unlock()
+
+	attempt, err := beginHandshakeFresh(t.cfg.Token, avoid, encapID(t.encap), fresh)
 	if err != nil {
 		return err
 	}
@@ -1229,6 +1255,15 @@ func (t *Tunnel) negotiate(ctx context.Context) error {
 				continue // an answer to something else
 			}
 			sess, err := attempt.complete(reply.body)
+			if errors.Is(err, errPeerLegacy) {
+				t.mu.Lock()
+				t.legacyUntil = time.Now().Add(legacyRetry)
+				t.mu.Unlock()
+				t.log.Infof("l3: %s runs a build without handshake timestamps; using the older "+
+					"handshake with it, and trying again in %s. Upgrading it closes handshake "+
+					"replay for good", peer, legacyRetry)
+				return t.negotiate(ctx)
+			}
 			if err != nil {
 				return err
 			}

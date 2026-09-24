@@ -226,6 +226,9 @@ func (c *WsMuxTransport) poolMaintainer() {
 }
 
 func (c *WsMuxTransport) channelHandler() {
+	// See beatClock: learns how often the server really heartbeats.
+	beats := &beatClock{}
+
 	msgChan := make(chan byte, 1000)
 
 	// The generation this handler belongs to, captured once.
@@ -258,7 +261,7 @@ func (c *WsMuxTransport) channelHandler() {
 				// eleven minutes to give up on the default keepalive_period,
 				// and the watchdog sees an ESTABLISHED socket for every
 				// second of it. See controlDeadline.
-				if err := c.state.WSConn().SetReadDeadline(time.Now().Add(controlDeadline(c.config.KeepAlive))); err != nil {
+				if err := c.state.WSConn().SetReadDeadline(time.Now().Add(beats.deadline(c.config.KeepAlive))); err != nil {
 					if ctx.Err() == nil {
 						c.logger.Errorf("failed to set control channel deadline: %v", err)
 						go c.Restart()
@@ -277,6 +280,9 @@ func (c *WsMuxTransport) channelHandler() {
 				if !ok {
 					c.logger.Warnf("ignoring a malformed control frame (type %d, %d bytes)", messageType, len(msg))
 					continue
+				}
+				if signal == utils.SG_HB {
+					beats.beat(time.Now())
 				}
 				msgChan <- signal
 			}

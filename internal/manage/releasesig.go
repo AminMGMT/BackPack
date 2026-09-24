@@ -66,14 +66,23 @@ func verifyChecksumSignature(tag string, sums []byte) error {
 		return fmt.Errorf("release %s publishes no signature for its checksums, and this "+
 			"build requires one: %w\nInstall offline instead — see the README", tag, err)
 	}
+	return checkReleaseSignature(pub, tag, sums, sig)
+}
+
+// checkReleaseSignature verifies a published signature for one tag's checksum
+// list. Separate from the fetching so the signing tool's output can be checked
+// against it directly.
+func checkReleaseSignature(pub []byte, tag string, sums, sig []byte) error {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
 	if err != nil {
 		return fmt.Errorf("the signature published for %s is not readable", tag)
 	}
-	if !ed25519.Verify(ed25519.PublicKey(pub), sums, raw) {
-		return fmt.Errorf("the checksums published for %s are not signed by the key this "+
-			"build trusts — the release has been altered, or it was published by "+
-			"somebody else", tag)
+	// Over the tag as well as the list: see app.ReleaseSignedMessage for the
+	// downgrade a signature over the list alone allowed.
+	if !ed25519.Verify(ed25519.PublicKey(pub), app.ReleaseSignedMessage(tag, sums), raw) {
+		return fmt.Errorf("the checksums published for %s are not signed for %s by the key "+
+			"this build trusts — the release has been altered, it was published by somebody "+
+			"else, or it is another release's files served under this tag", tag, tag)
 	}
 	return nil
 }

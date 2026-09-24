@@ -34,6 +34,14 @@ git push origin v1.8.2
 The release workflow builds every architecture, writes `SHA256SUMS`, signs it
 with the repository secret, and publishes.
 
+What is signed is the **tag and the list together** (`backpack release <tag>`,
+a newline, then `SHA256SUMS`), not the list alone. The list names archives,
+not versions, so a signature over it alone would let a mirror serve an older
+release's genuine files under a newer tag and have every updater verify and
+install them. With the tag signed, a signature is good for its own release
+only. To check one by hand, verify the Ed25519 signature in `SHA256SUMS.sig`
+over exactly those bytes.
+
 ## After the tag
 
 - [ ] Download the published binary for your own architecture and check it

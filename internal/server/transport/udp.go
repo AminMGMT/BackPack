@@ -395,7 +395,7 @@ func (s *UdpTransport) validControlClaim(conn net.Conn) bool {
 }
 
 func (s *UdpTransport) channelHandler(g *udpGen) {
-	ticker := time.NewTicker(s.config.Heartbeat)
+	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
 	defer ticker.Stop()
 
 	// Channel to receive the message or error

@@ -183,7 +183,7 @@ them both ends have to agree on. This says what exists.
 | `channel_size` | `int` | ChannelSize is how many connections may queue between the accept loop and the handlers before new ones are dropped. A larger queue absorbs a burst; it does not make the tunnel faster. |
 | `fallback_dwell` | `int` | FallbackDwell is how many seconds the server holds one candidate before trying the next. 0 uses DefaultFallbackDwell. |
 | `fallback_transports` | `[]TransportType` | FallbackTransports are additional carriers this tunnel may fall back to when the configured one stops getting through. Both ends carry the same list and rotate through it — see internal/tunnel/chain for how they meet without negotiating — so a filtered carrier is recovered from without an operator. Empty (the default) means one transport, exactly as before. |
-| `heartbeat` | `int` | Heartbeat is how often, in seconds, the server sends a liveness byte down the control channel. It is how a client notices a server that has gone away without closing the socket. |
+| `heartbeat` | `int` | Heartbeat is how often, in seconds, the server sends a liveness byte down the control channel. It is how a client notices a server that has gone away without closing the socket. The control channel beats at least every 10 seconds whatever is set here, so a client can give up on a crashed server in about 30 rather than waiting out its keepalive. |
 | `keepalive_period` | `int` | Keepalive is how often, in seconds, an idle connection is probed. It also decides how long a dead peer takes to notice — too low tears down a tunnel that is merely slow, which on a bad path is the difference between a working tunnel and one that flaps. |
 | `log_format` | `string` | LogFormat is "" for human-readable output or "json" for machine parsing. |
 | `log_level` | `string` | LogLevel is one of trace, debug, info, warn, error or fatal. info is the default; trace on a busy tunnel writes a line per connection. |
@@ -238,4 +238,4 @@ them both ends have to agree on. This says what exists.
 
 ---
 
-*Generated from `config/` on 2026-09-22. Last verified against Backpack v1.8.2.*
+*Generated from `config/` on 2026-09-24. Last verified against Backpack v1.8.2.*

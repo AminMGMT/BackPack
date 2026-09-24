@@ -25,6 +25,44 @@ raw-socket carriers need capabilities a test process does not have.
 
 ### Security
 
+- **Any Telegram admin with write access could read the panel password** from
+  the Web UI screen, or take a backup that carries it — and the panel password
+  is everything, including who else gets in. The same gap the panel's `write`
+  tokens had. Both are now the bot owner's alone; added admins keep running the
+  tunnels.
+
+- **A release signature did not say which release it was for.** It covered the
+  checksum list, which names archives but not versions, so a mirror or proxy —
+  which is how restricted networks fetch releases — could serve an older
+  release's genuine archive, checksums and signature under a newer tag, and
+  every updater would verify and install it: a downgrade signed by the
+  publisher. The tag is now part of what is signed. No release carried a
+  signature before this one, so nothing already installed depends on the old
+  form.
+
+- **The reverse QUIC transport handed its token to anything that terminated
+  the TLS.** The client does not verify the server's certificate, and then
+  sent the token as its control claim and on every data stream, and the server
+  echoed it back. It now proves the token with an HMAC over keying material
+  exported from the TLS session, as WSS already did, and the server answers with
+  a proof of its own; a man in the middle holds a different session with each
+  end and gets nothing usable. A test puts a real QUIC man in the middle between
+  the two and checks the tunnel does not come up and the token never crosses
+  it — it did both before. **Upgrade the Iran server first**: a new server
+  still accepts an older client's token, a new client never sends one.
+- **A recorded layer-3 handshake could be replayed for ever.** Protocol v2 puts
+  a monotonic timestamp inside the dialler's encrypted handshake payload and
+  the listener refuses one that does not advance (WireGuard's rule); once it has
+  seen one, it refuses the older, untimestamped handshake too. It interoperates
+  with v1.8.1 in both directions: against an old listener the dialler falls back
+  on that listener's own authenticated answer — never on silence, so the path
+  cannot force it — and retries v2 every half hour. Verified against a real
+  v1.8.1 binary each way.
+- **The audit record is a hash chain.** Editing or deleting a line is shown at
+  the top of the record, and every line forwarded to Telegram carries the head
+  of the chain, so even a consistent rewrite disagrees with the copies off the
+  machine.
+
 - **A `write` API token could make itself `admin`.** `/api/tokens` and
   `/api/audit` were guarded at `admin`, but everything else that decides who gets
   in sat at `write`: the panel password, the second factor, the signed-in
@@ -912,6 +950,47 @@ raw-socket carriers need capabilities a test process does not have.
   and the sentence did not.
 
 ### Fixed
+
+- **Every systemd operation failed.** When the service helpers moved into
+  `internal/manage/core`, renaming the function `systemctl` to `Systemctl` also
+  renamed the program it runs, and no Linux has a `Systemctl`. Starting,
+  stopping, restarting, enabling and reloading tunnels — from the CLI, the
+  panel, the bot and the watchdog alike — all failed with "executable file not
+  found". No test ran a real command, so nothing noticed; one does now, against
+  a stand-in named exactly `systemctl`. This never shipped: it came in during
+  this version.
+
+- **A crashed or rebooted server cost a kcp, xdi, pck or quic tunnel about two
+  minutes; a crashed client cost kcp another two.** Measured with `kill -9` and
+  with a host that vanished for twenty seconds, in two network namespaces:
+  - the server now sends its control heartbeat at least every 10 seconds, and
+    the client learns that rhythm and gives up after three missed beats (30 s)
+    instead of a keepalive and a half (112 s). A client too old to learn it
+    waits as it always did; a server too old to beat faster is not rushed;
+  - a KCP server that gets a new claim while it still holds the old one — a
+    client that crashed and came back — now says it is restarting to adopt it
+    instead of answering as granted and dropping it in silence, which left the
+    client believing it was connected for 116 seconds;
+  - after all of it: 1–5 s for a crash of either side on every transport, and
+    within 20 s of a rebooted host coming back.
+- **A layer-3 QUIC tunnel never recovered from a dialler crash.** The listener
+  accepted one connection for the life of the process; a dialler that came back
+  sat in its accept queue unanswered. It now keeps every connection it accepts,
+  like an unconnected UDP socket, and the tunnel's own rule — only a packet that
+  authenticates moves the peer — decides which one it talks to. (Letting the
+  newest connection win instead, which was tried first, would have let anyone
+  who can reach the port knock an established tunnel off, no token needed.) A 5-second keepalive and 20-second idle timeout (were
+  15 and 60), and a stateless-reset key derived from the token so a restarted
+  listener resets the old connection at once, bring a listener crash from 69 s
+  to about 23.
+- **Dependencies** (Dependabot #47 and #48): quic-go 0.62.0, reedsolomon
+  1.14.2, gopsutil 4.26.8, logrus 1.10.2 and the golang.org/x modules, and the
+  CI actions to their current majors, with the release action still pinned by
+  SHA. **Not** smux `v2.0.1+incompatible`, which #48 also proposed: that tag is
+  from 2019, older than every v1.5 release, lacks `Config.Version` and
+  `MaxStreamBuffer`, and would not build. Dependabot is told to leave it alone.
+- The panel page asked for `/favicon.ico` at the host's root, where the panel
+  answers nothing, and logged a 404 on every load.
 
 - **A clean restart of the Iran side cost a quic, kcp, xdi or pck tunnel almost
   two minutes.** Over TCP a stopping server's socket closes and the client reads

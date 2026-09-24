@@ -289,7 +289,7 @@ func (c *KcpTransport) channelDialer() {
 				continue
 			}
 
-			message, _, err := utils.ReceiveBinaryTransportString(tunnelConn)
+			message, answer, err := utils.ReceiveBinaryTransportString(tunnelConn)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					c.logger.Warn("timeout while waiting for control channel response")
@@ -309,6 +309,22 @@ func (c *KcpTransport) channelDialer() {
 			// Resetting the deadline (removes any existing deadline)
 			tunnelConn.SetReadDeadline(time.Time{})
 
+			if restartingRefusal(message, answer) {
+				// Not a failure: the server has the token and is rebuilding its
+				// run for this client. Claimed again after the ordinary first
+				// backoff, which is about as long as the rebuild takes; a server
+				// that kept saying so would still be backed off from, not spun on.
+				c.logger.Info("the server is restarting to adopt this client; claiming again")
+				tunnelConn.Close()
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			if why, refused := refusalReason(message, answer); refused {
+				c.logger.Errorf("%s. Retrying...", why)
+				tunnelConn.Close()
+				bo.Wait(c.state.Ctx())
+				continue
+			}
 			if message != c.config.Token {
 				c.logger.Errorf("invalid token received (does not match the server's token). Retrying...")
 				tunnelConn.Close()
@@ -359,6 +375,9 @@ func (c *KcpTransport) poolMaintainer() {
 }
 
 func (c *KcpTransport) channelHandler() {
+	// See beatClock: learns how often the server really heartbeats.
+	beats := &beatClock{}
+
 	msgChan := make(chan byte, 1000)
 
 	// The generation this handler belongs to, captured once.
@@ -390,7 +409,7 @@ func (c *KcpTransport) channelHandler() {
 				// read on a dead tunnel would block forever and the client would
 				// never reconnect. The server heartbeats regularly, so silence
 				// for longer than the keepalive period means the peer is gone.
-				window := controlDeadline(c.config.KeepAlive)
+				window := beats.deadline(c.config.KeepAlive)
 				if err := c.state.Conn().SetReadDeadline(time.Now().Add(window)); err != nil {
 					c.logger.Errorf("failed to set control channel deadline: %v", err)
 					go c.Restart()
@@ -424,6 +443,9 @@ func (c *KcpTransport) channelHandler() {
 						go c.Restart()
 					}
 					return
+				}
+				if msg == utils.SG_HB {
+					beats.beat(time.Now())
 				}
 				msgChan <- msg
 			}

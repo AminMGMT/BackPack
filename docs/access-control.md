@@ -81,6 +81,13 @@ interesting line. A token nobody issued is not: it is counted against the
 address by the same limiter as a wrong password, and it is not written down,
 because an unauthenticated caller must not be able to fill the record.
 
+The record is a hash chain. Each entry carries the hash of the one before it,
+so deleting or editing a line breaks every link after it, and the record says
+so at the top where it is read (*Record intact · head #…*, or which entry does
+not follow). Every line forwarded to Telegram carries the head of the chain at
+that moment, so even a rewrite that recomputes the whole chain disagrees with
+the numbers already sitting in Telegram, out of the intruder's reach.
+
 The record lives at `/etc/backpack/audit.json`, holds the last 5,000 entries,
 and is readable only by root. An audit file that cannot be written never blocks
 an action — a full disk must not lock an operator out of the tool they need to

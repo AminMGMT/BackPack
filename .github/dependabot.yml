@@ -20,6 +20,13 @@ updates:
     groups:
       go-dependencies:
         patterns: ["*"]
+    ignore:
+      # smux has a v2.0.1+incompatible tag from 2019, older than every v1.5.x,
+      # and missing Config.Version and MaxStreamBuffer, which this code uses.
+      # Dependabot reads the bigger number as newer and proposes it (PR #48);
+      # it would not even build. The real line is v1.x.
+      - dependency-name: github.com/xtaci/smux
+        versions: [">= 2.0.0"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
