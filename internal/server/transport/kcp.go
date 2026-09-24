@@ -375,7 +375,7 @@ func (s *KcpTransport) channelHandler(g *kcpGen) {
 	// never say goodbye.
 	defer g.bye.said()
 
-	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
+	ticker := newLivenessTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
 	messageChan := make(chan byte, 1)
@@ -597,14 +597,16 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 		}
 		// The control channel carries small, latency-critical signals.
 		session.SetACKNoDelay(true)
+		// Between heartbeats it idles like a pool session (kcpidle.go).
+		control := network.IdleAwareKCP(session, s.kcpSettings, true)
 
 		select {
-		case g.handshakeChannel <- session: // ok
+		case g.handshakeChannel <- control: // ok
 		default:
 			// channelHandshake has not begun reading in this run yet: a genuine
 			// duplicate racing the first claim, rather than a re-dial.
 			s.logger.Warnf("control channel handshake already in progress, discarding duplicate")
-			session.Close()
+			control.Close()
 		}
 
 	case utils.SG_TCP:
@@ -615,10 +617,13 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 			session.Close()
 			return
 		}
-		muxSession, err := smux.Client(session, s.smuxConfig)
+		// From here on the session is closed through conn, so that the idle
+		// governor lets go of it.
+		conn := network.IdleAwareKCP(session, s.kcpSettings, s.kcpSettings.AckNoDelay)
+		muxSession, err := smux.Client(conn, s.smuxConfig)
 		if err != nil {
 			s.logger.Errorf("failed to create MUX session for connection %s: %v", session.RemoteAddr(), err)
-			session.Close()
+			conn.Close()
 			return
 		}
 		select {

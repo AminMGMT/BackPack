@@ -332,7 +332,10 @@ func (c *KcpTransport) channelDialer() {
 				continue
 			}
 
-			c.state.SetConn(tunnelConn)
+			// Heartbeats every few seconds are all it carries once the pool is
+			// up, so it idles like any pool session (kcpidle.go) — keeping the
+			// ack-nodelay it was given above when it wakes.
+			c.state.SetConn(network.IdleAwareKCP(tunnelConn, c.kcpSettings, true))
 			c.logger.Info("control channel established successfully")
 
 			// The dialling side has to record its peer for the same reason the
@@ -376,7 +379,7 @@ func (c *KcpTransport) poolMaintainer() {
 
 func (c *KcpTransport) channelHandler() {
 	// See beatClock: learns how often the server really heartbeats.
-	beats := &beatClock{}
+	beats := newBeatClock(time.Now())
 
 	msgChan := make(chan byte, 1000)
 
@@ -500,7 +503,7 @@ func (c *KcpTransport) tunnelDialer() {
 
 	atomic.AddInt32(&c.poolConnections, 1)
 
-	c.handleSession(tunnelConn)
+	c.handleSession(network.IdleAwareKCP(tunnelConn, c.kcpSettings, c.kcpSettings.AckNoDelay))
 }
 
 func (c *KcpTransport) handleSession(tunnelConn net.Conn) {

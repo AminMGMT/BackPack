@@ -253,10 +253,30 @@ func restartingRefusal(ack string, signal byte) bool {
 // It is per control channel: a new one starts with a new clock, so a server
 // replaced by an older, slower one is not held to the faster one's rhythm.
 // Only the reader goroutine touches it.
+//
+// Learning takes three gaps, and a server that dies before they arrive used to
+// cost the whole fallback. From v1.8.2 a server opens each channel with a
+// warm-up of quick beats, the first a tenth of a second in; no older server
+// beats sooner than a second after the channel opens (one second is the
+// shortest heartbeat it accepts, and its first beat is one interval in). So a
+// first beat inside warmupEvidence is proof of a server that keeps a fast
+// rhythm, and the clock trusts livenessFloor from then on rather than waiting
+// to learn it — which is what closes the gap for a crash in the first second
+// or two of a connection.
 type beatClock struct {
-	last time.Time
-	gaps []time.Duration
+	opened time.Time
+	last   time.Time
+	gaps   []time.Duration
+	quick  bool // the first beat came within warmupEvidence of opening
 }
+
+// warmupEvidence is how soon after the channel opens a first beat has to
+// arrive to prove the server warms up. Under the one second no older server
+// can beat in, with room for a slow path.
+const warmupEvidence = 700 * time.Millisecond
+
+// newBeatClock starts the clock of a control channel that opened at now.
+func newBeatClock(now time.Time) *beatClock { return &beatClock{opened: now} }
 
 // beatHistory is how many recent gaps are kept; the longest of them decides.
 const beatHistory = 4
@@ -268,6 +288,9 @@ const beatsToLearn = 3
 const livenessFloor = 15 * time.Second
 
 func (b *beatClock) beat(now time.Time) {
+	if b.last.IsZero() && !b.opened.IsZero() && now.Sub(b.opened) < warmupEvidence {
+		b.quick = true
+	}
 	if !b.last.IsZero() {
 		b.gaps = append(b.gaps, now.Sub(b.last))
 		if len(b.gaps) > beatHistory {
@@ -281,6 +304,9 @@ func (b *beatClock) beat(now time.Time) {
 func (b *beatClock) deadline(keepAlive time.Duration) time.Duration {
 	base := controlDeadline(keepAlive)
 	if len(b.gaps) < beatsToLearn {
+		if b.quick {
+			return min(livenessFloor, base)
+		}
 		return base
 	}
 	var worst time.Duration

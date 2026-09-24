@@ -488,7 +488,7 @@ func (s *QuicTransport) channelHandler(g *quicGen) {
 	// goodbye. See farewell.
 	defer g.bye.said()
 
-	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
+	ticker := newLivenessTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
 	messageChan := make(chan byte, 1)

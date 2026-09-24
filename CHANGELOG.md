@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.8.2 — unreleased
+## v1.8.2 — 2026-09-24
 
 Every finding of a section-by-section audit of the whole project, and the
 mechanism that lets a fix like these reach a server that already exists.
@@ -952,7 +952,7 @@ raw-socket carriers need capabilities a test process does not have.
 ### Fixed
 
 - **High CPU.** Measured on every transport, idle and under load, in two
-  network namespaces; four causes found and fixed:
+  network namespaces; five causes found and fixed:
   - **The panel, on a busy server.** Each tunnel poll ran `ss -tin` once per
     listening tunnel, from every open tab, and each dumped the TCP state of
     every socket on the machine. With 40,000 connections, five tunnels and one
@@ -974,6 +974,16 @@ raw-socket carriers need capabilities a test process does not have.
     over one scheduler per CPU, so an idle tunnel woke every core: **6% of a
     core doing nothing** on a 16-core machine, against 0.15% for every TCP
     transport. One scheduler: **3%**, with the same CPU per byte under load.
+    And a session that has carried nothing for three seconds now flushes
+    every 200 ms instead of every 10–20, and goes back to the preset's
+    interval the moment it reads or writes; while slowed it acknowledges
+    every packet at once, so the first exchange after a quiet spell is not
+    held back. Idle: **3% → 1.4%**.
+  - **xdi, every packet.** Each echo was built and parsed through x/net's ICMP
+    message types — an allocation for the message, its body and the output,
+    and a second copy of the payload, in both directions. It is now written
+    and read in place in a pooled buffer: a 256 MB transfer went from
+    **700 to 950 Mbit/s**, and from 24 CPU-seconds to 18.
 
 - **The panel could not use a certificate obtained any other way than its own
   Let's Encrypt run** (#49). Where Let's Encrypt could not verify the server —
@@ -993,6 +1003,21 @@ raw-socket carriers need capabilities a test process does not have.
   reconnects measured). A new client talking to an old server still cannot
   tell a slow heartbeat from a dead server, so it now says which setting to
   change instead of blaming the path.
+- **A server that crashed in the first half minute of a connection left the
+  client waiting almost two minutes.** A client trusts the server's heartbeat
+  rhythm only after three gaps, which at the ten-second beat took half a
+  minute; until then it waited out its long fallback, meant for older servers
+  whose beat could be forty seconds. Measured on KCP, pck, xdi and QUIC:
+  **115 s** to recover from a `kill -9` a few seconds after connecting. The
+  server now opens every control channel with seven quick heartbeats, doubling
+  from 0.1 s up to its steady beat. A first beat that quick is something no
+  older server can send — its shortest heartbeat is a second — so the client
+  takes it as proof and gives up on silence after 15 s from that moment on,
+  and after 30 s once the steady beat is learnt. Measured: **115 s → 17 s** on
+  KCP, pck, xdi and QUIC, for a crash one second into the connection; a
+  v1.8.1 server or client on the other end ran 150 s without a reconnect. Older clients only reset their deadline on a heartbeat
+  and are unaffected; an older server never sends them, so a new client stays
+  exactly as patient with it as before.
 - **A tunnel could not be put on Turbo — it always came back as Balanced.**
   The edit form posts its whole Fine-tune section along with the preset, and
   those fields still held the old preset's numbers. The server applied them

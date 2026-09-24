@@ -227,7 +227,7 @@ func (c *WsMuxTransport) poolMaintainer() {
 
 func (c *WsMuxTransport) channelHandler() {
 	// See beatClock: learns how often the server really heartbeats.
-	beats := &beatClock{}
+	beats := newBeatClock(time.Now())
 
 	msgChan := make(chan byte, 1000)
 

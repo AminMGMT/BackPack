@@ -287,7 +287,7 @@ func (s *TcpTransport) channelHandshake(g *tcpGen) {
 }
 
 func (s *TcpTransport) channelHandler(g *tcpGen) {
-	ticker := time.NewTicker(livenessBeat(s.config.Heartbeat))
+	ticker := newLivenessTicker(s.config.Heartbeat)
 	defer ticker.Stop()
 
 	// Channel to receive the message or error

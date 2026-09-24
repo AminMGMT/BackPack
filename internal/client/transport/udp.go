@@ -236,7 +236,7 @@ func (c *UdpTransport) poolMaintainer() {
 
 func (c *UdpTransport) channelHandler() {
 	// See beatClock: learns how often the server really heartbeats.
-	beats := &beatClock{}
+	beats := newBeatClock(time.Now())
 
 	msgChan := make(chan byte, 1000)
 

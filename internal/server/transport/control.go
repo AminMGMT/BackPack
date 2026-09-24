@@ -310,3 +310,73 @@ func livenessBeat(configured time.Duration) time.Duration {
 
 // maxLivenessBeat is the longest the control channel goes without a heartbeat.
 const maxLivenessBeat = 10 * time.Second
+
+// livenessWarmup is the spacing of the first few heartbeats on a new control
+// channel, before it settles to livenessBeat.
+//
+// A client trusts the rhythm only after it has seen three gaps (beatClock).
+// At ten seconds a beat that took half a minute, and until then it could only
+// wait its long fallback — made for servers older than this one, whose beat
+// could be forty seconds or more. So a server that crashed in the first half
+// minute of a connection cost the client 115 seconds, measured on KCP, pck and
+// xdi alike. The warm-up doubles from a tenth of a second up to the steady
+// beat, which gives the client its three gaps within 1.5 seconds of the
+// channel opening; a crash from then on is noticed after fifteen seconds (the
+// client's floor), then thirty once the steady beat is learnt. Seven extra
+// bytes per channel.
+//
+// It changes nothing for an older client, which only ever resets its deadline
+// on a heartbeat, and an older server simply never sends them, which leaves a
+// new client exactly as patient as it was.
+var livenessWarmup = []time.Duration{
+	100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond,
+	1600 * time.Millisecond, 3200 * time.Millisecond, 6400 * time.Millisecond,
+}
+
+// livenessTicker delivers the heartbeat schedule on C: livenessWarmup, then
+// every livenessBeat. It stands in for the time.Ticker the control loops used.
+type livenessTicker struct {
+	C    <-chan time.Time
+	stop chan struct{}
+	once sync.Once
+}
+
+func newLivenessTicker(configured time.Duration) *livenessTicker {
+	steady := livenessBeat(configured)
+	c := make(chan time.Time, 1)
+	t := &livenessTicker{C: c, stop: make(chan struct{})}
+	go t.run(c, steady)
+	return t
+}
+
+func (t *livenessTicker) run(c chan<- time.Time, steady time.Duration) {
+	timer := time.NewTimer(livenessGap(0, steady))
+	defer timer.Stop()
+	for i := 1; ; i++ {
+		select {
+		case <-t.stop:
+			return
+		case now := <-timer.C:
+			// Like a time.Ticker: a beat the loop has not taken yet is not
+			// queued twice.
+			select {
+			case c <- now:
+			default:
+			}
+			timer.Reset(livenessGap(i, steady))
+		}
+	}
+}
+
+// livenessGap is the wait before heartbeat i (from zero) of a channel whose
+// steady beat is steady. A heartbeat set shorter than the warm-up keeps its
+// own pace throughout.
+func livenessGap(i int, steady time.Duration) time.Duration {
+	if i < len(livenessWarmup) {
+		return min(livenessWarmup[i], steady)
+	}
+	return steady
+}
+
+// Stop ends the schedule. Safe to call more than once.
+func (t *livenessTicker) Stop() { t.once.Do(func() { close(t.stop) }) }

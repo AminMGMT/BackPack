@@ -143,23 +143,16 @@ func (c *icmpConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 	if c.server {
 		typ = icmpEchoReply
 	}
-	// Both buffers come from the pool: the framed payload, and the marshalled
-	// echo underneath it. Each was a fresh allocation per packet, and this runs
-	// once for every datagram the tunnel sends.
-	fp := xdiBuffers.Get().(*[]byte)
-	defer xdiBuffers.Put(fp)
-	framed := appendXdiPayload(*fp, c.tag, outboundDir(c.server), p)
-
-	body := &icmp.Echo{
-		ID:   c.echoIDFor(dst),
-		Seq:  int(c.seq.Add(1) & 0xffff),
-		Data: framed,
-	}
-	msg := &icmp.Message{Type: typ, Code: 0, Body: body}
-	wire, err := msg.Marshal(nil)
-	if err != nil {
-		return 0, err
-	}
+	// The echo is built straight into one pooled buffer: header, tag,
+	// direction, payload, then the checksum over all of it. It used to go
+	// through icmp.Message.Marshal, which allocated the message, its body and
+	// a fresh output slice and copied the payload a second time — for every
+	// datagram the tunnel sends.
+	wp := xdiBuffers.Get().(*[]byte)
+	defer xdiBuffers.Put(wp)
+	wire := appendEcho((*wp)[:0], byte(typ), uint16(c.echoIDFor(dst)), uint16(c.seq.Add(1)))
+	wire = appendXdiPayload(wire, c.tag, outboundDir(c.server), p)
+	setICMPChecksum(wire)
 	if _, err := c.pc.WriteTo(wire, ipAddr); err != nil {
 		return 0, err
 	}
@@ -189,37 +182,29 @@ func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		// The cheap refusals first, from the raw bytes, before a parse that
-		// allocates: the type, and on the client the echo identifier. The
-		// socket filter normally keeps these away already; this is what is
+		// The type, and on the client the echo identifier below. The socket
+		// filter normally keeps everything else away already; this is what is
 		// left where it could not be attached.
 		if n < 8 || buf[0] != byte(wantType) {
 			continue
 		}
-		if !c.server && (int(buf[4])<<8|int(buf[5])) != int(c.id) {
-			continue
-		}
-		msg, err := icmp.ParseMessage(c.proto, buf[:n])
-		if err != nil || msg.Type != wantType {
-			continue
-		}
-		echo, ok := msg.Body.(*icmp.Echo)
-		if !ok {
-			continue
-		}
+		// An echo is eight bytes of header and then its data; nothing in it
+		// needs icmp.ParseMessage, which allocated the message and copied the
+		// data out for every datagram received.
+		echoID := int(buf[4])<<8 | int(buf[5])
 		// The client answers to one identifier, its own, which is how it
 		// ignores the packets of the tunnel's other sessions — every raw ICMP
 		// socket on the host sees all of them. The server answers to every
 		// identifier, because each is one of its clients' sessions; what says a
 		// packet is this tunnel's at all is the tag and the direction below.
-		if !c.server && echo.ID != int(c.id) {
+		if !c.server && echoID != int(c.id) {
 			continue
 		}
-		payload, ok := decodeXdiPayload(c.tag, wantDir, echo.Data)
+		payload, ok := decodeXdiPayload(c.tag, wantDir, buf[8:n])
 		if !ok {
 			continue
 		}
-		return copy(p, payload), c.peerAddr(peer, echo.ID), nil
+		return copy(p, payload), c.peerAddr(peer, echoID), nil
 	}
 }
 

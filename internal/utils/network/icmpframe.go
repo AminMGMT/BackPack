@@ -166,8 +166,11 @@ func encodeXdiPayload(tag [xdiTagLen]byte, dir byte, payload []byte) []byte {
 // The send path is not one of them — it runs once per packet, and a few
 // thousand packets a second of short-lived slices is the garbage collector
 // doing work the network asked nobody to do.
+//
+// It appends to dst as it is — the send path puts the echo header there first
+// — so a caller reusing a buffer passes it as buf[:0].
 func appendXdiPayload(dst []byte, tag [xdiTagLen]byte, dir byte, payload []byte) []byte {
-	dst = append(dst[:0], tag[:]...)
+	dst = append(dst, tag[:]...)
 	dst = append(dst, dir)
 	return append(dst, payload...)
 }
@@ -202,4 +205,31 @@ func decodeXdiPayload(tag [xdiTagLen]byte, wantDir byte, data []byte) (payload [
 		return nil, false
 	}
 	return data[xdiHeaderLen:], true
+}
+
+// appendEcho appends an ICMP echo header — type, code 0, a zero checksum, the
+// identifier and the sequence number — for setICMPChecksum to complete once
+// the data is in place.
+func appendEcho(dst []byte, typ byte, id, seq uint16) []byte {
+	return append(dst, typ, 0, 0, 0, byte(id>>8), byte(id), byte(seq>>8), byte(seq))
+}
+
+// setICMPChecksum fills in the checksum of an ICMP message whose checksum
+// field is zero: the ones' complement of the ones' complement sum of its
+// 16-bit words (RFC 792). An IPv4 raw socket sends what it is given, so this
+// is ours to compute.
+func setICMPChecksum(msg []byte) {
+	var sum uint32
+	n := len(msg) &^ 1
+	for i := 0; i < n; i += 2 {
+		sum += uint32(msg[i])<<8 | uint32(msg[i+1])
+	}
+	if len(msg)&1 == 1 {
+		sum += uint32(msg[len(msg)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = sum&0xffff + sum>>16
+	}
+	cs := ^uint16(sum)
+	msg[2], msg[3] = byte(cs>>8), byte(cs)
 }

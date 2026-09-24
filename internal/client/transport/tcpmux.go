@@ -308,7 +308,7 @@ func (c *TcpMuxTransport) poolMaintainer() {
 
 func (c *TcpMuxTransport) channelHandler() {
 	// See beatClock: learns how often the server really heartbeats.
-	beats := &beatClock{}
+	beats := newBeatClock(time.Now())
 
 	msgChan := make(chan byte, 1000)
 

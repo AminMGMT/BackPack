@@ -372,7 +372,10 @@ type ServerConfig struct {
 	// the control channel. It is how a client notices a server that has gone
 	// away without closing the socket. The control channel beats at least every
 	// 10 seconds whatever is set here, so a client can give up on a crashed
-	// server in about 30 rather than waiting out its keepalive.
+	// server in about 30 rather than waiting out its keepalive. The first beats on
+	// a new control channel come faster, starting a tenth of a second in, so this
+	// holds from the first moments of a connection too: 15 seconds until the
+	// steady rhythm is learnt.
 	Heartbeat int `toml:"heartbeat"`
 	// MuxCon is how many concurrent streams one multiplexed session may carry
 	// before the next connection waits.
