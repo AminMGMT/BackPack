@@ -1,323 +1,1028 @@
-<p align="center"><img src="img/image.png" alt="Backpack" width="100%"></p>
-
-# Backpack 🎒
-
 <p align="center">
-  <a href="go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/AminMGMT/BackPack?logo=go&label=Go"></a>
-  <a href="https://github.com/AminMGMT/BackPack/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/AminMGMT/BackPack?logo=github&label=release&color=orange"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/AminMGMT/BackPack?color=orange"></a>
-  <a href="https://github.com/AminMGMT/BackPack/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/AminMGMT/BackPack?style=flat&logo=github&color=orange"></a>
-  <a href="https://github.com/AminMGMT/BackPack/releases"><img alt="Total downloads across all releases" src="https://img.shields.io/github/downloads/AminMGMT/BackPack/total?logo=github&label=total%20downloads&color=orange"></a>
+  <img src="img/image.png" alt="BackPack" width="100%">
 </p>
 
-**Backpack** is a tunnel engine for Iran ⇄ abroad (kharej) servers. One Go
-binary, no dependencies: an interactive CLI **and** a web dashboard, so you can
-run everything with or without a terminal.
+<h1 align="center">BackPack</h1>
 
 <p align="center">
-  <b><a href="tutorial/README.md">📘 Setup tutorials</a></b> ·
-  <b><a href="docs/README.md">📚 Documentation</a></b> ·
-  <b><a href="README_FA.md">🇮🇷 راهنمای فارسی</a></b> ·
-  <b><a href="https://t.me/BlackProtocols">Telegram Channel</a></b> ·
-  <b><a href="https://t.me/BlackProtocolsGroup">Telegram Group</a></b>
+  <b>High-performance tunneling between Iran and abroad — built in Go.</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/AminMGMT/BackPack/releases/latest">
+    <img src="https://img.shields.io/github/v/release/AminMGMT/BackPack?logo=github&label=release&color=orange" alt="Latest release">
+  </a>
+  <a href="go.mod">
+    <img src="https://img.shields.io/github/go-mod/go-version/AminMGMT/BackPack?logo=go&label=Go" alt="Go version">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/AminMGMT/BackPack?color=orange" alt="License">
+  </a>
+  <a href="https://github.com/AminMGMT/BackPack/stargazers">
+    <img src="https://img.shields.io/github/stars/AminMGMT/BackPack?style=flat&logo=github&color=orange" alt="GitHub stars">
+  </a>
+  <a href="https://github.com/AminMGMT/BackPack/releases">
+    <img src="https://img.shields.io/github/downloads/AminMGMT/BackPack/total?logo=github&label=downloads&color=orange" alt="Downloads">
+  </a>
+</p>
+
+<p align="center">
+  <a href="tutorial/README.md">Tutorials</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="README_FA.md">فارسی</a> ·
+  <a href="https://t.me/BlackProtocols">Telegram</a> ·
+  <a href="https://t.me/BlackProtocolsGroup">Community</a>
 </p>
 
 ---
 
-## How it works
+## What is BackPack?
 
+**BackPack** is a high-performance tunnel engine for connecting **Iran ⇄ abroad (kharej)** servers.
+
+It is written in Go and distributed as a self-contained binary with:
+
+* Interactive CLI
+* Web monitoring panel
+* Multiple tunnel transports
+* Full IP direct tunneling
+* Automatic failover and transport fallback
+* Health checks and route diagnostics
+* Backup, rollback and verified updates
+* Telegram monitoring
+* Multi-server management
+
+BackPack is designed for routes where connectivity is not something you can simply assume will stay healthy.
+
+Instead of depending on one protocol or one path, it gives you several transport and recovery strategies and lets you measure the route before choosing one.
+
+---
+
+# How it works
+
+## Reverse tunnel
+
+The normal BackPack tunnel is a **reverse tunnel**:
+
+```text
+                    INTERNET
+                       │
+                       │ user traffic
+                       ▼
+                ┌──────────────┐
+                │ IRAN SERVER  │
+                │              │
+                │ Exposed port │
+                └──────┬───────┘
+                       │
+                       │ BackPack tunnel
+                       │
+                       ▼
+                ┌──────────────┐
+                │ KHAREJ SERVER│
+                │              │
+                │ Real service │
+                └──────────────┘
 ```
-  end users ──▶  IRAN server  ══ tunnel ══▶  KHAREJ server  ──▶  real service
-                 exposes the ports            holds the service
+
+The direction is important:
+
+```text
+KHAREJ ───────────────▶ IRAN
+          tunnel
 ```
 
-A user connects to a **forwarded port** on the Iran server. The engine carries
-that connection through **one transport** to the kharej side, which hands it to
-the **real service**.
+The **kharej server dials the Iran server**, while user traffic enters through the Iran server and is forwarded to the service on kharej.
 
-**The ports never move.** Iran always exposes them and kharej always holds the
-service. What you choose is *who reaches out first*, and *what travels between
-them*:
+| Server     | Setup          | Role                                                |
+| ---------- | -------------- | --------------------------------------------------- |
+| **Iran**   | `Setup Iran`   | Listens for the tunnel and exposes forwarded ports  |
+| **Kharej** | `Setup Kharej` | Dials Iran and forwards traffic to the real service |
 
-| | Who dials | Carries | Choose it when |
-|---|---|---|---|
-| **[Reverse](#reverse-tunnel--12-transports)** | kharej → Iran | forwarded ports | the usual case: Iran can accept an inbound connection |
-| **[Direct](#direct-tunnel--6-carriers)** | Iran → kharej | a private network, with forwarded ports over it | an inbound connection to Iran does not get through |
+This means:
 
-Both are built the same way — run `sudo backpack`, pick **Setup Iran** or
-**Setup Kharej** for the machine you are on, and the wizard asks the rest.
+* The kharej server does **not** need an inbound tunnel port.
+* The Iran server needs the tunnel port open.
+* The Iran side should be configured first.
+* The kharej side needs the Iran address, tunnel port and token generated by the Iran side.
 
----
+> The **tunnel port** and the **forwarded ports** are different things.
+> The tunnel port carries BackPack itself; forwarded ports are the ports your users connect to.
 
-## Reverse tunnel — 12 transports
-
-Kharej dials Iran, so **Iran needs one open port** and kharej needs none. Pick
-the transport that matches what your route allows; **Manage → Link Test**
-measures the route and recommends one if you are not sure.
-
-| Transport | What it is, in one line | Needs | Guide |
-|---|---|---|---|
-| **TCP** | A plain TCP connection per flow. The starting point when nothing is filtered. | — | [→](tutorial/tcp.md) |
-| **TCP Mux** | The same, with many flows sharing a few connections. For a service that opens lots of short ones. | — | [→](tutorial/tcp-mux.md) |
-| **TCP + Stealth** | TCP with a Noise record layer over it — **looks like random bytes, no fingerprint at all**. | — | [→](tutorial/tcp-stealth.md) |
-| **TCP + PCK** | TCP segments built without a socket: no kernel handshake, no connection state. For a path where TCP connects and then stalls, resets or is throttled. | Linux, root | [→](tutorial/tcp-pck.md) |
-| **UDP** | Raw UDP datagrams. Lowest overhead, no recovery of its own. | UDP open | [→](tutorial/udp.md) |
-| **UDP + KCP + FEC** | UDP with error correction that repairs loss instead of waiting for a retransmit. **The gaming and lossy-route answer.** | UDP open | [→](tutorial/udp-kcp-fec.md) |
-| **UDP + QUIC** | A real QUIC session: TLS 1.3, its own congestion control, nothing to tune. | UDP open | [→](tutorial/udp-quic.md) |
-| **WS** | A WebSocket over plain HTTP. For a route where only HTTP gets through. | — | [→](tutorial/websocket.md) |
-| **WS Mux** | The same, multiplexed. | — | [→](tutorial/websocket.md) |
-| **WSS** | A WebSocket inside TLS, dialled with a real **Chrome** handshake and answering every probe with a **decoy website**. Looks like an ordinary HTTPS site, and passes through a CDN. | certificate | [→](tutorial/websocket-tls.md) |
-| **WSS Mux** | The same, multiplexed. | certificate | [→](tutorial/websocket-tls.md) |
-| **xDi (ICMP)** | The tunnel inside ping packets, for a path that filters TCP and UDP but not ICMP. | Linux, root, ICMP open | [→](tutorial/xdi-icmp.md) |
-
-**[→ All twelve compared, setting by setting](docs/transports.md)** ·
-**[→ Which one should I pick?](docs/choosing-a-transport.md)** ·
-**[→ What to do when a server is filtered or dirty](docs/filtered-or-dirty-ip.md)**
-
-> On **TCP, TCP Mux, UDP, WS and WS Mux** the token travels as-is. On an
-> untrusted path use one of the encrypted ones — Stealth, PCK, KCP, QUIC, WSS.
+For the complete explanation, see [Before you start](tutorial/before-you-start.md).
 
 ---
 
-## Direct tunnel — 6 carriers
+# Direct tunnel
 
-Iran dials **out**, so **no inbound port on Iran is needed at all**. This one is
-a full IP tunnel: an interface on each host carrying whole IP packets, so the
-two servers share a private network and anything can be routed over it — and
-forwarded ports work over the top exactly as they do on a reverse tunnel.
+BackPack also supports a **direct tunnel**, where Iran initiates the connection to kharej.
 
-Every direct tunnel is **GRE + Noise**: encrypted, mutually authenticated, with
-a replay window, and it **measures its own MTU** once it is up. What you choose
-is only the carrier that wrapping travels inside.
+```text
+IRAN ─────────────────────────▶ KHAREJ
+             tunnel
+```
 
-| Carrier | What it looks like on the wire | Needs | Guide |
-|---|---|---|---|
-| **udp** | Ordinary UDP datagrams. The default, and the fastest. | UDP open | [→](docs/l3-direct-tunnel.md) |
-| **quic** | A real QUIC session carrying the tunnel in RFC 9221 datagrams. | UDP open | [→](docs/l3-direct-tunnel.md) |
-| **pck** | TCP segments built below the kernel — no handshake, no connection state. The answer when UDP is throttled. | Linux, root | [→](docs/tcp-pck.md) |
-| **sni** | `pck`, with a TLS hello naming an allowed domain at the front of the flow. | Linux, root | [→](docs/l3-direct-tunnel.md) |
-| **xdi** | ICMP echo, for a path that filters UDP and TCP but not ping. | Linux, root, ICMP open | [→](docs/l3-direct-tunnel.md) |
-| **spoof** | Raw IP with a **forged source address**, for a path that blocks or counts by source. | Linux, root, a path that passes forged sources | [→](docs/ip-spoofing.md) |
+The current `Setup → Direct` wizard builds BackPack's **full layer-3 tunnel**.
 
-All six are built the same way — `sudo backpack` → **Setup Iran** or
-**Setup Kharej** → **Direct** → pick the carrier — and one page covers every
-one of them:
+Instead of forwarding individual connections, it creates a private point-to-point network interface between the two machines and carries complete IP packets through it.
 
-**[→ The direct tunnel in full](docs/l3-direct-tunnel.md)** ·
-**[→ IP spoofing, setting by setting](docs/ip-spoofing.md)** · [its setup page](tutorial/ip-spoofing.md) ·
-**[→ TCP + PCK explained](docs/tcp-pck.md)** ·
-**[→ The older layer-4 direct tunnel](docs/direct-tunnel.md)** · [its setup page](tutorial/direct-tunnel.md)
+```text
+┌──────────────┐                  ┌──────────────┐
+│ IRAN         │                  │ KHAREJ       │
+│              │                  │              │
+│ 10.10.0.1    │══════════════════│ 10.10.0.2    │
+│              │    BackPack      │              │
+└──────────────┘                  └──────────────┘
+```
+
+The direct tunnel uses:
+
+* GRE encapsulation
+* Noise encryption
+* Automatic MTU handling
+* Multiple carrier options
+* Full IP routing
+
+See [Direct layer-3 tunnel](docs/l3-direct-tunnel.md).
+
+> The older stream-based `[direct]` engine still exists for existing configurations, but the current wizard builds the layer-3 direct tunnel.
 
 ---
 
-## Install
+# Before you start
 
-One command as root on the VPS. It downloads the release for your architecture,
-**verifies it against the published checksum**, installs it and opens the menu:
+There are four things responsible for most first-time setup problems:
+
+### 1. The roles
+
+```text
+Users
+  │
+  ▼
+Iran ────────────────▶ Kharej
+       BackPack          │
+                        ▼
+                    Real service
+```
+
+### 2. The token
+
+The Iran side generates a random **64-character token**.
+
+Both ends must use the same token.
+
+A mismatch can look like a dead tunnel, especially on encrypted transports where the server may intentionally not respond.
+
+### 3. Port mappings
+
+For example:
+
+```text
+443
+```
+
+means:
+
+```text
+Iran :443
+   ↓
+Kharej 127.0.0.1:443
+```
+
+while:
+
+```text
+443=127.0.0.1:2096
+```
+
+means:
+
+```text
+Iran :443
+   ↓
+Kharej 127.0.0.1:2096
+```
+
+You can also use explicit backend addresses, multiple backends and port ranges.
+
+See [Port mappings](docs/port-mappings.md).
+
+### 4. UDP
+
+Forwarded ports carry **TCP by default**.
+
+UDP forwarding is a separate per-tunnel setting.
+
+Enable it when the service behind the tunnel requires UDP, such as:
+
+* Xray / 3x-ui
+* Shadowsocks UDP
+* WireGuard
+* DNS
+* Games
+
+See [Forwarded UDP](docs/forwarded-udp.md).
+
+---
+
+# Quick Start
+
+## 1. Install
+
+On both servers:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/AminMGMT/BackPack/main/install.sh)
 ```
 
-Reopen the menu any time with `sudo backpack`.
-
-> **No internet on the server?** There is a full offline path — copy one archive
-> across and go. Building from source works as a fallback.
-> **→ [Installing Backpack](docs/install.md)**
-
----
-
-## Quick start
-
-**Get the roles right first** — it is the one thing people trip on.
-
-| Server | Menu option | What it does |
-|---|---|---|
-| **Iran** | **1. Setup Iran** | Exposes the ports. Users connect to the **Iran IP**. |
-| **Kharej** | **2. Setup Kharej** | Holds the real service. Dials the Iran server. |
-
-**Set up Iran first** — kharej needs the Iran address and the token Iran
-generates.
+Then:
 
 ```bash
-# on the IRAN server
-sudo backpack   →  1. Setup Iran
-#   transport → tunnel port → name → COPY THE TOKEN → exposed ports
-#   → UDP? → preset (Turbo) → done
-
-# on the KHAREJ server
-sudo backpack   →  2. Setup Kharej
-#   same transport → Iran IP + same tunnel port → name → SAME TOKEN
-#   → same preset → done
+sudo backpack
 ```
 
-Then **Manage → Status** to see both ends, and **Manage → Health Check** if
-anything looks wrong — it prints a fix under each problem.
+The installer downloads the release for the server architecture, verifies its published checksum, installs it and opens the CLI.
 
-**[→ Before you start](tutorial/before-you-start.md)** covers the roles, the
-token, the port mapping and the firewall in full. Every transport then has its
-own step-by-step page.
+Supported release architectures currently include:
 
-> Running **X-UI, 3x-ui or Marzban** on the kharej server? That is the most
-> common deployment and it has four things of its own —
-> **[→ Behind a panel](tutorial/behind-a-panel.md)**.
+```text
+x86_64  → amd64
+aarch64 → arm64
+```
 
----
+If the server cannot reach GitHub, BackPack also supports a completely offline installation.
 
-## Why Backpack?
-
-- **UDP on any forwarded port** — Xray/3x-ui, Shadowsocks, WireGuard, DNS,
-  games. On **every** transport, with one switch.
-  [How](tutorial/udp-forwarding.md)
-- **No fingerprint** — Stealth is random bytes; WSS dials with a real Chrome TLS
-  handshake and answers every probe with a decoy website.
-  [Camouflage](docs/camouflage.md)
-- **It moves when the route does** — backup addresses with health scoring, a
-  [transport fallback chain](docs/transport-fallback.md) that changes carrier on
-  its own, and multi-exit steering to the healthiest server.
-- **Nothing left broken** — an update or an edit that breaks a tunnel
-  **reverts itself**, and a watchdog notices a stall — not just a stopped
-  service — and works up a ladder before restarting anything.
-- **It tells you what is wrong** — Health Check prints a fix under each problem;
-  Link Test measures the route and recommends a transport and its timers.
-  [Troubleshooting](docs/troubleshooting.md)
-- **Telegram from Iran** — status and alerts reach Telegram *through* a tunnel
-  peer, picking the tunnel itself and moving when one dies.
-  [Telegram bot](docs/telegram-bot.md)
-- **A fleet from one screen** — register another server once over SSH and build
-  both ends of a tunnel from one page. [Managed servers](docs/managed-servers.md)
-- **Offline installer** — install or update with no internet at all.
-
-<details>
-<summary><b>The full feature list</b></summary>
-
-**Performance** — four presets (Balance, **Turbo**, Aggressive, Throughput) fill
-in every tuning value at once; **Optimize** applies kernel and network tuning
-(BBR + fq, buffer ceilings, file limits); **Link Test** derives the liveness
-timers from your real round trip. [Presets](docs/performance-presets.md) ·
-[Measurements](docs/performance-notes.md)
-
-**Reliability** — failover to backup addresses with health scoring
-(`rtt + 2·jitter + 20·loss%`) or load balancing across all of them; a transport
-fallback chain; a self-healing watchdog; automatic rollback; systemd services
-that survive reboots. [Failover](docs/failover-load-balancing.md)
-
-**Security** — the token never travels in the clear on an encrypted transport;
-**two-factor sign-in** on the panel with recovery codes; scoped API tokens and
-an audit record written by the authorisation guard itself; PROXY protocol v2 for
-real client IPs; per-tunnel connection and bandwidth caps; SHA-256 verified
-downloads, and anything unverifiable is refused rather than installed.
-[Access control](docs/access-control.md) · [Limits](docs/limits.md)
-
-**Management** — an interactive CLI where every option explains itself; a web
-panel under a secret path; a built-in SOCKS5/HTTP proxy so the tunnel exit can
-be its own backend; JSON logs with a stable schema; auto-refresh every N hours.
-[CLI menu](docs/cli-menu.md) · [Web panel](docs/web-panel.md) ·
-[Log shipping](docs/log-schema.md)
-
-**Monitoring** — live CPU/RAM/disk/traffic and per-tunnel status, ping and logs;
-metrics including KCP retransmits, loss and FEC repairs, kept across restarts;
-Telegram alerts with a recovery message for each.
-[Tunnel metrics](docs/tunnel-metrics.md) · [Alerts](docs/alerts.md) ·
-[Health Check](docs/health-check.md)
-
-**Maintenance** — one-file backup of every tunnel, the panel password, Telegram
-settings, certificates and the schedule; verified updates on a stable or beta
-channel. [Backup & restore](docs/backup-restore.md) · [Updates](docs/updates.md)
-
-</details>
+See [Installation](docs/install.md).
 
 ---
 
-## Documentation
+## 2. Configure the Iran server
 
-**Start here**
+```bash
+sudo backpack
+```
 
-| | |
-|---|---|
-| **[📘 Tutorials](tutorial/README.md)** | Step by step, one page per transport — every question the wizard asks, with the answer to give |
-| **[📚 Docs index](docs/README.md)** | Reference: what each part is, and every setting it has |
-| **[🚑 Troubleshooting](docs/troubleshooting.md)** | Ordered by how often each cause is actually the answer |
-| **[🖥 CLI menu](docs/cli-menu.md)** | Every option in every menu, including Fine Tune |
+Then:
 
-**Tunnels and transports**
+```text
+1. Setup Iran
+→ Reverse
+→ Transport
+→ Tunnel port
+→ Tunnel name
+→ Security token
+→ Exposed ports
+→ UDP forwarding
+→ Performance preset
+```
 
-| | |
-|---|---|
-| [Transports](docs/transports.md) · [Choosing one](docs/choosing-a-transport.md) | All twelve compared, and how to decide |
-| [Direct tunnel](docs/l3-direct-tunnel.md) · [Layer-4 direct](docs/direct-tunnel.md) | The full IP tunnel, and the older port-forwarding one |
-| [Port mappings](docs/port-mappings.md) · [Forwarded UDP](docs/forwarded-udp.md) | Every form `ports = [...]` accepts; what to read when UDP does not pass |
-| [Transport fallback](docs/transport-fallback.md) · [Failover](docs/failover-load-balancing.md) | When the carrier is blocked, and when the address is |
-| [Camouflage](docs/camouflage.md) · [IP spoofing](docs/ip-spoofing.md) · [TCP + PCK](docs/tcp-pck.md) | The decoy site, the forged source, and TCP without the kernel |
-| [MSS clamp](docs/mss-clamp.md) · [Filtered or dirty IP](docs/filtered-or-dirty-ip.md) | The fix for "connects but carries nothing", and for a blocked address |
+Copy the generated token.
 
-**Running it**
-
-| | |
-|---|---|
-| [Install](docs/install.md) · [Updates](docs/updates.md) · [Backup & restore](docs/backup-restore.md) | Getting it on, keeping it current, getting it back |
-| [Web panel](docs/web-panel.md) · [Screen by screen](docs/web-panel-screens.md) · [Access control](docs/access-control.md) | The dashboard, every screen it has, and who may do what |
-| [Managed servers](docs/managed-servers.md) · [Monitor service](docs/monitor-service.md) | A fleet from one screen, and the service that watches it |
-| [Telegram bot](docs/telegram-bot.md) · [Alerts](docs/alerts.md) · [Health Check](docs/health-check.md) | What it tells you, and when |
-| [Tunnel metrics](docs/tunnel-metrics.md) · [Log shipping](docs/log-schema.md) · [Real client IP](docs/real-client-ip.md) | What it measures, and how to get it off the server |
-| [Limits](docs/limits.md) · [Presets](docs/performance-presets.md) · [Server layout](docs/server-layout.md) | Caps, tuning, and where everything lives on disk |
-
-**Under the hood**
-
-| | |
-|---|---|
-| [Architecture](docs/architecture.md) · [Configuration reference](docs/config-reference.md) | What it is made of, and every key it reads |
-| [Design decisions](docs/design-decisions.md) · [Performance notes](docs/performance-notes.md) | What it deliberately does not do, and the measurements that settled it |
-| [Releasing](docs/releasing.md) · [Contributing](CONTRIBUTING.md) | The release checklist, and how this codebase is written |
-
-Every page carries a Persian summary at the bottom.
+For a first deployment, **TCP** is the simplest starting point.
 
 ---
 
-## Screenshots
+## 3. Configure the kharej server
 
-| CLI menu | Web panel |
-|----------|-----------|
-| ![CLI menu](img/cli-Screenshot.png) | ![Web panel](img/web-panel-Screenshot.png) |
+```bash
+sudo backpack
+```
 
-| Tunnel management | Telegram bot |
-|-------------------|--------------|
-| ![Tunnel management](img/cli-manage-Screenshot.png) | ![Telegram bot](img/tg-bot-Screenshot.png) |
+Then:
 
----
-
-## Support & donate
-
-If Backpack helps you, a star or a small tip is appreciated. 🙏
-
-- Telegram channel: **[@BlackProtocols](https://t.me/BlackProtocols)**
-- Telegram group: **[@BlackProtocolsGroup](https://t.me/BlackProtocolsGroup)**
-
-| Coin | Address |
-|------|---------|
-| **Tron (TRX)** | `TTzuUAtsEsrLgNpFVLNTyLVJVRRFNWESYc` |
-| **USDT (BEP20)** | `0xc112AE9bfF7c59dEcFb34E988A397848D3093E82` |
-| **Toncoin (TON)** | `UQD9g40QubAICJ6zPqegtCY7s-joMx2DB8aIqA0xF1aHoCDs` |
+```text
+2. Setup Kharej
+→ Reverse
+→ Same transport
+→ Iran IP
+→ Same tunnel port
+→ Tunnel name
+→ Same token
+→ Same preset
+```
 
 ---
 
-## License
+## 4. Check the tunnel
 
-**Copyright © 2026 Amin Mohammadi (AminMGMT).**
-Released under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see
-[LICENSE](LICENSE) and [NOTICE](NOTICE).
+Use:
 
-You may use, study, modify, redistribute and build a business on this. Two
-conditions come with it, both permitted by Section 7 of that licence and neither
-taking away anything it grants:
+```text
+Manage → Status
+```
 
-- **Keep the attribution.** A modified version must carry this line in its
-  NOTICE, its README, its version output and the notices its panel shows:
+Then:
 
-  > Based on BackPack by Amin Mohammadi (AminMGMT)
-  > https://github.com/AminMGMT/BackPack
+```text
+Manage → Health Check
+```
 
-- **Use your own name.** "BackPack", the name and the logo are not licensed with
-  the code — a fork needs a name of its own. Saying truthfully that your work is
-  based on or compatible with BackPack is always fine. See
-  [TRADEMARK.md](TRADEMARK.md).
+If you are unsure which transport to use:
+
+```text
+Manage → Link Test
+```
+
+Link Test measures the route over TCP, including latency, jitter and packet loss, and recommends a suitable transport.
+
+See [Choosing a transport](docs/choosing-a-transport.md).
+
+---
+
+# Which transport should I use?
+
+If you don't know where to start, use this:
+
+| Situation                                         | Start with          |
+| ------------------------------------------------- | ------------------- |
+| Clean / ordinary route                            | **TCP**             |
+| Many short-lived connections                      | **TCP Mux**         |
+| TCP is filtered or unstable                       | **TCP + Stealth**   |
+| TCP connects but stalls, resets or gets throttled | **TCP + PCK**       |
+| You specifically need raw UDP                     | **UDP**             |
+| Lossy route / real-time traffic / gaming          | **UDP + KCP + FEC** |
+| You want to test QUIC                             | **UDP + QUIC**      |
+| HTTP/WebSocket traffic is useful                  | **WS / WS Mux**     |
+| HTTPS-style traffic is required                   | **WSS / WSS Mux**   |
+| TCP and UDP are filtered but ICMP works           | **xDi (ICMP)**      |
+| Inbound access to Iran is unavailable             | **Direct tunnel**   |
+
+The easiest way to choose is:
+
+```text
+Kharej
+  ↓
+Manage → Link Test
+  ↓
+Measure route
+  ↓
+Get recommendation
+```
+
+See [Choosing a transport](docs/choosing-a-transport.md) and [all transports](docs/transports.md).
+
+---
+
+# Transport overview
+
+BackPack currently provides **twelve reverse-tunnel transports**.
+
+| Transport           | Family       |   Encryption  | PROXY v2 | Requirements        |
+| ------------------- | ------------ | :-----------: | :------: | ------------------- |
+| TCP                 | TCP          |       —       |     ✓    | —                   |
+| TCP Mux             | TCP          |       —       |     ✓    | —                   |
+| **TCP + Stealth**   | TCP          |     Noise     |     ✓    | —                   |
+| **TCP + PCK**       | TCP          | Token-derived |     ✓    | Linux + root        |
+| UDP                 | UDP          |       —       |     —    | UDP open            |
+| **UDP + KCP + FEC** | UDP          | Token-derived |     ✓    | UDP open            |
+| UDP + QUIC          | UDP          |    TLS 1.3    |     ✓    | UDP open            |
+| WS                  | WebSocket    |       —       |     —    | —                   |
+| WS Mux              | WebSocket    |       —       |     ✓    | —                   |
+| WSS                 | WebSocket    |      TLS      |     —    | Certificate         |
+| WSS Mux             | WebSocket    |      TLS      |     ✓    | Certificate         |
+| **xDi (ICMP)**      | Experimental | Token-derived |     ✓    | Linux + root + ICMP |
+
+### TCP
+
+Plain reliable TCP.
+
+Low overhead and the simplest starting point on a clean route.
+
+### TCP Mux
+
+Multiplexes multiple logical connections over a small pool of TCP connections.
+
+Useful for services that create many short-lived connections.
+
+### TCP + Stealth
+
+TCP wrapped in a Noise record layer.
+
+The handshake and encrypted stream do not use a TLS ClientHello or a recognizable application protocol header.
+
+Useful when plain TCP is being identified, filtered or killed.
+
+### TCP + PCK
+
+Builds TCP segments without using the kernel's normal TCP connection state.
+
+Useful when normal TCP connects but later stalls, resets or gets throttled.
+
+Requires Linux and root on both ends.
+
+### UDP
+
+Raw UDP transport with minimal overhead.
+
+There is no reliability or ordering layer.
+
+### UDP + KCP + FEC
+
+Reliable, ordered transport over UDP with forward error correction.
+
+Designed for routes where packet loss makes TCP back off too aggressively, and for latency-sensitive traffic.
+
+### UDP + QUIC
+
+QUIC over UDP with TLS 1.3, multiplexing, congestion control and loss recovery.
+
+It is available for testing, but BackPack's route testing does not generally recommend it over KCP for lossy Iran routes.
+
+### WS / WS Mux
+
+WebSocket transport for routes where HTTP traffic is useful or where the tunnel needs to sit behind a CDN.
+
+WS Mux adds multiplexing and PROXY protocol support.
+
+### WSS / WSS Mux
+
+WebSocket over TLS.
+
+WSS can use a real certificate and Chrome-style TLS behavior and can provide a decoy site for probes.
+
+### xDi
+
+Carries the KCP transport inside ICMP echo packets instead of UDP.
+
+Designed for the specific case where TCP and UDP are filtered but ICMP remains available.
+
+It is a last-resort transport rather than the normal starting point.
+
+See the complete [Transport reference](docs/transports.md).
+
+---
+
+# Forwarded UDP
+
+UDP forwarding is independent of the transport carrying the tunnel.
+
+For example:
+
+```text
+Iran :443/tcp + :443/udp
+        │
+        ▼
+BackPack
+        │
+        ▼
+Kharej :443/tcp + :443/udp
+```
+
+This is useful for:
+
+* Xray / 3x-ui
+* WireGuard
+* DNS
+* Games
+* Other services that require UDP
+
+UDP forwarding is **off by default**.
+
+See [Adding UDP to a tunnel](tutorial/udp-forwarding.md).
+
+---
+
+# Reliability
+
+BackPack is built around routes that can change or fail.
+
+## Backup addresses
+
+A tunnel can have multiple server addresses.
+
+BackPack can:
+
+* automatically fail over between addresses
+* health-score available addresses
+* load-balance across healthy addresses
+
+See [Failover & load balancing](docs/failover-load-balancing.md).
+
+## Transport fallback
+
+A tunnel can also have a fallback chain.
+
+For example:
+
+```toml
+transport = "wss"
+
+fallback_transports = [
+  "quic",
+  "kcp",
+  "tcpmux"
+]
+```
+
+If the active carrier stops getting through, BackPack can move through the configured fallback chain.
+
+See [Transport fallback](docs/transport-fallback.md).
+
+## Self-healing
+
+BackPack includes a watchdog that detects stopped or stalled tunnels and performs recovery.
+
+Services are managed through systemd and survive reboots.
+
+## Automatic rollback
+
+Updates and relevant configuration changes can create restore points and roll back when the tunnel does not return successfully.
+
+---
+
+# Diagnostics
+
+BackPack includes diagnostics directly in the CLI.
+
+### Link Test
+
+Measures:
+
+* latency
+* jitter
+* packet loss
+
+It also recommends a transport for the measured route.
+
+### Health Check
+
+Checks the server, panel and tunnels and provides a suggested fix when it detects a problem.
+
+### Tunnel Metrics
+
+Provides tunnel-level statistics including traffic, connections and transport-specific metrics such as KCP retransmissions, loss and FEC repairs.
+
+### Speed Test
+
+Measures the actual throughput carried by the tunnel end-to-end, including encapsulation, encryption, carrier and path.
+
+See:
+
+* [Health Check](docs/health-check.md)
+* [Tunnel Metrics](docs/tunnel-metrics.md)
+* [Performance presets](docs/performance-presets.md)
+* [Performance notes](docs/performance-notes.md)
+
+---
+
+# Performance
+
+BackPack provides four performance presets:
+
+* **Balance**
+* **Turbo**
+* **Aggressive**
+* **Throughput**
+
+The first three tune the queues and transport behavior for a full IP tunnel; Throughput is intended for maximizing sustained transfer.
+
+BackPack also includes kernel/network optimization through the CLI.
+
+See [Performance presets](docs/performance-presets.md).
+
+---
+
+# Security
+
+BackPack provides several security mechanisms depending on the transport and deployment mode.
+
+### Encrypted transports
+
+Encrypted tunnel options include:
+
+* TCP + Stealth
+* TCP + PCK
+* UDP + KCP + FEC
+* UDP + QUIC
+* WSS
+* WSS Mux
+* xDi
+
+On plain transports such as TCP, TCP Mux, UDP, WS and WS Mux, the tunnel credential itself is not encrypted by the transport.
+
+### Web panel security
+
+The Web Panel supports:
+
+* Password authentication
+* Two-factor authentication
+* Recovery codes
+* Scoped API tokens
+* Authorization records
+
+See [Access control](docs/access-control.md).
+
+### Verified releases
+
+Release archives are verified against the published SHA-256 checksum.
+
+An archive that cannot be verified is refused rather than installed.
+
+See [Updates & rollback](docs/updates.md).
+
+---
+
+# Real client IP
+
+Backends normally see the connection as coming from the tunnel itself.
+
+BackPack can instead send the original client address using **PROXY protocol v2**.
+
+This allows applications and panels behind the tunnel to see the real client IP and keep per-user/device limits working.
+
+Supported transports and limitations are documented in:
+
+[Real client IP / PROXY protocol v2](docs/real-client-ip.md)
+
+---
+
+# Web Panel
+
+BackPack includes a monitoring-focused web dashboard.
+
+It provides:
+
+* CPU usage
+* RAM usage
+* Disk usage
+* Traffic
+* Tunnel state
+* Real ping
+* Logs
+* Backup and Telegram settings
+* Panel security settings
+
+The panel listens on **port 7777** by default.
+
+```text
+Iran server
+    │
+    └── Web Panel :7777
+```
+
+The panel is primarily for monitoring and management around the deployment; tunnel creation and detailed tunnel configuration remain available through the CLI.
+
+It also supports:
+
+* HTTPS
+* Custom certificates
+* Two-factor authentication
+* Recovery codes
+* API access control
+
+See:
+
+* [Web Panel](docs/web-panel.md)
+* [Web Panel — screen by screen](docs/web-panel-screens.md)
+
+---
+
+# Managed servers
+
+The Web Panel can register remote servers as managed nodes.
+
+Once registered, BackPack can use the panel to build and manage both ends of a tunnel without requiring you to repeat the entire SSH setup manually.
+
+Managed servers can be:
+
+* registered
+* edited
+* tested
+* used to create tunnels
+* started
+* stopped
+* restarted
+* removed
+
+See [Managed servers](docs/managed-servers.md).
+
+---
+
+# Telegram monitoring
+
+BackPack can send status and alert messages through Telegram.
+
+The built-in Telegram integration can relay its connection through a tunnel peer, allowing Telegram monitoring from environments where direct Telegram access is unavailable.
+
+It supports:
+
+* periodic status reports
+* tunnel status
+* resource alerts
+* recovery messages
+* monitoring events
+
+See:
+
+* [Telegram bot](docs/telegram-bot.md)
+* [Alerts](docs/alerts.md)
+
+---
+
+# Backup & Restore
+
+BackPack can create a portable backup containing the important deployment state, including:
+
+* tunnel configurations
+* panel settings
+* panel password
+* Telegram settings
+* TLS certificates
+* scheduled tasks
+
+Backups are stored as `.tar.gz` archives.
+
+They can also be restored onto another machine.
+
+See [Backup & Restore](docs/backup-restore.md).
+
+---
+
+# Updates
+
+BackPack can update itself from the GitHub release system.
+
+The update process:
+
+1. Detects the available release.
+2. Downloads the architecture-specific archive.
+3. Verifies the published SHA-256.
+4. Installs the release.
+5. Uses restore points and recovery logic if the updated tunnel does not return successfully.
+
+Updates can also use a tunnel peer when the server itself cannot reach GitHub.
+
+If neither direct access nor a tunnel path is available, BackPack supports offline updates.
+
+See [Updates & rollback](docs/updates.md).
+
+---
+
+# Offline installation
+
+BackPack does not require the VPS itself to have GitHub access.
+
+Download the release from a machine with internet access and copy it to the server.
+
+For example:
+
+```bash
+scp install.sh SHA256SUMS backpack_linux_amd64.tar.gz root@SERVER_IP:/root/
+
+ssh root@SERVER_IP \
+  "cd /root && sudo bash install.sh"
+```
+
+Or install manually after verifying the checksum:
+
+```bash
+sha256sum backpack_linux_amd64.tar.gz
+
+tar xzf backpack_linux_amd64.tar.gz
+
+mkdir -p /etc/backpack /root/BackPack/backups
+
+install -m 0755 backpack /usr/local/bin/backpack
+
+echo /root/BackPack > /etc/backpack/install_path
+
+sudo backpack
+```
+
+See [Installation](docs/install.md).
+
+---
+
+# Configuration & operations
+
+For operators who need more than the basic setup, BackPack documents its internal configuration and operational behavior separately.
+
+### CLI
+
+[CLI menu reference](docs/cli-menu.md)
+
+Complete reference for:
+
+* Setup Iran
+* Setup Kharej
+* Direct setup
+* Tunnel management
+* Built-in proxy
+* Backup & Restore
+* Web Panel
+* Optimize
+* Telegram
+* Updates
+* Fine Tune
+* File locations
+
+### Configuration
+
+[Configuration reference](docs/config-reference.md)
+
+Generated from the configuration declarations and documents every configuration key BackPack reads.
+
+### Server layout
+
+```text
+/root/BackPack
+/root/BackPack/backups
+/etc/backpack
+/usr/local/bin/backpack
+```
+
+See [Server layout](docs/server-layout.md).
+
+---
+
+# Documentation
+
+BackPack intentionally separates **setup tutorials** from **technical reference**.
+
+## Tutorials
+
+The `tutorial/` directory explains how to actually build a tunnel, step by step, following the CLI wizard.
+
+### Start here
+
+* [Before you start](tutorial/before-you-start.md)
+
+### Reverse transports
+
+* [TCP](tutorial/tcp.md)
+* [TCP Mux](tutorial/tcp-mux.md)
+* [TCP + Stealth](tutorial/tcp-stealth.md)
+* [TCP + PCK](tutorial/tcp-pck.md)
+* [UDP](tutorial/udp.md)
+* [UDP + KCP + FEC](tutorial/udp-kcp-fec.md)
+* [UDP + QUIC](tutorial/udp-quic.md)
+* [WS / WS Mux](tutorial/websocket.md)
+* [WSS / WSS Mux](tutorial/websocket-tls.md)
+* [xDi / ICMP](tutorial/xdi-icmp.md)
+
+### Special deployments
+
+* [Forwarded UDP](tutorial/udp-forwarding.md)
+* [Behind X-UI / 3x-ui / Marzban](tutorial/behind-a-panel.md)
+* [Direct tunnel](tutorial/direct-tunnel.md)
+* [IP Spoofing](tutorial/ip-spoofing.md)
+
+---
+
+## Documentation reference
+
+### Architecture & internals
+
+* [Architecture](docs/architecture.md)
+* [Design decisions](docs/design-decisions.md)
+* [Performance notes](docs/performance-notes.md)
+* [Configuration reference](docs/config-reference.md)
+
+### Transports & networking
+
+* [Transports](docs/transports.md)
+* [Choosing a transport](docs/choosing-a-transport.md)
+* [Transport fallback](docs/transport-fallback.md)
+* [Direct layer-3 tunnel](docs/l3-direct-tunnel.md)
+* [Direct stream tunnel](docs/direct-tunnel.md)
+* [TCP + PCK](docs/tcp-pck.md)
+* [IP Spoofing](docs/ip-spoofing.md)
+* [Port mappings](docs/port-mappings.md)
+* [Forwarded UDP](docs/forwarded-udp.md)
+* [TCP MSS clamp](docs/mss-clamp.md)
+* [Filtered / dirty IP](docs/filtered-or-dirty-ip.md)
+* [WSS camouflage](docs/camouflage.md)
+
+### Operations
+
+* [Installation](docs/install.md)
+* [CLI menu](docs/cli-menu.md)
+* [Server layout](docs/server-layout.md)
+* [Web Panel](docs/web-panel.md)
+* [Web Panel screens](docs/web-panel-screens.md)
+* [Managed servers](docs/managed-servers.md)
+* [Health Check](docs/health-check.md)
+* [Tunnel Metrics](docs/tunnel-metrics.md)
+* [Monitor service](docs/monitor-service.md)
+* [Troubleshooting](docs/troubleshooting.md)
+
+### Reliability & maintenance
+
+* [Failover & load balancing](docs/failover-load-balancing.md)
+* [Transport fallback](docs/transport-fallback.md)
+* [Backup & Restore](docs/backup-restore.md)
+* [Updates & rollback](docs/updates.md)
+* [Performance presets](docs/performance-presets.md)
+* [Per-tunnel limits](docs/limits.md)
+* [Real client IP](docs/real-client-ip.md)
+
+### Management & security
+
+* [Access control](docs/access-control.md)
+* [Telegram bot](docs/telegram-bot.md)
+* [Alerts](docs/alerts.md)
+* [Log schema](docs/log-schema.md)
+
+### Development
+
+* [Contributing](CONTRIBUTING.md)
+* [Releasing](docs/releasing.md)
+
+> Every documentation page includes a Persian summary where applicable.
+
+---
+
+# Screenshots
+
+### CLI
+
+<p align="center">
+  <img src="img/cli-Screenshot.png" alt="BackPack CLI">
+</p>
+
+### Web Panel
+
+<p align="center">
+  <img src="img/web-panel-Screenshot.png" alt="BackPack Web Panel">
+</p>
+
+### Tunnel Management
+
+<p align="center">
+  <img src="img/cli-manage-Screenshot.png" alt="BackPack tunnel management">
+</p>
+
+### Telegram Bot
+
+<p align="center">
+  <img src="img/tg-bot-Screenshot.png" alt="BackPack Telegram bot">
+</p>
+
+---
+
+# Support & Community
+
+If BackPack is useful to you:
+
+* Star the repository
+* Report bugs through GitHub Issues
+* Contribute improvements
+* Join the Telegram community
+
+### Telegram
+
+* Channel: [@BlackProtocols](https://t.me/BlackProtocols)
+* Community: [@BlackProtocolsGroup](https://t.me/BlackProtocolsGroup)
+
+---
+
+# Contributing
+
+Pull requests, bug reports and technical improvements are welcome.
+
+Before contributing:
+
+1. Read [CONTRIBUTING.md](CONTRIBUTING.md).
+2. Check the relevant documentation.
+3. Keep changes focused.
+4. Add or update tests where appropriate.
+5. Update documentation when behavior or configuration changes.
+
+For the release process, see [Releasing](docs/releasing.md).
+
+---
+
+# License
+
+Copyright © 2026 Amin Mohammadi (AminMGMT).
+
+BackPack is released under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+
+See:
+
+* [LICENSE](LICENSE)
+* [NOTICE](NOTICE)
+* [TRADEMARK.md](TRADEMARK.md)
+
+You may use, study, modify, redistribute and build a business on BackPack under the terms of the license.
+
+Additional attribution and trademark conditions apply.
+
+### Attribution
+
+Modified versions must retain the required BackPack attribution in the locations specified by the license and project notices:
+
+```text
+Based on BackPack by Amin Mohammadi (AminMGMT)
+https://github.com/AminMGMT/BackPack
+```
+
+### Name & logo
+
+**BackPack**, its name and logo are not licensed as part of the source code.
+
+Forks should use their own name and branding.
+
+It is permitted to truthfully state that a project is based on or compatible with BackPack.
+
+See [TRADEMARK.md](TRADEMARK.md) for the complete terms.
