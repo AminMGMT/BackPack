@@ -808,19 +808,6 @@ func (t *Tunnel) account(ready [][]byte, sent, payload int) {
 
 // pumpFromCarrier reads datagrams off the carrier and routes them by kind.
 func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
-	plain := make([]byte, 0, maxMTU+256)
-	// The one-packet slice tun.Write takes, allocated once.
-	//
-	// It was written as [][]byte{inner} at the call site, which is a fresh
-	// slice header on the heap for every packet that arrives — once per packet,
-	// forever, on the receive path of a tunnel carrying a whole network.
-	//
-	// It stays one packet on the way to the interface. Gathering several
-	// datagrams from the *carrier* is a different question and is answered by
-	// recvmmsg, which waits no longer than a single read would; see
-	// batchread.go. Only the plain UDP carrier can do it, so both paths exist.
-	wbuf := make([][]byte, 1)
-
 	// The receive batch: one buffer per datagram, reused for the life of the
 	// pump. A carrier with no batch capability uses only the first.
 	batch := 1
@@ -832,6 +819,20 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 	for i := range bufs {
 		bufs[i] = make([]byte, maxMTU+256)
 	}
+	// One plaintext buffer per slot as well, and the packets of a whole batch
+	// go to the interface in one write.
+	//
+	// They used to go one at a time, which was one syscall per packet and —
+	// the larger cost — one trip up the kernel's receive path per packet. The
+	// device takes several at once, and with segmentation offload on, the
+	// library coalesces consecutive segments of one TCP flow into a single
+	// large one before the kernel sees them (GRO). A batch is whatever the
+	// carrier read had in hand, so nothing waits for it to fill.
+	plains := make([][]byte, batch)
+	for i := range plains {
+		plains[i] = make([]byte, 0, maxMTU+256)
+	}
+	pending := make([][]byte, 0, batch)
 	sizes := make([]int, batch)
 	froms := make([]net.Addr, batch)
 	ticker := time.NewTicker(previousGrace / 2)
@@ -869,9 +870,34 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 			}
 			return
 		}
+		pending = pending[:0]
 		for i := 0; i < got; i++ {
-			plain = t.route(plain, wbuf, bufs[i][:sizes[i]], froms[i])
+			var inner []byte
+			plains[i], inner = t.route(plains[i], bufs[i][:sizes[i]], froms[i])
+			if inner != nil {
+				pending = append(pending, inner)
+			}
 		}
+		t.writeToDevice(pending)
+	}
+}
+
+// writeToDevice hands a batch of authenticated inner packets to the interface.
+// They were counted as received when they were opened; any the device refuses
+// are counted again as drops.
+func (t *Tunnel) writeToDevice(pending [][]byte) {
+	if len(pending) == 0 {
+		return
+	}
+	n, err := t.tun.Write(pending)
+	if err != nil {
+		t.stats.dropped.Add(uint64(len(pending)))
+		t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
+		return
+	}
+	if n > 0 && n < len(pending) {
+		// More than the staging buffer holds in one call: the rest go now.
+		t.writeToDevice(pending[n:])
 	}
 }
 
@@ -903,13 +929,17 @@ func (t *Tunnel) receive(reader batchReader, bufs [][]byte, sizes []int, froms [
 
 // route parses one datagram off the carrier and hands it to whichever half of
 // the protocol owns it.
-func (t *Tunnel) route(plain []byte, wbuf [][]byte, datagram []byte, from net.Addr) []byte {
+//
+// A data packet is not written here: its inner packet comes back, to go to the
+// interface with the rest of the batch. It points into plain, so plain must
+// not be reused until it has been written.
+func (t *Tunnel) route(plain []byte, datagram []byte, from net.Addr) ([]byte, []byte) {
 	h, body, err := parseHeader(datagram)
 	if err != nil {
 		// A stray datagram on an open port: a scanner, a stale peer, or
 		// noise. Not worth a log line above debug.
 		t.stats.dropped.Add(1)
-		return plain
+		return plain, nil
 	}
 
 	switch h.kind {
@@ -918,11 +948,11 @@ func (t *Tunnel) route(plain []byte, wbuf [][]byte, datagram []byte, from net.Ad
 	case typeResp:
 		t.handleResp(h, body)
 	case typeData:
-		return t.handleData(plain, wbuf, h, body, from)
+		return t.handleData(plain, h, body, from)
 	case typeProbe, typeProbeAck:
-		return t.handleProbeMessage(plain, h, body, from)
+		return t.handleProbeMessage(plain, h, body, from), nil
 	}
-	return plain
+	return plain, nil
 }
 
 // handleInit is the listening side's half of the handshake.
@@ -1056,18 +1086,18 @@ func (t *Tunnel) handleResp(h header, body []byte) {
 //
 // wbuf is the caller's one-element slice for the write, reused for the same
 // reason plain is.
-func (t *Tunnel) handleData(plain []byte, wbuf [][]byte, h header, body []byte, from net.Addr) []byte {
+func (t *Tunnel) handleData(plain []byte, h header, body []byte, from net.Addr) ([]byte, []byte) {
 	sess, isPending := t.sessionFor(h.session)
 	if sess == nil {
 		t.stats.dropped.Add(1)
-		return plain
+		return plain, nil
 	}
 
 	opened, err := sess.open(plain, h, body)
 	if err != nil {
 		t.stats.dropped.Add(1)
 		t.log.Debugf("l3: discarding a datagram from %s: %v", from, err)
-		return plain
+		return plain, nil
 	}
 	// Keep whichever buffer is larger, so the capacity settles rather than
 	// being reallocated per packet.
@@ -1087,7 +1117,7 @@ func (t *Tunnel) handleData(plain []byte, wbuf [][]byte, h header, body []byte, 
 	if err != nil {
 		t.stats.dropped.Add(1)
 		t.log.Debugf("l3: discarding a malformed inner packet from %s: %v", from, err)
-		return plain
+		return plain, nil
 	}
 	// Counted before the packet is handed on, not after, and bytes before
 	// packets. See Stats for why the order is load-bearing.
@@ -1099,13 +1129,7 @@ func (t *Tunnel) handleData(plain []byte, wbuf [][]byte, h header, body []byte, 
 	t.stats.bytesIn.Add(uint64(len(inner)))
 	t.stats.packetsIn.Add(1)
 
-	wbuf[0] = inner
-	if _, err := t.tun.Write(wbuf); err != nil {
-		t.stats.dropped.Add(1)
-		t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
-		return plain
-	}
-	return plain
+	return plain, inner
 }
 
 // notePeer follows a peer that has moved, which is safe only because the

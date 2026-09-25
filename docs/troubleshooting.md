@@ -393,4 +393,4 @@ journalctl -u backpack-webui -n 100
 
 ---
 
-*Last verified against Backpack v1.8.2.*
+*Last verified against Backpack v1.8.3.*

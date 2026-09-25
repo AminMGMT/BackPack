@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/tui"
@@ -54,6 +56,19 @@ const (
 	// not what is being measured.
 	throughputBuf = 256 << 10
 
+	// throughputStreams is how many connections a measurement runs at once.
+	//
+	// It was one, and one TCP connection measures the connection rather than
+	// the tunnel: on a long or lossy path its window, not the tunnel, sets the
+	// rate, and a tunnel carrying a VPN's worth of users is never carrying one
+	// connection. Measured on a layer-3 pck tunnel on loopback: 16 parallel
+	// downloads moved 1,300 Mbit/s where the best single stream moved 1,390 —
+	// the same ceiling on a clean path — while on a path with loss the single
+	// stream falls far below what the tunnel carries. Several streams report
+	// the tunnel's capacity on both. The receiver has always accepted any
+	// number of connections, so an older far end measures the same way.
+	throughputStreams = 8
+
 	// throughputSinkWindow is how long the receiver waits for a sender before
 	// giving up. It has to cover somebody walking to the other server and
 	// finding the same menu entry there, which is the whole reason the two
@@ -65,6 +80,8 @@ const (
 type ThroughputResult struct {
 	Bytes    uint64
 	Duration time.Duration
+	// Streams is how many connections carried it at once.
+	Streams int
 }
 
 // Mbps is the measured rate in megabits per second.
@@ -76,8 +93,12 @@ func (r ThroughputResult) Mbps() float64 {
 }
 
 func (r ThroughputResult) String() string {
-	return fmt.Sprintf("%.1f Mbit/s (%s in %s)",
-		r.Mbps(), humanBytes(r.Bytes), r.Duration.Round(100*time.Millisecond))
+	streams := ""
+	if r.Streams > 1 {
+		streams = fmt.Sprintf(", %d streams", r.Streams)
+	}
+	return fmt.Sprintf("%.1f Mbit/s (%s in %s%s)",
+		r.Mbps(), humanBytes(r.Bytes), r.Duration.Round(100*time.Millisecond), streams)
 }
 
 // ServeThroughput listens on the tunnel address and sinks whatever arrives,
@@ -125,50 +146,108 @@ func MeasureThroughput(ctx context.Context, peer string) (ThroughputResult, erro
 // MeasureThroughputOn is the same measurement against a port of the caller's
 // choosing. See ServeThroughputOn for why a port forwarder needs one.
 func MeasureThroughputOn(ctx context.Context, peer string, port int) (ThroughputResult, error) {
+	return measureStreams(ctx, peer, port, throughputStreams)
+}
+
+// measureStreams runs the measurement over several connections at once and
+// reports what they carried together.
+func measureStreams(ctx context.Context, peer string, port, streams int) (ThroughputResult, error) {
+	addr := net.JoinHostPort(peer, fmt.Sprint(port))
 	dialer := net.Dialer{Timeout: 10 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp",
-		net.JoinHostPort(peer, fmt.Sprint(port)))
-	if err != nil {
-		return ThroughputResult{}, fmt.Errorf(
-			"could not reach the other end on %s:%d — is the receiver running there? %w",
-			peer, port, err)
+
+	// The first connection decides whether there is anything to measure; the
+	// rest are best effort, so a far end that refuses a few still gives a
+	// figure from the ones it took.
+	var conns []net.Conn
+	for i := 0; i < streams; i++ {
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			if i == 0 {
+				return ThroughputResult{}, fmt.Errorf(
+					"could not reach the other end on %s:%d — is the receiver running there? %w",
+					peer, port, err)
+			}
+			break
+		}
+		conns = append(conns, conn)
 	}
-	defer conn.Close()
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
 
 	buf := make([]byte, throughputBuf)
 	if _, err := rand.Read(buf); err != nil {
 		return ThroughputResult{}, err
 	}
 
-	// Warm up without counting. TCP opens its window over the first few round
-	// trips, and on a long path that is most of a second of deliberately slow
-	// sending that has nothing to do with the link's capacity.
-	deadline := time.Now().Add(throughputWarmup)
-	for time.Now().Before(deadline) {
-		if _, err := conn.Write(buf); err != nil {
-			return ThroughputResult{}, err
-		}
+	// Every stream writes flat out from the start. Only bytes written while
+	// counting is on are counted: the warm-up lets TCP open its window over
+	// the first few round trips, which on a long path is most of a second of
+	// deliberately slow sending that has nothing to do with the link.
+	var counting atomic.Bool
+	var sent atomic.Uint64
+	var failed atomic.Int32
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, c := range conns {
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				n, err := c.Write(buf)
+				if counting.Load() {
+					sent.Add(uint64(n))
+				}
+				if err != nil {
+					failed.Add(1)
+					return
+				}
+			}
+		}(c)
 	}
 
-	var sent uint64
-	start := time.Now()
-	deadline = start.Add(throughputRun)
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			break
+	finish := func() {
+		close(stop)
+		// A write blocked on a full window only returns once the connection
+		// closes, so closing is what ends the run on time.
+		for _, c := range conns {
+			c.Close()
 		}
-		n, err := conn.Write(buf)
-		sent += uint64(n)
-		if err != nil {
-			// A short run that moved real bytes is still an answer; only a run
-			// that moved nothing is a failure.
-			if sent == 0 {
-				return ThroughputResult{}, err
-			}
-			break
-		}
+		wg.Wait()
 	}
-	return ThroughputResult{Bytes: sent, Duration: time.Since(start)}, nil
+
+	select {
+	case <-time.After(throughputWarmup):
+	case <-ctx.Done():
+		finish()
+		return ThroughputResult{}, ctx.Err()
+	}
+	start := time.Now()
+	counting.Store(true)
+	select {
+	case <-time.After(throughputRun):
+	case <-ctx.Done():
+	}
+	counting.Store(false)
+	elapsed := time.Since(start)
+	finish()
+
+	// A short run that moved real bytes is still an answer; only a run that
+	// moved nothing is a failure.
+	if sent.Load() == 0 {
+		if int(failed.Load()) == len(conns) {
+			return ThroughputResult{}, fmt.Errorf("every connection to %s failed before the measurement began", addr)
+		}
+		return ThroughputResult{}, fmt.Errorf("nothing crossed to %s during the measurement", addr)
+	}
+	return ThroughputResult{Bytes: sent.Load(), Duration: elapsed, Streams: len(conns)}, nil
 }
 
 // humanBytes renders a byte count the way an operator reads one.

@@ -306,6 +306,50 @@ is never *told* the kernel had to back off. Health Check reads `snd_mss` from
 the live sockets and compares it to the path (`internal/manage/diagnose_path.go`
 — `fromKernel`), which is the right place for that to appear.
 
+## pck: a clock read nobody used, and batches at both ends
+
+Profiled on 2026-09-25, a layer-3 `pck` tunnel between two network namespaces,
+512 MB echoed and 16 parallel 64 MB downloads, three runs of each. `pprof`
+of the loaded kharej side, before anything changed:
+
+| Where | Share of CPU |
+|---|---|
+| syscalls — `sendto` on the packet socket, TUN write, packet-socket read | 54% |
+| `time.Now`, almost all of it from `pckConn.peerFor` | 15% |
+| ChaCha20-Poly1305, both directions | 6% |
+
+The clock read stamped a `touched` time on every segment in both directions,
+and nothing read it. On this machine's clock source a read is not the cheap
+vDSO kind, which is also true of a good share of VPS hypervisors. It went, with
+the per-packet `addr.String()` the peer map was keyed on:
+
+| | one stream | CPU (Iran / kharej) |
+|---|---|---|
+| before | 970 Mbit/s | 18.3 / 16.5 s |
+| without the clock read | 1,315 Mbit/s | 13.6 / 11.9 s |
+
+That left the syscalls, one per segment each way. The receive side now reads
+the packet socket with `recvmmsg` and hands the interface the whole batch in
+one write; the device coalesces a flow's segments before the kernel's receive
+path sees them. The send side uses `sendmmsg`. On one stream each is worth a
+few percent — the section on sendmmsg above says why — but not on the
+workload a tunnel actually carries:
+
+| 16 parallel downloads | throughput | CPU (Iran / kharej) |
+|---|---|---|
+| v1.8.2 | 742 Mbit/s | 18.8 / 21.0 s |
+| all three changes | **1,300 Mbit/s** | **7.5 / 11.9 s** |
+
+The reverse `pck` transport runs under KCP, which only batches on a real UDP
+socket, so it gains the clock fix alone: 545 → 631 Mbit/s on the same test.
+
+One trap on the way, kept as a test (`tunstage_linux_test.go`): with offload
+on, the TUN library coalesces by appending to the first packet's buffer in
+place when its capacity allows. The write path staged packets back to back in
+one buffer, so each had the rest of it as capacity and the append ran over the
+next packet. Nothing had written more than one packet at a time before, so it
+had never shown. Each packet now gets a 64 KB slot of its own.
+
 ## What is measured on every build
 
 The numbers above are one-offs. These are gates, and they fail the build:
@@ -352,4 +396,4 @@ See `internal/tunnel/l3/bench_gate_test.go`.
 
 ---
 
-*Last verified against Backpack v1.8.2.*
+*Last verified against Backpack v1.8.3.*

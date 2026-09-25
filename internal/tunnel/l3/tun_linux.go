@@ -126,17 +126,23 @@ func (t *tunDevice) Write(bufs [][]byte) (int, error) {
 		return 0, nil
 	}
 	t.wbufs = t.wbufs[:0]
-	off := 0
-	for _, p := range bufs {
-		end := off + virtioOffset + len(p)
-		if end > len(t.wbuf) {
+	for i, p := range bufs {
+		start := i * tunSlot
+		if start+tunSlot > len(t.wbuf) || virtioOffset+len(p) > tunSlot {
 			// More than the staging buffer holds: write what is staged and
-			// send the rest on its own rather than truncating.
+			// leave the rest to the caller rather than truncating.
 			break
 		}
-		copy(t.wbuf[off+virtioOffset:], p)
-		t.wbufs = append(t.wbufs, t.wbuf[off:end])
-		off = end
+		copy(t.wbuf[start+virtioOffset:], p)
+		// Capped at the slot, not at the packet. With segmentation offload
+		// the device coalesces consecutive segments of a flow by appending
+		// them to the first one's buffer in place whenever its capacity
+		// allows (GRO). Packets staged back to back each had the whole rest
+		// of the staging buffer as capacity, so the append ran straight over
+		// the packets after it: a batch of more than one arrived corrupted.
+		// A slot of its own gives every packet room to grow into and nothing
+		// of anyone else's to grow over.
+		t.wbufs = append(t.wbufs, t.wbuf[start:start+virtioOffset+len(p):start+tunSlot])
 	}
 	if len(t.wbufs) == 0 {
 		return 0, nil
@@ -162,10 +168,14 @@ func (t *tunDevice) Close() error {
 // because the device decides that at open time and the cost is ten bytes.
 const virtioOffset = 10
 
-// tunStageSize is the staging buffer the write path copies into. Big enough for
-// a full batch of MTU-sized packets with their offsets, so a busy write is one
-// syscall rather than one per packet.
-const tunStageSize = 1 << 20
+// tunSlot is each staged packet's share of the write buffer: the largest
+// packet coalescing can build, with the virtio header in front.
+const tunSlot = virtioOffset + 1<<16
+
+// tunStageSize is the staging buffer the write path copies into: a slot for
+// each packet of a full receive batch, so a busy write is one syscall rather
+// than one per packet.
+const tunStageSize = batchSize * tunSlot
 
 // openTUNTuned creates a TUN interface and brings it up with the given address
 // and MTU.

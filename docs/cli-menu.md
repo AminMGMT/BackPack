@@ -112,7 +112,7 @@ once it is up and corrects the interface itself.
 | **Status** | A live table of every tunnel: role, transport, state, uptime, traffic. |
 | **Health Check** | Tests the server, the panel and every tunnel, and prints a **fix** under each problem it finds. Start here when something is wrong. [More](health-check.md) |
 | **Link Test** | Measures the real route (latency, jitter, loss) and recommends a transport with matching timers. On a lossy link it names the exact FEC ratio and offers to apply it. [More](choosing-a-transport.md) |
-| **Speed Test** | Measures what a tunnel actually carries, end to end — encapsulation, encryption, carrier and path together. Needs both servers: start **Receive** on one, then **Send and measure** on the other, which is the side that reports. Link Test above measures how the path *behaves*; this measures how much it *moves*. Full IP tunnels only. |
+| **Speed Test** | Measures what a tunnel actually carries, end to end — encapsulation, encryption, carrier and path together. Needs both servers: start **Receive** on one, then **Send and measure** on the other, which is the side that reports. It runs eight connections at once, so the figure is the tunnel's capacity rather than one TCP window's. Link Test above measures how the path *behaves*; this measures how much it *moves*. Full IP tunnels only. |
 | **Game Latency Test** | Estimates the in-game ping a player would feel through this exit — pings the nearest edge of Dota 2, CS2, Valorant, PUBG, Fortnite and others from the kharej server, adds the tunnel leg, and rates the result. Endpoint list at `/etc/backpack/game-endpoints.list`. |
 | **Exit Health** | Scores and ranks every server address of a tunnel by `rtt + 2·jitter + 20·loss%`, and offers to pin the healthiest as the primary. The manual companion to health failover. |
 | **IP Spoofing Tester** | Two-node test that finds which forged source IPs actually cross the path. [More](ip-spoofing.md#the-ip-spoofing-tester) |
@@ -407,4 +407,4 @@ FEC؛ و zero-copy (فقط روی tcp ساده).
 
 ---
 
-*Last verified against Backpack v1.8.2.*
+*Last verified against Backpack v1.8.3.*

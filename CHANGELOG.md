@@ -2,6 +2,57 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.8.3 — unreleased
+
+### Added
+
+- **Several kharej servers behind one Iran server, on a direct layer-3
+  tunnel.** The Iran side of a direct tunnel dials, so each kharej is its own
+  tunnel — its own interface and `10.10.N.0/30`, any carrier, `pck` included —
+  and one forwarded port can now be served by all of them. Each new connection
+  goes to the kharej with the fewest connections open, so bandwidth adds up:
+  two kharej on `pck`, each limited to 300 Mbit/s, gave 267 Mbit/s apiece and
+  **535 Mbit/s together** on the shared port. The wizard offers the sharing
+  when the second kharej is given a port the first already forwards, the
+  panel does it on its own, and the Iran summary now says which tunnel
+  addresses the kharej has to enter (the kharej wizard proposed the first
+  block free on its own machine, which for a second kharej was the wrong one,
+  and the tunnel came up carrying nothing).
+
+### Changed
+
+- **pck is much faster.** Measured on a loopback pair in network namespaces,
+  three runs each:
+  - **Layer-3 pck, 16 parallel downloads: 742 → 1,300 Mbit/s**, with 60% less
+    CPU on the Iran side and 43% less on kharej. One stream: 970 → 1,390.
+  - **Reverse pck, 16 parallel downloads: 545 → 631 Mbit/s.**
+
+  Three causes, found by profiling a loaded tunnel:
+  - Every segment sent or received read the clock to stamp a "last seen" time
+    that nothing ever read, and built a string to find its peer. On a VM whose
+    clock is not the cheap kind that was 15% of the CPU on its own. Both are
+    gone, which is also what reverse pck gains.
+  - The layer-3 tunnel wrote received packets to its interface one at a time.
+    It now reads the pck socket in batches (recvmmsg) and writes a whole
+    batch to the interface in one call, which lets the kernel coalesce a
+    flow's segments into large ones before its receive path sees them.
+  - Sending took one syscall per segment; a batch now goes out in one
+    (sendmmsg), with one clock read for the batch.
+- **The speed test measures with 8 connections at once** instead of one. One
+  TCP connection measures its own window, which on a long or lossy path is far
+  below what the tunnel carries — and a tunnel carrying a VPN is never carrying
+  one connection. The result says how many streams it used, and an older
+  receiver on the far end measures the same way.
+
+### Fixed
+
+- **A dead backend on a shared layer-3 port stalled connections.** The
+  forwarder went round-robin and dialled every member in turn with a 10 s
+  timeout, so with one of two kharej gone every second connection hung for ten
+  seconds: ten connections took 50 s. A member whose dial fails is now set
+  aside for 20 s, and while another is left to try a dial gives up after 3 s:
+  the same ten took 3.1 s.
+
 ## v1.8.2 — 2026-09-24
 
 Every finding of a section-by-section audit of the whole project, and the

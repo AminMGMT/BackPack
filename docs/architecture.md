@@ -220,4 +220,4 @@ heap) — و هر پروسهٔ دیگری همان فایل را می‌خوان
 
 ---
 
-*Last verified against Backpack v1.8.2.*
+*Last verified against Backpack v1.8.3.*

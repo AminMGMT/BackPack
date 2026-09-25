@@ -76,6 +76,9 @@ type PcapCarrier struct {
 // pckConn is one tunnel's carrier.
 type pckConn struct {
 	rx      *os.File // AF_PACKET, wrapped so the runtime poller drives reads
+	rxConn  syscall.RawConn
+	rxBatch pckRecvBatch // recvmmsg's arrays, reused; see pckbatch_linux.go
+	txBatch pckSendBatch // sendmmsg's, likewise
 	txRaw   *ipv4.RawConn
 	txRawPC net.PacketConn
 	txFile  *os.File // AF_PACKET send, when the link has an L2 header we can build
@@ -114,7 +117,7 @@ type pckConn struct {
 	// bytes it has sent and acknowledge the bytes it has received; anything
 	// tracking the flow checks exactly that, so it is tracked exactly that way.
 	mu    sync.Mutex
-	peers map[string]*pckPeer
+	peers map[pckPeerKey]*pckPeer
 
 	closed atomic.Bool
 }
@@ -125,11 +128,22 @@ type pckConn struct {
 
 // pckPeer is the numbering of one conversation.
 type pckPeer struct {
-	addr    *net.UDPAddr
-	seq     uint32 // our next sequence number
-	ack     uint32 // the next byte we expect from them
-	lastTS  uint32 // their most recent timestamp, echoed back in ours
-	touched time.Time
+	addr   *net.UDPAddr
+	seq    uint32 // our next sequence number
+	ack    uint32 // the next byte we expect from them
+	lastTS uint32 // their most recent timestamp, echoed back in ours
+}
+
+// pckPeerKey identifies a peer without building a string for every packet.
+//
+// The map used to be keyed on addr.String(), and every entry carried a
+// "touched" time set on every packet in both directions — a time nothing ever
+// read. Together they were a sixth of the CPU of a loaded pck tunnel: a string
+// allocation and a clock read per packet, measured with pprof (time.Now alone
+// was 15%, on a VM whose clock is not the cheap vDSO kind).
+type pckPeerKey struct {
+	ip   [4]byte
+	port uint16
 }
 
 // PckOverhead is what the pck framing costs inside the path MTU, exported so
@@ -187,7 +201,7 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 		flags:   flags,
 		tsBase:  rand.Uint32(),
 		tsStart: time.Now(),
-		peers:   make(map[string]*pckPeer),
+		peers:   make(map[pckPeerKey]*pckPeer),
 	}
 	// The server is addressed on the tunnel port and answers from it. A client
 	// sends from an ephemeral port of its own, as any connecting host would —
@@ -279,6 +293,10 @@ func (c *pckConn) openRx() error {
 	// reads block in the scheduler rather than in a syscall and deadlines and
 	// Close work without a race over the descriptor.
 	c.rx = os.NewFile(uintptr(fd), "pck-rx")
+	// For recvmmsg. Without it ReadBatch declines and reads go one at a time.
+	if raw, err := c.rx.SyscallConn(); err == nil {
+		c.rxConn = raw
+	}
 	return nil
 }
 
@@ -389,7 +407,9 @@ func (c *pckConn) timestamp() uint32 {
 // peerFor returns the numbering for one peer, starting a fresh conversation the
 // first time it is seen.
 func (c *pckConn) peerFor(addr *net.UDPAddr) *pckPeer {
-	key := addr.String()
+	var key pckPeerKey
+	copy(key.ip[:], addr.IP.To4())
+	key.port = uint16(addr.Port)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p := c.peers[key]
@@ -402,7 +422,6 @@ func (c *pckConn) peerFor(addr *net.UDPAddr) *pckPeer {
 		}
 		c.peers[key] = p
 	}
-	p.touched = time.Now()
 	return p
 }
 
@@ -530,32 +549,42 @@ func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			}
 			return 0, nil, err
 		}
-		seg, ok := parsePckFrame(buf[:n], c.egress.LinkLen, c.local)
-		if !ok || len(seg.Payload) == 0 {
+		payload, addr, ok := c.accept(buf[:n])
+		if !ok {
 			continue
 		}
-		// Our own outgoing frames come back on the packet socket. They are
-		// addressed FROM our port, so the destination-port filter usually
-		// excludes them, but a client that happened to pick the server's port
-		// would see its own traffic; drop anything sourced from us.
-		if seg.SrcIP.Equal(c.egress.LocalIP) && seg.SrcPort == c.local {
-			continue
-		}
-		addr := &net.UDPAddr{IP: seg.SrcIP, Port: int(seg.SrcPort)}
-		peer := c.peerFor(addr)
-
-		c.mu.Lock()
-		// Acknowledge what we have actually received, as a real receiver does.
-		if next := seg.Seq + uint32(len(seg.Payload)); peer.ack == 0 || int32(next-peer.ack) > 0 {
-			peer.ack = next
-		}
-		if seg.TSVal != 0 {
-			peer.lastTS = seg.TSVal
-		}
-		c.mu.Unlock()
-
-		return copy(p, seg.Payload), addr, nil
+		return copy(p, payload), addr, nil
 	}
+}
+
+// accept checks one captured frame and, when it is this tunnel's, records what
+// it acknowledges and returns its payload and sender. The payload points into
+// frame.
+func (c *pckConn) accept(frame []byte) ([]byte, *net.UDPAddr, bool) {
+	seg, ok := parsePckFrame(frame, c.egress.LinkLen, c.local)
+	if !ok || len(seg.Payload) == 0 {
+		return nil, nil, false
+	}
+	// Our own outgoing frames come back on the packet socket. They are
+	// addressed FROM our port, so the destination-port filter usually
+	// excludes them, but a client that happened to pick the server's port
+	// would see its own traffic; drop anything sourced from us.
+	if seg.SrcIP.Equal(c.egress.LocalIP) && seg.SrcPort == c.local {
+		return nil, nil, false
+	}
+	addr := &net.UDPAddr{IP: seg.SrcIP, Port: int(seg.SrcPort)}
+	peer := c.peerFor(addr)
+
+	c.mu.Lock()
+	// Acknowledge what we have actually received, as a real receiver does.
+	if next := seg.Seq + uint32(len(seg.Payload)); peer.ack == 0 || int32(next-peer.ack) > 0 {
+		peer.ack = next
+	}
+	if seg.TSVal != 0 {
+		peer.lastTS = seg.TSVal
+	}
+	c.mu.Unlock()
+	return seg.Payload, addr, true
 }
 
 func (c *pckConn) Close() error {

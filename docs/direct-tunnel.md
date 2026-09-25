@@ -256,4 +256,4 @@ nonce و یک پروتکل سیگنال بین دو سر نیاز دارد. **ه
 
 ---
 
-*Last verified against Backpack v1.8.2.*
+*Last verified against Backpack v1.8.3.*

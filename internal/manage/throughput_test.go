@@ -2,7 +2,10 @@ package manage
 
 import (
 	"context"
+	"io"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -130,5 +133,37 @@ func TestTheSinkReleasesItsPortOnTheWayOut(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("run %d did not stop", i+1)
 		}
+	}
+}
+
+// The measurement runs several connections at once and adds up what they
+// carried, so it reports the tunnel's capacity rather than one TCP window's.
+func TestThroughputUsesSeveralStreams(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			go func() { defer c.Close(); _, _ = io.Copy(io.Discard, c) }()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+	r, err := measureStreams(context.Background(), "127.0.0.1", port, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Streams != 4 || accepted.Load() != 4 {
+		t.Fatalf("streams = %d, accepted = %d; want 4 and 4", r.Streams, accepted.Load())
+	}
+	if r.Bytes == 0 || !strings.Contains(r.String(), "4 streams") {
+		t.Fatalf("result = %s", r)
 	}
 }

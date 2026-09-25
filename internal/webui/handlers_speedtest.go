@@ -142,6 +142,7 @@ func (s *server) handleSpeedTestRun(w http.ResponseWriter, r *http.Request) {
 		"mbps":    res.Mbps(),
 		"bytes":   res.Bytes,
 		"seconds": res.Duration.Seconds(),
+		"streams": res.Streams,
 		"summary": res.String(),
 	}
 	if started != "" {
