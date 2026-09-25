@@ -71,15 +71,17 @@ func openPck(cfg Config) (DatagramCarrier, net.Addr, error) {
 	return base, peer, nil
 }
 
-// pckBatchReader is the pck socket's recvmmsg and sendmmsg.
+// pckBatchReader is a raw carrier's recvmmsg and sendmmsg — pck's packet
+// socket, and xdi's ICMP socket.
 type pckBatchReader interface {
 	ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, error)
 	WriteBatch(bufs [][]byte, to net.Addr) (int, error)
 }
 
-// pckCarrier is the pck carrier with its batch read exposed, so the receive
-// pump takes a burst of segments per syscall and hands the interface the whole
-// run in one write. Measured on a loopback pair: see docs/performance-notes.md.
+// pckCarrier is a raw carrier — pck or xdi — with its batch read and write
+// exposed, so the receive pump takes a burst per syscall and hands the
+// interface the whole run in one write, and the send pump puts a sealed batch
+// out in one call. Measured on a loopback pair: see docs/performance-notes.md.
 type pckCarrier struct {
 	*obfuscatedCarrier
 	br pckBatchReader
@@ -100,11 +102,15 @@ func openXdi(cfg Config) (DatagramCarrier, net.Addr, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return &obfuscatedCarrier{
+	base := &obfuscatedCarrier{
 		PacketConn: conn,
 		overhead:   network.XdiOverhead(),
 		name:       "xdi",
-	}, peer, nil
+	}
+	if br, ok := conn.(pckBatchReader); ok {
+		return &pckCarrier{obfuscatedCarrier: base, br: br}, peer, nil
+	}
+	return base, peer, nil
 }
 
 // openSpoof builds the forged-source carrier.

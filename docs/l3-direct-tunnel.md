@@ -262,6 +262,15 @@ The obfuscated ones are **Linux only**. `pck`, `xdi` and `spoof` are the same
 carriers those transports already use — the layer-3 tunnel simply hands them its
 own packets instead of KCP's, so a fix to a carrier reaches both at once.
 
+`xdi` installs one iptables rule on the listening side while it runs. The
+client's data travels in Echo Requests, and without the rule the kernel answers
+each one with an Echo Reply carrying the same payload — every uploaded byte
+would leave the server a second time. The rule drops only those automatic
+replies (it matches the tunnel's tag together with the client's direction
+byte), so an ordinary ping to the server, or across the tunnel, still answers.
+It is removed when the tunnel stops, and it needs the `u32` iptables module;
+without it the tunnel works and simply spends the extra uplink.
+
 `quic` is not imitating anything: it opens a real QUIC connection, with a real
 TLS 1.3 handshake and `h3` as the ALPN, and puts the tunnel in QUIC's unreliable
 DATAGRAM frames. To a path it is the HTTP/3 that dominates a modern network. It

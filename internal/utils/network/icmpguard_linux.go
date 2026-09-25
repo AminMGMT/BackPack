@@ -46,8 +46,38 @@ type icmpEchoGuard struct {
 // installICMPEchoGuard adds the reply-drop rule for a tunnel port and returns a
 // handle that remembers whether it took, so remove() only undoes what it added.
 func installICMPEchoGuard(port uint16) *icmpEchoGuard {
-	g := &icmpEchoGuard{port: port, rule: icmpEchoRule(port)}
+	return installEchoRule(&icmpEchoGuard{port: port, rule: icmpEchoRule(port)})
+}
+
+// installXdiEchoGuard is the same guard for the xdi carrier's server side.
+//
+// xdi carries its client-to-server traffic in Echo Requests too, and the
+// server's kernel answered every one of them with an Echo Reply echoing the
+// whole payload. The client throws those away — they carry its own direction
+// byte, not the server's (see icmpframe.go) — but by then they have been sent:
+// every byte a user uploads through an xdi tunnel went back out of the server
+// again, doubling its uplink and the kernel work on both ends. The rule drops
+// them before they leave.
+//
+// It cannot match on the identifier the way the spoof guard does, because xdi
+// clients draw theirs at random. What every packet of the tunnel carries is its
+// tag, and what only the kernel's copies carry on the way out is the client's
+// direction byte — the server's own replies are stamped with its own. So the
+// rule matches the two together.
+func installXdiEchoGuard(tag [xdiTagLen]byte) *icmpEchoGuard {
+	return installEchoRule(&icmpEchoGuard{rule: xdiEchoRule(tag)})
+}
+
+// installEchoRule inserts a guard's rule and records whether it took.
+func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
 	if _, err := exec.LookPath("iptables"); err != nil {
+		return g
+	}
+	// A rule already there is one a crashed run left behind — the process
+	// died before it could remove it. It is adopted rather than doubled, so
+	// crash after crash does not stack copies, and this run's exit removes it.
+	if exec.Command("iptables", append([]string{"-C"}, g.rule...)...).Run() == nil {
+		g.active = true
 		return g
 	}
 	args := append([]string{"-I"}, g.rule...)
@@ -93,6 +123,25 @@ func icmpEchoRule(port uint16) []string {
 		"--icmp-type", "echo-reply",
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>16=%d", port),
 		"-m", "comment", "--comment", fmt.Sprintf("backpack-spoof-icmp-%s", p),
+		"-j", "DROP",
+	}
+}
+
+// xdiEchoRule drops outbound Echo Replies that carry this tunnel's tag and the
+// client's direction byte — the kernel's automatic answers to the client's
+// requests, and nothing the server itself sends.
+//
+//	0>>22&0x3C   the IP header length, where the ICMP header begins
+//	@8           the first word of the echo data: the tunnel's four-byte tag
+//	@12>>24      the byte after it: the direction marker
+func xdiEchoRule(tag [xdiTagLen]byte) []string {
+	word := uint32(tag[0])<<24 | uint32(tag[1])<<16 | uint32(tag[2])<<8 | uint32(tag[3])
+	return []string{
+		"OUTPUT",
+		"-p", "icmp",
+		"--icmp-type", "echo-reply",
+		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@8=0x%08x&&0>>22&0x3C@12>>24=0x%02x", word, xdiDirClient),
+		"-m", "comment", "--comment", fmt.Sprintf("backpack-xdi-echo-%08x", word),
 		"-j", "DROP",
 	}
 }

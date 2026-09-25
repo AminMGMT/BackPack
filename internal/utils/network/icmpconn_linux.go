@@ -63,6 +63,11 @@ type icmpConn struct {
 	tag       [xdiTagLen]byte
 	seq       atomic.Uint32
 	closeOnce sync.Once
+	// echoGuard keeps the server's kernel from answering the client's
+	// requests; nil on the client. See installXdiEchoGuard.
+	echoGuard *icmpEchoGuard
+	// batch is recvmmsg's and sendmmsg's state; see icmpbatch_linux.go.
+	batch icmpBatch
 }
 
 // icmpMTUOverhead is what the ICMP framing costs on top of the IP header, so
@@ -91,7 +96,9 @@ func newICMPServerConn(token string) (net.PacketConn, error) {
 		return nil, err
 	}
 	attachICMPFilter(pc, uint8(icmpEchoRequest), -1)
-	return newICMPServerConnWith(pc, token), nil
+	c := newICMPServerConnWith(pc, token).(*icmpConn)
+	c.echoGuard = installXdiEchoGuard(c.tag)
+	return c, nil
 }
 
 // newICMPServerConnWith is the constructor the tests use, with the socket
@@ -216,6 +223,7 @@ func (c *icmpConn) Close() error {
 		if !c.server {
 			releaseXdiSessionID(c.id)
 		}
+		c.echoGuard.remove()
 	})
 	return c.pc.Close()
 }

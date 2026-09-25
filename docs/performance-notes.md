@@ -343,6 +343,14 @@ workload a tunnel actually carries:
 The reverse `pck` transport runs under KCP, which only batches on a real UDP
 socket, so it gains the clock fix alone: 545 → 631 Mbit/s on the same test.
 
+The same batching on xdi's raw ICMP socket (x/net's `ipv4.PacketConn`, which
+is recvmmsg and sendmmsg underneath) doubled it: 16 downloads 543 → 1,150
+Mbit/s, 16 uploads 627 → 1,325, one stream 582 → 1,112. Sending had been 45%
+of a loaded xdi tunnel's CPU. The upload figure also carries a second change:
+the server's kernel answered every data-carrying Echo Request with a full-size
+Echo Reply, which one iptables rule now drops (108,000 of them in a 64 MB
+upload test).
+
 One trap on the way, kept as a test (`tunstage_linux_test.go`): with offload
 on, the TUN library coalesces by appending to the first packet's buffer in
 place when its capacity allows. The write path staged packets back to back in

@@ -38,6 +38,18 @@ All notable changes to Backpack are documented here.
     flow's segments into large ones before its receive path sees them.
   - Sending took one syscall per segment; a batch now goes out in one
     (sendmmsg), with one clock read for the batch.
+- **xdi (ICMP) is twice as fast** on a direct layer-3 tunnel: 16 parallel
+  downloads 543 → 1,150 Mbit/s, 16 uploads 627 → 1,325, one stream
+  582 → 1,112. It reads and sends its echoes in batches, as pck now does.
+- **The xdi server no longer sends every upload back.** The client's data
+  travels in Echo Requests, and the server's kernel answered each one with an
+  Echo Reply carrying the whole payload. The client discarded them, but they
+  had already crossed the path: every byte uploaded through xdi left the
+  server twice. One iptables rule now drops exactly those — the tunnel's tag
+  with the client's direction byte — and nothing else: pings to the server
+  and across the tunnel still answer. With the batching, the server's CPU for
+  a 16-stream upload fell from 17 to 7.7 CPU-seconds. Where the `u32` module is
+  missing the rule does not install and the tunnel works as before.
 - **The speed test measures with 8 connections at once** instead of one. One
   TCP connection measures its own window, which on a long or lossy path is far
   below what the tunnel carries — and a tunnel carrying a VPN is never carrying
