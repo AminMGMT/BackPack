@@ -178,6 +178,46 @@ Two things worth knowing:
   throughput you can skip it and use kernel `iptables` DNAT over `bp0` instead
   — the interface is a normal one and nothing here prevents it.
 
+## Several kharej servers behind one Iran server
+
+The Iran side of a direct tunnel dials, so one Iran server can reach as many
+kharej servers as you like: **one tunnel per kharej**, each with its own
+interface (`bp0`, `bp1`, …), its own `10.10.N.0/30` and its own carrier socket.
+Every carrier works this way, `pck` included — each tunnel builds and reads its
+own packets on its own port.
+
+A forwarded port can then be served by all of them. The kernel routes each
+peer address over its own interface, so one mapping on one of the tunnels can
+list every kharej:
+
+```toml
+ports = ["443=10.10.0.2:443|10.10.1.2:443|10.10.2.2:443"]
+```
+
+- **Each new connection goes to the kharej with the fewest connections open**,
+  so bandwidth adds up: measured with `pck`, two kharej each limited to
+  300 Mbit/s gave 267 Mbit/s apiece alone and **535 Mbit/s together** on the
+  shared port.
+- **A kharej that stops answering is set aside for 20 seconds** and tried again
+  after that, or sooner if nothing else answers. While another is left to try,
+  a connection gives up on a dead one after 3 seconds rather than 10: with one
+  of two kharej killed, ten new connections took 3.1 s in all (50 s before).
+- One connection always travels over one kharej, so a single download is
+  limited to that kharej's link; it is many connections that add up.
+
+**You do not have to write that mapping by hand.** Set up the first kharej as
+usual. When you set up the second one on the Iran server and give it a port the
+first already forwards, the wizard offers to share it: the port stays on the
+first tunnel and the new kharej is added to it as another backend. The panel
+does the same without asking, since binding the port twice could only fail.
+A port *range* cannot be shared (which backend would port 10005 belong to?);
+the wizard leaves it out and the panel refuses it with the reason.
+
+When you run the wizard on the **kharej** server, give it the tunnel addresses
+the Iran server printed. The kharej wizard proposes the first block free on its
+own machine, and for a second kharej that is not the block the Iran server
+chose — a tunnel set up that way comes up, reports a peer, and carries nothing.
+
 ---
 
 ## Options
@@ -393,7 +433,8 @@ and it is why the kernel's own tunnels are not used here.
   an IP packet already belongs to something that handles its own loss, and
   stacking two retransmit timers makes throughput collapse under loss rather
   than degrade. This is the classic TCP-over-TCP meltdown.
-- **Two peers**, not many.
+- **Two peers per tunnel.** A tunnel is one point-to-point link; several kharej
+  servers are several tunnels (see above).
 
 ## It cannot disturb a reverse tunnel
 
@@ -518,6 +559,15 @@ used exactly as written.
 <div dir="rtl">
 
 ## خلاصهٔ فارسی
+
+**چند سرور خارج پشت یک سرور ایران:** در تونل direct سمت ایران dial می‌کند، پس
+برای هر خارج یک تونل جدا می‌سازی (اینترفیس و ‎`10.10.N.0/30`‎ جدا، با هر حاملی،
+از جمله `pck`). یک پورت می‌تواند بین همه‌شان پخش شود:
+‎`443=10.10.0.2:443|10.10.1.2:443`‎. هر اتصال جدید به خارجی می‌رود که کمترین اتصال
+باز را دارد، پس پهنای باند جمع می‌شود (دو خارجِ ۳۰۰ مگابیتی: ۵۳۵ مگابیت با هم)،
+و خارجی که جواب ندهد ۲۰ ثانیه کنار گذاشته می‌شود. ویزارد وقتی پورت تکراری بدهی
+خودش پیشنهاد اشتراک می‌دهد و پنل بدون پرسیدن این کار را می‌کند. روی سرور خارج،
+آدرس‌های تونل را همان‌طور که سرور ایران چاپ کرد وارد کن.
 
 هر ترنسپورت دیگری در Backpack **پورت** forward می‌کند: یک listener روی ایران، یک
 dial به backend روی خارج، و یک stream وسطشان. این یکی فرق دارد: روی هر هاست یک

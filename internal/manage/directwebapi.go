@@ -202,7 +202,20 @@ func SuggestDirectDefaults(side string) map[string]any {
 // either way, and the usual cause — a port already taken — is fixed by editing
 // the tunnel, not by creating it again.
 func CreateDirectTunnel(n NewDirectTunnel) (service string, active bool, err error) {
-	name, body, err := directBody(n)
+	spec, err := n.spec()
+	if err != nil {
+		return "", false, err
+	}
+	// A second kharej given the first one's ports: those ports are shared
+	// with it rather than bound twice, which could only fail. The panel has no
+	// screen to ask on, and there is no other reading of the request — see
+	// l3share.go.
+	if spec.Side == sideIran && len(spec.Ports) > 0 {
+		if spec.Ports, err = shareL3PortsQuietly(spec); err != nil {
+			return "", false, err
+		}
+	}
+	name, body, err := directBodyFromSpec(spec)
 	if err != nil {
 		return "", false, err
 	}
@@ -277,6 +290,11 @@ func directBody(n NewDirectTunnel) (name, body string, err error) {
 	if err != nil {
 		return "", "", err
 	}
+	return directBodyFromSpec(spec)
+}
+
+// directBodyFromSpec is directBody for a spec already built.
+func directBodyFromSpec(spec l3Spec) (name, body string, err error) {
 	body = spec.render()
 	// Parsed before it is written. A config that does not decode would leave a
 	// tunnel that cannot start and an operator with no idea why, and the cost

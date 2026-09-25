@@ -317,11 +317,17 @@ func saveDirect(t Tunnel, d config.DirectConfig) {
 
 // saveL3 writes a changed [l3] config back and restarts the tunnel.
 func saveL3(t Tunnel, l config.L3Config) {
+	applyEdit(t, l3SpecOf(t, l).render())
+}
+
+// l3SpecOf rebuilds the wizard's view of an existing layer-3 config, so an
+// edit re-renders the whole file rather than patching it.
+func l3SpecOf(t Tunnel, l config.L3Config) l3Spec {
 	side := sideIran
 	if strings.EqualFold(strings.TrimSpace(l.Mode), "listen") {
 		side = sideKharej
 	}
-	spec := l3Spec{
+	return l3Spec{
 		Name: t.Name, Side: side,
 		Carrier: orDefault(l.Carrier, "udp"),
 		Encap:   "gre", GREKey: l.GREKey,
@@ -339,7 +345,16 @@ func saveL3(t Tunnel, l config.L3Config) {
 		Spoof: l.SpoofConfig,
 		Pck:   l.PckConfig,
 	}
-	applyEdit(t, spec.render())
+}
+
+// validateRendered parses a config the wizard just built, before it replaces
+// the old one. See applyEdit.
+func validateRendered(body string) error {
+	var check config.Config
+	if _, err := toml.Decode(body, &check); err != nil {
+		return fmt.Errorf("the edit produced a config that does not parse: %w", err)
+	}
+	return nil
 }
 
 // applyEdit writes the rendered config and restarts the service.

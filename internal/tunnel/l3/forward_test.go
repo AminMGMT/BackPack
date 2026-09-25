@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,24 +348,25 @@ func TestForwarderBalancesAndSkipsDeadBackends(t *testing.T) {
 	}
 }
 
-func TestDialBackendSkipsRefusals(t *testing.T) {
+func TestTheBackendPoolSkipsRefusals(t *testing.T) {
 	live := echoTCP(t, "L:")
 	dead := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 
-	var cursor atomic.Uint64
+	pool := newBackendPool([]string{dead, live})
 	for i := 0; i < 4; i++ {
-		conn, err := dialBackend(context.Background(), "tcp", []string{dead, live}, &cursor)
+		conn, m, err := pool.dial(context.Background(), "tcp")
 		if err != nil {
-			t.Fatalf("dialBackend refused despite a live backend: %v", err)
+			t.Fatalf("the pool refused despite a live backend: %v", err)
 		}
 		conn.Close()
+		m.done()
 	}
 
-	if _, err := dialBackend(context.Background(), "tcp", []string{dead}, &cursor); err == nil {
-		t.Fatal("dialBackend succeeded with only a dead backend")
+	if _, _, err := newBackendPool([]string{dead}).dial(context.Background(), "tcp"); err == nil {
+		t.Fatal("the pool connected with only a dead backend")
 	}
-	if _, err := dialBackend(context.Background(), "tcp", nil, &cursor); err == nil {
-		t.Fatal("dialBackend succeeded with no backends")
+	if _, _, err := newBackendPool(nil).dial(context.Background(), "tcp"); err == nil {
+		t.Fatal("the pool connected with no backends")
 	}
 }
 

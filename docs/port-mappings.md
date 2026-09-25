@@ -126,6 +126,11 @@ mappings.
 A single backend is never health-checked, so ordinary tunnels behave exactly as
 before.
 
+On a **layer-3** tunnel the choice is by load instead: each new connection goes
+to the backend with the fewest connections open, and one whose dial fails is
+passed over for 20 seconds. That is what lets one port be spread over several
+kharej servers — see [several kharej behind one Iran server](l3-direct-tunnel.md#several-kharej-servers-behind-one-iran-server).
+
 ## UDP
 
 Forwarded ports carry TCP only until you ask for UDP as well:

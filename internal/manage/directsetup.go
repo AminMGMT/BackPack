@@ -195,6 +195,9 @@ func setupL3(side directSide) {
 				return
 			}
 			cfg.AcceptUDP = tui.Confirm("Carry UDP as well as TCP on those ports", false)
+			// A second kharej asking for the first one's ports means "serve
+			// them from both", not "fail to bind". See l3share.go.
+			cfg.Ports = offerL3Sharing(cfg)
 		}
 	}
 
@@ -479,6 +482,15 @@ func summariseL3(cfg l3Spec) {
 	// came up, reported a peer and carried nothing.
 	tui.Warn("The other machine must use exactly these three:")
 	tui.Warn("  carrier " + cfg.Carrier + "   wrapping " + encap + "   the same token")
+	// And the addresses, the other way round. The kharej wizard proposes the
+	// first block free on *its* machine, which for a second kharej is not the
+	// block this Iran server gave the tunnel — a tunnel set up that way comes
+	// up, reports a peer, and carries nothing.
+	if cfg.Side == sideIran {
+		tui.Warn("  and these tunnel addresses when its wizard asks:")
+		tui.Warn("    this machine's tunnel address   " + l3PeerWithPrefix(cfg))
+		tui.Warn("    the other machine's address     " + hostOnly(cfg.LocalIP))
+	}
 	fmt.Println()
 	tui.Warn("Once both ends are up, test it with:  ping " + strings.SplitN(cfg.PeerIP, "/", 2)[0])
 	fmt.Println()
@@ -684,4 +696,14 @@ func askL3Paths(cfg *l3Spec, carrier string, side directSide) {
 		}
 		tui.Error("Choose between 2 and 8.")
 	}
+}
+
+// l3PeerWithPrefix is the peer's tunnel address carrying this end's prefix
+// length, which is how the other machine has to enter it as its own.
+func l3PeerWithPrefix(cfg l3Spec) string {
+	peer := hostOnly(cfg.PeerIP)
+	if _, prefix, ok := strings.Cut(cfg.LocalIP, "/"); ok {
+		return peer + "/" + prefix
+	}
+	return peer
 }

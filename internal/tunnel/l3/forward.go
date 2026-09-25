@@ -230,7 +230,7 @@ func (f *Forwarder) serveTCP(ctx context.Context, m portmap.Mapping, bound func(
 
 	f.log.Infof("l3: forwarding tcp %s", m)
 
-	var cursor atomic.Uint64
+	pool := newBackendPool(m.Targets)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -239,11 +239,11 @@ func (f *Forwarder) serveTCP(ctx context.Context, m portmap.Mapping, bound func(
 			}
 			return err
 		}
-		go f.handleTCP(ctx, conn, m, &cursor)
+		go f.handleTCP(ctx, conn, m, pool)
 	}
 }
 
-func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Mapping, cursor *atomic.Uint64) {
+func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Mapping, pool *backendPool) {
 	defer local.Close()
 
 	if !f.limiter.Acquire() {
@@ -257,12 +257,13 @@ func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Map
 	f.stats.active.Add(1)
 	defer f.stats.active.Add(-1)
 
-	backend, err := dialBackend(ctx, "tcp", m.Targets, cursor)
+	backend, member, err := pool.dial(ctx, "tcp")
 	if err != nil {
 		f.stats.refused.Add(1)
 		f.noteBackend(m, err)
 		return
 	}
+	defer member.done()
 	defer backend.Close()
 	f.noteBackend(m, nil)
 	f.stats.accepted.Add(1)
@@ -323,28 +324,6 @@ func (f *Forwarder) noteBackend(m portmap.Mapping, err error) {
 		strings.Join(m.Targets, ", "), st.failures, m.Listen)
 }
 
-// dialBackend tries the mapping's backends in turn, starting one further along
-// than the last connection did, so healthy members share the load and a member
-// that refuses is skipped rather than failing the connection.
-func dialBackend(ctx context.Context, network string, targets []string, cursor *atomic.Uint64) (net.Conn, error) {
-	if len(targets) == 0 {
-		return nil, errors.New("no backends configured")
-	}
-	start := int(cursor.Add(1)-1) % len(targets)
-	dialer := net.Dialer{Timeout: forwardDialTimeout}
-
-	var lastErr error
-	for i := range targets {
-		target := targets[(start+i)%len(targets)]
-		conn, err := dialer.DialContext(ctx, network, target)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
 // pipe copies in both directions until either side is done, then closes both.
 //
 // Each direction closes the connection it was writing to when its source ends,
@@ -377,7 +356,8 @@ func pipe(ctx context.Context, a, b net.Conn) {
 // so a flow is recognised by its source address and ends when it goes quiet.
 type udpFlow struct {
 	backend  *net.UDPConn
-	lastSeen atomic.Int64 // unix nanoseconds
+	member   *backendMember // counted against it while the flow lives
+	lastSeen atomic.Int64   // unix nanoseconds
 }
 
 func (f *udpFlow) touch() { f.lastSeen.Store(time.Now().UnixNano()) }
@@ -407,7 +387,7 @@ func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func(
 
 	go f.reapUDPFlows(ctx, &flows)
 
-	var cursor atomic.Uint64
+	pool := newBackendPool(m.Targets)
 	buf := make([]byte, udpBufferSize)
 	for {
 		n, client, err := conn.ReadFrom(buf)
@@ -418,7 +398,7 @@ func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func(
 			return err
 		}
 
-		flow, err := f.udpFlowFor(ctx, &flows, conn, client, m, &cursor)
+		flow, err := f.udpFlowFor(ctx, &flows, conn, client, pool)
 		if err != nil {
 			f.stats.refused.Add(1)
 			// Left at debug deliberately: this path also reports the
@@ -441,8 +421,7 @@ func (f *Forwarder) udpFlowFor(
 	flows *sync.Map,
 	local net.PacketConn,
 	client net.Addr,
-	m portmap.Mapping,
-	cursor *atomic.Uint64,
+	pool *backendPool,
 ) (*udpFlow, error) {
 	key := client.String()
 	if existing, ok := flows.Load(key); ok {
@@ -456,7 +435,7 @@ func (f *Forwarder) udpFlowFor(
 		return nil, errors.New("the connection limit is reached")
 	}
 
-	conn, err := dialBackend(ctx, "udp", m.Targets, cursor)
+	conn, member, err := pool.dial(ctx, "udp")
 	if err != nil {
 		f.limiter.Release()
 		return nil, err
@@ -464,11 +443,12 @@ func (f *Forwarder) udpFlowFor(
 	udpConn, ok := conn.(*net.UDPConn)
 	if !ok {
 		conn.Close()
+		member.done()
 		f.limiter.Release()
 		return nil, errors.New("udp backend did not yield a UDP socket")
 	}
 
-	flow := &udpFlow{backend: udpConn}
+	flow := &udpFlow{backend: udpConn, member: member}
 	flow.touch()
 
 	// Two goroutines could reach here for the same client at once; only one
@@ -476,6 +456,7 @@ func (f *Forwarder) udpFlowFor(
 	// nobody is tracking.
 	if actual, loaded := flows.LoadOrStore(key, flow); loaded {
 		udpConn.Close()
+		member.done()
 		f.limiter.Release()
 		return actual.(*udpFlow), nil
 	}
@@ -499,6 +480,7 @@ func (f *Forwarder) pumpUDPReplies(
 	defer func() {
 		flows.Delete(key)
 		flow.backend.Close()
+		flow.member.done()
 		f.stats.active.Add(-1)
 		// Paired with the Acquire in udpFlowFor. This pump is where a flow ends
 		// however it ends, so it is the one place the slot is given back.
