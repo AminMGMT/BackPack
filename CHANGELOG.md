@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.8.3 — unreleased
+## v1.8.3 — 2026-09-25
 
 ### Added
 
