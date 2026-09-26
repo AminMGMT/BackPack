@@ -9,9 +9,8 @@ import (
 
 // A refusal that has one remedy offers it, rather than describing it.
 //
-// Both measurements a tunnel can have — the link test and the speed test —
-// need the server holding its other end, and both refuse when the panel does
-// not know which server that is. Saying "link it" in a sentence puts the action
+// The link test needs the server holding the tunnel's other end, and refuses
+// when the panel does not know which server that is. Saying "link it" in a sentence puts the action
 // two screens away and makes knowing it exists the hard part; the operator who
 // reported this had been told, twice, and still could not run either.
 func TestARefusalWithARemedyCarriesIt(t *testing.T) {
@@ -19,7 +18,7 @@ func TestARefusalWithARemedyCarriesIt(t *testing.T) {
 	// words would be the same mistake as keying on "not installed" was: the
 	// sentence is written for a person, and rewording it must not silently take
 	// the button away.
-	for _, f := range []string{"handlers_monitoring.go", "handlers_speedtest.go"} {
+	for _, f := range []string{"handlers_monitoring.go"} {
 		src, err := readRepoFile(f)
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)
@@ -65,10 +64,6 @@ func TestARefusalWithARemedyCarriesIt(t *testing.T) {
 	lt, _ := fs.ReadFile(panelRoot, "js/views/linktest.js")
 	if !strings.Contains(string(lt), "oops(e, name)") {
 		t.Error("the link test's refusal does not say which tunnel it was about")
-	}
-	mon, _ := fs.ReadFile(panelRoot, "js/views/monitor.js")
-	if !strings.Contains(string(mon), "oops(e, name)") {
-		t.Error("the speed test's refusal does not say which tunnel it was about")
 	}
 }
 

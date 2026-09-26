@@ -7,22 +7,14 @@ import (
 	"testing"
 )
 
-// The attribution has to be present, and it has to be the same everywhere.
+// The attribution line lives in the licence documents, not in the product.
 //
 // AGPL-3.0 lets anybody fork this and publish the fork. Section 7(b) of the
 // same licence lets the author require that the attribution be preserved when
-// they do, and NOTICE exercises that — naming four places a modified version
-// must keep it: NOTICE itself, the README, the program's version/About output,
-// and the Appropriate Legal Notices the panel shows its users.
-//
-// A requirement stated in a file and enforced by nothing is a requirement that
-// disappears the first time somebody tidies a template. This is what makes
-// removing it a failing build rather than a quiet edit — for a fork, and just
-// as importantly for us: a refactor that drops the line from the login page
-// would otherwise go unnoticed until somebody looked.
-//
-// It also keeps the wording in step. Four copies of a sentence drift; this
-// asserts they are one sentence.
+// they do, and NOTICE exercises that: a modified version keeps the line in its
+// NOTICE and its README. The program itself — the TUI menu, the web panel, the
+// version output — does not show it.
+const attribution = "Based on BackPack by Amin Mohammadi (AminMGMT)"
 
 // repoRoot is two levels up from internal/app.
 func repoRoot(t *testing.T) string {
@@ -43,46 +35,28 @@ func read(t *testing.T, rel string) string {
 	return string(b)
 }
 
-// The constant is the single definition; everything else has to match it.
-func TestTheAttributionIsOneSentenceEverywhere(t *testing.T) {
-	if Attribution == "" {
-		t.Fatal("app.Attribution is empty; every surface below derives from it")
-	}
-	if !strings.Contains(Attribution, "BackPack") ||
-		!strings.Contains(Attribution, "AminMGMT") {
-		t.Errorf("app.Attribution = %q, which names neither the project nor its author", Attribution)
-	}
-	if AttributionURL != "https://github.com/"+RepoOwner+"/"+RepoName {
-		t.Errorf("AttributionURL = %q, which does not point at this repository", AttributionURL)
-	}
-
-	// Each file that NOTICE names, and the exact text it must carry.
-	for _, f := range []struct {
-		path, why string
-	}{
-		{"NOTICE", "NOTICE states the requirement; it has to meet it itself"},
-		{"README.md", "the README of a distribution is one of the four places NOTICE names"},
-		{"README_FA.md", "the Persian README is a distribution README too"},
-		{"internal/webui/assets/login.html", "the first page a network user reaches — AGPL-3.0 section 13"},
-		{"internal/webui/panel/views/support.html", "the panel's About screen"},
-	} {
-		body := read(t, f.path)
-		if !strings.Contains(body, Attribution) {
-			t.Errorf("%s does not carry the attribution %q.\n  %s\n"+
-				"NOTICE requires it under AGPL-3.0 section 7(b). If the wording is being "+
-				"changed, change app.Attribution and every one of these together.",
-				f.path, Attribution, f.why)
+// NOTICE states the requirement and the READMEs tell a fork where the line goes.
+func TestTheAttributionIsInTheLicenceDocuments(t *testing.T) {
+	for _, f := range []string{"NOTICE", "README.md", "README_FA.md", "TRADEMARK.md"} {
+		if !strings.Contains(read(t, f), attribution) {
+			t.Errorf("%s does not carry the attribution %q", f, attribution)
 		}
 	}
 }
 
-// The version output is the fourth place NOTICE names, and the one a bug report
-// reaches for. main.go prints it; this asserts it still does.
-func TestTheVersionOutputCarriesTheAttribution(t *testing.T) {
-	body := read(t, "main.go")
-	if !strings.Contains(body, "app.Attribution") {
-		t.Error("main.go no longer prints app.Attribution with the version. " +
-			"NOTICE names the version output as a place a modified version must keep it.")
+// And nowhere a user of the program looks.
+func TestTheProductDoesNotShowTheAttribution(t *testing.T) {
+	for _, f := range []string{
+		"main.go",
+		"internal/tui/tui.go",
+		"internal/cli/cli.go",
+		"internal/webui/assets/login.html",
+		"internal/webui/assets/twofactor.html",
+		"internal/webui/panel/views/support.html",
+	} {
+		if strings.Contains(read(t, f), "Based on BackPack") {
+			t.Errorf("%s shows the attribution line; it belongs in NOTICE and the README only", f)
+		}
 	}
 }
 

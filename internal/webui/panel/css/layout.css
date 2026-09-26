@@ -239,3 +239,18 @@ body[data-t="light"] .bgbars i{
 .panel .factline b { font-weight: 620; color: var(--tx2); font-variant-numeric: tabular-nums; }
 .panel .factline .cap { color: var(--faint); }
 .panel .factline .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--faint); }
+
+/* ---- installed as an app -------------------------------------------------
+   body.app is set by js/ui/pwa.js when the panel runs from the home screen:
+   full screen, no browser bar, the status bar drawn over the page. The header
+   and the bottom edge keep clear of the notch and the home indicator, and the
+   page stops rubber-banding and flashing a grey box on every tap, which is
+   what gives a web page away inside an app frame. */
+body.app{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent}
+body.app .panel .stickH{padding-top:env(safe-area-inset-top)}
+body.app .panel .inner2{padding-left:max(clamp(12px,3vw,24px),env(safe-area-inset-left));
+  padding-right:max(clamp(12px,3vw,24px),env(safe-area-inset-right));
+  padding-bottom:calc(26px + env(safe-area-inset-bottom))}
+body.app .toastZ{bottom:calc(26px + env(safe-area-inset-bottom))}
+body.app #boot{padding-top:env(safe-area-inset-top)}
+body.app button,body.app .dock,body.app .HH{-webkit-user-select:none;user-select:none}

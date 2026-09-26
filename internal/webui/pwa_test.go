@@ -2,6 +2,7 @@ package webui
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -113,5 +114,44 @@ func TestPWAAssets(t *testing.T) {
 	}
 	if !maskable {
 		t.Error("manifest has no maskable icon — Android will letterbox it")
+	}
+}
+
+// The panel has to ask for the install, not only have the files for it. When
+// the panel was rebuilt nothing linked the manifest and nothing registered the
+// worker, so the files above were served to nobody and no phone ever offered
+// to install it.
+func TestThePanelAsksToBeInstallable(t *testing.T) {
+	loadPanel()
+	read := func(name string) string {
+		b, err := fs.ReadFile(panelRoot, name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return string(b)
+	}
+	index := read("index.html")
+	for _, want := range []string{
+		`rel="manifest" href="__BASE_PATH__/manifest.json"`,
+		`rel="apple-touch-icon" href="__BASE_PATH__/icons/apple-touch-icon.png"`,
+		`name="apple-mobile-web-app-capable" content="yes"`,
+		`id="install-btn"`,
+	} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index.html is missing %s", want)
+		}
+	}
+	if !strings.Contains(read("js/main.js"), "startPWA()") {
+		t.Error("main.js never starts the install support")
+	}
+	if pwa := read("js/ui/pwa.js"); !strings.Contains(pwa, "serviceWorker.register(") ||
+		!strings.Contains(pwa, "beforeinstallprompt") {
+		t.Error("pwa.js neither registers the worker nor offers the install")
+	}
+	for name, page := range map[string][]byte{"login": loginHTML, "two-factor": twoFactorHTML} {
+		if !strings.Contains(string(page), "serviceWorker.register(") ||
+			!strings.Contains(string(page), `rel="manifest"`) {
+			t.Errorf("the %s page cannot be installed from", name)
+		}
 	}
 }

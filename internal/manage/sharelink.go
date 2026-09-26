@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/backpack/backpack/config"
 )
 
 // Handing a tunnel's settings to the other server.
@@ -85,6 +87,14 @@ type ShareLink struct {
 	FECParity int `json:"fp,omitempty"`
 	Paths     int `json:"pa,omitempty"`
 
+	// Direct only, and all three paired. They were left out, and a tunnel
+	// whose Iran side had set one of them came up on the kharej without it:
+	// a GRE key the other end did not expect drops every packet, and so does
+	// a segment cap or an MTU the two ends disagree on.
+	GREKey  uint32 `json:"gk,omitempty"`
+	L3MSS   int    `json:"lm,omitempty"`
+	AutoMTU *bool  `json:"am,omitempty"`
+
 	// The forged-source carrier's paired half. SrcIPs is what the PRODUCER
 	// forges — the receiver turns it into what it expects from its peer, which
 	// is the pairing people get wrong most and the one no wizard question can
@@ -95,6 +105,14 @@ type ShareLink struct {
 	SrcIPs    string `json:"ss,omitempty"`
 	Stealth   bool   `json:"sl,omitempty"`
 	ICMPReply bool   `json:"si,omitempty"`
+
+	// Reverse only, and paired. SimpleAuth changes how a wss client proves
+	// itself, and a server expecting the other kind refuses it; the smux
+	// version is negotiated and must match. For the kcp transport FECData and
+	// FECParity above carry its error-correction pair, which must match too —
+	// zero on both meaning off.
+	SimpleAuth bool `json:"sa,omitempty"`
+	MuxVer     int  `json:"mv,omitempty"`
 }
 
 // Encode renders a link as the string an operator copies.
@@ -233,10 +251,24 @@ type PeerForm struct {
 
 	Paths int  `json:"paths,omitempty"`
 	FEC   bool `json:"fec,omitempty"`
+	// The exact error-correction pair. FEC above says only whether it is on,
+	// and a far end given "on" took the recommended pair — not the one the
+	// producer had chosen, and two different pairs cannot decode each other.
+	FECData   int `json:"fecData,omitempty"`
+	FECParity int `json:"fecParity,omitempty"`
+
+	GREKey   uint32 `json:"greKey,omitempty"`   // direct
+	MSSClamp int    `json:"mssClamp,omitempty"` // direct
+	AutoMTU  *bool  `json:"autoMtu,omitempty"`  // direct
 
 	Spoof       *SpoofTune `json:"spoof,omitempty"`
 	Stealth     bool       `json:"stealth,omitempty"`
 	SpoofPeerIP string     `json:"spoofPeerIp,omitempty"`
+
+	// Reverse only: how a wss client proves itself, and the smux version.
+	// Both must match the server's.
+	SimpleAuth bool `json:"simpleAuth,omitempty"`
+	MuxVersion int  `json:"muxVersion,omitempty"`
 
 	// Paired names the form fields that came from the link. Changing one of
 	// them breaks the tunnel unless the other end is changed to match, which is
@@ -268,7 +300,12 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		MTU:        l.MTU,
 		Paths:      l.Paths,
 		FEC:        l.FECData > 0 && l.FECParity > 0,
+		FECData:    l.FECData,
+		FECParity:  l.FECParity,
 		Stealth:    l.Stealth,
+		GREKey:     l.GREKey,
+		MSSClamp:   l.L3MSS,
+		AutoMTU:    l.AutoMTU,
 	}
 	// Every one of these is a setting the two ends must agree on. The list is
 	// what the panel marks, so it is built from what was actually filled rather
@@ -278,6 +315,13 @@ func MirrorForPeer(l ShareLink) PeerForm {
 	if l.Kind == "reverse" {
 		f.Transport = l.Tr
 		paired = append(paired, "transport")
+		f.SimpleAuth, f.MuxVersion = l.SimpleAuth, l.MuxVer
+		if l.SimpleAuth {
+			paired = append(paired, "simpleAuth")
+		}
+		if l.MuxVer > 0 {
+			paired = append(paired, "muxVersion")
+		}
 		// The kharej side dials Iran; the ports it forwards are Iran's business
 		// and it is not asked for them.
 		if f.Side == "kharej" {
@@ -322,6 +366,15 @@ func MirrorForPeer(l ShareLink) PeerForm {
 	}
 	if l.MSS > 0 {
 		paired = append(paired, "mss")
+	}
+	if l.GREKey != 0 {
+		paired = append(paired, "greKey")
+	}
+	if l.L3MSS != 0 {
+		paired = append(paired, "mssClamp")
+	}
+	if l.MTU > 0 && l.Kind == "direct" {
+		paired = append(paired, "mtu")
 	}
 
 	// The carrier decides this, not the tuning. Keying it on a profile or a
@@ -415,6 +468,12 @@ func ShareLinkFor(name, host string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return shareLinkOf(name, host, cfg)
+}
+
+// shareLinkOf builds the link from a config in hand, which is how the direct
+// wizard shows it in its summary before the tunnel is written.
+func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 	l := ShareLink{Name: name, Host: strings.TrimSpace(host)}
 
 	switch {
@@ -436,6 +495,7 @@ func ShareLinkFor(name, host string) (string, error) {
 		l.LocalIP, l.PeerIP = cfg.L3.LocalIP, cfg.L3.PeerIP
 		l.FECData, l.FECParity = cfg.L3.FECData, cfg.L3.FECParity
 		l.Paths = cfg.L3.Paths
+		l.GREKey, l.L3MSS, l.AutoMTU = cfg.L3.GREKey, cfg.L3.MSSClamp, cfg.L3.AutoMTU
 		sc := cfg.L3.SpoofConfig
 		l.Profile, l.Uplink, l.Downlink = sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink
 		l.SrcIPs = strings.Join(nonEmpty(append([]string{sc.SpoofSrcIP}, sc.SpoofSrcPool...)), ", ")
@@ -451,6 +511,11 @@ func ShareLinkFor(name, host string) (string, error) {
 		l.Ports = strings.Join(cfg.Server.Ports, ", ")
 		l.AcceptUDP = cfg.Server.ForwardsUDP()
 		l.MSS = cfg.Server.MSS
+		l.SimpleAuth = cfg.Server.SimpleAuth
+		l.MuxVer = cfg.Server.MuxVersion
+		if cfg.Server.Transport == "kcp" {
+			l.FECData, l.FECParity = cfg.Server.DataShards, cfg.Server.ParityShards
+		}
 
 	case cfg.Client.RemoteAddr != "":
 		l.Kind, l.From = "reverse", "kharej"

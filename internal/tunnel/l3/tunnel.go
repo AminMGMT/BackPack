@@ -233,6 +233,14 @@ type Tunnel struct {
 	prevFrom time.Time
 	peer     net.Addr
 
+	// badHandshakes paces the warning about handshakes that do not
+	// authenticate. See handleInit.
+	badHandshakes reportEvery
+
+	// foreignTags paces the warning about xdi echoes carrying another
+	// tunnel's tag. See noteForeignTag.
+	foreignTags reportEvery
+
 	// probe is how patient the MTU search is; see mtuprobe.go.
 	probe probeTiming
 
@@ -306,13 +314,15 @@ func New(cfg Config, log *logrus.Logger) (*Tunnel, error) {
 		log = logrus.StandardLogger()
 	}
 	return &Tunnel{
-		cfg:          cfg,
-		encap:        encap,
-		log:          log,
-		replies:      make(chan handshakeReply, 4),
-		mtuCurrent:   cfg.MTU,
-		probe:        defaultProbeTiming(),
-		probeWaiters: make(map[uint32]chan uint32),
+		cfg:           cfg,
+		encap:         encap,
+		log:           log,
+		replies:       make(chan handshakeReply, 4),
+		mtuCurrent:    cfg.MTU,
+		probe:         defaultProbeTiming(),
+		probeWaiters:  make(map[uint32]chan uint32),
+		badHandshakes: reportEvery{every: time.Minute},
+		foreignTags:   reportEvery{every: time.Minute},
 	}, nil
 }
 
@@ -322,6 +332,9 @@ func (t *Tunnel) Run(ctx context.Context) error {
 	carrier, peer, err := openCarrier(t.cfg)
 	if err != nil {
 		return err
+	}
+	if h, ok := carrier.(foreignTagHooker); ok {
+		h.SetForeignHook(t.noteForeignTag)
 	}
 	if t.wrapCarrier != nil {
 		carrier = t.wrapCarrier(carrier)
@@ -333,6 +346,11 @@ func (t *Tunnel) Run(ctx context.Context) error {
 	if d, ok := carrier.(interface{ Diag() string }); ok {
 		if note := d.Diag(); note != "" {
 			t.log.Infof("%s", note)
+		}
+	}
+	if w, ok := carrier.(interface{ Warning() string }); ok {
+		if warning := w.Warning(); warning != "" {
+			t.log.Warnf("%s", warning)
 		}
 	}
 	t.setPeer(peer)
@@ -996,12 +1014,22 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 		// replay learns nothing, not even that it was recognised.
 		t.mu.Lock()
 		if why := t.fresh.admit(fresh); why != nil {
+			remembered := t.fresh.last
+			if t.fresh.stale(fresh, t.current == nil, time.Now()) {
+				t.mu.Unlock()
+				t.log.Warnf("l3: taking a handshake from %s stamped %s earlier than the last one "+
+					"accepted: no session is up and it has been refused for %s, so the other "+
+					"server's clock went back rather than this being a replay", from,
+					time.Duration(remembered-fresh).Round(time.Second), clockStepGrace)
+			} else {
+				t.mu.Unlock()
+				t.stats.dropped.Add(1)
+				t.log.Warnf("l3: refusing a handshake from %s: %v", from, why)
+				return
+			}
+		} else {
 			t.mu.Unlock()
-			t.stats.dropped.Add(1)
-			t.log.Warnf("l3: refusing a handshake from %s: %v", from, why)
-			return
 		}
-		t.mu.Unlock()
 	}
 	if err != nil {
 		// A mismatched encapsulation is a misconfiguration, not an intruder:
@@ -1012,6 +1040,15 @@ func (t *Tunnel) handleInit(h header, body []byte, from net.Addr) {
 		if reply != nil {
 			t.log.Errorf("l3: refusing the tunnel from %s: %v", from, err)
 			_, _ = t.carrier.WriteTo(reply, from)
+		} else if n, say := t.badHandshakes.allow(time.Now()); say {
+			// The peer still hears nothing. The operator is told, because
+			// this is what a token copied wrong looks like from here, and it
+			// used to be logged at debug: the dialling side reported "did not
+			// answer" for ever and this side said nothing at all. At most once
+			// a minute, so a scanner cannot fill the log.
+			t.log.Warnf("l3: a handshake from %s did not authenticate (%d so far): "+
+				"the token on the two servers is not the same, or it is not a Backpack "+
+				"tunnel — check the token with Edit → Show the token on both", from, n)
 		} else {
 			t.log.Debugf("l3: refusing a handshake from %s: %v", from, err)
 		}
@@ -1148,9 +1185,29 @@ func (t *Tunnel) notePeer(from net.Addr) {
 	previous := t.peer
 	t.peer = from
 	t.mu.Unlock()
-	if previous != nil {
+	if previous != nil && !sameHost(previous, from) {
 		t.log.Infof("l3: peer moved from %s to %s", previous, from)
 	}
+}
+
+// sameHost reports whether two addresses name one machine, ports aside. ICMP
+// has no ports: xdi reads its peer as a bare IP while the dialler resolved
+// addr as host:port, so every xdi tunnel announced "peer moved from
+// 1.2.3.4:6999 to 1.2.3.4" on its first packet — the same server, which read
+// as a fault. The address is still updated; only the report is kept for a
+// real move.
+func sameHost(a, b net.Addr) bool {
+	ip := func(x net.Addr) net.IP {
+		switch v := x.(type) {
+		case *net.UDPAddr:
+			return v.IP
+		case *net.IPAddr:
+			return v.IP
+		}
+		return nil
+	}
+	x, y := ip(a), ip(b)
+	return x != nil && x.Equal(y)
 }
 
 // ---------------------------------------------------------------- handshake
@@ -1163,9 +1220,21 @@ func (t *Tunnel) handshakeLoop(ctx context.Context) {
 
 	for {
 		if t.peerSilent(time.Now()) {
-			t.log.Warnf("l3: nothing has come back from the peer for %s while this end "+
-				"was sending — handshaking again (it may have restarted)", peerSilentAfter)
-			t.silentRekey.Store(true)
+			if t.peerAnswersProbe(ctx) {
+				// Traffic that expects no answer — a one-way UDP stream, the
+				// kernel's own IPv6 and multicast chatter on the interface —
+				// looked exactly like a dead peer, and every 15 seconds of it
+				// tore the session down and built it again. Users saw their
+				// connections drop over and over on a tunnel that was fine.
+				// The peer has now said, under the session's keys, that it is
+				// there, so nothing is rebuilt.
+				t.log.Debugf("l3: %s of unanswered traffic, but the peer answered a probe — it is one-way traffic, not a dead peer", peerSilentAfter)
+			} else {
+				t.log.Warnf("l3: nothing has come back from the peer for %s while this end "+
+					"was sending, and it did not answer a probe — handshaking again "+
+					"(it may have restarted)", peerSilentAfter)
+				t.silentRekey.Store(true)
+			}
 		}
 		if t.silentRekey.Load() || t.needsSession() {
 			if err := t.negotiate(ctx); err != nil {
@@ -1187,6 +1256,25 @@ func (t *Tunnel) handshakeLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// livenessProbeSize is the inner size a liveness probe stands in for: small,
+// because it asks only whether the peer is there, not what fits.
+const livenessProbeSize = 64
+
+// peerAnswersProbe asks the peer, under the current session, whether it is
+// there. A few tries, each waiting the probe timeout, so one lost datagram is
+// not taken for a dead peer.
+func (t *Tunnel) peerAnswersProbe(ctx context.Context) bool {
+	for attempt := 0; attempt < 3; attempt++ {
+		if ctx.Err() != nil {
+			return false
+		}
+		if t.sendProbe(ctx, livenessProbeSize) {
+			return true
+		}
+	}
+	return false
 }
 
 // noteSent records that the dialling side has sent something that has not
@@ -1348,4 +1436,40 @@ func sameAddr(a, b net.Addr) bool {
 	// An address type this does not know: fall back to the string form, which
 	// is correct for anything and slow for nothing that reaches here.
 	return a.String() == b.String()
+}
+
+// foreignTagHooker is a carrier that can say when traffic for a different
+// tunnel of its kind arrives — the xdi carrier, whose tag comes from the token.
+type foreignTagHooker interface {
+	SetForeignHook(func(from net.Addr))
+}
+
+// noteForeignTag is told about an xdi echo that carries the client's direction
+// marker but another token's tag.
+//
+// On a listener that has no session, that is almost always its own peer with a
+// token copied wrong: xdi drops such packets below the handshake, so nothing
+// else on this side would ever say so, and the dialling side only reports that
+// nobody answered. With a session up the same thing is only another tunnel's
+// traffic on the same host, and is not worth a line.
+func (t *Tunnel) noteForeignTag(from net.Addr) {
+	t.mu.RLock()
+	up := t.current != nil
+	t.mu.RUnlock()
+	if up {
+		return
+	}
+	if n, say := t.foreignTags.allow(time.Now()); say {
+		t.log.Warnf("l3: xdi echoes from %s carry a different tunnel's tag (%d so far) and "+
+			"no session is up: if %s is this tunnel's other end, the token on the two "+
+			"servers is not the same", from, n, from)
+	}
+}
+
+// Up reports whether the tunnel has a session: a handshake has completed and
+// its keys are in use.
+func (t *Tunnel) Up() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.current != nil
 }

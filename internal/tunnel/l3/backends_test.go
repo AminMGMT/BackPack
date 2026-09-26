@@ -151,3 +151,22 @@ func TestABurstSpreadsEvenly(t *testing.T) {
 		t.Fatalf("a burst of %d split %d/%d", burst, ma, mb)
 	}
 }
+
+// The rotation counter only grows. Its conversion to an index must not go
+// negative once it passes what an int holds — on a 32-bit build that is two
+// billion connections, which a long-running busy server reaches, and a
+// negative index is a panic that takes the forwarder down.
+func TestTheRotationSurvivesTheCounterWrapping(t *testing.T) {
+	p := newBackendPool([]string{"10.10.0.2:443", "10.10.1.2:443", "10.10.2.2:443"})
+	p.turn.Store(1 << 63)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("choosing a backend panicked once the counter was large: %v", r)
+		}
+	}()
+	for range 5 {
+		if got := len(p.order()); got != 3 {
+			t.Fatalf("order has %d members, want 3", got)
+		}
+	}
+}

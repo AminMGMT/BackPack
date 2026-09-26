@@ -9,20 +9,20 @@ import (
 
 // One abstraction for an operation that outlives the request that started it.
 //
-// There were three hand-rolled versions of this before. The link test kept a
-// mutex, a bool and a pointer in a package-level struct literal; the speed test
-// kept its own; the staged fleet rollout was about to want a third, and that
+// There were hand-rolled versions of this before. The link test kept a
+// mutex, a bool and a pointer in a package-level struct literal; the staged
+// fleet rollout was about to want another, and that
 // one fans out across servers. None of them had progress, cancellation or any
 // memory of what happened last time — so the panel showed a spinner and, when
 // it finished, showed the answer or nothing.
 //
-// Three ad-hoc versions of the same thing is how they drift. This is the one.
+// Ad-hoc versions of the same thing is how they drift. This is the one.
 //
 // # One at a time, per kind
 //
 // A job has a kind, and only one job of a kind runs at once. That is not a
-// limitation being worked around: the link test and the speed test both measure
-// a path, and two of them at once measure each other. Starting a second is
+// limitation being worked around: two link tests at once measure each other
+// rather than the path. Starting a second is
 // refused with the first one's handle, so a caller that raced sees the running
 // job rather than an error.
 

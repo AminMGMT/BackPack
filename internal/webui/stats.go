@@ -184,7 +184,7 @@ type TunnelInfo struct {
 	// which is a real and ordinary thing to have.
 	//
 	// The panel needs it to know there is a second side it can act on at all —
-	// a log to read there, a speed test that can start a receiver — without
+	// a log to read there, its service to start and stop — without
 	// asking the fleet about every tunnel on every poll.
 	Node     string `json:"node,omitempty"`
 	PeerName string `json:"peerName,omitempty"`

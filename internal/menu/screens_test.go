@@ -212,3 +212,37 @@ func TestTheRelayOfferSaysSoWhenThereIsNoWayOut(t *testing.T) {
 		t.Errorf("the offer does not say why the update failed:\n%s", out)
 	}
 }
+
+// After an update the menu used to come back as the build it was started as —
+// the old version on the title, the old screens — until the operator quit and
+// ran it again. It now opens the installed binary in its own place, and says
+// how to do it by hand when it cannot.
+func TestAnUpdateReopensTheMenuOnTheNewBinary(t *testing.T) {
+	calls := 0
+	prev := execSelf
+	defer func() { execSelf = prev }()
+
+	execSelf = func() error { calls++; return nil }
+	drive(t, "", reopen)
+	if calls != 1 {
+		t.Fatalf("reopen asked to start the new binary %d times, want 1", calls)
+	}
+
+	execSelf = func() error { return errors.New("permission denied") }
+	if out := drive(t, "\n", reopen); !strings.Contains(out, "run sudo backpack again") {
+		t.Fatalf("a failed reopen does not say what to do:\n%s", out)
+	}
+
+	src, err := os.ReadFile("update.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, after := range []string{`tui.Success("Done.")`, `tui.Success("Backpack updated successfully.")`,
+		`tui.Success("Rolled back to "`} {
+		body := string(src)
+		i := strings.Index(body, after)
+		if i < 0 || !strings.Contains(body[i:i+200], "reopen()") {
+			t.Errorf("the screen that prints %s does not reopen the menu", after)
+		}
+	}
+}

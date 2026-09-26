@@ -32,9 +32,8 @@ export function toast(text, isError = false, action = null) {
 
 /* A refusal that carries a remedy offers it, rather than describing it.
  *
- * Both measurements a tunnel can have — the link test and the speed test —
- * need the server holding its other end, and both refuse when the panel does
- * not know which server that is. The sentence said to go and link it; the
+ * The link test needs the server holding the tunnel's other end, and refuses
+ * when the panel does not know which server that is. The sentence said to go and link it; the
  * action is on another screen, and knowing it exists at all is the hard part.
  * So the toast carries the button. */
 const FIXES = {

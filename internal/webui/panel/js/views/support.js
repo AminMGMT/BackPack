@@ -38,10 +38,8 @@ function links(root, close) {
   });
 }
 
-/* The version beside the attribution, read from the same place the rest of the
-   panel reads it. The notice itself is in the markup rather than built here:
-   NOTICE requires it to be present, and markup is what survives somebody
-   trimming a script. */
+/* The version on the About line, read from the same place the rest of the
+   panel reads it. */
 function stampVersion(root) {
   const el = root.querySelector('#bpver');
   if (!el) return;

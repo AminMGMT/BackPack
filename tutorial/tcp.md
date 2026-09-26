@@ -24,57 +24,67 @@ sudo backpack
 ```
 Choose **1) Setup Iran**, then **Reverse**.
 
-### Select transport family → `TCP`
-### Select TCP transport → `TCP`
+### Select Transport Family → `TCP`
+### Select TCP Transport → `TCP`
 
-### `Tunnel (control) port:`
+### `Iran IP Or Domain (What Kharej Dials) [detected]`
+This server's address as the kharej will reach it. The detected public IP is
+the default — press Enter, or give a domain. The setup link carries it.
+
+### `Tunnel Port:`
 The port the kharej client will dial. Anything free — `8443`, `2087`, `9000`.
-It is not what your users connect to, and it does not have to look like
-anything. Setup refuses a port already in use.
+It is not what your users connect to. `85.10.11.51:8443` pins it to one address.
+Setup refuses a port already in use.
 
-### `Listen on IPv6 as well [y/N]`
+### `Listen On IPv6 As Well (y/N)`
 `N` unless you know you need it. Yes binds `::`, which on a normal dual-stack
-host accepts IPv4 too — it is "IPv6 as well", not "IPv6 instead".
+host accepts IPv4 too.
 
-### `Tunnel name [server-8443]`
-Cosmetic. It names the systemd service (`backpack-<name>`) and the config file.
-Press Enter.
-
-### `Security token`
-A 64-character token is generated and printed. **Copy it now** — the client
-needs the identical string. Press Enter to accept it.
-
-### `Exposed ports (comma separated…)`
+### `Forwarded Ports (e.g. 443, 8080=127.0.0.1:2096):`
 What your users connect to on the Iran IP. `443` alone means the kharej server
 hands it to its own `127.0.0.1:443`; write `443=127.0.0.1:2096` if the service
-listens elsewhere there. See [the mapping table](before-you-start.md#3-the-ports--and-what-a-mapping-means).
+listens elsewhere there. The summary shows where each one lands
+(**Kharej Serves**). See [the mapping table](before-you-start.md#3-the-ports--and-what-a-mapping-means).
 
-Setup then prints the resolved list — **read it**, this is where a wrong mapping
-becomes obvious:
+### `Tunnel Name [server-8443]`
+Names the systemd service (`backpack-<name>`) and the config file. Enter.
 
-```
-On the KHAREJ server, these must be listening:
-  443  →  127.0.0.1:2096
-```
+### `Security Token [generated]`
+Press Enter. The setup link carries it to kharej — nothing to copy by hand.
 
-### `Carry UDP as well as TCP on the exposed ports [y/N]`
+### `Carry UDP As Well As TCP On Those Ports (y/N)`
 `N` for a web or proxy tunnel. `y` for Xray/3x-ui UDP, WireGuard, DNS or games.
 Details: [Adding UDP to a tunnel](udp-forwarding.md).
 
-### `Enable PROXY protocol (send real client IP) [y/N]`
-`N` unless the service behind the tunnel is already configured to **accept** the
-PROXY protocol (in X-UI/Marzban: the inbound option *Accept Proxy Protocol*).
-Turning it on without that breaks every connection.
+### `Send Real Client IP (PROXY Protocol — The Service Must Accept It) (y/N)`
+`N` unless the service behind the tunnel **accepts** the PROXY protocol (X-UI /
+Marzban: *Accept Proxy Protocol*). On without that, every connection breaks.
 See [real client IP](../docs/real-client-ip.md).
 
-### `Performance preset:`
+### `How Should The Tunnel Be Tuned?`
 **Turbo** — the recommended default. [What each one does](../docs/performance-presets.md).
 
-### `Fine-tune the advanced settings by hand [y/N]`
-`N`. The preset has already filled in every value. If you do say yes, every
-question is documented in the [CLI menu reference](../docs/cli-menu.md#the-advanced-settings-fine-tune).
+### `Fine-Tune The Advanced Settings (y/N)`
+`N`. The preset has already filled in every value.
 
-The tunnel is created, started and verified. Now open the firewall:
+Then one short summary, with the **Setup Link** under it:
+
+```
+Reverse TCP
+
+Listens On      : 0.0.0.0:8443
+Kharej Dials    : 203.0.113.9:8443
+Forwarded Ports : 443=2096
+Kharej Serves   : 443 → 127.0.0.1:2096
+Tuning          : Turbo
+Config File     : /etc/backpack/server-8443.toml
+
+Setup Link (Setup Kharej → Reverse → The Same Transport → Setup Link) :
+backpack://1.H4sI…
+```
+
+**Create This Tunnel** → the tunnel is created and started. Copy the link, and
+open the firewall:
 
 ```bash
 ufw allow 8443/tcp      # the tunnel port
@@ -88,33 +98,21 @@ ufw allow 443/tcp       # each forwarded port
 ```bash
 sudo backpack
 ```
-Choose **2) Setup Kharej**, then **Reverse**.
+Choose **2) Setup Kharej**, then **Reverse**, then **the same transport**
+(`TCP` → `TCP`).
 
-### Select transport family → `TCP` → `TCP`
-Must match the server exactly.
+### `How Do You Want To Set Up This Side?` → **Setup Link**
+Paste the line the Iran server printed, press Enter for the name, and
+**Create This Tunnel**. The address, port, token, preset and every paired
+setting come from the link.
 
-### `Server address (IP or domain of the server):`
-The **Iran** server's IP (or a domain pointing at it). Setup resolves a domain
-and warns if it lands on a CDN, or if an AAAA record would send the tunnel over
-IPv6 — the usual reason a bare IP works where its own domain does not.
-
-### `Server tunnel port:`
-The same tunnel port you chose on the Iran side (`8443` here).
-
-### `Tunnel name [client-8443]`
-Press Enter.
-
-### `Security token [backpack]`
-Paste the **exact** token from the server. This is the field people get wrong.
-
-### `Configure optional connection settings… [y/N]`
-`N` for a normal setup. Behind it: an outbound SOCKS5/HTTP proxy, pinning the
-tunnel to one interface or source address, and **backup server addresses** with
-failover or load balancing. See
-[failover & load balancing](../docs/failover-load-balancing.md).
-
-### `Performance preset:` → the same one as the server.
-### `Fine-tune the advanced settings by hand [y/N]` → `N`.
+**Manual** instead asks `Iran IP Or Domain`, `Tunnel Port`, `Tunnel Name`,
+`Security Token (From The Iran Server)` (no default — paste Iran's), the
+optional connection settings (proxy, interface, **backup addresses** with
+failover or load balancing — see [failover & load balancing](../docs/failover-load-balancing.md)),
+the preset — the same one as Iran — and fine-tune. A domain is resolved and
+checked: a CDN in front of it, or an AAAA record that would send the tunnel
+over IPv6, is warned about.
 
 ---
 
@@ -168,17 +166,18 @@ transport**, on both ends.
 باشد، همین بهترین کارایی را می‌دهد.
 
 **روی سرور ایران:** `sudo backpack` → گزینهٔ ۱ (Setup Iran) → Reverse → خانوادهٔ TCP →
-TCP → پورت تونل (مثلاً 8443) → IPv6 را `N` → نام را Enter → **توکن را کپی کن** →
-پورت‌های forward (مثلاً `443` یا `443=127.0.0.1:2096`) → سؤال UDP (برای وب `N`،
-برای Xray/وایرگارد `y`) → PROXY protocol را `N` بگذار مگر پنل تنظیمش کرده باشی →
-پریست **Turbo** → تنظیمات پیشرفته `N`.
+TCP → آی‌پی یا دامنهٔ ایران (پیش‌فرض را Enter بزن) → پورت تونل (مثلاً 8443) → IPv6
+را `N` → پورت‌های forward (مثلاً `443` یا `443=127.0.0.1:2096`) → نام را Enter →
+توکن را Enter → سؤال UDP (برای وب `N`، برای Xray/وایرگارد `y`) → PROXY protocol
+را `N` بگذار مگر پنل تنظیمش کرده باشی → پریست **Turbo** → تنظیمات پیشرفته `N`. در
+خلاصه یک **Setup Link** (`backpack://…`) نشان داده می‌شود؛ کپی‌اش کن.
 
 بعد فایروال ایران: `ufw allow 8443/tcp` (پورت تونل) و `ufw allow 443/tcp` (هر
 پورت forward شده).
 
 **روی سرور خارج:** `sudo backpack` → گزینهٔ ۲ (Setup Kharej) → Reverse → همان ترنسپورت →
-آی‌پی ایران + همان پورت تونل → نام → **همان توکن** → تنظیمات اختیاری `N` → همان
-پریست.
+**Setup Link** → لینک را پیست کن → نام را Enter → Create. (با **Manual** هم می‌شود:
+آی‌پی ایران، همان پورت تونل، نام، همان توکن، همان پریست.)
 
 بعد با `Manage → Status` و `Manage → Health Check` چک کن. اگر تونل بالاست ولی
 پورت جواب نمی‌دهد، سرویس روی سرور خارج جای درستی گوش نمی‌دهد —

@@ -21,7 +21,7 @@ STUBS = [((46, 34), (46, 38)), ((82, 34), (82, 38))]
 BODY = (23.0, 46.0, 105.0, 104.0)            # x0,y0,x1,y1
 BODY_R = (9.0, 9.0, 13.0, 13.0)              # tl, tr, br, bl
 FLAP = ((51.0, 72.0), (77.0, 72.0))
-GRAD = ((0xFF, 0x45, 0x3A), (0xA1, 0x22, 0x19))
+GRAD = ((0x26, 0x26, 0x26), (0x07, 0x07, 0x07))   # the panel's dark ground
 
 
 def sd_segment(px, py, ax, ay, bx, by):

@@ -85,22 +85,6 @@ const (
 	OpStart   = "start"
 	OpStop    = "stop"
 	OpRestart = "restart"
-
-	// OpReceive runs the speed test's receiver for a bounded time.
-	//
-	// Adding to this list is the one change in this package that has to be
-	// argued for, so: a speed test measures by pushing bytes at a sink on the
-	// other server, and until now somebody had to go and start that sink by
-	// hand — the panel's own error said so, and pointed at a CLI menu on a
-	// machine the operator was not sitting at. On a managed server that is
-	// exactly the second pass this feature exists to remove.
-	//
-	// What it grants is narrow. It opens a listener on one port for a few
-	// seconds and discards everything that arrives; it reads nothing, writes
-	// nothing, and closes itself whether or not anyone connects. The port is
-	// one of the tunnel's own backend ports, which the panel already knows
-	// because it wrote the configuration.
-	OpReceive = "receive"
 )
 
 // Request is one operation. Body is the operation's own arguments, left as raw

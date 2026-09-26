@@ -16,10 +16,11 @@ import { addView } from './views/add.js';
 import { settingsView } from './views/settings.js';
 import { serversView } from './views/servers.js';
 import { maintView, undoView } from './views/maint.js';
-import { alertsView, healthView, speedView } from './views/monitor.js';
+import { alertsView, healthView } from './views/monitor.js';
 import { starView, supportView } from './views/support.js';
 import { closeScreen } from './ui/screen.js';
 import { mountStrip } from './ui/strip.js';
+import { startPWA } from './ui/pwa.js';
 import * as api from './api.js';
 
 /* ---- appearance ----------------------------------------------------------
@@ -126,7 +127,6 @@ router.route('/t/:name/logs',    over(logsView));
 router.route('/t/:name/metrics', over(metricsView));
 router.route('/t/:name/history', over(historyView));
 router.route('/t/:name/link',    over(linkTestView));
-router.route('/t/:name/speed',   over(speedView));
 router.route('/t/:name/edit',    over(editView));
 router.route('/t/:name/undo',    over(undoView));
 
@@ -226,6 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (appearOpen && !ev.target.closest('#appearance, #appearance-btn')) toggleAppearance();
   });
   bind('#alerts-btn', 'click', () => router.go('/alerts'));
+  startPWA();
   bind('.warnbar .act', 'click', () => router.go('/health'));
 
   document.addEventListener('keydown', ev => {

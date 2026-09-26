@@ -11,9 +11,8 @@ import (
 // Linking a tunnel that already exists to the server that holds its other end.
 //
 // Everything the fleet does for a tunnel — carrying an edit across, starting
-// both halves together, reading the far journal, standing the speed test's
-// receiver up on the other machine — is gated on a record saying where that
-// other half lives. Until now that record was written in exactly one place: the
+// both halves together, reading the far journal — is gated on a record saying
+// where that other half lives. Until now that record was written in exactly one place: the
 // moment the panel created both ends at once. A tunnel made any other way, or
 // made before the server was added to the fleet, could never get one.
 //

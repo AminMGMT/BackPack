@@ -34,12 +34,31 @@ func (f PeerForm) ToNewTunnel() NewTunnel {
 	if role == "client" {
 		n.ServerAddr = f.ServerAddr
 	}
-	// The two settings that belong to the path rather than to a profile travel
-	// in the drawer, and the drawer is sent only when one of them is set — an
-	// empty drawer is not the same as no drawer, because the setup path reads
-	// "the operator opened Fine Tune" as "these values replace the preset's".
-	if f.AcceptUDP || f.MSS > 0 {
-		n.Tune = &FineTune{AcceptUDP: f.AcceptUDP, MSS: f.MSS}
+	// The paired settings travel in the Fine Tune drawer, marked as sent key
+	// by key. A drawer built in code without that mark counts every field as
+	// answered, so its zeros replaced the preset's: heartbeat off, Nagle back
+	// on, kcp's error correction off — a kharej that could not keep a session
+	// with its server.
+	tune := FineTune{AcceptUDP: f.AcceptUDP, MSS: f.MSS, MuxVersion: f.MuxVersion,
+		KCPDataShards: f.FECData, KCPParityShards: f.FECParity, sent: map[string]bool{}}
+	if f.AcceptUDP {
+		tune.sent["acceptUDP"] = true
+	}
+	if f.MSS > 0 {
+		tune.sent["mss"] = true
+	}
+	if f.MuxVersion > 0 {
+		tune.sent["muxVersion"] = true
+	}
+	if f.Transport == "kcp" {
+		// Zero on both is "off", and has to be carried as an answer.
+		tune.sent["kcpDataShards"], tune.sent["kcpParityShards"] = true, true
+	}
+	if len(tune.sent) > 0 {
+		n.Tune = &tune
+	}
+	if f.SimpleAuth {
+		n.Conn = &ConnTune{SimpleAuth: true}
 	}
 	return n
 }
@@ -66,7 +85,13 @@ func (f PeerForm) ToNewDirectTunnel() NewDirectTunnel {
 		Stealth:     f.Stealth,
 		Paths:       f.Paths,
 		FEC:         f.FEC,
+		FECData:     f.FECData,
+		FECParity:   f.FECParity,
 		SpoofPeerIP: f.SpoofPeerIP,
 		SNIDomain:   f.SNIDomain,
+		GREKey:      f.GREKey,
+		MTU:         f.MTU,
+		MSSClamp:    f.MSSClamp,
+		AutoMTU:     f.AutoMTU,
 	}
 }

@@ -266,6 +266,20 @@ func withBase(page []byte, prefix string) []byte {
 	return bytes.ReplaceAll(page, []byte(basePlaceholder), []byte(prefix))
 }
 
+// loginStatePlaceholder marks where the sign-in pages learn that the last
+// attempt was refused, so they can say so instead of silently reappearing.
+const loginStatePlaceholder = "__LOGIN_STATE__"
+
+// withLoginState stamps "wrong" into a sign-in page after a refused attempt,
+// and nothing otherwise.
+func withLoginState(page []byte, refused bool) []byte {
+	state := ""
+	if refused {
+		state = "wrong"
+	}
+	return bytes.ReplaceAll(page, []byte(loginStatePlaceholder), []byte(state))
+}
+
 // The base path this request arrived under.
 type basePathKey struct{}
 

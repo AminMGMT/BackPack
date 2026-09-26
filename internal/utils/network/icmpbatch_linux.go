@@ -95,6 +95,7 @@ func (c *icmpConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int,
 			}
 			payload, ok := decodeXdiPayload(c.tag, wantDir, pkt[8:])
 			if !ok {
+				c.noteForeign(pkt[8:], msgs[i].Addr)
 				continue
 			}
 			sizes[out] = copy(bufs[out], payload)

@@ -96,6 +96,15 @@ var chosenInJS = map[string]bool{
 	"preset": true, "name": true,
 }
 
+// fromTheOtherSide are settings a direct tunnel takes only from the other
+// server's setup link — the exact error-correction pair, the MTU and the
+// segment cap it was built with. They must match that server, so they are
+// mirrored across (manage.MirrorForPeer), never typed; the form not offering
+// them is the point.
+var fromTheOtherSide = map[string]bool{
+	"fecData": true, "fecParity": true, "mtu": true, "mssClamp": true, "autoMtu": true,
+}
+
 func TestTheSetupFormMatchesWhatTheServerAccepts(t *testing.T) {
 	names := formNames(t)
 
@@ -124,7 +133,7 @@ func TestTheSetupFormMatchesWhatTheServerAccepts(t *testing.T) {
 		}
 	}
 	for n, owner := range accepts {
-		if !names[n] && !chosenInJS[n] {
+		if !names[n] && !chosenInJS[n] && !fromTheOtherSide[n] {
 			missing = append(missing, n+" ("+owner+")")
 		}
 	}
@@ -249,7 +258,7 @@ func TestTheFormSendsNumbersForTheFieldsGoDeclaresNumeric(t *testing.T) {
 	}
 
 	for name := range want {
-		if !declared[name] {
+		if !declared[name] && !fromTheOtherSide[name] {
 			t.Errorf("%s is a number in Go but the form posts it as a string", name)
 		}
 	}

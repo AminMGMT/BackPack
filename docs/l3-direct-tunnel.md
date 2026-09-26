@@ -85,12 +85,35 @@ port of its own.
 
 ## Setting one up
 
-**From the menu — the easy way.** Run `sudo backpack`, choose **Setup Iran** or
-**Setup Kharej**, then **Direct**, then **Full IP tunnel**. It asks which machine you are on and how the packets
-should travel, suggests private addresses for both ends, and writes the config
-itself.
+**From the menu — the easy way.** Set up the **Iran server first**, then paste
+one line on the kharej server.
 
-The rest of this page is what it writes.
+1. **Iran:** `sudo backpack` → **Setup Iran** → **Direct** → the carrier —
+   **xDi**, **PCK**, **UDP**, **Quic**, **IP Spoofing** or **SNI Spoofing**. Then, in order: **Kharej IP Or Domain**,
+   **Tunnel Port**, **Forwarded Ports** (blank for a plain IP tunnel — TUN),
+   **Tunnel Name**, **Security Token** (generated here — press Enter), UDP,
+   **Error Correction (FEC)**, the preset, and whether to fine-tune. The tunnel
+   addresses are chosen for you — a free `10.10.N.0/30` — and can be changed
+   under fine-tune.
+2. The summary before **Create This Tunnel** shows the **Setup Link**: one line
+   starting with `backpack://`. It carries everything both ends must agree on
+   — token, port, carrier, addresses, GRE key, error correction, MTU and
+   segment cap — so nothing is retyped. It is shown again at any time under
+   **Manage tunnels → the tunnel → Setup Link**.
+3. **Kharej:** `sudo backpack` → **Setup Kharej** → **Direct** → the **same
+   carrier** → **Setup Link**, paste the line, confirm. Done.
+
+The kharej side can still be filled in by hand instead (**Manual**): the
+tunnel port, the tunnel addresses, and the token — which must be pasted from
+the Iran server; the kharej side never makes one up.
+
+> The link contains the tunnel's token. Treat it as the secret it is.
+
+**IP Spoofing and SNI Spoofing are the exception.** They keep the classic
+wizard: no setup link, both servers set up by hand, the token suggested on the
+kharej server and pasted on Iran, and the tunnel addresses asked on both.
+
+The rest of this page is what the two sides write.
 
 Two files, one on each host. They must agree on the token, the encapsulation
 and the carrier.
@@ -213,10 +236,39 @@ does the same without asking, since binding the port twice could only fail.
 A port *range* cannot be shared (which backend would port 10005 belong to?);
 the wizard leaves it out and the panel refuses it with the reason.
 
-When you run the wizard on the **kharej** server, give it the tunnel addresses
-the Iran server printed. The kharej wizard proposes the first block free on its
-own machine, and for a second kharej that is not the block the Iran server
-chose — a tunnel set up that way comes up, reports a peer, and carries nothing.
+**Each kharej takes its own link.** Run **Setup Iran → Direct** once per kharej;
+each run prints a link for that kharej alone, with its own token and its own
+`10.10.N.0/30`, and the kharej pastes it. Measured through the menus on one Iran
+with three kharej (Germany, USA, Finland — ports 1245, 3294 and 3190), 1 GiB
+crossed each tunnel at the same time at about 1 Gbit/s apiece, on `pck` and on
+`xdi` alike, with one session per tunnel and no drop after the tunnels sat idle.
+
+If you fill a kharej in by hand, give it exactly the tunnel addresses the Iran
+server printed. A block picked on the kharej's own machine is not the one the
+Iran server chose for a second kharej, and a tunnel set up that way comes up,
+reports a peer, and carries nothing.
+
+### When it does not come up
+
+The log names the cause rather than leaving a silent tunnel:
+
+- **`a handshake from … did not authenticate`** — the tokens on the two servers
+  differ. Paste the Iran server's setup link again, or compare the token under
+  **Edit → Show the token** on both.
+- **`connections to :PORT are being refused because the tunnel is not up yet`**
+  — the forwarded port works; no handshake has completed. Look at the lines
+  above it.
+- **`local_ip` and `peer_ip` are the same address** — refused when the config
+  is loaded. Each end has its own address in the `/30`; the kharej's
+  `peer_ip` is the Iran end, not its own.
+- A forwarded port that something on the server already listens on — the web
+  panel's `7777` is the usual one — is refused by the wizard and the panel
+  instead of failing to bind in the log.
+
+A tunnel that carries only one-way traffic, or none, is not torn down for it.
+When the peer has been quiet for 15 seconds the tunnel asks it directly, under
+the current session, before starting a new handshake, so an idle or one-way
+tunnel no longer drops and reconnects every few seconds.
 
 ---
 
@@ -270,6 +322,13 @@ replies (it matches the tunnel's tag together with the client's direction
 byte), so an ordinary ping to the server, or across the tunnel, still answers.
 It is removed when the tunnel stops, and it needs the `u32` iptables module;
 without it the tunnel works and simply spends the extra uplink.
+
+`xdi` also opens its own way in. A server that drops ICMP in its firewall (an
+`INPUT` policy of `DROP`, a `ufw` default) would otherwise swallow every echo
+before the tunnel reads it, and the tunnel would sit waiting with no error. On
+both ends it inserts one `ACCEPT` rule for its own echoes — same tag, same
+direction byte, nothing else — and removes it on exit. Where it cannot, the log
+says which firewall rule is in the way.
 
 `quic` is not imitating anything: it opens a real QUIC connection, with a real
 TLS 1.3 handshake and `h3` as the ALPN, and puts the tunnel in QUIC's unreliable
@@ -493,7 +552,7 @@ arriving.
 | a number | that value exactly, for when a path measurement gave you one |
 | `-1` | off, for a host whose firewall is managed elsewhere |
 
-Set it in the wizard under *Fine-tune the advanced settings by hand*, or later
+Set it in the wizard under *Fine-Tune The Advanced Settings*, or later
 with **Manage → Manage Tunnels → Edit → TCP segment cap**.
 
 ### Checking it
@@ -560,7 +619,7 @@ auto_mtu = false
 ```
 
 or answer *no* to "Let the tunnel measure and correct the MTU automatically"
-under **Fine-tune the advanced settings by hand**. The `mtu` you set is then
+under **Fine-Tune The Advanced Settings**. The `mtu` you set is then
 used exactly as written.
 
 ---
@@ -575,8 +634,21 @@ used exactly as written.
 ‎`443=10.10.0.2:443|10.10.1.2:443`‎. هر اتصال جدید به خارجی می‌رود که کمترین اتصال
 باز را دارد، پس پهنای باند جمع می‌شود (دو خارجِ ۳۰۰ مگابیتی: ۵۳۵ مگابیت با هم)،
 و خارجی که جواب ندهد ۲۰ ثانیه کنار گذاشته می‌شود. ویزارد وقتی پورت تکراری بدهی
-خودش پیشنهاد اشتراک می‌دهد و پنل بدون پرسیدن این کار را می‌کند. روی سرور خارج،
-آدرس‌های تونل را همان‌طور که سرور ایران چاپ کرد وارد کن.
+خودش پیشنهاد اشتراک می‌دهد و پنل بدون پرسیدن این کار را می‌کند.
+
+**راه‌اندازی با لینک:** اول سرور ایران را بساز: **Setup Iran ← Direct ← حامل**،
+بعد آی‌پی یا دامنهٔ خارج، پورت تونل، پورت‌های forward (خالی = TUN)، نام، توکن
+(ایران خودش می‌سازد — Enter بزن)، UDP، تصحیح خطا (FEC)، preset و تنظیم دستی. در
+خلاصهٔ قبل از **Create This Tunnel** یک **لینک `backpack://`** نشان داده می‌شود. روی سرور خارج: **Setup Kharej ← Direct ← همان
+حامل ← Setup Link** و لینک را پیست کن — توکن،
+آدرس‌ها و بقیهٔ تنظیمات خودکار پر می‌شوند. برای هر خارج یک بار از ایران تونل بساز؛
+هر کدام لینک خودش را دارد. لینک شامل توکن است، پس مثل رمز نگهش دار. اگر خارج را
+دستی پر کنی، توکن و آدرس‌ها را دقیقاً همان‌طور که ایران چاپ کرد وارد کن.
+
+**وقتی بالا نمی‌آید:** لاگ علت را می‌گوید — توکن متفاوت (`did not authenticate`)،
+آدرس یکسان برای `local_ip` و `peer_ip`، یا پورتی که چیز دیگری (مثل پنل روی
+`7777`) گرفته. تونلی که ترافیک یک‌طرفه یا هیچ ترافیکی ندارد دیگر قطع و وصل نمی‌شود،
+و `xdi` روی سروری که ICMP را در فایروال می‌بندد خودش راه ورودش را باز می‌کند.
 
 هر ترنسپورت دیگری در Backpack **پورت** forward می‌کند: یک listener روی ایران، یک
 dial به backend روی خارج، و یک stream وسطشان. این یکی فرق دارد: روی هر هاست یک
@@ -640,4 +712,4 @@ obfuscated به `CAP_NET_RAW` هم نیاز دارند). **هیچ‌وقت حا�
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

@@ -39,6 +39,20 @@ type obfuscatedCarrier struct {
 	// carried here because the carrier's own type is hidden behind
 	// net.PacketConn once it is wrapped, so the method would not be promoted.
 	note string
+	// warning is what the carrier found wrong with the host at startup — a
+	// firewall that will keep its packets out. Said as a warning, not a note.
+	warning string
+}
+
+// Warning returns the startup warning, or "".
+func (c *obfuscatedCarrier) Warning() string { return c.warning }
+
+// SetForeignHook passes the hook down to a carrier that reports another
+// tunnel's traffic, and does nothing for one that does not.
+func (c *obfuscatedCarrier) SetForeignHook(f func(net.Addr)) {
+	if h, ok := c.PacketConn.(interface{ SetForeignHook(func(net.Addr)) }); ok {
+		h.SetForeignHook(f)
+	}
 }
 
 func (c *obfuscatedCarrier) Overhead() int       { return c.overhead }
@@ -106,6 +120,9 @@ func openXdi(cfg Config) (DatagramCarrier, net.Addr, error) {
 		PacketConn: conn,
 		overhead:   network.XdiOverhead(),
 		name:       "xdi",
+	}
+	if f, ok := conn.(interface{ FirewallNote() string }); ok {
+		base.warning = f.FirewallNote()
 	}
 	if br, ok := conn.(pckBatchReader); ok {
 		return &pckCarrier{obfuscatedCarrier: base, br: br}, peer, nil

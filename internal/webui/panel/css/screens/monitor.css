@@ -375,65 +375,6 @@ body[data-t="light"]{
   background:var(--sunk);border-radius:8px;line-height:1.55}
 .dlg.hc2 .ck .fx b{font-weight:620}
 .dlg.hc2 .running{padding:30px 17px;text-align:center;font-size:12.5px;color:var(--dim)}
-.dlg.st3{width:min(600px,100%)}
-.dlg.st3 .warn3{margin:15px 17px 0;padding:12px 13px;border-radius:12px;display:flex;gap:10px;
-  background:color-mix(in srgb,var(--wr) 8%,transparent);
-  border:1px solid color-mix(in srgb,var(--wr) 28%,transparent)}
-.dlg.st3 .warn3 i{font-style:normal;color:var(--wr);font-weight:700;flex:none;font-size:12px;line-height:1.5}
-.dlg.st3 .warn3 span{font-size:11.5px;color:var(--tx2);line-height:1.6}
-.dlg.st3 .warn3 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
-  background:var(--sunk);padding:1px 5px;border-radius:4px}
-.dlg.st3 .maps{padding:14px 17px 0;display:grid;gap:8px}
-.dlg.st3 .mp{display:flex;gap:11px;align-items:flex-start;padding:12px 13px;border:1px solid var(--ln);
-  border-radius:12px;background:var(--field);cursor:pointer;color:var(--tx);
-  transition:border-color .2s ease,background .2s ease}
-.dlg.st3 .mp:hover{border-color:var(--ln2)}
-.dlg.st3 .mp.on{border-color:var(--tx);background:var(--s2)}
-.dlg.st3 .mp.off{opacity:.55;cursor:default}
-.dlg.st3 .mp .rd3{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--ln2);flex:none;margin-top:2px;
-  display:grid;place-items:center}
-.dlg.st3 .mp.on .rd3{border-color:var(--tx)}
-.dlg.st3 .mp.on .rd3::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--tx)}
-.dlg.st3 .mp b{display:block;font-size:12.5px;font-weight:620}
-.dlg.st3 .mp i{display:block;font-style:normal;font-size:11px;color:var(--dim);margin-top:4px;line-height:1.55}
-.dlg.st3{width:min(560px,100%)}
-.dlg.st3 .dialwrap{position:relative;padding:14px 0 4px;display:grid;place-items:center}
-.dlg.st3 .dial{width:300px;height:300px;display:block}
-.dlg.st3 .dial .track{fill:none;stroke:var(--sunk);stroke-width:9;stroke-linecap:round}
-.dlg.st3 .dial .prog{fill:none;stroke:var(--tx);stroke-width:9;stroke-linecap:round}
-.dlg.st3 .dial .tick{stroke:var(--ln2);stroke-width:1.5}
-.dlg.st3 .dial .tick.major{stroke:var(--mu);stroke-width:2}
-.dlg.st3 .dial .tlab{fill:var(--dim);font-size:9.5px;font-weight:600;text-anchor:middle;
-  font-variant-numeric:tabular-nums}
-.dlg.st3 .dial .needle{stroke:var(--tx);stroke-width:2.5;stroke-linecap:round;
-  transform-origin:150px 150px}
-.dlg.st3 .dial .hub{fill:var(--tx)}
-.dlg.st3 .centre{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
-.dlg.st3 .centre .inner3{text-align:center;margin-top:6px}
-.dlg.st3 .phase{font-size:10.5px;font-weight:660;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
-  height:14px}
-.dlg.st3 .big3{font-size:46px;min-width:170px;font-weight:660;letter-spacing:-.05em;line-height:1;margin:5px 0 2px;
-  font-variant-numeric:tabular-nums}
-.dlg.st3 .unit3{font-size:11.5px;color:var(--mu);font-weight:560;letter-spacing:.04em}
-.dlg.st3 .go2{position:absolute;inset:0;display:grid;place-items:center}
-.dlg.st3 .go2 button{width:104px;height:104px;border-radius:50%;border:1.5px solid var(--ln2);
-  background:var(--s1);color:var(--tx);font:inherit;font-size:17px;font-weight:660;letter-spacing:.08em;
-  cursor:pointer;transition:transform .18s var(--spring),border-color .22s ease,background .22s ease}
-.dlg.st3 .go2 button:hover{border-color:var(--tx);background:var(--s2);transform:scale(1.04)}
-.dlg.st3 .go2 button:active{transform:scale(.97)}
-.dlg.st3 .go2 button:disabled{opacity:.4;cursor:default;transform:none}
-.dlg.st3 .res3{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--ln);
-  border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
-.dlg.st3 .res3 .r6{background:var(--s1);padding:13px 15px;text-align:center;opacity:.4;
-  transition:opacity .4s ease}
-.dlg.st3 .res3 .r6.on{opacity:1}
-.dlg.st3 .res3 .r6 .k6{font-size:10.5px;font-weight:620;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-.dlg.st3 .res3 .r6 .v6{font-size:21px;font-weight:660;letter-spacing:-.03em;margin-top:4px;
-  font-variant-numeric:tabular-nums}
-.dlg.st3 .res3 .r6 .v6 em{font-style:normal;font-size:11px;color:var(--mu);font-weight:560;margin-left:3px}
-.dlg.st3 .res3 .r6.live .k6{color:var(--tx2)}
-.dlg.st3 .via{padding:11px 17px;font-size:11.5px;color:var(--dim);text-align:center;line-height:1.55}
-.dlg.st3 .via b{color:var(--tx2);font-weight:600}
 
 /* rows this screen fills from /api/alerts and /api/health */
 .dlg .arow{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--ln);

@@ -401,7 +401,10 @@ func (s *server) handleDirectDefaults(w http.ResponseWriter, r *http.Request) {
 	side := r.URL.Query().Get("side")
 	out := manage.SuggestDirectDefaults(side)
 	out["tunnelPort"] = manage.SuggestDirectPort()
-	if !strings.EqualFold(strings.TrimSpace(side), "kharej") {
+	// The Iran side makes the token and hands it over in its code; a kharej
+	// set up by hand is given the Iran server's, never a fresh one of its
+	// own, or pressing Enter on both ends would leave two different tokens.
+	if strings.EqualFold(strings.TrimSpace(side), "kharej") {
 		delete(out, "token")
 	}
 	writeJSON(w, out)

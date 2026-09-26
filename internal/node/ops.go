@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/backpack/backpack/internal/metrics"
-	"io"
-	"net"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,12 +31,6 @@ type ApplyRequest struct {
 	Kind   string                  `json:"kind"` // "reverse" or "direct"
 	Tunnel *manage.NewTunnel       `json:"tunnel,omitempty"`
 	Direct *manage.NewDirectTunnel `json:"direct,omitempty"`
-}
-
-// ReceiveRequest asks for the speed test's sink: which port, and for how long.
-type ReceiveRequest struct {
-	Port    int `json:"port"`
-	Seconds int `json:"seconds"`
 }
 
 // NameRequest addresses one tunnel.
@@ -97,13 +88,6 @@ func Execute(req Request) Response {
 			return failf("%v", err)
 		}
 		return okBody(set)
-
-	case OpReceive:
-		var rr ReceiveRequest
-		if err := json.Unmarshal(req.Body, &rr); err != nil {
-			return failf("malformed receive request")
-		}
-		return doReceive(rr)
 
 	case OpLogs:
 		var lr LogsRequest
@@ -178,61 +162,6 @@ func Execute(req Request) Response {
 		})
 	}
 	return fail(errUnknownOp.Error())
-}
-
-// receiveWindow caps how long the sink may run.
-//
-// A listener that outlives the measurement is a listener nobody asked for, and
-// the whole point of doing this from here is that nobody has to remember to
-// stop it. The ceiling is a little over the longest measurement the panel will
-// run, so a slow start still finishes and a forgotten one still ends.
-const receiveWindow = 40 * time.Second
-
-// doReceive runs the speed test's sink on one port for a bounded time.
-//
-// It returns as soon as the listener is up rather than when it closes: the
-// panel has to start measuring while it is running, and a call that only
-// answered at the end would be answering after the thing it enabled was over.
-func doReceive(rr ReceiveRequest) Response {
-	if rr.Port < 1 || rr.Port > 65535 {
-		return failf("port %d is not a port", rr.Port)
-	}
-	d := time.Duration(rr.Seconds) * time.Second
-	if d <= 0 || d > receiveWindow {
-		d = receiveWindow
-	}
-	ln, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(rr.Port)))
-	if err != nil {
-		return failf("could not listen on %d: %v", rr.Port, err)
-	}
-	// Everything the sink accepts is bounded by the same deadline the listener
-	// is, so the window closing ends the whole thing rather than just the
-	// Accept loop.
-	//
-	// It did not before: a connection that stayed open and sent nothing left
-	// io.Copy blocked on a read with no deadline, holding its goroutine and its
-	// descriptor for the life of the process. The listener closing does not
-	// touch a connection already accepted.
-	deadline := time.Now().Add(d)
-	go func() {
-		defer ln.Close()
-		done := time.After(d)
-		go func() { <-done; ln.Close() }()
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			// Sunk, not echoed — the same rule as ServeThroughputOn, for the
-			// same reason: echoing would measure the round trip.
-			go func() {
-				defer c.Close()
-				_ = c.SetDeadline(deadline)
-				io.Copy(io.Discard, c)
-			}()
-		}
-	}()
-	return okBody(map[string]any{"port": rr.Port, "seconds": int(d / time.Second)})
 }
 
 func doApply(ar ApplyRequest) Response {

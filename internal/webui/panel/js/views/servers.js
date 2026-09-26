@@ -902,8 +902,7 @@ async function offerPairs(suggestions) {
     const ok = await confirmBox({
       title: `Is <q>${esc(s.name)}</q> the same tunnel as <q>${esc(s.peerName)}</q>?`,
       body: `${s.why}. Linking them lets this panel carry edits across, start and `
-          + `stop both halves together, read that server's journal for it, and run the `
-          + `speed test end to end. Nothing is changed on either machine.`,
+          + `stop both halves together, and read that server's journal for it. Nothing is changed on either machine.`,
       lines: [{ text: `${s.node}: ${s.peerName}` }],
       go: 'Link them', icon: 'check',
     });

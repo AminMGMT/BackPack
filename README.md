@@ -143,6 +143,8 @@ The direct tunnel uses:
 * Multiple carrier options
 * Full IP routing
 
+Set up the Iran server first: `Setup Iran → Direct → carrier`. Its summary, right before **Create This Tunnel**, shows a one-line **setup link** (`backpack://…`); on the kharej server choose `Setup Kharej → Direct → the same carrier → Setup Link`. The token, addresses and tuning come across in the link. For several kharej servers behind one Iran server, repeat it once per kharej — each gets its own link.
+
 See [Direct layer-3 tunnel](docs/l3-direct-tunnel.md).
 
 > The older stream-based `[direct]` engine still exists for existing configurations, but the current wizard builds the layer-3 direct tunnel.
@@ -268,15 +270,17 @@ Then:
 1. Setup Iran
 → Reverse
 → Transport
-→ Tunnel port
-→ Tunnel name
-→ Security token
-→ Exposed ports
-→ UDP forwarding
-→ Performance preset
+→ Iran IP Or Domain (the detected one is the default)
+→ Tunnel Port
+→ Forwarded Ports
+→ Tunnel Name
+→ Security Token (generated — press Enter)
+→ Carry UDP As Well As TCP
+→ the transport's own questions (certificate for WSS, flags for PCK, …)
+→ How Should The Tunnel Be Tuned?
 ```
 
-Copy the generated token.
+The summary before **Create This Tunnel** shows a one-line **Setup Link** (`backpack://…`). Copy it.
 
 For a first deployment, **TCP** is the simplest starting point.
 
@@ -294,12 +298,10 @@ Then:
 2. Setup Kharej
 → Reverse
 → Same transport
-→ Iran IP
-→ Same tunnel port
-→ Tunnel name
-→ Same token
-→ Same preset
+→ Setup Link → paste the link → Tunnel Name → Create This Tunnel
 ```
+
+**Manual** is there too: Iran IP, the same tunnel port, a name, the same token, the same preset.
 
 ---
 
@@ -551,10 +553,6 @@ Checks the server, panel and tunnels and provides a suggested fix when it detect
 ### Tunnel Metrics
 
 Provides tunnel-level statistics including traffic, connections and transport-specific metrics such as KCP retransmissions, loss and FEC repairs.
-
-### Speed Test
-
-Measures the actual throughput carried by the tunnel end-to-end, including encapsulation, encryption, carrier and path.
 
 See:
 
@@ -1010,7 +1008,7 @@ Additional attribution and trademark conditions apply.
 
 ### Attribution
 
-Modified versions must retain the required BackPack attribution in the locations specified by the license and project notices:
+Modified versions must keep this line, unaltered, in their README (and in NOTICE):
 
 ```text
 Based on BackPack by Amin Mohammadi (AminMGMT)

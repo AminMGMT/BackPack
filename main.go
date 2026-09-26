@@ -69,11 +69,8 @@ func main() {
 
 	switch {
 	case *showVersion:
-		// The version output is one of the places NOTICE's attribution term
-		// names, and it is the one a script or a bug report reaches for.
 		fmt.Println(app.Version)
-		fmt.Println(app.Attribution)
-		fmt.Println(app.AttributionURL)
+		fmt.Println(app.SourceURL)
 		return
 	case *restartAll:
 		ok, failed := manage.RestartAll()

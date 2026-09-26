@@ -158,14 +158,11 @@ export const directDefaults = side =>
   get('/api/direct/defaults?side=' + encodeURIComponent(side || ''));
 export const directCreate   = payload => post('/api/direct/create', payload);
 
-/* ---- CLI: Manage → Health Check / Link Test / Speed Test ------------------ */
+/* ---- CLI: Manage → Health Check / Link Test -------------------------------- */
 export const health = () => get('/api/health');
 export const linkTestStatus = () => get('/api/linktest');
 export const linkTestRun = name =>
   post('/api/linktest?name=' + encodeURIComponent(name));
-export const speedPlan = name =>
-  get('/api/speedtest/plan?name=' + encodeURIComponent(name));
-export const speedRun = body => post('/api/speedtest', body);
 
 /* ---- CLI: Manage → Tunnel Metrics, and the long view --------------------- */
 /* Plain text, not JSON — the handler writes journald's own output. */

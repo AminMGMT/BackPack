@@ -165,4 +165,4 @@ vector در بالا آمده؛ هر دو journald را می‌خوانند.
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

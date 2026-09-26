@@ -5,7 +5,7 @@
 // # Why it was cut here
 //
 // internal/manage was 28,000 lines in one package — wizards, editing, backup,
-// restore, update, migration, diagnosis, speed tests, presets, the share-link
+// restore, update, migration, diagnosis, presets, the share-link
 // codec and the web API adapters — and every other package imports it
 // wholesale. The cost is not confusion: it is well organised inside. The cost
 // is that a change to how a systemd unit is written is a change to the package

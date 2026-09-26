@@ -90,7 +90,7 @@ func savePairs(f pairFile) error {
 //
 // The pairing itself is still kept when that happens. The tunnel really does
 // have its other end on that server — losing the whole record over a name
-// would take the fleet's edits, logs and speed test with it — and every use of
+// would take the fleet's edits and logs with it — and every use of
 // PeerName already falls back to the local name when it is empty.
 func NoteNodePair(tunnel, node, peerName string) error {
 	tunnel, node = strings.TrimSpace(tunnel), strings.TrimSpace(node)

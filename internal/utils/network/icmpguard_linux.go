@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
+	"sync"
 )
 
 // The icmp spoof profile carries its data inside ICMP Echo Requests. A raw
@@ -70,6 +72,18 @@ func installXdiEchoGuard(tag [xdiTagLen]byte) *icmpEchoGuard {
 
 // installEchoRule inserts a guard's rule and records whether it took.
 func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
+	key := strings.Join(g.rule, " ")
+	echoRules.Lock()
+	defer echoRules.Unlock()
+	// Shared within the process: the sessions of one reverse xdi tunnel each
+	// open a carrier with the same tag, and so the same rule. The first puts
+	// it in, the last takes it out; one session closing must not pull it from
+	// under the others.
+	if echoRules.users[key] > 0 {
+		echoRules.users[key]++
+		g.active = true
+		return g
+	}
 	if _, err := exec.LookPath("iptables"); err != nil {
 		return g
 	}
@@ -78,24 +92,36 @@ func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
 	// crash after crash does not stack copies, and this run's exit removes it.
 	if exec.Command("iptables", append([]string{"-C"}, g.rule...)...).Run() == nil {
 		g.active = true
-		return g
-	}
-	args := append([]string{"-I"}, g.rule...)
-	if err := exec.Command("iptables", args...).Run(); err == nil {
+	} else if exec.Command("iptables", append([]string{"-I"}, g.rule...)...).Run() == nil {
 		g.active = true
+	}
+	if g.active {
+		echoRules.users[key] = 1
 	}
 	return g
 }
 
-// remove deletes the rule if it was installed. Safe on a guard that installed
-// nothing.
+// echoRules counts, per rule, the carriers in this process that rely on it.
+var echoRules = struct {
+	sync.Mutex
+	users map[string]int
+}{users: map[string]int{}}
+
+// remove deletes the rule once the last carrier relying on it lets go. Safe on
+// a guard that installed nothing, and on one removed twice.
 func (g *icmpEchoGuard) remove() {
 	if g == nil || !g.active {
 		return
 	}
-	args := append([]string{"-D"}, g.rule...)
-	_ = exec.Command("iptables", args...).Run()
 	g.active = false
+	key := strings.Join(g.rule, " ")
+	echoRules.Lock()
+	defer echoRules.Unlock()
+	if echoRules.users[key]--; echoRules.users[key] > 0 {
+		return
+	}
+	delete(echoRules.users, key)
+	_ = exec.Command("iptables", append([]string{"-D"}, g.rule...)...).Run()
 }
 
 // Installed reports whether the rule is in place, so the carrier can log which
@@ -143,5 +169,37 @@ func xdiEchoRule(tag [xdiTagLen]byte) []string {
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@8=0x%08x&&0>>22&0x3C@12>>24=0x%02x", word, xdiDirClient),
 		"-m", "comment", "--comment", fmt.Sprintf("backpack-xdi-echo-%08x", word),
 		"-j", "DROP",
+	}
+}
+
+// installXdiAcceptRule lets this tunnel's own echoes through a firewall that
+// drops ICMP.
+//
+// xdi reads from a raw ICMP socket, which is handed a packet only after the
+// INPUT chain has passed it. Servers in Iran commonly drop ICMP so as not to
+// answer ping, and on such a server an xdi tunnel started, logged nothing
+// wrong, and never completed a handshake. The rule accepts only echoes that
+// carry this tunnel's tag and the other end's direction byte — the server
+// accepts the client's requests, the client the server's replies — so the
+// host stays as silent to ping as it was. Inserted at the top of INPUT so a
+// drop further down cannot pre-empt it, and removed when the carrier closes.
+func installXdiAcceptRule(tag [xdiTagLen]byte, server bool) *icmpEchoGuard {
+	return installEchoRule(&icmpEchoGuard{rule: xdiAcceptRule(tag, server)})
+}
+
+// xdiAcceptRule is the INPUT rule body for installXdiAcceptRule.
+func xdiAcceptRule(tag [xdiTagLen]byte, server bool) []string {
+	word := uint32(tag[0])<<24 | uint32(tag[1])<<16 | uint32(tag[2])<<8 | uint32(tag[3])
+	typ, dir, side := "echo-reply", xdiDirServer, "client"
+	if server {
+		typ, dir, side = "echo-request", xdiDirClient, "server"
+	}
+	return []string{
+		"INPUT",
+		"-p", "icmp",
+		"--icmp-type", typ,
+		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@8=0x%08x&&0>>22&0x3C@12>>24=0x%02x", word, dir),
+		"-m", "comment", "--comment", fmt.Sprintf("backpack-xdi-in-%s-%08x", side, word),
+		"-j", "ACCEPT",
 	}
 }

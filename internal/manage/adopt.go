@@ -6,8 +6,7 @@ import "strings"
 //
 // A tunnel built through the panel's fleet has its two ends recorded as a pair,
 // and everything that reaches across — carrying an edit, starting both halves,
-// reading the far journal, standing up the speed test's receiver — is gated on
-// that record existing. A tunnel built any other way has no record, so none of
+// reading the far journal — is gated on that record existing. A tunnel built any other way has no record, so none of
 // it works, and there was no way to add one: the pairing was written in exactly
 // one place, when the panel created both ends at once.
 //

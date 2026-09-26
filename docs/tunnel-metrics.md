@@ -37,4 +37,4 @@ so the numbers do not reset when a tunnel bounces (and they carry on after a
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

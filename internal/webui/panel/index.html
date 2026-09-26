@@ -12,6 +12,15 @@
      root: the panel answers nowhere outside its base path, and every page load
      logged a 404 for it. -->
 <link rel="icon" href="__BASE_PATH__/icon.svg" type="image/svg+xml">
+<!-- Installable as an app on a phone — see js/ui/pwa.js. The manifest is what
+     Android and desktop Chrome install from; iOS reads the apple-* tags and
+     the touch icon instead, and ignores the manifest's icons. -->
+<link rel="manifest" href="__BASE_PATH__/manifest.json">
+<link rel="apple-touch-icon" href="__BASE_PATH__/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Backpack">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/base.css">
@@ -83,6 +92,9 @@
           <button class="pal2" id="appearance-btn" title="Appearance"
                   aria-haspopup="true" aria-expanded="false">
             <span class="sw0"></span><span class="t2">Appearance</span>
+          </button>
+          <button class="ic2" id="install-btn" title="Install app" aria-label="Install app" hidden>
+            <svg class="x" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/><path d="M10.5 18.5h3"/></svg>
           </button>
           <button class="ic2" id="alerts-btn" title="Alerts" aria-label="Alerts">
             <svg class="x" viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>

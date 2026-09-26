@@ -82,7 +82,7 @@ func manageOne(t Tunnel) {
 			{Title: "Stop", Desc: "stop the tunnel service"},
 			{Title: "Restart", Desc: "restart the tunnel service"},
 			{Title: "Live Log", Desc: "stream the journal — Ctrl+C to return"},
-			{Title: "Setup link", Desc: "one string that builds the other end"},
+			{Title: "Setup Link", Desc: "one string that builds the other end"},
 			{Title: "Delete", Desc: "remove the tunnel permanently"},
 		})
 		switch idx {

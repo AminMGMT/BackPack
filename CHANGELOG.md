@@ -2,6 +2,161 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.8.4 — 2026-09-26
+
+### Changed
+
+- **A direct tunnel is set up from the Iran server, and the kharej server
+  pastes one line.** The Iran wizard asks short questions, in order: **Kharej
+  IP Or Domain**, **Tunnel Port**, **Forwarded Ports (Blank For TUN)**,
+  **Tunnel Name**, **Security Token** — generated on the Iran side, press
+  Enter — UDP, **Error Correction (FEC)**, the preset and fine-tuning; the
+  tunnel addresses are picked for it. The paragraphs of explanation between
+  the questions are gone. The summary before **Create This Tunnel** is one
+  short block — *Direct PCK*, interface, where it dials, forwarded ports,
+  tuning, config file — with the **Setup Link** (`backpack://…`) under it. On
+  the kharej server, after the carrier: **Setup Link** (paste the line; only a
+  name is asked) or **Manual**. Each kharej behind one Iran server gets its own
+  link. By hand, the kharej side no longer invents a token: it has to be the
+  Iran server's.
+- **The reverse wizard works the same way.** Iran asks, in order: **Iran IP Or
+  Domain** (the detected public IP is the default), **Tunnel Port**,
+  **Forwarded Ports**, **Tunnel Name**, **Security Token** (generated — press
+  Enter), UDP, then the transport's own questions — **TLS Certificate** and
+  **Simple Token Auth** for WSS, **TCP Flag Pattern** for PCK, **Send Real
+  Client IP (PROXY Protocol)** where it can be carried — the preset and
+  fine-tuning. One short summary (*Reverse TCP*, where it listens, what kharej
+  dials, where each forwarded port lands on kharej) shows the **Setup Link**
+  before **Create This Tunnel**. On kharej, after the transport: **Setup Link**
+  (paste; only the name is asked) or **Manual**, whose token prompt no longer
+  offers the meaningless default `backpack`. The link now also carries simple
+  auth, the smux version and, for KCP, the exact error-correction pair, so a
+  kharej built from it cannot disagree with Iran on them. The `udp` transport,
+  whose forwarded ports are UDP anyway, is no longer asked about UDP. Tested
+  through the menus on all eleven reverse transports.
+- **The direct carriers are listed as xDi, PCK, UDP, Quic, IP Spoofing, SNI
+  Spoofing**, in that order. xDi, PCK, UDP and Quic use the setup-link wizard;
+  UDP's several-sockets question is short too, and the summary names the port
+  range the kharej must open. **IP Spoofing and SNI Spoofing keep the classic
+  wizard** — both ends by hand, the token made on kharej — since their answers
+  belong to the route and are worked out on each machine.
+- **The setup link now carries everything the two ends must agree on.** The
+  GRE key, the exact error-correction pair, the MTU, the TCP segment cap and
+  automatic MTU were missing, so a tunnel built from a link — or by the panel
+  on a managed server — could differ between its two ends. Measured through
+  the menus with one Iran and three kharej (Germany, USA, Finland on ports
+  1245, 3294 and 3190): 1 GiB crossed each tunnel at the same time at about
+  1 Gbit/s apiece, on `pck` and on `xdi`, with one session per tunnel and no
+  drop after an idle minute.
+- **The sign-in pages look like the panel.** The password and two-factor
+  pages use the panel's own palette, glass card, mark and accent-bar ground,
+  and follow its light or dark theme and its accent — they used to be a fixed
+  red page that knew none of the panel's current accents. A wrong password or
+  code now says so under the field instead of the page silently reappearing.
+- **The panel installs as an app on a phone again.** Behind a trusted
+  certificate (Let's Encrypt or your own), Android and desktop Chrome offer to
+  install it — an **Install app** button appears in the header — and it opens
+  full screen from the home screen, clear of the notch and the home
+  indicator. On an iPhone the same button explains Share → Add to Home Screen.
+  The rebuilt panel had stopped linking the manifest and registering the
+  service worker, so no browser ever offered it. The app icon, the sign-in
+  pages and the offline screen use the panel's own dark look.
+- **The attribution line lives in the licence documents only.** "Based on
+  BackPack by Amin Mohammadi (AminMGMT)" is gone from the TUI banner, the
+  sign-in pages, the panel's About line and the version output. NOTICE now
+  asks a modified version to keep it in its NOTICE and its README.
+
+### Removed
+
+- **Speed Test and Game Latency Test are gone, everywhere.** Both left the
+  Manage menu; the panel's speed test went with them — the button on the
+  tunnel card, its screen, `/api/speedtest` and `/api/speedtest/plan` — and a
+  managed server no longer answers the `receive` operation that started the
+  far-end sink. The game endpoint list (`/etc/backpack/game-endpoints.list`)
+  is no longer read.
+
+### Fixed
+
+- **A reverse kharej built from a setup link outside the wizard lost its
+  pairing.** "Setup from a link", the panel's paste box and a managed server's
+  far end all went through a path that dropped simple auth, the smux version
+  and kcp's exact error correction — and, when the link carried an MSS, sent a
+  tuning block whose every zero replaced the preset: heartbeat off, Nagle on,
+  kcp FEC off. The tuning block now carries only the settings it answers, on
+  this machine and across the wire to a managed server.
+- **A direct tunnel could stop for hours after the Iran server's clock was
+  corrected.** Reported on v1.8.3 as "direct stops working after a while". The
+  kharej refuses a handshake stamped no later than the last one it accepted,
+  which is what makes a recorded handshake worthless. An Iran server whose
+  clock ran fast and was set back by NTP, and whose tunnel then restarted
+  (watchdog, Auto Refresh, reboot), sent only older stamps: every one was
+  refused as a replay until the clock caught up, or the kharej was restarted.
+  Once the kharej has no session left and such stamps have been refused for a
+  minute, it now takes the Iran server's clock as it is, and says so in its
+  log. While a session is up nothing changes.
+- **After an update the menu was still the old version.** The menu that ran
+  the update went on as the build it was started as — old version on the
+  title, old screens — until it was quit and opened again. After an update, an
+  install from a file or a rollback, pressing Enter now opens the installed
+  binary in its place.
+- **Install from a downloaded file always said "Version unknown".** The
+  version flag prints the version and then the source link, and the whole of
+  that was read as the version and refused. It reads the first line now, and
+  the closing "now running" line no longer carries the link.
+- **A reverse kharej set up from the Setup Link skipped its own questions.**
+  Only a name was asked, so a ws/wss kharej behind a CDN could not be given
+  its edge IP, a pck kharej its flag pattern or interface, and none of them a
+  proxy or backup addresses. The link path now asks exactly what the manual
+  path asks of this side; what the two ends share still comes from the link.
+- **The reverse wizard wrote a tunnel whose forwarded port was already in
+  use,** or was its own tunnel port, and the listener then failed to bind. It
+  is refused before anything is written, in the wizard and the panel, as the
+  direct wizard already did. Both checks now count only a port that is really
+  held, not one a non-root process may not bind.
+- **A kharej accepted a second direct tunnel on a UDP port another one
+  listens on.** Two Iran servers set up with the default port 9000 left the
+  second tunnel failing to bind and restarting for ever; the wizard, the panel
+  and the setup link now refuse it and say which tunnel has the port.
+- **A wizard left open when the session dropped asked the same question for
+  ever.** A refused name — or a refused address in the spoofing screens — was
+  asked again on every empty read once stdin had closed, burning a core. It
+  now stops.
+- **A port spread over several kharej could panic after two billion
+  connections on a 32-bit build,** when the rotation counter no longer fitted
+  an int.
+- **Direct `pck` tunnels dropped and reconnected on their own.** A tunnel that
+  heard nothing from its peer for 15 seconds started a new handshake, and a
+  tunnel carrying only one-way traffic — or only the kernel's own chatter on
+  the interface — looked exactly like one whose peer had died. It now asks the
+  peer directly, under the current session, before tearing anything down, and
+  keeps the session when the peer answers.
+- **A second kharej never came up** when its config gave `local_ip` and
+  `peer_ip` the same address, which a hand-filled kharej easily did. That is
+  now refused when the config is loaded, and by the wizard and the panel, with
+  the reason.
+- **`xdi` did nothing behind a firewall that drops ICMP.** The kernel dropped
+  the echoes before the tunnel could read them, and the tunnel waited with no
+  error. Each end now inserts an `ACCEPT` rule for its own echoes only (same
+  tag, same direction) and removes it on exit; where it cannot, the log names
+  the rule in the way. The rules are counted per process, so several `xdi`
+  tunnels share them safely.
+- **A token mismatch was silent.** The listening side now logs that a handshake
+  did not authenticate and that the tokens differ; an echo tagged for another
+  tunnel is reported while no session exists; and a forwarded port says it is
+  refusing connections because the tunnel is not up, not that the backend is
+  unreachable.
+- **Every `xdi` tunnel reported "peer moved" as it came up.** ICMP has no
+  ports, so the kharej's address was read back as `1.2.3.4` after being dialled
+  as `1.2.3.4:6999`, and the same server was logged as a move — which read as a
+  fault on a tunnel that was working. Only a change of host is reported now.
+- **A forwarded port already in use was accepted.** A tunnel forwarding the web
+  panel's own `7777` started and then failed to bind, in a log nobody was
+  reading. The wizard and the panel now refuse the port up front.
+- **The main menu spun for ever when its input closed.** Run with a closed
+  stdin — from a script, `< /dev/null`, a dropped SSH session — it printed
+  "Invalid option" in a tight loop, taking a core and filling the disk with
+  output (3.6 GB in one test). It now exits.
+
 ## v1.8.3 — 2026-09-25
 
 ### Added

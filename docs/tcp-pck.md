@@ -155,4 +155,4 @@ throttle می‌شود و علتش چیزی است که روی *اتصال* عم
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

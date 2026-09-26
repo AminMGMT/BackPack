@@ -5,9 +5,11 @@ package menu
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
@@ -118,10 +120,12 @@ func runLocalUpdate() {
 	fmt.Println()
 	if err := manage.ApplyLocalUpdate(u, func(l string) { tui.Info("• " + l) }); err != nil {
 		tui.Error(err.Error())
-	} else {
-		tui.Success("Done.")
+		tui.PressEnter()
+		return
 	}
+	tui.Success("Done.")
 	tui.PressEnter()
+	reopen()
 }
 
 // channelMenu picks between stable releases and pre-releases.
@@ -201,10 +205,12 @@ func runUpdate() {
 	}
 	if err != nil {
 		tui.Error("Update failed: " + err.Error())
-	} else {
-		tui.Success("Backpack updated successfully.")
+		tui.PressEnter()
+		return
 	}
+	tui.Success("Backpack updated successfully.")
 	tui.PressEnter()
+	reopen()
 }
 
 // offerRelay asks whether to fetch the update through one of the tunnels, and
@@ -298,10 +304,33 @@ func restorePointMenu() {
 	fmt.Println()
 	if err := manage.RollbackUpdate(chosen, func(l string) { tui.Info("• " + l) }); err != nil {
 		tui.Error("Rollback failed: " + err.Error())
-	} else {
-		tui.Success("Rolled back to " + chosen.Meta.Version + " successfully.")
+		tui.PressEnter()
+		return
 	}
+	tui.Success("Rolled back to " + chosen.Meta.Version + " successfully.")
 	tui.PressEnter()
+	reopen()
+}
+
+// reopen replaces this menu with the binary now installed.
+//
+// An update or a rollback swaps the file on disk, and this process is still
+// the build it was started as: the menu came back showing the old version and
+// the old screens until the operator quit and ran sudo backpack again. Every
+// tunnel has already been restarted on the new binary by then; this puts the
+// menu on it too.
+func reopen() {
+	tui.Info("Opening the new version...")
+	if err := execSelf(); err != nil {
+		tui.Warn("Could not reopen by itself (" + err.Error() + ") — exit and run sudo backpack again.")
+		tui.PressEnter()
+	}
+}
+
+// execSelf starts the installed binary in place of this process. A variable so
+// a test can see it asked for without the test binary being replaced.
+var execSelf = func() error {
+	return syscall.Exec(app.BinPath, []string{app.BinPath}, os.Environ())
 }
 
 // diagnoseRelay walks the relay chain and reports the first broken hop.

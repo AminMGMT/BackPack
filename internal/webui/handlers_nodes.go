@@ -662,6 +662,16 @@ func (s *server) pushPeerEnd(run node.Runner, nodeName, tunnel string, peerConn 
 			// settings the operator gave when the tunnel was paired.
 			peerConn = peerConnOnNode(run, nodeName, form.Name)
 		}
+		// Simple auth is paired, not the far end's own answer: it has to match
+		// this end, whatever the far end's drawer said.
+		if form.SimpleAuth {
+			c := manage.ConnTune{}
+			if peerConn != nil {
+				c = *peerConn
+			}
+			c.SimpleAuth = true
+			peerConn = &c
+		}
 		t.Conn = peerConn
 		req.Tunnel = &t
 	}

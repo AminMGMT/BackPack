@@ -29,35 +29,45 @@ import (
 // other server.
 func showShareLink(name string) {
 	tui.Clear()
-	tui.Title("Setup link")
+	tui.Title("Setup Link")
+	printShareLink(name)
+	tui.PressEnter()
+}
 
+// printShareLink prints the link and what to do with it, and reports whether
+// there was one to print.
+func printShareLink(name string) bool {
 	link, err := ShareLinkFor(name, "")
 	if err != nil {
 		tui.Error("Could not build the link: " + err.Error())
-		tui.PressEnter()
-		return
+		return false
 	}
 	parsed, derr := DecodeShareLink(link)
 	if derr != nil {
 		// A link this build made and cannot read is a bug in the codec, not in
 		// the operator's tunnel, and saying so is more use than the raw error.
 		tui.Error("This build produced a link it cannot read back: " + derr.Error())
-		tui.PressEnter()
-		return
+		return false
 	}
 
 	fmt.Println()
-	tui.Warn("Paste this into the OTHER server: sudo backpack → Setup from a link.")
+	if parsed.Kind == "direct" && parsed.PeerSide() == "kharej" {
+		tui.Warn("On the KHAREJ server: Setup Kharej → Direct → the same carrier →")
+		tui.Warn("Setup Link, and paste this line.")
+	} else {
+		tui.Warn("Paste this into the OTHER server: sudo backpack → Setup from a link.")
+	}
 	tui.Warn("It carries everything the two ends have to agree on — the token, the")
 	tui.Warn("transport, the port, and the tuning — so nothing has to be retyped.")
 	fmt.Println()
-	tui.Info("Meant for the " + parsed.PeerSide() + " side.")
+	tui.Info("Meant for the " + parsed.PeerSide() + " side. Shown again any time under")
+	tui.Info("Manage tunnels → this tunnel → Setup Link.")
 	fmt.Println()
 	fmt.Println(link)
 	fmt.Println()
 	tui.Warn("It contains this tunnel's token. Treat it as the secret it is: anyone")
 	tui.Warn("holding it can connect to this tunnel.")
-	tui.PressEnter()
+	return true
 }
 
 // setupFromLink builds this machine's end from a link made on the other one.
@@ -65,7 +75,7 @@ func setupFromLink() {
 	tui.Clear()
 	tui.Title("Set up from a link")
 	tui.Warn("Paste the setup link from the other server. It was shown there under")
-	tui.Warn("Manage tunnels → the tunnel → Setup link.")
+	tui.Warn("Manage tunnels → the tunnel → Setup Link.")
 	fmt.Println()
 
 	raw := strings.TrimSpace(tui.Prompt("Link: "))

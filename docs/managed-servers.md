@@ -179,16 +179,6 @@ screen has a switch — this server, or the one holding the other end — so a
 client that cannot dial, a certificate it could not read or a port already held
 over there says so without logging into that machine.
 
-## Speed testing
-
-The measurement needs something at the far end to sink the bytes. When the
-tunnel was built across a managed server, the panel starts that itself for the
-length of the test.
-
-A refused connection on the *local* port is not the far end's fault and is no
-longer reported as one: it means nothing is listening here, usually because the
-tunnel is stopped.
-
 ## Keeping them up to date
 
 Each card has **Upgrade**, and when a release lands the fleet page says which
@@ -209,7 +199,7 @@ server from the fleet leaves nothing behind to clean up.
 
 The one command is `backpack node exec`, which performs a single operation from
 a fixed list — create or update a tunnel, start, stop, restart, report, read a
-log, sink a speed test — and refuses anything else. It is not meant to be typed.
+log — and refuses anything else. It is not meant to be typed.
 
 ## What to think about before turning it on
 
@@ -290,4 +280,4 @@ log, sink a speed test — and refuses anything else. It is not meant to be type
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

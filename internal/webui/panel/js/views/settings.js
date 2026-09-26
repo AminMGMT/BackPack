@@ -451,7 +451,8 @@ export function settingsView(ctx) {
             ? `<b>Trusted by every browser.</b> ${esc(snap.acmeNote || '')}`
             : certMode === 'self'
               ? '<b>The browser warns once.</b> It works on a bare IP, and the warning '
-                + 'is accepted per device.'
+                + 'is accepted per device. Installing it as an app needs a trusted '
+                + 'certificate — only an iPhone adds it to the home screen anyway.'
               : '<b>No certificate.</b> The page travels in the clear and cannot be '
                 + 'installed as an app.';
         }

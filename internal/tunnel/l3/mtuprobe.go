@@ -305,6 +305,9 @@ func (t *Tunnel) handleProbeMessage(plain []byte, h header, body []byte, from ne
 		t.promote(sess)
 	}
 	t.notePeer(from)
+	// An authenticated probe or answer is the peer demonstrably alive, as a
+	// data packet is.
+	t.noteAnswered()
 
 	switch h.kind {
 	case typeProbe:

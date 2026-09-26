@@ -67,7 +67,9 @@ func newBackendPool(targets []string) *backendPool {
 func (p *backendPool) order() []*backendMember {
 	now := p.now().UnixNano()
 	n := len(p.members)
-	start := int(p.turn.Add(1)-1) % max(n, 1)
+	// Reduced while still unsigned: converted first, a counter past what an
+	// int holds (two billion on a 32-bit build) gives a negative index.
+	start := int((p.turn.Add(1) - 1) % uint64(max(n, 1)))
 
 	up := make([]*backendMember, 0, n)
 	var cooling []*backendMember

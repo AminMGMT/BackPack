@@ -1,135 +1,181 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-state="__LOGIN_STATE__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0a0a0b">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#070707">
 <link rel="manifest" href="__BASE_PATH__/manifest.json">
 <link rel="icon" href="__BASE_PATH__/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="__BASE_PATH__/icon.svg">
+<link rel="apple-touch-icon" href="__BASE_PATH__/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Backpack">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Backpack · Login</title>
+<script nonce="__CSP_NONCE__">
+  /* The panel's own appearance, read before first paint: the ground (dark or
+     light) and the accent, under the names js/main.js stores them. Signing in
+     is the first thing anyone sees, and a door in a different colour from the
+     room behind it reads as a different product. This page loads before
+     anything else, so it reads the choice itself rather than importing it. */
+  (function(){
+    var t='dark', a='none';
+    try{ t=localStorage.getItem('bp_theme')||'dark'; a=localStorage.getItem('bp_accent')||'none'; }catch(e){}
+    if(t!=='light') t='dark';
+    document.addEventListener('DOMContentLoaded',function(){
+      document.body.dataset.t=t;
+      if(a && a!=='none') document.body.dataset.accent=a;
+      var m=document.querySelector('meta[name="theme-color"]');
+      if(m) m.setAttribute('content', t==='light' ? '#f2f2f2' : '#070707');
+    });
+  })();
+</script>
 <style>
-  :root{
-    --bg:#0a0a0b; --card:rgba(255,255,255,.045); --stroke:rgba(255,255,255,.09);
-    --accent-rgb:255,69,58;
-    --accent:rgb(var(--accent-rgb));
-    --red:var(--accent);
-    --red-soft:color-mix(in srgb, var(--accent) 60%, #fff);
-    --red-deep:color-mix(in srgb, var(--accent) 68%, #000);
-    --txt:#f5f5f7; --muted:#9a9aa0; --radius:26px;
-  }
+  /* Tokens — the same palette, accents and material as the panel
+     (panel/css/tokens.css, accent.css, screens/monitor.css). */
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%}
-  body{
-    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Inter,system-ui,sans-serif;
-    background:var(--bg); color:var(--txt);
-    display:grid; place-items:center; overflow:hidden; -webkit-font-smoothing:antialiased;
-    min-height:100dvh;
-  }
-  .ic{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  button,input{font:inherit;color:inherit}
+  svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  [hidden]{display:none!important}
+  :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.32,.72,0,1)}
+  body[data-t="dark"]{
+    --bg:#070707;--s1:#111111;--s2:#181818;--s3:#1f1f1f;
+    --ln:rgba(255,255,255,.08);--ln2:rgba(255,255,255,.15);--ln3:rgba(255,255,255,.3);
+    --tx:#fafafa;--tx2:#dcdcdc;--mu:#8e8e8e;--dim:#606060;--faint:#3d3d3d;
+    --sunk:rgba(255,255,255,.05);--field:#0c0c0c;
+    --glassA:rgba(26,26,28,.62);--glassB:rgba(16,16,18,.74);
+    --rim:rgba(255,255,255,.30);--rim2:rgba(255,255,255,.06);--spec:rgba(255,255,255,.09)}
+  body[data-t="light"]{
+    --bg:#f2f2f2;--s1:#ffffff;--s2:#fafafa;--s3:#f4f4f4;
+    --ln:rgba(0,0,0,.09);--ln2:rgba(0,0,0,.16);--ln3:rgba(0,0,0,.34);
+    --tx:#0a0a0a;--tx2:#2e2e2e;--mu:#6b6b6b;--dim:#949494;--faint:#c4c4c4;
+    --sunk:rgba(0,0,0,.045);--field:#ffffff;
+    --glassA:rgba(255,255,255,.66);--glassB:rgba(250,250,250,.78);
+    --rim:rgba(255,255,255,.95);--rim2:rgba(0,0,0,.05);--spec:rgba(255,255,255,.55)}
+  body{--ac:var(--tx);--ac-on:var(--bg)}
+  body[data-t="dark"][data-accent="crimson"]{--ac:#b3001b;--ac-on:#ffffff}
+  body[data-t="light"][data-accent="crimson"]{--ac:#4f000b;--ac-on:#ffffff}
+  body[data-t="dark"][data-accent="ember"]{--ac:#f6511d;--ac-on:#ffffff}
+  body[data-t="light"][data-accent="ember"]{--ac:#d9410f;--ac-on:#ffffff}
+  body[data-t="dark"][data-accent="lime"]{--ac:#7fb800;--ac-on:#101010}
+  body[data-t="light"][data-accent="lime"]{--ac:#5f8a00;--ac-on:#ffffff}
+  body[data-t="dark"][data-accent="azure"]{--ac:#41bbd9;--ac-on:#08222a}
+  body[data-t="light"][data-accent="azure"]{--ac:#1d87a5;--ac-on:#ffffff}
+
+  html,body{min-height:100%}
+  body{min-height:100dvh;display:grid;place-items:center;
+    padding:max(24px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));
+    background:var(--bg);color:var(--tx);overflow-x:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
-  :focus-visible{outline:2px solid var(--red);outline-offset:3px}
+  :focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
 
-  .glow{position:fixed;inset:0;z-index:0;filter:blur(90px);opacity:.6}
-  .glow::before,.glow::after{content:"";position:absolute;border-radius:50%}
-  .glow::before{width:520px;height:520px;background:radial-gradient(circle,var(--red-deep),transparent 65%);
-    top:-160px;left:-120px;animation:float1 14s ease-in-out infinite}
-  .glow::after{width:420px;height:420px;background:radial-gradient(circle,#7a0d08,transparent 65%);
-    bottom:-140px;right:-100px;animation:float2 18s ease-in-out infinite}
-  @keyframes float1{50%{transform:translate(120px,80px) scale(1.15)}}
-  @keyframes float2{50%{transform:translate(-100px,-60px) scale(1.1)}}
+  /* The ground: the panel's horizon of accent bars. */
+  .bgbars{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;display:flex}
+  .bgbars i{flex:1 0 0;min-width:0;height:100%;transform-origin:bottom;transform:scaleY(var(--s));
+    background:linear-gradient(to top,color-mix(in srgb,var(--ac) 24%,transparent),
+      color-mix(in srgb,var(--ac) 6%,transparent) 45%,transparent 78%);
+    animation:pulseBar 2s ease-in-out var(--d) infinite alternate}
+  body[data-t="light"] .bgbars i{
+    background:linear-gradient(to top,color-mix(in srgb,var(--ac) 15%,transparent),
+      color-mix(in srgb,var(--ac) 4%,transparent) 45%,transparent 78%)}
+  @keyframes pulseBar{to{transform:scaleY(calc(var(--s) * .7))}}
 
-  .card{
-    position:relative;z-index:1;width:min(92vw,380px);padding:44px 34px 30px;
-    background:var(--card);border:1px solid var(--stroke);border-radius:var(--radius);
-    backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);
-    box-shadow:0 30px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08);
-    text-align:center;animation:rise .7s cubic-bezier(.16,1,.3,1) both;
-  }
-  @keyframes rise{from{opacity:0;transform:translateY(24px) scale(.98)}}
-  .logo{
-    width:66px;height:66px;margin:0 auto 18px;border-radius:20px;display:grid;place-items:center;color:#fff;
-    background:linear-gradient(145deg,var(--red),var(--red-deep));
-    box-shadow:0 10px 30px rgba(var(--accent-rgb),.45), inset 0 1px 0 rgba(255,255,255,.4);
-    animation:pop .8s cubic-bezier(.16,1,.3,1) .1s both;
-  }
-  .logo .ic{width:32px;height:32px}
-  @keyframes pop{from{opacity:0;transform:scale(.5) rotate(-12deg)}}
-  h1{font-size:22px;font-weight:700;letter-spacing:-.02em}
-  .sub{color:var(--muted);font-size:13px;margin:6px 0 26px}
+  /* The card: the panel's glass dialog. */
+  .card{position:relative;z-index:1;width:min(360px,100%);border-radius:20px;overflow:hidden;
+    background:linear-gradient(160deg,var(--glassA),var(--glassB));
+    -webkit-backdrop-filter:blur(44px) saturate(190%);backdrop-filter:blur(44px) saturate(190%);
+    border:1px solid transparent;
+    box-shadow:0 40px 90px -30px rgba(0,0,0,.75),0 2px 10px -4px rgba(0,0,0,.5);
+    animation:rise .55s var(--spring) both}
+  body[data-t="light"] .card{box-shadow:0 30px 70px -30px rgba(0,0,0,.28),0 2px 10px -4px rgba(0,0,0,.12)}
+  .card::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:5;padding:1px;
+    background:linear-gradient(150deg,var(--rim),var(--rim2) 34%,transparent 60%,var(--rim2) 88%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude}
+  @keyframes rise{from{opacity:0;transform:translateY(14px) scale(.985)}}
 
-  form{display:flex;flex-direction:column;gap:14px}
+  .top{display:flex;flex-direction:column;align-items:center;padding:30px 24px 20px;text-align:center}
+  .mk{width:46px;height:46px;border-radius:15px;background:var(--ac);color:var(--ac-on);
+    display:grid;place-items:center;margin-bottom:14px}
+  .mk svg{width:23px;height:23px;stroke-width:2.1}
+  h1{font-size:20px;font-weight:660;letter-spacing:-.03em}
+  .sub{font-size:12.5px;color:var(--dim);margin-top:4px;line-height:1.5}
+
+  form{display:flex;flex-direction:column;gap:10px;padding:0 24px 22px}
+  label.lb{font-size:12px;color:var(--mu);font-weight:550}
   .field{position:relative;display:flex;align-items:center}
-  input{
-    width:100%;padding:16px 52px 16px 18px;font-size:20px;letter-spacing:.5em;text-align:center;
-    color:var(--txt);background:rgba(255,255,255,.05);border:1px solid var(--stroke);
-    border-radius:16px;outline:none;transition:border-color .25s,box-shadow .25s,background .25s;
-    font-variant-numeric:tabular-nums;
-  }
-  input::placeholder{letter-spacing:.2em;color:#5a5a5f}
-  input:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.18);background:rgba(255,255,255,.07)}
-  .toggle{position:absolute;right:8px;width:38px;height:38px;border-radius:10px;border:none;cursor:pointer;
-    background:transparent;color:var(--muted);display:grid;place-items:center;transition:color .2s}
-  .toggle:hover{color:var(--red-soft)}
-  button[type=submit]{
-    min-height:52px;padding:0 16px;font-size:16px;font-weight:600;color:#fff;cursor:pointer;
-    background:linear-gradient(145deg,var(--red),var(--red-deep));border:none;border-radius:16px;
-    transition:transform .25s,box-shadow .25s;box-shadow:0 10px 26px rgba(var(--accent-rgb),.35);touch-action:manipulation;
-  }
-  button[type=submit]:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(var(--accent-rgb),.5)}
-  button[type=submit]:active{transform:translateY(0) scale(.99)}
-  .foot{margin-top:22px;color:var(--muted);font-size:11.5px;letter-spacing:.03em}
-  .foot b{color:var(--red-soft);font-weight:600}
-  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
-  .foot.bp-attrib{opacity:.62;font-size:11.5px;margin-top:6px;line-height:1.5}
-  .foot.bp-attrib a{color:inherit}
+  input{width:100%;height:44px;padding:0 44px 0 13px;font-size:14px;color:var(--tx);
+    background:var(--field);border:1px solid var(--ln);border-radius:11px;outline:0;
+    transition:border-color .22s ease,box-shadow .22s ease}
+  input::placeholder{color:var(--faint)}
+  input:hover{border-color:var(--ln2)}
+  input:focus{border-color:var(--ln3);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 16%,transparent)}
+  input:focus-visible{outline:0}
+  .toggle{position:absolute;right:5px;width:34px;height:34px;border-radius:9px;border:0;cursor:pointer;
+    background:transparent;color:var(--mu);display:grid;place-items:center;transition:background .22s ease,color .22s ease}
+  .toggle:hover{background:var(--sunk);color:var(--tx)}
+  .toggle svg{width:16px;height:16px}
+  .err{display:none;align-items:center;gap:8px;font-size:12px;color:var(--er);line-height:1.45}
+  .err svg{width:14px;height:14px;flex:none}
+  html[data-state="wrong"] .err{display:flex}
+  html[data-state="wrong"] input{border-color:color-mix(in srgb,var(--er) 55%,transparent)}
+  .go{height:44px;margin-top:4px;border-radius:11px;border:1px solid transparent;cursor:pointer;
+    background:var(--ac);color:var(--ac-on);font-size:13.5px;font-weight:620;letter-spacing:-.01em;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    transition:opacity .2s ease,transform .2s var(--spring)}
+  .go:hover{opacity:.9}
+  .go:active{transform:scale(.985)}
+  .go svg{width:15px;height:15px}
+
+  .foot{border-top:1px solid var(--ln);padding:13px 24px 15px;text-align:center;
+    background:color-mix(in srgb,var(--s1) 40%,transparent);font-size:11px;color:var(--dim);line-height:1.6}
+  .foot b{color:var(--tx2);font-weight:600}
+  .foot a{color:inherit}
+
+  html[dir="rtl"] .toggle{right:auto;left:5px}
+  html[dir="rtl"] input{padding:0 13px 0 44px}
+  html[dir="rtl"] .go svg{transform:scaleX(-1)}
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+  @media (prefers-reduced-transparency:reduce){.card{background:var(--s1);-webkit-backdrop-filter:none;backdrop-filter:none}}
 </style>
 </head>
-<body>
-  <div class="glow" aria-hidden="true"></div>
-  <div class="card">
-    <div class="logo" aria-hidden="true">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg>
+<body data-t="dark">
+  <div class="bgbars" aria-hidden="true"><i style="--s:1.000;--d:0.0s"></i><i style="--s:0.882;--d:0.1s"></i><i style="--s:0.767;--d:0.2s"></i><i style="--s:0.658;--d:0.3s"></i><i style="--s:0.553;--d:0.4s"></i><i style="--s:0.456;--d:0.5s"></i><i style="--s:0.368;--d:0.6s"></i><i style="--s:0.300;--d:0.7s"></i><i style="--s:0.368;--d:0.8s"></i><i style="--s:0.456;--d:0.9s"></i><i style="--s:0.553;--d:1.0s"></i><i style="--s:0.658;--d:1.1s"></i><i style="--s:0.767;--d:1.2s"></i><i style="--s:0.882;--d:1.3s"></i><i style="--s:1.000;--d:1.4s"></i></div>
+
+  <main class="card">
+    <div class="top">
+      <div class="mk" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg>
+      </div>
+      <h1>Backpack</h1>
+      <div class="sub" id="sub">Sign in to the panel</div>
     </div>
-    <h1>Backpack</h1>
-    <div class="sub" id="sub">Enter your access password</div>
     <form method="post" action="__BASE_PATH__/login">
-      <label class="sr-only" for="pw" id="pwlabel">Access password</label>
+      <label class="lb" for="pw" id="pwlabel">Access password</label>
       <div class="field">
         <input id="pw" name="password" type="password" maxlength="128"
                placeholder="Password" autofocus autocomplete="current-password" required>
-        <button type="button" class="toggle" id="toggle" aria-label="Show code" aria-pressed="false">
-          <svg class="ic" viewBox="0 0 24 24" id="eye"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        <button type="button" class="toggle" id="toggle" aria-label="Show password" aria-pressed="false">
+          <svg viewBox="0 0 24 24" id="eye"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <button type="submit" id="unlock">Unlock</button>
+      <div class="err" role="alert"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg><span id="err">Wrong password. Try again.</span></div>
+      <button type="submit" class="go" id="unlock"><span id="unlocktxt">Unlock</span><svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></button>
     </form>
-    <div class="foot">TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
-    <!-- The Appropriate Legal Notice AGPL-3.0 section 13 asks a network
-         service to show the people interacting with it, and the attribution
-         NOTICE requires a modified version to keep. This is the first page
-         anyone reaches, which is why it is here rather than only inside. -->
-    <div class="foot bp-attrib">Based on BackPack by Amin Mohammadi (AminMGMT)<br>
-      <a href="https://github.com/AminMGMT/BackPack" rel="noreferrer">source</a> · AGPL-3.0</div>
-  </div>
+    <div class="foot">
+      <div>TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
+    </div>
+  </main>
 <script nonce="__CSP_NONCE__">
-  // The accent chosen in the panel applies here too. Signing in is the first
-  // thing anyone sees, and a login screen in a colour the panel does not use
-  // reads as a different product. The table is duplicated rather than shared
-  // because this page loads before anything else and must not depend on it.
-  (function(){
-    const A={ember:'255,69,58',pomegranate:'231,29,54',saffron:'247,181,56',
-             pistachio:'127,184,0',turquoise:'65,187,217',frost:'173,202,214'};
-    try{
-      const v=A[localStorage.getItem('bp_accent')];
-      if(v) document.documentElement.style.setProperty('--accent-rgb',v);
-    }catch(e){}
-  })();
   function togglePw(){
     const i=document.getElementById('pw'), t=document.getElementById('toggle'), e=document.getElementById('eye');
     const show=i.type==='password';
     i.type=show?'text':'password';
-    t.setAttribute('aria-pressed',show); t.setAttribute('aria-label',show?'Hide code':'Show code');
+    t.setAttribute('aria-pressed',show); t.setAttribute('aria-label',show?'Hide password':'Show password');
     e.innerHTML=show
       ?'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>'
       :'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
@@ -140,22 +186,37 @@
      script elements only — never an attribute handler. That is the point of
      it, and it means this page cannot keep one either. */
   document.getElementById('toggle').addEventListener('click', togglePw);
+  /* Typing again clears the "wrong password" line. */
+  document.getElementById('pw').addEventListener('input', function(){
+    document.documentElement.dataset.state='';
+  });
 </script>
 <script nonce="__CSP_NONCE__">
 // The language the panel was left in. The login page has no settings of its
 // own — it follows the choice already made, so a Persian reader is not shown an
 // English door to a Persian panel.
 (function(){
-  if(localStorage.getItem('bp_lang')!=='fa') return;
+  let lang=null;
+  try{ lang=localStorage.getItem('bp_lang'); }catch(e){}
+  if(lang!=='fa') return;
   document.documentElement.lang='fa';
   document.documentElement.dir='rtl';
   const set=(id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
-  set('sub','رمز عبور خود را وارد کن');
+  set('sub','ورود به پنل');
   set('pwlabel','رمز عبور');
-  set('unlock','ورود');
+  set('unlocktxt','ورود');
+  set('err','رمز عبور اشتباه است. دوباره امتحان کن.');
   const pw=document.getElementById('pw');
   if(pw){ pw.placeholder='رمز عبور'; pw.style.direction='ltr'; pw.style.textAlign='left'; }
 })();
+</script>
+<script nonce="__CSP_NONCE__">
+// Registered here too, so a phone can install the panel from the first page it
+// sees rather than only after signing in. The worker caches nothing — see
+// sw.js — so this changes no request, it only makes the page installable.
+if('serviceWorker' in navigator && window.isSecureContext){
+  navigator.serviceWorker.register('__BASE_PATH__/sw.js',{scope:'__BASE_PATH__/'}).catch(function(){});
+}
 </script>
 </body>
 </html>

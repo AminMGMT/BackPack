@@ -167,6 +167,29 @@ func (f *FineTune) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON writes only the answered keys of a drawer that knows which they
+// are. The fleet sends a setup form to a managed server as JSON, and the far
+// end's UnmarshalJSON reads every key present as answered — so a drawer carrying
+// one setting arrived carrying all of them, and its zeros replaced the preset's
+// there. A drawer with no marks means every field, and writes every field.
+func (f FineTune) MarshalJSON() ([]byte, error) {
+	type plain FineTune
+	full, err := json.Marshal(plain(f))
+	if err != nil || f.sent == nil {
+		return full, err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(full, &keys); err != nil {
+		return nil, err
+	}
+	for k := range keys {
+		if !f.sent[k] {
+			delete(keys, k)
+		}
+	}
+	return json.Marshal(keys)
+}
+
 // has reports whether the form sent this key; code-built values have them all.
 func (f FineTune) has(key string) bool { return f.sent == nil || f.sent[key] }
 
@@ -382,6 +405,9 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
+	if err := refuseBusyForwards(s); err != nil {
+		return "", false, err
+	}
 	service, err = s.Save()
 	if err != nil {
 		return service, false, err
@@ -404,6 +430,9 @@ func ApplyTunnel(n NewTunnel) (service string, active bool, created bool, err er
 	}
 	service = app.ServiceName(s.Name)
 	if !fileExists(app.ConfigPath(s.Name)) {
+		if err := refuseBusyForwards(s); err != nil {
+			return service, false, true, err
+		}
 		service, err = s.Save()
 		if err != nil {
 			return service, false, true, err
@@ -414,6 +443,20 @@ func ApplyTunnel(n NewTunnel) (service string, active bool, created bool, err er
 		return service, IsActive(service), false, err
 	}
 	return service, IsActive(service), false, nil
+}
+
+// refuseBusyForwards is the panel's copy of the wizard's refusal: a new Iran
+// server whose forwarded port is already held here, or is its own tunnel port,
+// would be written and then fail to bind it. See reverseBusyPorts.
+func refuseBusyForwards(s TunnelSpec) error {
+	if s.Role != "server" {
+		return nil
+	}
+	if busy := reverseBusyPorts(s.Ports, s.BindAddr, s.Transport); len(busy) > 0 {
+		return fmt.Errorf("already in use on this server: %s — the tunnel port or the web "+
+			"panel's own port is the usual one; pick other ports", strings.Join(busy, ", "))
+	}
+	return nil
 }
 
 // specFromNew turns a filled setup form into the configuration it describes.

@@ -33,7 +33,7 @@ that brought a filtered Germany server back online in the field.
 
 Exactly the TCP walkthrough, with:
 
-**Select transport family → `TCP`, Select TCP transport → `TCP + Stealth`**
+**Select Transport Family → `TCP`, Select TCP Transport → `TCP + Stealth`**
 
 on **both** ends. No certificate, no domain, no extra questions. Tunnel port,
 token, forwarded ports, UDP question and preset are all answered as usual.

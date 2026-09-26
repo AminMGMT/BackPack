@@ -1,25 +1,50 @@
 package webui
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// The panel is deliberately single-themed: one accent, matching the CLI menu.
-// These tests guard that decision, because it is the kind of thing a later edit
-// re-adds without meaning to — a colour picker looks like a feature, and the
-// reason it is absent lives in the changelog rather than the code.
-
-// The login page must follow the same choice: it is the first thing anyone
-// sees, and a sign-in screen in a colour the panel does not use reads as a
-// different product.
-func TestLoginFollowsTheChosenAccent(t *testing.T) {
-	body := string(loginHTML)
-	if !strings.Contains(body, "bp_accent") {
-		t.Error("the login page ignores the chosen accent")
+// The login page must follow the panel's appearance: it is the first thing
+// anyone sees, and a sign-in screen in a colour or ground the panel does not
+// use reads as a different product. It reads the same keys the panel stores
+// (js/main.js) and knows every accent the panel offers.
+func TestLoginFollowsThePanelAppearance(t *testing.T) {
+	accents, err := os.ReadFile("panel/css/accent.css")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(body, "setProperty('--accent-rgb'") {
-		t.Error("the login page reads the accent but never applies it")
+	for name, page := range map[string][]byte{"login": loginHTML, "two-factor": twoFactorHTML} {
+		body := string(page)
+		for _, want := range []string{"bp_theme", "bp_accent", "dataset.t=", "dataset.accent="} {
+			if !strings.Contains(body, want) {
+				t.Errorf("the %s page does not follow the panel's appearance: %q is missing", name, want)
+			}
+		}
+		for _, m := range regexp.MustCompile(`data-accent="([a-z]+)"`).FindAllStringSubmatch(string(accents), -1) {
+			if m[1] != "none" && !strings.Contains(body, `data-accent="`+m[1]+`"`) {
+				t.Errorf("the %s page has no colour for the panel's %q accent", name, m[1])
+			}
+		}
+	}
+}
+
+// A refused attempt says so. The page used to reappear unchanged, which reads
+// as the click not having worked.
+func TestARefusedSignInSaysSo(t *testing.T) {
+	for name, page := range map[string][]byte{"login": loginHTML, "two-factor": twoFactorHTML} {
+		if !strings.Contains(string(page), loginStatePlaceholder) {
+			t.Errorf("the %s page has no place for the refused state", name)
+		}
+		if got := string(withLoginState(page, true)); !strings.Contains(got, `<html lang="en" data-state="wrong">`) {
+			t.Errorf("the %s page is not marked after a refusal", name)
+		}
+		if got := string(withLoginState(page, false)); strings.Contains(got, loginStatePlaceholder) ||
+			!strings.Contains(got, `<html lang="en" data-state="">`) {
+			t.Errorf("the %s page shows a refusal nobody made", name)
+		}
 	}
 }
 

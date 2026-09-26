@@ -89,32 +89,37 @@ func TestMenuEntryReachesTheRightSide(t *testing.T) {
 	}
 }
 
-// Only the listening side may offer a token.
+// Only one side may offer a token, and it is the Iran side.
 //
 // Offering one on both ends means somebody presses Enter twice and ends up
 // with two different tokens — and a mismatched token is answered with silence
 // by design, so it presents as a blocked port rather than as the typo it is.
-func TestOnlyKharejSuggestsAToken(t *testing.T) {
-	// The Iran prompt must not carry a pre-filled value. This asserts on the
-	// wording because the prompt itself needs a terminal: the Iran path uses
-	// Prompt (no default) and the kharej path PromptDefault (a default).
+// Iran sets the tunnel up first and hands the token over in its code, so the
+// kharej, set up by hand, must be given the Iran server's token.
+func TestOnlyIranSuggestsAToken(t *testing.T) {
+	// The kharej prompt must not carry a pre-filled value. This asserts on the
+	// wording because the prompt itself needs a terminal: the kharej path uses
+	// Prompt (no default) and the Iran path PromptDefault (a default).
 	src, err := os.ReadFile("directsetup.go")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	body := string(src)
 
-	iran := body[strings.Index(body, "tui.Info(\"The kharej server generates the token"):]
-	if strings.Contains(iran[:900], "PromptDefault") {
-		t.Fatal("the Iran side offers a default token, which is what causes the mismatch")
+	fn := body[strings.Index(body, "func askSharedToken"):]
+	fn = fn[:strings.Index(fn, "\n}\n")]
+	iran, kharej, ok := strings.Cut(fn, "\n\t\treturn token, true\n\t}\n")
+	if !ok {
+		t.Fatal("askSharedToken no longer has an Iran branch followed by the kharej one")
 	}
-	if !strings.Contains(iran[:900], "Token from the kharej server") {
-		t.Fatal("the Iran side does not ask for the other machine's token by name")
+	if strings.Contains(kharej, "PromptDefault") {
+		t.Fatal("the kharej side offers a default token, which is what causes the mismatch")
 	}
-
-	// And it must still be possible to set Iran up first.
-	if !strings.Contains(body, "Leave this blank and one will be") {
-		t.Fatal("no way to generate a token when the kharej side does not exist yet")
+	if !strings.Contains(kharej, "From The Iran Server") {
+		t.Fatal("the kharej side does not ask for the Iran server's token by name")
+	}
+	if !strings.Contains(iran, "randomToken(64)") || !strings.Contains(iran, `PromptDefault("Security Token"`) {
+		t.Fatal("the Iran side does not generate and offer the token")
 	}
 }
 
@@ -147,13 +152,24 @@ func TestWizardOrderMatchesReverse(t *testing.T) {
 				// inside the Noise session, so there is no encapsulation left
 				// to choose between.
 				"askL3Carrier()",
-				`uniqueName(tui.PromptDefault("Tunnel name"`,
+				// Iran, in the order the operator asked for: where, which
+				// port, what to forward, then the name and the token.
+				`tui.Prompt("Kharej IP Or Domain: ")`,
+				`tui.PromptDefault("Tunnel Port", "9000")`,
+				`tui.Prompt("Forwarded Ports (Blank For TUN): ")`,
+				`uniqueName(tui.PromptDefault("Tunnel Name"`,
 				"askL3Token(&cfg)",
-				`tui.Prompt("Ports to expose here`,
-				// The forged-source carrier's own screen, which the reverse
-				// transport used to own and which came across with it.
-				"askSpoofCarrier(&cfg.Spoof",
-				`tui.Confirm("Fine-tune the advanced settings by hand"`,
+				`tui.Confirm("Carry UDP As Well As TCP On Those Ports"`,
+				// The carrier's own questions — the forged-source carrier's
+				// screen, which the reverse transport used to own, and the SNI
+				// domain — gathered in one place so the paste-a-code path asks
+				// them too.
+				"askL3CarrierExtras(&cfg, side)",
+				"askL3FEC(&cfg, side)",
+				"chooseL3Preset(false)",
+				`tui.Confirm("Fine-Tune The Advanced Settings"`,
+				"summariseL3(cfg, link)",
+				`tui.Confirm("Create This Tunnel"`,
 			},
 		},
 	} {
@@ -189,7 +205,7 @@ func TestAdvancedSettingsAreOptional(t *testing.T) {
 	}
 	body := string(src)
 
-	if !strings.Contains(body, `tui.Confirm("Fine-tune the advanced settings by hand"`) {
+	if !strings.Contains(body, `tui.Confirm("Fine-Tune The Advanced Settings"`) {
 		t.Fatal("the wizard does not gate its advanced settings")
 	}
 	// The caps must not be asked on the ordinary path.
@@ -200,5 +216,38 @@ func TestAdvancedSettingsAreOptional(t *testing.T) {
 	}
 	if strings.Contains(seg, "Maximum simultaneous connections") {
 		t.Error("setupL3 asks for a cap outside the fine-tune block")
+	}
+}
+
+// IP and SNI spoofing keep the wizard they had: they leave setupL3 before the
+// link-based questions, and in theirs the kharej side makes the token.
+func TestSpoofingCarriersKeepTheClassicWizard(t *testing.T) {
+	src, err := os.ReadFile("directsetup.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	fn := body[strings.Index(body, "func setupL3("):]
+	route := strings.Index(fn, `if carrier == "spoof" || carrier == "sni" {`)
+	link := strings.Index(fn, `"How Do You Want To Set Up This Side?"`)
+	if route < 0 || link < 0 || route > link {
+		t.Fatal("IP and SNI spoofing no longer leave for the classic wizard before the setup-link choice")
+	}
+
+	classic, err := os.ReadFile("directsetup_classic.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	c := string(classic)
+	tok := c[strings.Index(c, "func askSharedTokenClassic"):]
+	kharej, iran, _ := strings.Cut(tok, "\n\t\treturn token, true\n\t}\n")
+	if !strings.Contains(kharej, "if side == sideKharej") || !strings.Contains(kharej, "randomToken(64)") {
+		t.Fatal("the classic wizard no longer has kharej suggest the token")
+	}
+	if !strings.Contains(iran, `tui.Prompt("Token from the kharej server: ")`) {
+		t.Fatal("the classic wizard no longer asks Iran for the kharej server's token")
+	}
+	if strings.Contains(c, "pendingShareLink") || strings.Contains(c, "Setup Link") {
+		t.Fatal("the classic wizard shows the setup link, which the spoofing carriers were to be left without")
 	}
 }

@@ -52,8 +52,8 @@ var manifestJSON = []byte(`{
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait-primary",
-  "background_color": "#0a0a0b",
-  "theme_color": "#0a0a0b",
+  "background_color": "#070707",
+  "theme_color": "#070707",
   "categories": ["utilities", "productivity"],
   "icons": [
     { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
@@ -80,10 +80,10 @@ var (
 //go:embed assets/sw.js
 var serviceWorkerJS []byte
 
-// iconSVG is the header's backpack mark on the accent gradient, as a file.
+// iconSVG is the header's backpack mark on the panel's dark ground, as a file.
 var iconSVG = []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#ff453a"/><stop offset="1" stop-color="#a12219"/>
+    <stop offset="0" stop-color="#262626"/><stop offset="1" stop-color="#070707"/>
   </linearGradient></defs>
   <rect width="128" height="128" rx="30" fill="url(#g)"/>
   <g fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">

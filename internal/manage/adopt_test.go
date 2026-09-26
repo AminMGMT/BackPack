@@ -8,8 +8,7 @@ import (
 //
 // This is what makes a tunnel that already exists joinable to the fleet. Every
 // reach-across the panel has — carrying an edit, starting both halves, reading
-// the far journal, standing the speed test's receiver up over there — is gated
-// on a record of where the other end lives, and until now that record could
+// the far journal — is gated on a record of where the other end lives, and until now that record could
 // only be written at the moment the panel built both ends at once. A tunnel
 // made any other way was permanently outside the fleet, on a server the panel
 // was otherwise managing.

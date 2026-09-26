@@ -18,7 +18,7 @@ it and starve everything else — which is exactly why
 
 Identical to the TCP walkthrough, with one change:
 
-**Select transport family → `TCP`, Select TCP transport → `TCP Mux`**
+**Select Transport Family → `TCP`, Select TCP Transport → `TCP Mux`**
 
 on **both** ends. Everything else — tunnel port, token, forwarded ports, UDP
 question, preset — is answered exactly the same way.
@@ -30,7 +30,7 @@ Firewall on the Iran server: the tunnel port and the forwarded ports on `tcp`.
 ## The mux settings
 
 They come from the preset and rarely need touching. They appear under
-**Fine-tune the advanced settings by hand** at setup, and per-tunnel afterwards
+**Fine-Tune The Advanced Settings** at setup, and per-tunnel afterwards
 in the panel's Fine Tune drawer:
 
 | Setting | What it is |

@@ -251,6 +251,9 @@ func (c *Config) Validate() error {
 	if !strings.Contains(c.LocalIP, "/") && c.PeerIP == "" {
 		return fmt.Errorf("l3: local_ip %q has no prefix length, so peer_ip is required", c.LocalIP)
 	}
+	if err := CheckTunnelEnds(c.LocalIP, c.PeerIP); err != nil {
+		return err
+	}
 
 	if c.TxQueueLen <= 0 {
 		c.TxQueueLen = defaultTxQueueLen
@@ -324,4 +327,23 @@ func validateTunnelAddr(field, value string, allowPrefix bool) error {
 // can see and argue with.
 func MTUFor(pathMTU, carrierOverhead, encapOverhead int) int {
 	return pathMTU - carrierOverhead - dataOverhead - encapOverhead
+}
+
+// CheckTunnelEnds refuses a config whose two tunnel addresses are the same.
+//
+// peer_ip is the OTHER machine's address, and the wizard asks for both, one
+// after the other, with the values swapped between the two machines. Typing
+// this machine's address twice gave a tunnel that came up, completed its
+// handshake and then carried nothing — every packet for the peer was routed to
+// itself — with no error anywhere to say why. Seen in the field on a kharej
+// set up as "10.10.2.2/30 ↔ 10.10.2.2".
+func CheckTunnelEnds(localIP, peerIP string) error {
+	local, _, _ := strings.Cut(strings.TrimSpace(localIP), "/")
+	peer, _, _ := strings.Cut(strings.TrimSpace(peerIP), "/")
+	if peer != "" && local == peer {
+		return fmt.Errorf("l3: local_ip and peer_ip are both %s. peer_ip is the other machine's "+
+			"address on the tunnel — the one the other server has as its local_ip — "+
+			"so the two must differ", local)
+	}
+	return nil
 }

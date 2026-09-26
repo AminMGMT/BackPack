@@ -79,12 +79,21 @@ func findL3Preset(name string) l3Preset {
 }
 
 // chooseL3Preset asks which one, described by what it costs and buys.
-func chooseL3Preset() l3Preset {
+//
+// classic is the IP/SNI spoofing wizard, which keeps its explanation and its
+// wording; the others ask the short question.
+func chooseL3Preset(classic bool) l3Preset {
+	// All three keep latency bounded with fq_codel; what separates them is
+	// the queue and the socket memory, which the descriptions say.
 	fmt.Println()
-	tui.Info("These tune the queue between the kernel and the tunnel, and how much")
-	tui.Info("room the carrier's sockets get. All three keep latency bounded with")
-	tui.Info("fq_codel, so what really separates them is memory.")
-	switch tui.ChooseOpt("How should the tunnel be tuned?", []tui.Option{
+	title := "How Should The Tunnel Be Tuned?"
+	if classic {
+		tui.Info("These tune the queue between the kernel and the tunnel, and how much")
+		tui.Info("room the carrier's sockets get. All three keep latency bounded with")
+		tui.Info("fq_codel, so what really separates them is memory.")
+		title = "How should the tunnel be tuned?"
+	}
+	switch tui.ChooseOpt(title, []tui.Option{
 		{Title: "Turbo", Desc: "the default — 8 MB of socket buffer, suits most links. Start here"},
 		{Title: "Balance", Desc: "smallest footprint, for a small VPS or several tunnels on one box"},
 		{Title: "Aggressive", Desc: "for a fast link with bursts — 32 MB of buffer and a deep queue, wants RAM"},

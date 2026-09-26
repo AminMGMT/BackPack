@@ -57,22 +57,54 @@ func TestReminderShowsTheToken(t *testing.T) {
 // built on the layer-3 engine now, so summariseL3 is what runs before every
 // one of them. What was here checked a function nothing called.
 
-// The layer-3 summary has its own set, including the ping that proves it.
+// The layer-3 summary is one short screen: the carrier in the menu's words,
+// one fact a line, and on Iran the setup link the kharej pastes.
 func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
 	cfg := l3Spec{
 		Name: "demo", Side: sideIran, Carrier: "pck", Encap: "gre", GREKey: 42,
-		Addr: "203.0.113.9:9000", Token: "the-token",
+		Addr: "203.0.113.9:9000", Token: "the-token", Ports: []string{"3233"},
 		Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
+		Preset: PresetBalance,
 	}
-	out := capture(t, func() { summariseL3(cfg) })
+	link := pendingShareLink(cfg)
+	if !strings.HasPrefix(link, shareScheme) {
+		t.Fatalf("no setup link could be built before the tunnel exists: %q", link)
+	}
+	out := capture(t, func() { summariseL3(cfg, link) })
 
 	for _, want := range []string{
-		"pck", "gre (key 42)", "bp0", "10.10.0.1/30", "10.10.0.2",
-		"1400", "the-token",
-		"ping 10.10.0.2", // how to check it worked
+		"Direct PCK", "bp0", "10.10.0.1/30", "10.10.0.2",
+		"203.0.113.9:9000", "3233", "GRE Key", "42", "Balance",
+		"Setup Link (Setup Kharej → Direct → The Same Carrier → Setup Link)", link,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the layer-3 summary is missing %q:\n%s", want, out)
 		}
+	}
+
+	// The link shown before the file exists is the one the kharej can use:
+	// it decodes, and mirrors into this tunnel's other end.
+	parsed, err := DecodeShareLink(link)
+	if err != nil {
+		t.Fatalf("the summary's link does not decode: %v", err)
+	}
+	form := MirrorForPeer(parsed)
+	if form.Token != "the-token" || hostOnly(form.LocalIP) != "10.10.0.2" || form.PeerIP != "10.10.0.1" ||
+		form.TunnelPort != "9000" || form.GREKey != 42 {
+		t.Fatalf("the summary's link builds the wrong kharej: %+v", form)
+	}
+
+	// A udp tunnel over several sockets names the kharej ports it needs open.
+	udp := cfg
+	udp.Carrier, udp.Paths = "udp", 4
+	if out := capture(t, func() { summariseL3(udp, "") }); !strings.Contains(out, "Direct UDP") ||
+		!strings.Contains(out, "9000-9003") {
+		t.Fatalf("a four-socket udp tunnel does not show its port range:\n%s", out)
+	}
+
+	// No ports is a plain TUN, and says so.
+	cfg.Ports = nil
+	if out := capture(t, func() { summariseL3(cfg, "") }); !strings.Contains(out, "none (TUN)") {
+		t.Fatalf("a tunnel without ports is not shown as TUN:\n%s", out)
 	}
 }

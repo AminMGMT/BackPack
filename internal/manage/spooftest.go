@@ -108,6 +108,7 @@ func spoofTestSender() {
 			break
 		}
 		tui.Error("Enter a valid IPv4 address.")
+		tui.StopIfInputGone()
 	}
 	port := tui.PromptInt("Receiver's listen UDP port", 45000)
 	attempts := tui.PromptInt("Probes per candidate IP", 5)
@@ -120,10 +121,12 @@ func spoofTestSender() {
 		expanded, err := spooftest.ExpandList(spec)
 		if err != nil {
 			tui.Error(err.Error())
+			tui.StopIfInputGone()
 			continue
 		}
 		if len(expanded) == 0 {
 			tui.Error("No IPs to test.")
+			tui.StopIfInputGone()
 			continue
 		}
 		ips = expanded

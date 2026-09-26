@@ -18,18 +18,23 @@ const OFFLINE = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Backpack · Offline</title>
 <style>
-  :root{color-scheme:dark}
-  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;
-    background:#0a0a0b;color:#f5f5f7;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
-  .card{max-width:340px;text-align:center}
-  .mark{width:64px;height:64px;margin:0 auto 18px;border-radius:20px;display:grid;place-items:center;
-    background:linear-gradient(145deg,#ff453a,#a12219)}
-  svg{width:32px;height:32px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  h1{font-size:18px;margin:0 0 8px}
-  p{font-size:13.5px;line-height:1.6;color:#9a9aa0;margin:0 0 20px}
-  button{min-height:46px;padding:0 22px;border:0;border-radius:12px;cursor:pointer;
-    font:600 14px inherit;color:#fff;background:#ff453a}
+  :root{color-scheme:dark light;--bg:#070707;--s1:#111111;--ln:rgba(255,255,255,.1);
+    --tx:#fafafa;--dim:#8e8e8e}
+  @media (prefers-color-scheme:light){:root{--bg:#f2f2f2;--s1:#ffffff;--ln:rgba(0,0,0,.1);
+    --tx:#0a0a0a;--dim:#6b6b6b}}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;
+    padding:max(24px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));
+    background:var(--bg);color:var(--tx);-webkit-font-smoothing:antialiased;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif}
+  .card{width:min(340px,100%);padding:30px 24px 24px;text-align:center;background:var(--s1);
+    border:1px solid var(--ln);border-radius:20px}
+  .mark{width:46px;height:46px;margin:0 auto 14px;border-radius:15px;display:grid;place-items:center;
+    background:var(--tx);color:var(--bg)}
+  svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
+  h1{font-size:20px;font-weight:660;letter-spacing:-.03em;margin:0 0 6px}
+  p{font-size:12.5px;line-height:1.6;color:var(--dim);margin:0 0 20px}
+  button{width:100%;height:44px;border:0;border-radius:11px;cursor:pointer;
+    font:inherit;font-size:13.5px;font-weight:620;color:var(--bg);background:var(--tx)}
 </style></head>
 <body><div class="card">
   <div class="mark"><svg viewBox="0 0 24 24"><path d="M8 6V5a4 4 0 018 0v1"/><path d="M5 8h14a2 2 0 012 2v8a3 3 0 01-3 3H6a3 3 0 01-3-3v-8a2 2 0 012-2z"/><path d="M9 12h6"/></svg></div>

@@ -13,7 +13,7 @@ Every request is authorised at one function — `guard` in
 | Scope   | May                                                                 |
 |---------|---------------------------------------------------------------------|
 | `read`  | `/metrics`, `/api/stats`, `/api/tunnels`, `/api/alerts`, `/api/fleet/drift` |
-| `write` | also everything else that runs the tunnels and the fleet: create, edit, restart, logs, speed tests, updates |
+| `write` | also everything else that runs the tunnels and the fleet: create, edit, restart, logs, updates |
 | `admin` | also everything that decides who gets in: tokens, the record, the password, the second factor, signed-in devices, the Telegram admins, the panel's port and certificate, and backup export and restore |
 
 Signing in with the panel password is `admin`. Handing out a credential is
@@ -142,4 +142,4 @@ curl -H "Authorization: Bearer <token>" https://panel:8443/metrics
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

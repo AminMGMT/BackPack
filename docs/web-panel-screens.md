@@ -78,7 +78,6 @@ were on. `fr-relay` below is an example name.
 | Metrics | `#/t/fr-relay/metrics` | Everything known about one tunnel: traffic, the peer, limits, the bot relay, the certificate, failover, the connection pool, and on a KCP link what the error correction is repairing. Sections with nothing behind them are removed rather than shown empty. | Manage → Tunnel Metrics |
 | History | `#/t/fr-relay/history` | The long view: speed over the last day, per-day totals for the week, both uptime figures, and the configuration changes inside the window. | Manage → Tunnel Metrics |
 | Link test | `#/t/fr-relay/link` | Twelve TCP connects to the tunnel port, then the transport the measurement argues for. Same branch logic as the CLI's recommendation, in the same order. | Manage → Link Test |
-| Speed test | `#/t/fr-relay/speed` | A throughput measurement through the tunnel itself. | Manage → Speed Test |
 | Edit | `#/t/fr-relay/edit` | Every setting the tunnel has. The values come from the same call the CLI's edit screen makes, so a tunnel edited here is byte for byte a tunnel edited in the terminal. | Manage → Manage Tunnels → Edit |
 | Undo | `#/t/fr-relay/undo` | The configuration history for this tunnel, and a restore back to any earlier version of it. | Manage → Manage Tunnels → Config history |
 
@@ -145,4 +144,4 @@ hash همه‌جا درست reload می‌شود. هر صفحه‌ای در ای
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

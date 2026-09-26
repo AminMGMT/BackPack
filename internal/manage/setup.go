@@ -7,7 +7,6 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
-	"github.com/backpack/backpack/internal/optimize"
 	"github.com/backpack/backpack/internal/tui"
 	"github.com/backpack/backpack/internal/utils/network"
 )
@@ -60,7 +59,7 @@ func chooseTransport() string {
 		for i, g := range transportGroups {
 			groupOpts[i] = tui.Option{Title: g.label, Desc: g.desc}
 		}
-		gi := tui.ChooseOpt("Select transport family:", groupOpts)
+		gi := tui.ChooseOpt("Select Transport Family", groupOpts)
 		if gi < 0 {
 			return ""
 		}
@@ -70,7 +69,7 @@ func chooseTransport() string {
 		for i, e := range group.entries {
 			entryOpts[i] = tui.Option{Title: e.label, Desc: e.desc}
 		}
-		ei := tui.ChooseOpt("Select "+group.label+" transport:", entryOpts)
+		ei := tui.ChooseOpt("Select "+group.label+" Transport", entryOpts)
 		if ei < 0 {
 			// Back to the family list rather than out of setup entirely.
 			continue
@@ -94,7 +93,7 @@ func choosePreset(transport string) string {
 	for i, o := range options {
 		opts[i] = tui.Option{Title: o.label, Desc: o.desc}
 	}
-	idx := tui.ChooseOpt("Performance preset:", opts)
+	idx := tui.ChooseOpt("How Should The Tunnel Be Tuned?", opts)
 	if idx < 0 {
 		return PresetTurbo
 	}
@@ -105,62 +104,57 @@ func choosePreset(transport string) string {
 // the preset. It runs after ApplyPreset, so every prompt starts from the
 // preset's value and anything left untouched keeps that value.
 func applyManualTuning(s *TunnelSpec) {
-	s.Nodelay = tui.Confirm("Enable TCP_NODELAY (lower latency)", s.Nodelay)
-	s.KeepAlive = tui.PromptInt("Keepalive period (seconds)", s.KeepAlive)
-	s.Heartbeat = tui.PromptInt("Heartbeat interval (seconds, 0 to disable)", s.Heartbeat)
-	s.LogLevel = tui.PromptDefault("Log level (info/debug/warn/error)", s.LogLevel)
+	s.Nodelay = tui.Confirm("TCP_NODELAY (Lower Latency)", s.Nodelay)
+	s.KeepAlive = tui.PromptInt("Keepalive Period (Seconds)", s.KeepAlive)
+	s.Heartbeat = tui.PromptInt("Heartbeat Interval (Seconds, 0 = Off)", s.Heartbeat)
+	s.LogLevel = tui.PromptDefault("Log Level (info/debug/warn/error)", s.LogLevel)
 	// JSON is for feeding a log collector or a script; a person reading
 	// journalctl is better served by the default text format.
-	if tui.Confirm("Write logs as JSON (for log collectors and scripts)", s.LogFormat == "json") {
+	if tui.Confirm("Write Logs As JSON (For Log Collectors)", s.LogFormat == "json") {
 		s.LogFormat = "json"
 	} else {
 		s.LogFormat = ""
 	}
 	if s.Role == "server" {
-		s.ChannelSize = tui.PromptInt("Channel size", s.ChannelSize)
+		s.ChannelSize = tui.PromptInt("Channel Size", s.ChannelSize)
 		// UDP forwarding is not asked here: it is asked in the main setup flow,
-		// next to the exposed ports it describes. Burying it under the advanced
-		// settings — which default to "no" — meant a fresh install never saw
-		// the question at all, and an Xray or WireGuard inbound came up with
-		// nothing explaining why only half of it worked.
+		// next to the forwarded ports it describes. Burying it under the
+		// advanced settings — which default to "no" — meant a fresh install
+		// never saw the question at all, and an Xray or WireGuard inbound came
+		// up with nothing explaining why only half of it worked.
 	} else {
-		s.ConnectionPool = tui.PromptInt("Connection pool size", s.ConnectionPool)
-		s.AggressivePool = tui.Confirm("Enable aggressive pool", s.AggressivePool)
+		s.ConnectionPool = tui.PromptInt("Connection Pool Size", s.ConnectionPool)
+		s.AggressivePool = tui.Confirm("Aggressive Pool", s.AggressivePool)
 	}
 	// The MSS clamp is deliberately not part of any preset: it describes the
-	// path the tunnel crosses, not how hard the tunnel is being pushed. There is
-	// nothing to guess at either — Diagnose measures the path and prints the
-	// number — so it stays at 0 until something has measured it.
+	// path the tunnel crosses, not how hard the tunnel is being pushed. Keep it
+	// at 0 unless Diagnose reports the path cannot carry full-sized packets —
+	// it prints the value, and both ends need the same one.
 	if !isDatagram(s.Transport) {
-		tui.Warn("MSS caps the largest TCP segment the tunnel sends. Keep it at 0")
-		tui.Warn("unless Diagnose reports that the path cannot carry full-sized")
-		tui.Warn("packets — it prints the value, and both ends need the same one.")
-		s.MSS = tui.PromptInt("TCP MSS clamp (bytes, 0 = automatic)", s.MSS)
+		s.MSS = tui.PromptInt("TCP MSS Clamp (Bytes, 0 = Automatic; Both Ends The Same)", s.MSS)
 	}
 	if isMux(s.Transport) {
-		s.MuxCon = tui.PromptInt("Mux connections/sessions", s.MuxCon)
-		s.MuxVersion = tui.PromptInt("Mux version (1 or 2)", s.MuxVersion)
-		s.MuxFrameSize = tui.PromptInt("Mux frame size", s.MuxFrameSize)
-		s.MuxRecvBuffer = tui.PromptInt("Mux receive buffer", s.MuxRecvBuffer)
-		s.MuxStreamBuffer = tui.PromptInt("Mux stream buffer", s.MuxStreamBuffer)
+		s.MuxCon = tui.PromptInt("Mux Connections", s.MuxCon)
+		s.MuxVersion = tui.PromptInt("Mux Version (1 Or 2)", s.MuxVersion)
+		s.MuxFrameSize = tui.PromptInt("Mux Frame Size", s.MuxFrameSize)
+		s.MuxRecvBuffer = tui.PromptInt("Mux Receive Buffer", s.MuxRecvBuffer)
+		s.MuxStreamBuffer = tui.PromptInt("Mux Stream Buffer", s.MuxStreamBuffer)
 	}
 	if isKCP(s.Transport) {
-		s.KCPMTU = tui.PromptInt("KCP MTU (bytes, keep below the path MTU)", s.KCPMTU)
-		s.KCPInterval = tui.PromptInt("KCP interval (ms — lower reacts faster, costs CPU)", s.KCPInterval)
-		s.KCPSndWnd = tui.PromptInt("KCP send window (packets)", s.KCPSndWnd)
-		s.KCPRcvWnd = tui.PromptInt("KCP receive window (packets)", s.KCPRcvWnd)
-		s.KCPDataShards = tui.PromptInt("FEC data shards (0 disables error correction)", s.KCPDataShards)
-		s.KCPParityShards = tui.PromptInt("FEC parity shards (losses repaired per group)", s.KCPParityShards)
+		s.KCPMTU = tui.PromptInt("KCP MTU (Bytes, Below The Path MTU)", s.KCPMTU)
+		s.KCPInterval = tui.PromptInt("KCP Interval (ms)", s.KCPInterval)
+		s.KCPSndWnd = tui.PromptInt("KCP Send Window (Packets)", s.KCPSndWnd)
+		s.KCPRcvWnd = tui.PromptInt("KCP Receive Window (Packets)", s.KCPRcvWnd)
+		s.KCPDataShards = tui.PromptInt("FEC Data Shards (0 = Off)", s.KCPDataShards)
+		s.KCPParityShards = tui.PromptInt("FEC Parity Shards", s.KCPParityShards)
 	}
 	// Zero-copy forwarding, offered only where it can actually engage: the
 	// kernel path needs two plain TCP sockets, so a mux, websocket or datagram
-	// transport would take the setting and quietly ignore it.
+	// transport would take the setting and quietly ignore it. It is the
+	// fastest path and the least proven one; nothing about it reaches the
+	// wire, so the two ends need not agree.
 	if s.Transport == "tcp" {
-		tui.Warn("Zero-copy hands forwarded traffic straight to the kernel. It is the")
-		tui.Warn("fastest path and the least proven one — try it on a spare tunnel")
-		tui.Warn("before a busy one. Nothing about it reaches the wire, so the two")
-		tui.Warn("ends need not agree.")
-		s.ZeroCopy = tui.Confirm("Enable zero-copy forwarding (experimental)", s.ZeroCopy)
+		s.ZeroCopy = tui.Confirm("Zero-Copy Forwarding (Experimental)", s.ZeroCopy)
 	}
 
 	// Manual edits no longer match any preset, so the tunnel is marked custom
@@ -175,35 +169,25 @@ func applyManualTuning(s *TunnelSpec) {
 // that wants a real certificate is finished in one pass instead of being built
 // and then reconfigured.
 func setupServerTLS(s *TunnelSpec) bool {
-	tui.Info("WSS transports need a TLS certificate.")
-	fmt.Println()
-	tui.Warn("Self-signed encrypts exactly as well — the client is Backpack's own")
-	tui.Warn("code and does not verify it. A real certificate matters for how the")
-	tui.Warn("connection looks from outside: real HTTPS on 443 is never self-signed,")
-	tui.Warn("so a self-signed one stands out. It is also what a CDN requires.")
-	fmt.Println()
-
-	choice := tui.ChooseOpt("TLS certificate:", []tui.Option{
-		{Title: "Self-signed, generated now", Desc: "works anywhere, including on a bare IP — the default"},
-		{Title: "Let's Encrypt, automatic", Desc: "free and real — needs a domain pointing at this server"},
-		{Title: "Use existing certificate/key files", Desc: "a certificate you already have on disk"},
+	// Self-signed encrypts exactly as well — the client is Backpack's own code
+	// and does not verify it. A real certificate matters for how the
+	// connection looks from outside, and it is what a CDN requires.
+	choice := tui.ChooseOpt("TLS Certificate", []tui.Option{
+		{Title: "Self-Signed", Desc: "generated now — works anywhere, including on a bare IP"},
+		{Title: "Let's Encrypt", Desc: "free and real — needs a domain pointing at this server"},
+		{Title: "Existing Files", Desc: "a certificate and key you already have on disk"},
 	})
 
 	switch choice {
 	case 0:
-		host := strings.TrimSpace(tui.PromptDefault("Domain or IP to embed in the cert (optional)", ""))
+		host := strings.TrimSpace(tui.PromptDefault("Domain Or IP In The Certificate (Optional)", ""))
 		return generateSelfSigned(s, host)
 
 	case 1:
-		// The tunnel port is already chosen at this point, so it can be
-		// checked rather than described in the abstract. On 443 validation
-		// happens over the tunnel's own listener and nothing else is needed;
-		// anywhere else it falls back to port 80.
+		// Off 443, validation happens over port 80, which must then be free
+		// and open; on 443 it goes over the tunnel's own listener.
 		if p := addrPort(s.BindAddr); p != "443" {
-			tui.Warn("This tunnel is on port " + p + ", not 443.")
-			tui.Warn("Let's Encrypt will have to validate over port 80 instead, so")
-			tui.Warn("port 80 must be free on this server and open in the firewall.")
-			fmt.Println()
+			tui.Warn("Port " + p + " is not 443: Let's Encrypt validates over port 80, which must be free and open.")
 		}
 
 		domain, email, ok := promptACMEDomain("", "")
@@ -214,19 +198,11 @@ func setupServerTLS(s *TunnelSpec) bool {
 		// The self-signed pair is generated anyway. It is what the config still
 		// points at, and it is the fallback if issuance fails — without it a
 		// failed ACME request would leave the tunnel with no certificate at all.
-		if !generateSelfSigned(s, domain) {
-			return false
-		}
-		fmt.Println()
-		tui.Success("Let's Encrypt will be used for " + domain + ".")
-		tui.Warn("The certificate is requested on the first connection. If it does")
-		tui.Warn("not arrive, the tunnel keeps working on the self-signed one —")
-		tui.Warn("check: journalctl -u " + app.ServiceName(s.Name) + " -n 50")
-		return true
+		return generateSelfSigned(s, domain)
 
 	case 2:
-		s.TLSCert = strings.TrimSpace(tui.Prompt("Path to TLS certificate (e.g. /etc/letsencrypt/live/x/fullchain.pem): "))
-		s.TLSKey = strings.TrimSpace(tui.Prompt("Path to TLS key (e.g. /etc/letsencrypt/live/x/privkey.pem): "))
+		s.TLSCert = strings.TrimSpace(tui.Prompt("Certificate File (fullchain.pem): "))
+		s.TLSKey = strings.TrimSpace(tui.Prompt("Key File (privkey.pem): "))
 		if err := validCertPair(s.TLSCert, s.TLSKey); err != nil {
 			tui.Error("Invalid certificate: " + err.Error())
 			tui.PressEnter()
@@ -260,14 +236,9 @@ func generateSelfSigned(s *TunnelSpec, host string) bool {
 // tunnel restart and leave the user wondering why nothing changed. Shared with
 // Edit → Certificate so both paths warn about the same things.
 func promptACMEDomain(currentDomain, currentEmail string) (domain, email string, ok bool) {
-	fmt.Println()
-	tui.Warn("Requirements, all of them:")
-	tui.Warn("  • a domain whose A record points at this server's IP")
-	tui.Warn("  • port 80 reachable from outside, OR this tunnel on port 443")
-	tui.Warn("  • this server able to reach acme-v02.api.letsencrypt.org")
-	fmt.Println()
-
-	domain = strings.TrimSpace(tui.PromptDefault("Domain", currentDomain))
+	// Needs: the domain's A record on this server, port 80 reachable (or the
+	// tunnel on 443), and a way out to acme-v02.api.letsencrypt.org.
+	domain = strings.TrimSpace(tui.PromptDefault("Domain (A Record Pointing Here)", currentDomain))
 	if domain == "" {
 		tui.Error("A domain is required.")
 		tui.PressEnter()
@@ -296,7 +267,7 @@ func promptACMEDomain(currentDomain, currentEmail string) (domain, email string,
 		}
 	}
 
-	email = strings.TrimSpace(tui.PromptDefault("Email for expiry warnings (optional)", currentEmail))
+	email = strings.TrimSpace(tui.PromptDefault("Email For Expiry Warnings (Optional)", currentEmail))
 	return domain, email, true
 }
 
@@ -313,40 +284,27 @@ func askPck(s *TunnelSpec) {
 	if s.Transport != "pck" {
 		return
 	}
-	fmt.Println()
-	tui.Warn("TCP + PCK builds and reads its own TCP packets instead of using the")
-	tui.Warn("kernel's TCP stack. Nothing is forged — the address and ports are")
-	tui.Warn("real — but no socket, no handshake and no connection state exist, so")
-	tui.Warn("connection tracking and netfilter have nothing to act on.")
-	tui.Warn("Linux only, needs root, and BOTH ends must be on this transport.")
-	fmt.Println()
-	tui.Info("The interface, local address and next hop are read from this machine's")
-	tui.Info("own routing table — there is nothing to enter for them.")
-	fmt.Println()
-
-	// The default is what bulk data carries, and it is right until a specific
-	// path is known to match on it, so the question leads with that.
-	tui.Info("TCP flags stamped on the tunnel's packets. Vary them only if the path")
-	tui.Info("is known to match on the pattern; each end decides its own.")
+	// The interface, local address and next hop are read from this machine's
+	// routing table. What is left is what the flags on the wire look like —
+	// varied only if the path is known to match on the pattern; each end
+	// decides its own — and an override for a host where the lookup is wrong.
 	opts := network.SuggestedTCPFlagCycles()
 	menu := make([]tui.Option, len(opts))
 	for i, o := range opts {
 		menu[i] = tui.Option{Title: o.Value, Desc: o.Desc}
 	}
-	if i := tui.ChooseOpt("Flag pattern:", menu); i > 0 {
+	if i := tui.ChooseOpt("TCP Flag Pattern", menu); i > 0 {
 		s.PckFlags = strings.Split(opts[i].Value, ",")
 	} else {
 		s.PckFlags = nil // the default, left out of the config entirely
 	}
 
-	fmt.Println()
-	if tui.Confirm("Override the automatic interface / gateway detection", false) {
-		tui.Warn("Leave either empty to keep the automatic answer for it.")
+	if tui.Confirm("Override The Automatic Interface / Gateway Detection", false) {
 		if names := routableInterfaces(); len(names) > 0 {
 			tui.Info("Interfaces: " + strings.Join(names, ", "))
 		}
 		for {
-			raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
+			raw := strings.TrimSpace(tui.PromptDefault("Interface (Blank = Automatic)", ""))
 			if raw == "" {
 				break
 			}
@@ -358,7 +316,7 @@ func askPck(s *TunnelSpec) {
 			break
 		}
 		for {
-			raw := strings.TrimSpace(tui.PromptDefault("Gateway MAC", ""))
+			raw := strings.TrimSpace(tui.PromptDefault("Gateway MAC (Blank = Automatic)", ""))
 			if raw == "" {
 				break
 			}
@@ -456,6 +414,7 @@ func askSpoofCarrier(sc *config.SpoofConfig, onIran bool) {
 				break
 			}
 			tui.Error("That is not an IPv4 address. It looks like 203.0.113.10")
+			tui.StopIfInputGone()
 		}
 	} else {
 		tui.Info("Nothing to answer here: this end dialled the " + there + " server, so it")
@@ -674,17 +633,10 @@ func askProxyProtocol(s *TunnelSpec) {
 	if !supportsProxyProtocol(s.Transport) {
 		return
 	}
-	fmt.Println()
-	tui.Info("Send the real client IP to the service behind the tunnel?")
-	tui.Warn("Without this, your panel sees every user coming from one address, so")
-	tui.Warn("per-user device/IP limits cannot work. With it, each connection")
-	tui.Warn("carries a PROXY protocol v2 header holding the real client IP.")
-	fmt.Println()
-	tui.Error("Only turn this on if the service is set to ACCEPT the PROXY protocol.")
-	tui.Error("If it is not, it will read the header as data and every connection breaks.")
-	tui.Warn("In X-UI / Marzban this is the inbound option named \"Accept Proxy Protocol\".")
-	fmt.Println()
-	s.ProxyProtocol = tui.Confirm("Enable PROXY protocol (send real client IP)", false)
+	// Each connection then carries a PROXY v2 header with the real client IP.
+	// A service not set to accept it (X-UI / Marzban: "Accept Proxy Protocol")
+	// reads the header as data and every connection breaks — hence the label.
+	s.ProxyProtocol = tui.Confirm("Send Real Client IP (PROXY Protocol — The Service Must Accept It)", false)
 }
 
 // uniqueName ensures the chosen name is valid and not already taken.
@@ -698,294 +650,9 @@ func uniqueName(name string) string {
 		default:
 			return name
 		}
+		tui.StopIfInputGone()
 		name = tui.Prompt("Choose a different name: ")
 	}
-}
-
-// SetupServer runs the interactive server (edge/Iran) setup flow.
-func SetupServer() {
-	tui.Clear()
-	tui.Title("Setup Server")
-	tui.Warn("Iran side — reverse tunnel that exposes ports on this machine.")
-	fmt.Println()
-
-	transport := chooseTransport()
-	if transport == "" {
-		return
-	}
-
-	// AcceptUDP starts off: a forwarded port carries TCP only unless the
-	// operator turns UDP on, which is asked for below. See
-	// config.ServerConfig.ForwardsUDP.
-	s := TunnelSpec{Role: "server", Transport: transport, AcceptUDP: false}
-
-	// A port alone still means every interface. An address in front of it
-	// pins the control channel to one of them, which is what lets a two-address
-	// server run the control channel and a forwarded port on the same number.
-	tui.Info("A port alone (443) listens on every address on this server.")
-	tui.Info("To pin it to one — so another service can hold the same port on")
-	tui.Info("another address — write the address too: 85.10.11.51:443")
-	bindSpec := tui.Prompt("Tunnel (control) port: ")
-	bind, err := parseTunnelBind(bindSpec)
-	if err != nil {
-		tui.Error(err.Error())
-		tui.PressEnter()
-		return
-	}
-	port := bind.Port
-	// Only worth asking when they did not already say. Binding the IPv6
-	// wildcard accepts IPv4 as well on a normal dual-stack host, so this is
-	// "IPv6 too" rather than "IPv6 instead".
-	ipv6 := false
-	if !bind.HasHost() {
-		ipv6 = tui.Confirm("Listen on IPv6 as well", false)
-	} else if !localAddrExists(bind.Host) {
-		// A warning, not a refusal: a floating address or one that arrives
-		// with a later interface is a real setup. See localAddrExists.
-		tui.Warn(bind.Host + " is not on any interface of this server right now.")
-		tui.Warn("The tunnel will fail to bind unless it appears before it starts.")
-		fmt.Println()
-	}
-	s.BindAddr = bind.Addr(ipv6)
-
-	defaultName := "server-" + port
-	s.Name = uniqueName(tui.PromptDefault("Tunnel name", defaultName))
-
-	suggested := randomToken(64)
-	tui.Info("Suggested 64-char token (press Enter to accept — copy it to the client):")
-	fmt.Println("  " + tui.Color(tui.Bold+tui.White, suggested))
-	s.Token = tui.PromptDefault("Security token", suggested)
-
-	// Spelled out because getting this wrong is the single most common way a
-	// working tunnel looks broken: the tunnel comes up, carries the connection,
-	// and then the far side has nothing to hand it to.
-	fmt.Println()
-	tui.Warn("A bare port (443) means: expose 443 here, and the KHAREJ server")
-	tui.Warn("forwards it to its own 127.0.0.1:443 — so your panel must listen")
-	tui.Warn("on that exact port there.")
-	tui.Warn("If the service is elsewhere, say so: 443=127.0.0.1:2096")
-	tui.Warn("Several backends for one port: 443=127.0.0.1:2096|127.0.0.1:2097")
-	tui.Warn("(separated by |, checked continuously, balanced over the live ones)")
-	fmt.Println()
-
-	portsRaw := tui.Prompt("Exposed ports (comma separated, e.g. 443,8080 or 443=1.1.1.1:443): ")
-	s.Ports = parsePorts(portsRaw)
-	if len(s.Ports) == 0 {
-		tui.Error("No valid ports entered.")
-		tui.PressEnter()
-		return
-	}
-	if err := validatePortSpecs(s.Ports); err != nil {
-		tui.Error(err.Error())
-		tui.PressEnter()
-		return
-	}
-
-	// Asked in the main flow, right after the ports it applies to, rather than
-	// only under the advanced settings: it is off by default, and a tunnel
-	// fronting an Xray or WireGuard inbound is then broken in a way nothing at
-	// setup accounts for. The cost of saying yes is spelled out so a plain web
-	// tunnel still says no — see config.ServerConfig.ForwardsUDP.
-	fmt.Println()
-	tui.Warn("UDP forwarding is OFF by default. Say yes for Xray/Shadowsocks UDP,")
-	tui.Warn("WireGuard, DNS or games. Say no for a plain web or proxy tunnel: a")
-	tui.Warn("browser's QUIC is UDP on 443, and tunnelling it crowds out the TCP")
-	tui.Warn("forwards sharing this tunnel. It can be changed later under Edit.")
-	s.AcceptUDP = tui.Confirm("Carry UDP as well as TCP on the exposed ports", false)
-
-	showForwardTargets(s.Ports, s.AcceptUDP)
-
-	if needsTLS(transport) && !setupServerTLS(&s) {
-		return
-	}
-	askSimpleAuth(&s, transport)
-
-	askPck(&s)
-
-	askProxyProtocol(&s)
-
-	ApplyPreset(&s, choosePreset(s.Transport))
-	if tui.Confirm("Fine-tune the advanced settings by hand", false) {
-		applyManualTuning(&s)
-	}
-
-	finishSetup(s)
-}
-
-// SetupClient runs the interactive client (origin/kharej) setup flow.
-func SetupClient() {
-	tui.Clear()
-	tui.Title("Setup Client")
-	tui.Warn("Kharej side — reverse tunnel that dials out to the Iran server.")
-	fmt.Println()
-
-	transport := chooseTransport()
-	if transport == "" {
-		return
-	}
-
-	s := TunnelSpec{Role: "client", Transport: transport}
-
-	remoteHost := tui.Prompt("Server address (IP or domain of the server): ")
-	remotePort := tui.Prompt("Server tunnel port: ")
-	if remoteHost == "" || !validPort(remotePort) {
-		tui.Error("Invalid server address or port.")
-		tui.PressEnter()
-		return
-	}
-	// JoinHostPort adds the brackets an IPv6 literal needs, and leaves a
-	// hostname or IPv4 address alone.
-	s.RemoteAddr = net.JoinHostPort(strings.Trim(remoteHost, "[]"), remotePort)
-
-	if !checkServerAddress(strings.Trim(remoteHost, "[]"), transport, remotePort) {
-		return
-	}
-
-	defaultName := "client-" + remotePort
-	s.Name = uniqueName(tui.PromptDefault("Tunnel name", defaultName))
-
-	tui.Info("Enter the SAME token you configured on the server.")
-	s.Token = tui.PromptDefault("Security token", "backpack")
-
-	if isWS(transport) {
-		tui.Info("Optional edge IP: connect to a CDN edge (e.g. Cloudflare) instead of")
-		tui.Info("resolving the server address directly. Leave empty to skip.")
-		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP", ""))
-	}
-	askSimpleAuth(&s, transport)
-
-	askPck(&s)
-
-	// Proxy, interface pinning, and backup addresses are connectivity options
-	// that most tunnels never need. Gate them behind one confirm so the common
-	// path stays short, and only print their explanatory text on demand.
-	fmt.Println()
-	if tui.Confirm("Configure optional connection settings (proxy, interface, backup addresses)", false) {
-		// Only offered where it can actually work: the datagram transports carry
-		// their data in UDP, which a TCP proxy cannot relay.
-		if !isDatagram(transport) {
-			fmt.Println()
-			tui.Info("Optional proxy: reach the tunnel server through a SOCKS5 or HTTP proxy,")
-			tui.Info("for a machine that cannot open outbound connections directly.")
-			tui.Warn("e.g. socks5://127.0.0.1:1080 — leave empty to dial the server directly.")
-			for {
-				raw := strings.TrimSpace(tui.PromptDefault("Proxy URL", ""))
-				if raw == "" {
-					break
-				}
-				if _, err := network.ParseProxy(raw); err != nil {
-					tui.Error(fmt.Sprintf("%v", err))
-					continue
-				}
-				s.Proxy = raw
-				break
-			}
-
-			// Only worth asking on a machine that has somewhere else to go. On a
-			// single-uplink server the answer is always "the one route there is",
-			// and a prompt for it is a prompt to get wrong.
-			if names := routableInterfaces(); len(names) > 1 {
-				fmt.Println()
-				tui.Info("This machine has more than one network interface. You can pin the")
-				tui.Info("tunnel to one of them, or to a source address, if it should not")
-				tui.Info("leave by whichever route the kernel picks.")
-				tui.Warn("Available: " + strings.Join(names, ", ") + " — leave empty to let the kernel decide.")
-				for {
-					raw := strings.TrimSpace(tui.PromptDefault("Interface", ""))
-					if raw == "" {
-						break
-					}
-					if _, err := net.InterfaceByName(raw); err != nil {
-						tui.Error(fmt.Sprintf("no such interface: %v", err))
-						continue
-					}
-					s.Interface = raw
-					break
-				}
-				s.LocalAddr = strings.TrimSpace(tui.PromptDefault("Source address (optional)", ""))
-			}
-		}
-
-		// Backup addresses make the tunnel survive a filtered server IP: the
-		// client tries each one in turn until something answers.
-		fmt.Println()
-		tui.Info("Optional backup server addresses — if the main address ever stops")
-		tui.Info("answering, the client fails over to these automatically.")
-		tui.Warn("Comma separated; a bare IP reuses the main port. Leave empty to skip.")
-		if raw := strings.TrimSpace(tui.PromptDefault("Backup addresses", "")); raw != "" {
-			for _, part := range strings.Split(raw, ",") {
-				part = strings.TrimSpace(part)
-				if part == "" {
-					continue
-				}
-				if _, _, err := net.SplitHostPort(part); err != nil {
-					part = net.JoinHostPort(strings.Trim(part, "[]"), remotePort)
-				}
-				s.FallbackAddrs = append(s.FallbackAddrs, part)
-			}
-		}
-		if len(s.FallbackAddrs) > 0 {
-			fmt.Println()
-			tui.Info("Automatic failover scores every address (latency, jitter, loss) and")
-			tui.Info("keeps traffic on the healthiest one — the multi-exit gaming setup.")
-			tui.Warn("Only turn this on if every address reaches the SAME server — a")
-			tui.Warn("second IP of it, another port, or a CDN edge in front of it.")
-			if tui.Confirm("Enable automatic failover to the healthiest server", false) {
-				s.HealthFailover = true
-			} else {
-				fmt.Println()
-				tui.Info("Load balancing instead spreads connections over ALL those addresses")
-				tui.Info("at once, rather than picking the single best one.")
-				s.LoadBalance = tui.Confirm("Enable load balancing", false)
-			}
-		}
-	}
-
-	ApplyPreset(&s, choosePreset(s.Transport))
-	if tui.Confirm("Fine-tune the advanced settings by hand", false) {
-		applyManualTuning(&s)
-	}
-
-	finishSetup(s)
-}
-
-// finishSetup persists the tunnel, applies system-level tuning, and reports
-// the result.
-func finishSetup(s TunnelSpec) {
-	// The same refusal the panel makes, at the same point: before anything is
-	// written. Two creation paths that disagree about what is allowed is how a
-	// check ends up covering half the product — see portClash for what this is
-	// for.
-	addr := s.BindAddr
-	if s.Role == "client" {
-		addr = s.RemoteAddr
-	}
-	if why := portClash(s.Role, addr, s.Name); why != "" {
-		fmt.Println()
-		tui.Error(why)
-		fmt.Println()
-		tui.Info("Nothing was written. Run setup again with a different port.")
-		tui.PressEnter()
-		return
-	}
-
-	tui.Info("Applying system network optimizations...")
-	optimize.ApplyQuiet(ReservedPorts())
-
-	service, err := s.Save()
-	if err != nil {
-		tui.Error("Failed to create tunnel: " + err.Error())
-		tui.PressEnter()
-		return
-	}
-
-	fmt.Println()
-	if IsActive(service) {
-		tui.Success(fmt.Sprintf("Tunnel %q is up and running (%s).", s.Name, service))
-	} else {
-		tui.Warn(fmt.Sprintf("Tunnel %q created but not active yet — check logs.", s.Name))
-	}
-	tui.PressEnter()
 }
 
 // showForwardTargets spells out, for each mapping, what the kharej server will
@@ -1258,14 +925,11 @@ func askSimpleAuth(s *TunnelSpec, transport string) {
 	if !needsTLS(transport) {
 		return
 	}
-	fmt.Println()
-	tui.Info("If a reverse proxy (NGINX and the like) terminates TLS in front of this")
-	tui.Info("tunnel, the default proof-of-session authorisation cannot match and the")
-	tui.Info("tunnel is rejected. Simple auth sends the raw token instead, which works")
-	tui.Info("through such a proxy.")
-	tui.Warn("Only enable it when a trusted proxy is terminating the TLS — it hands the")
-	tui.Warn("token to whatever does. Set the same answer on both ends.")
-	s.SimpleAuth = tui.Confirm("Use simple token auth (for a TLS-terminating proxy in front)", s.SimpleAuth)
+	// Behind a reverse proxy that terminates TLS (NGINX and the like) the
+	// default proof-of-session cannot match; the raw token works through it,
+	// and hands the token to whatever terminates the TLS. Same answer on both
+	// ends.
+	s.SimpleAuth = tui.Confirm("Simple Token Auth (Only Behind A TLS-Terminating Proxy)", s.SimpleAuth)
 }
 
 // clearSpoofStealth is applySpoofStealth's opposite: it puts the carrier back to

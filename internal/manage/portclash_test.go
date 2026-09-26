@@ -100,7 +100,7 @@ func TestEveryCreationPathChecksForAClash(t *testing.T) {
 				"checks whether it can coexist with the ones already there", fn)
 		}
 	}
-	if !strings.Contains(manageFuncBody(t, "setup.go", "finishSetup"), "portClash(") {
+	if !strings.Contains(manageFuncBody(t, "reversesetup.go", "finishSetup"), "portClash(") {
 		t.Error("finishSetup creates a tunnel without checking whether it can coexist " +
 			"with the ones already there")
 	}

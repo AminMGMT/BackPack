@@ -95,6 +95,9 @@ func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
 		logger.Fatalf("layer-3 tunnel port mappings are not usable: %v", err)
 		return
 	}
+	if forwarder != nil {
+		forwarder.SetTunnelState(tunnel.Up)
+	}
 
 	// The engine's own counters, read once per snapshot. They survive the
 	// restart loop below because the tunnel object does.

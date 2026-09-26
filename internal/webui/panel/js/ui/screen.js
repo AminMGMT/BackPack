@@ -126,7 +126,7 @@ function wire(root, close) {
        and so does cl.
      *
      * cl('scAl') was the preview's own name for it, on the footer Close of
-     * every dialog in monitor.html — Alerts, Health check, Speed test. It does
+     * every dialog in monitor.html — Alerts and Health check. It does
      * not begin with "close", so it fell through this and those buttons did
      * nothing at all: the cross in the header worked, because that is a
      * button.x and is bound above, and the button actually labelled Close did

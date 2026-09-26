@@ -39,26 +39,29 @@ func TestHelpIsNotAnError(t *testing.T) {
 	}
 }
 
-// The version output is one of the places NOTICE requires the attribution, and
-// the JSON form is what a fleet script would read.
-func TestVersionCarriesTheAttributionInBothForms(t *testing.T) {
+// The version output names the version and the source, and the JSON form is
+// what a fleet script would read.
+func TestVersionCarriesTheSourceInBothForms(t *testing.T) {
 	plain := Run([]string{"version"})
 	if plain.Code != CodeOK {
 		t.Fatalf("version exited %d", plain.Code)
 	}
-	if !strings.Contains(plain.Out, "AminMGMT") {
-		t.Error("the plain version output does not carry the attribution")
+	if !strings.Contains(plain.Out, "github.com/AminMGMT/BackPack") {
+		t.Error("the plain version output does not name the source")
+	}
+	if strings.Contains(plain.Out, "Based on") {
+		t.Error("the version output still carries the attribution line")
 	}
 
 	asJSON := Run([]string{"version", "--json"})
 	var got struct {
-		Version, Attribution, Source, Licence string
+		Version, Source, Licence string
 	}
 	if err := json.Unmarshal([]byte(asJSON.Out), &got); err != nil {
 		t.Fatalf("version --json is not JSON: %v\n%s", err, asJSON.Out)
 	}
-	if got.Attribution == "" || got.Licence != "AGPL-3.0" {
-		t.Errorf("version --json = %+v, want the attribution and the licence", got)
+	if got.Source == "" || got.Licence != "AGPL-3.0" {
+		t.Errorf("version --json = %+v, want the source and the licence", got)
 	}
 }
 

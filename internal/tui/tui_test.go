@@ -158,6 +158,19 @@ func TestClosedInputEndsTheMenuRatherThanSpinning(t *testing.T) {
 	}
 }
 
+// The main menu reads a free-form answer and redraws on anything else, so it
+// needs to be told the input is gone: an empty answer there is "Invalid option"
+// and another lap. A wizard driven from a file wrote 3.6 GB of those laps.
+func TestPromptOrEndTellsAnEmptyLineFromNoInput(t *testing.T) {
+	defer drive(t, "\n")()
+	if v, ok := PromptOrEnd("x: "); v != "" || !ok {
+		t.Errorf("an empty line = (%q, %v), want (\"\", true)", v, ok)
+	}
+	if _, ok := PromptOrEnd("x: "); ok {
+		t.Error("PromptOrEnd with no input left said there was more; the main menu would spin")
+	}
+}
+
 // And a line that arrives without a trailing newline is still a line — the last
 // answer of a piped script has no newline after it.
 func TestAFinalLineWithoutANewlineIsStillRead(t *testing.T) {

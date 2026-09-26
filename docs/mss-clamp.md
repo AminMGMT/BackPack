@@ -22,7 +22,7 @@ stalls on the first full segment.
 
 - **CLI** — Manage → Manage Tunnels → Edit → **TCP MSS clamp**
 - **Web panel** — Edit → **Fine Tune** → *TCP MSS clamp*
-- **At setup** — answer *yes* to "Fine-tune the advanced settings by hand"
+- **At setup** — answer *yes* to "Fine-Tune The Advanced Settings"
 
 `0` means automatic, which is the default and what almost every tunnel should
 keep.
@@ -77,4 +77,4 @@ clamp می‌کند.
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

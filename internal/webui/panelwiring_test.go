@@ -21,7 +21,7 @@ import (
 // nothing, and the only way it has ever been found is somebody pressing it.
 //
 // Forty-odd controls were in that state when this was written — the settings
-// search, the whole speed test, two of the three buttons on the log toolbar,
+// search, two of the three buttons on the log toolbar,
 // every switch and menu in the advanced drawers. So the rule is checked here
 // instead: a control either names a handler this panel has, or is wired by one
 // of the conventions the views use, or it is not shipped.
@@ -140,7 +140,7 @@ func TestEveryControlInThePanelIsWiredToSomething(t *testing.T) {
 // They did not: manage.Health reports "online", "offline" and "stopped", and
 // six screens compared against "running", which nothing produces. A tunnel that
 // was up read as Stopped on its card, counted as down on the overview, and was
-// offered by neither the speed test nor the link test. One module now holds the
+// not offered the link test. One module now holds the
 // vocabulary, and this keeps the screens from going around it again.
 func TestTheScreensReadTunnelStateThroughOnePlace(t *testing.T) {
 	const lib = "panel/js/lib/tstate.js"

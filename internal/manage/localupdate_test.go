@@ -2,6 +2,7 @@ package manage
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -185,5 +186,24 @@ func TestTheOperatorIsToldWhereToPutTheFile(t *testing.T) {
 	}
 	if !strings.Contains(LocalAssetName(), runtime.GOARCH) {
 		t.Errorf("the asset name %q does not name this machine's architecture", LocalAssetName())
+	}
+}
+
+// The version flag prints the version and then the source link, and has since
+// the attribution was added. The archive's version was read as the whole of
+// that output, which is two lines, so it was refused and every local update
+// showed "Version unknown".
+func TestTheArchiveVersionIsTheFirstLineOfTheFlag(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "backpack")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho v9.9.9\necho https://github.com/AminMGMT/BackPack\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(dir, "backpack_linux_amd64.tar.gz")
+	if out, err := exec.Command("tar", "czf", archive, "-C", dir, "backpack").CombinedOutput(); err != nil {
+		t.Skipf("tar unavailable: %v %s", err, out)
+	}
+	if got := versionInArchive(archive); got != "v9.9.9" {
+		t.Fatalf("version read from the archive = %q, want v9.9.9", got)
 	}
 }

@@ -56,7 +56,7 @@ func TestAJobRunsAndKeepsItsResult(t *testing.T) {
 
 func TestAFailedJobKeepsItsReason(t *testing.T) {
 	j := NewJobs()
-	started, _ := j.Start(context.Background(), "speedtest", "",
+	started, _ := j.Start(context.Background(), "rollout", "",
 		func(ctx context.Context, p *Progress) (any, error) {
 			return nil, errors.New("the far end refused")
 		})
@@ -96,7 +96,7 @@ func TestASecondJobOfTheSameKindIsRefusedWithTheFirst(t *testing.T) {
 }
 
 // Different kinds are independent: a fleet rollout must not be blocked by
-// somebody looking at a speed test.
+// somebody running a link test.
 func TestDifferentKindsRunTogether(t *testing.T) {
 	j := NewJobs()
 	release := make(chan struct{})
@@ -225,7 +225,7 @@ func TestLatestAnswersWhatIsHappeningOrWhatJustHappened(t *testing.T) {
 
 func TestHistoryIsNewestFirstAndFiltersByKind(t *testing.T) {
 	j := NewJobs()
-	for _, kind := range []string{"linktest", "speedtest", "linktest"} {
+	for _, kind := range []string{"linktest", "rollout", "linktest"} {
 		started, _ := j.Start(context.Background(), kind, "",
 			func(ctx context.Context, p *Progress) (any, error) { return nil, nil })
 		waitFor(t, time.Second, func() bool { g, _ := j.Get(started.ID); return g.State.Done() })

@@ -376,13 +376,12 @@ func runVersion(args []string) Result {
 	}
 	if asJSON {
 		return jsonResult(struct {
-			Version     string `json:"version"`
-			Attribution string `json:"attribution"`
-			Source      string `json:"source"`
-			Licence     string `json:"licence"`
-		}{app.Version, app.Attribution, app.AttributionURL, "AGPL-3.0"})
+			Version string `json:"version"`
+			Source  string `json:"source"`
+			Licence string `json:"licence"`
+		}{app.Version, app.SourceURL, "AGPL-3.0"})
 	}
-	return ok(app.Version + "\n" + app.Attribution + "\n" + app.AttributionURL + "\n")
+	return ok(app.Version + "\n" + app.SourceURL + "\n")
 }
 
 func jsonResult(v any) Result {

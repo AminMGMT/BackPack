@@ -104,7 +104,7 @@ miss looked healthy in the socket table.
 
 | Package | Responsibility |
 |---|---|
-| `internal/manage` | the real work: wizards, edit, backup, restore, update, migrate, diagnose, speed test, presets. 27,302 lines, and the seam the panel and the CLI both call |
+| `internal/manage` | the real work: wizards, edit, backup, restore, update, migrate, diagnose, presets. 27,302 lines, and the seam the panel and the CLI both call |
 | `internal/menu` | the interactive TUI. One 1,400-line file with no tests and no non-interactive entry point, which is why nothing can drive it |
 | `internal/webui` | the panel: a Go mux plus a vanilla-JS SPA under `panel/`, served beneath a random secret base path. Also currently owns the fleet |
 | `internal/telegram` | bot, alerts, scheduled reports. Has a read-only admin tier |
@@ -220,4 +220,4 @@ heap) — و هر پروسهٔ دیگری همان فایل را می‌خوان
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

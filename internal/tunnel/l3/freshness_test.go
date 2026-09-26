@@ -210,3 +210,89 @@ func TestARewrittenHeaderCannotForceTheLegacyHandshake(t *testing.T) {
 		t.Fatalf("complete = %v, want it refused as a downgrade", err)
 	}
 }
+
+// Field report on v1.8.3: "a direct tunnel stops working after a while".
+//
+// The dialler stamps each handshake with its wall clock, and the listener
+// refuses one that is not newer than the last it accepted. A dialler whose
+// clock stepped back — NTP correcting a clock that ran fast — and that then
+// restarts (the watchdog, Auto Refresh, a reboot) sends stamps older than what
+// the listener remembers, and every one of them was refused as a replay: the
+// tunnel stayed down until the clock caught up, which can be hours, or until
+// somebody restarted the kharej. Once the listener has no session left, the
+// refusals are what is keeping the tunnel down, and after a grace it takes the
+// dialler's clock as it now is.
+func TestADiallerWhoseClockWentBackReconnects(t *testing.T) {
+	defer func(g time.Duration) { clockStepGrace = g }(clockStepGrace)
+	clockStepGrace = 300 * time.Millisecond
+
+	p := established(t, "gre", 0)
+	across(t, p.dialDev, p.listenDev, ipv4Packet(1))
+
+	// The listener remembers a stamp an hour ahead of the dialler's clock now:
+	// the dialler's clock was fast, and has been set back.
+	p.listener.mu.Lock()
+	p.listener.fresh.last = uint64(time.Now().Add(time.Hour).UnixNano())
+	// Its session from before the dialler restarted has expired.
+	p.listener.current, p.listener.previous, p.listener.pending = nil, nil, nil
+	p.listener.mu.Unlock()
+	// The dialler restarted: a fresh process, a fresh clock.
+	p.dialer.mu.Lock()
+	p.dialer.freshClock = freshClock{}
+	p.dialer.mu.Unlock()
+
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := p.dialer.negotiate(ctx)
+		cancel()
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the dialler never got back in once its clock went back: %v", err)
+		}
+	}
+	across(t, p.dialDev, p.listenDev, ipv4Packet(2))
+}
+
+// The grace is not a hole: while the listener still holds a working session,
+// a stamp older than the last one accepted is refused however long it has
+// been refused for — which is what makes a recorded handshake worthless.
+func TestAStaleStampIsRefusedWhileASessionIsUp(t *testing.T) {
+	defer func(g time.Duration) { clockStepGrace = g }(clockStepGrace)
+	clockStepGrace = 0
+
+	p := established(t, "gre", 0)
+	p.dialer.mu.Lock()
+	ts := p.dialer.freshClock.next(time.Now())
+	p.dialer.mu.Unlock()
+	old, err := beginHandshakeFresh(p.dialer.cfg.Token, 0, encapID(p.dialer.encap), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := old.datagram()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.dialer.negotiate(ctx); err != nil {
+		t.Fatalf("rekey: %v", err)
+	}
+	across(t, p.dialDev, p.listenDev, ipv4Packet(1))
+
+	from := &net.UDPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 4444}
+	h := parseHeaderT(t, recorded)
+	h.session ^= 0x5a5a5a5a
+	for range 3 {
+		p.listener.mu.RLock()
+		before := p.listener.pending
+		p.listener.mu.RUnlock()
+		p.listener.handleInit(h, recorded[headerLen:], from)
+		p.listener.mu.RLock()
+		after := p.listener.pending
+		p.listener.mu.RUnlock()
+		if after != before {
+			t.Fatal("a replayed handshake became the pending session while a session was up")
+		}
+		h.session++
+	}
+}

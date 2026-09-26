@@ -85,6 +85,11 @@ type Forwarder struct {
 	ready     chan struct{}
 	readyOnce sync.Once
 
+	// tunnelUp says whether the tunnel has a session, so a refused port is not
+	// blamed on the far end's service while the tunnel itself is down. Nil
+	// when nobody said, which is read as unknown.
+	tunnelUp func() bool
+
 	// reach records, per mapping, whether its backend is currently answering,
 	// so the log can report the transition rather than the traffic.
 	reach struct {
@@ -129,6 +134,9 @@ func NewForwarder(cfg Config, log *logrus.Logger) (*Forwarder, error) {
 		}),
 	}, nil
 }
+
+// SetTunnelState tells the forwarder how to ask whether the tunnel is up.
+func (f *Forwarder) SetTunnelState(up func() bool) { f.tunnelUp = up }
 
 // Stats returns a snapshot.
 func (f *Forwarder) Stats() ForwardStats {
@@ -311,6 +319,16 @@ func (f *Forwarder) noteBackend(m portmap.Mapping, err error) {
 	}
 	first := !st.down
 	st.down, st.said = true, time.Now()
+	if first && f.tunnelUp != nil && !f.tunnelUp() {
+		// The tunnel has no session, so nothing could have answered. Saying
+		// "the tunnel itself is up" here sent operators to check a service
+		// that was never the problem, while the handshake lines above said
+		// the far end was not answering at all.
+		f.log.Warnf("l3: connections to %s are being refused because the tunnel is not up yet — "+
+			"no handshake with the other server has completed. See the handshake lines above: "+
+			"the other server is not answering, or the token or carrier differ.", m.Listen)
+		return
+	}
 	if first {
 		// Named in full the first time: the address here is the far end of the
 		// tunnel, and a service listening only on loopback or on the public

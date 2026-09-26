@@ -64,6 +64,11 @@ const freshSep = versionSep + "t"
 // line in its log, so not every rekey.
 const legacyRetry = 30 * time.Minute
 
+// clockStepGrace is how long a listener with no session goes on refusing a
+// dialler's stamps as too old before it takes them as the dialler's clock
+// having gone back. See freshJudge.stale. A variable so a test can shorten it.
+var clockStepGrace = time.Minute
+
 // errPeerLegacy is a timestamped attempt refused by a listener that predates
 // timestamps. The dialler falls back and tries again at once.
 var errPeerLegacy = errors.New("l3: the listener does not read handshake timestamps")
@@ -111,6 +116,39 @@ type freshJudge struct {
 	// required is set by the first timestamp accepted; from then on a legacy
 	// payload is refused.
 	required bool
+	// staleSince is when authenticated stamps started arriving older than
+	// last, with no newer one accepted since; zero when none has.
+	staleSince time.Time
+}
+
+// stale decides an authenticated stamp that admit refused as not newer than
+// the last one. It is taken, and becomes the new last, when this end has no
+// session left (idle) and such stamps have been refused for clockStepGrace.
+//
+// That is a dialler whose wall clock went back — NTP correcting a clock that
+// ran fast — and which then restarted, so its own memory of the last stamp is
+// gone. Refusing it was right against a recorded handshake and wrong for this:
+// every stamp it sends is older than the one remembered, so the tunnel stayed
+// down until the clock caught up, which can be hours, or until the listener
+// restarted. Reported from the field on v1.8.3 as "a direct tunnel stops
+// working after a while".
+//
+// While a session is up nothing changes: a recorded handshake is still
+// worthless the moment a newer one has been seen. With none up there is
+// nothing for a replay to displace, and it still cannot complete a session
+// without the dialler's keys.
+func (j *freshJudge) stale(fresh uint64, idle bool, now time.Time) bool {
+	if fresh == 0 || fresh > j.last {
+		return false
+	}
+	if j.staleSince.IsZero() {
+		j.staleSince = now
+	}
+	if !idle || now.Sub(j.staleSince) < clockStepGrace {
+		return false
+	}
+	j.last, j.required, j.staleSince = fresh, true, time.Time{}
+	return true
 }
 
 // admit decides one handshake and records it when it is admitted. fresh is zero
@@ -129,6 +167,6 @@ func (j *freshJudge) admit(fresh uint64) error {
 			time.Unix(0, int64(fresh)).UTC().Format(time.RFC3339Nano),
 			time.Unix(0, int64(j.last)).UTC().Format(time.RFC3339Nano))
 	}
-	j.last, j.required = fresh, true
+	j.last, j.required, j.staleSince = fresh, true, time.Time{}
 	return nil
 }

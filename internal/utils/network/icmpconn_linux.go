@@ -66,8 +66,29 @@ type icmpConn struct {
 	// echoGuard keeps the server's kernel from answering the client's
 	// requests; nil on the client. See installXdiEchoGuard.
 	echoGuard *icmpEchoGuard
+	// accept lets this tunnel's echoes through a firewall that drops ICMP.
+	// See installXdiAcceptRule.
+	accept *icmpEchoGuard
 	// batch is recvmmsg's and sendmmsg's state; see icmpbatch_linux.go.
 	batch icmpBatch
+	// foreign is told about a client echo carrying another token's tag; see
+	// SetForeignHook.
+	foreign atomic.Pointer[func(net.Addr)]
+}
+
+// SetForeignHook asks the server to report client echoes that carry another
+// tunnel's tag — the only trace a token copied wrong leaves, since such a
+// packet never reaches the handshake.
+func (c *icmpConn) SetForeignHook(f func(net.Addr)) { c.foreign.Store(&f) }
+
+// noteForeign reports data that is a client's xdi echo for a different tunnel.
+func (c *icmpConn) noteForeign(data []byte, from net.Addr) {
+	if !c.server || len(data) < xdiHeaderLen || data[xdiTagLen] != xdiDirClient {
+		return
+	}
+	if h := c.foreign.Load(); h != nil {
+		(*h)(from)
+	}
 }
 
 // icmpMTUOverhead is what the ICMP framing costs on top of the IP header, so
@@ -98,6 +119,7 @@ func newICMPServerConn(token string) (net.PacketConn, error) {
 	attachICMPFilter(pc, uint8(icmpEchoRequest), -1)
 	c := newICMPServerConnWith(pc, token).(*icmpConn)
 	c.echoGuard = installXdiEchoGuard(c.tag)
+	c.accept = installXdiAcceptRule(c.tag, true)
 	return c, nil
 }
 
@@ -116,6 +138,7 @@ func newICMPClientConn(token string) (net.PacketConn, error) {
 	}
 	c := newICMPClientConnWith(pc, token)
 	attachICMPFilter(pc, uint8(icmpEchoReply), int(c.(*icmpConn).id))
+	c.(*icmpConn).accept = installXdiAcceptRule(c.(*icmpConn).tag, false)
 	return c, nil
 }
 
@@ -209,6 +232,7 @@ func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		}
 		payload, ok := decodeXdiPayload(c.tag, wantDir, buf[8:n])
 		if !ok {
+			c.noteForeign(buf[8:n], peer)
 			continue
 		}
 		return copy(p, payload), c.peerAddr(peer, echoID), nil
@@ -224,6 +248,7 @@ func (c *icmpConn) Close() error {
 			releaseXdiSessionID(c.id)
 		}
 		c.echoGuard.remove()
+		c.accept.remove()
 	})
 	return c.pc.Close()
 }

@@ -4,7 +4,7 @@
  * decided wrongly in the same way: they compared against "running", which
  * nothing in this codebase has ever produced. Every screen therefore showed a
  * working tunnel as a dead one — the card said Stopped, the overview counted it
- * among the ones that are not running, and the speed test refused to offer it.
+ * among the ones that are not running, and the link test refused to offer it.
  *
  * So these tests are about the vocabulary, not about formatting. Each one names
  * a state the server really sends.

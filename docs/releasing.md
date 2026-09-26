@@ -27,8 +27,8 @@ written down, so a release made in a hurry is the same release.
 ## Tagging
 
 ```
-git tag -a v1.8.3 -m "v1.8.3"
-git push origin v1.8.3
+git tag -a v1.8.4 -m "v1.8.4"
+git push origin v1.8.4
 ```
 
 The release workflow builds every architecture, writes `SHA256SUMS`, signs it
@@ -139,4 +139,4 @@ during the incident.
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

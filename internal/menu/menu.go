@@ -52,13 +52,18 @@ func Run() {
 
 	for {
 		tui.Clear()
-		tui.SetAttribution(app.Attribution)
 		tui.Logo(app.Version)
 		printUpdateBanner()
 		tui.Rule()
 		printMenu()
 
-		switch tui.Prompt("Select an option: ") {
+		choice, ok := tui.PromptOrEnd("Select an option: ")
+		if !ok {
+			// stdin is gone: nobody is left to answer the menu.
+			fmt.Println()
+			return
+		}
+		switch choice {
 		// Both entries ask which direction the tunnel should be built in, and
 		// a reverse one is then built by exactly the code that has always
 		// built it. See manage.SetupIran.

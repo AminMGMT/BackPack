@@ -117,8 +117,8 @@ func versionInArchive(archive string) string {
 	if err != nil {
 		return ""
 	}
-	v := strings.TrimSpace(out)
-	if v == "" || len(v) > 32 || strings.ContainsAny(v, "\n\r") {
+	v := versionLine(out)
+	if v == "" || len(v) > 32 {
 		return ""
 	}
 	return v
@@ -272,10 +272,19 @@ func installedVersion() string {
 	if err != nil {
 		return "the new version"
 	}
-	if v := strings.TrimSpace(out); v != "" {
+	if v := versionLine(out); v != "" {
 		return v
 	}
 	return "the new version"
+}
+
+// versionLine is the version out of what the -v flag prints: its first line.
+// The lines after it are the source link, which the flag has printed since
+// the attribution was added — and reading the whole output as the version
+// refused it, so a local update always showed "Version unknown".
+func versionLine(out string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(first)
 }
 
 // namesAnotherFile reports whether a checksum list still describes a file that

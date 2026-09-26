@@ -46,4 +46,4 @@ VPN همهٔ کاربران را یک دستگاه می‌شمارد و محدو
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*

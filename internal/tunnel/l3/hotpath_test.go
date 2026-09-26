@@ -34,6 +34,14 @@ func TestSameAddrIsCorrect(t *testing.T) {
 	if sameAddr(udp("203.0.113.9", 9000), &net.IPAddr{IP: net.ParseIP("203.0.113.9")}) {
 		t.Error("two different address kinds compared equal")
 	}
+	// …but it is not reported as a move: xdi reads a port-less address, and
+	// "peer moved from 203.0.113.9:6999 to 203.0.113.9" looked like a fault.
+	if !sameHost(udp("203.0.113.9", 6999), &net.IPAddr{IP: net.ParseIP("203.0.113.9")}) {
+		t.Error("the same host with and without a port was reported as a move")
+	}
+	if sameHost(udp("203.0.113.9", 6999), &net.IPAddr{IP: net.ParseIP("198.51.100.4")}) {
+		t.Error("a real move was not reported")
+	}
 	if !sameAddr(nil, nil) || sameAddr(nil, udp("203.0.113.9", 9000)) {
 		t.Error("nil handling is wrong")
 	}

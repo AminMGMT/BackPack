@@ -10,28 +10,15 @@ import (
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.8.3"
+	Version = "v1.8.4"
 
 	// RepoOwner/RepoName identify the GitHub repository used by the installer
 	// and the release-based updater.
 	RepoOwner = "AminMGMT"
 	RepoName  = "BackPack"
 
-	// Attribution is the line NOTICE requires a modified version to keep.
-	//
-	// AGPL-3.0 gives everybody the right to fork this and publish the fork.
-	// Section 7(b) of the same licence lets the author require that the
-	// attribution be preserved when they do, and NOTICE exercises that. This
-	// is that line, in one place, so the surfaces that must show it cannot
-	// drift apart from the one that defines it.
-	//
-	// It is deliberately a fact rather than a restriction: a fork is welcome,
-	// and it has to say what it came from. See TRADEMARK.md for the separate
-	// question of the name, which is not licensed with the code at all.
-	Attribution = "Based on BackPack by Amin Mohammadi (AminMGMT)"
-
-	// AttributionURL accompanies it wherever there is room for a link.
-	AttributionURL = "https://github.com/" + RepoOwner + "/" + RepoName
+	// SourceURL is where the source lives, printed with the version.
+	SourceURL = "https://github.com/" + RepoOwner + "/" + RepoName
 
 	// InstallDir is where the release bundle lives on the VPS.
 	InstallDir = "/root/BackPack"

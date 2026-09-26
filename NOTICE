@@ -20,10 +20,8 @@ modify, redistribute and sell services built on this software.
       others over a network, you must keep the following line visible and
       unaltered in:
 
-        - this NOTICE file,
-        - the README of your distribution,
-        - the "About" or version output of the program, and
-        - the Appropriate Legal Notices your version displays to its users.
+        - this NOTICE file, and
+        - the README of your distribution.
 
       The line is:
 

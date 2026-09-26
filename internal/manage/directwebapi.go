@@ -80,8 +80,18 @@ type NewDirectTunnel struct {
 	Paths int `json:"paths"`
 
 	// FEC turns on error correction with the recommended scheme, the same one
-	// answer the wizard asks. The exact pair is a CLI-only tuning.
-	FEC bool `json:"fec"`
+	// answer the wizard asks. The exact pair is a CLI-only tuning — or comes
+	// from the other side's setup link, in FECData and FECParity, which then
+	// win: the two ends must use the same pair.
+	FEC       bool `json:"fec"`
+	FECData   int  `json:"fecData"`
+	FECParity int  `json:"fecParity"`
+
+	// MTU, MSSClamp and AutoMTU are set from the other side's setup link.
+	// Zero and nil keep the defaults.
+	MTU      int   `json:"mtu"`
+	MSSClamp int   `json:"mssClamp"`
+	AutoMTU  *bool `json:"autoMtu"`
 
 	// SpoofPeerIP is required on the kharej side of the spoof carrier, which
 	// cannot learn where its peer is: every packet it receives carries a forged
@@ -110,12 +120,17 @@ func DirectCarriers() []map[string]string {
 	// carrier can open its socket without CAP_NET_RAW is a property of how it
 	// is built, and a screen that decided that for itself would be a second
 	// place to keep in step.
+	//
+	// The order is the operator's: xDi, PCK, UDP, Quic, then the two spoofing
+	// carriers, whose answers depend on the route.
 	return []map[string]string{
+		{"value": "xdi", "label": "xDi", "needsRoot": "1",
+			"desc": "inside ping (ICMP), for a path that filters UDP and TCP but lets ping through"},
 		{"value": "pck", "label": "PCK", "needsRoot": "1",
 			"desc": "looks like an ordinary TCP flow, but with no socket the firewall can touch"},
 		{"value": "udp", "label": "UDP", "needsRoot": "",
 			"desc": "plain and simple — use it where the path does not interfere"},
-		{"value": "quic", "label": "QUIC", "needsRoot": "",
+		{"value": "quic", "label": "Quic", "needsRoot": "",
 			"desc": "a real QUIC session on UDP — indistinguishable from HTTP/3, and needs no root"},
 		// cliOnly keeps a carrier out of the panel without taking it away.
 		//
@@ -125,12 +140,10 @@ func DirectCarriers() []map[string]string {
 		// up and moves nothing, and finding out costs a capture on the machine
 		// itself. That is CLI work, so the panel does not offer them — and the
 		// engine still runs a config that names one, whichever screen wrote it.
-		{"value": "sni", "label": "SNI spoofing", "needsRoot": "1", "cliOnly": "1",
-			"desc": "PCK, plus a TLS hello naming a domain your route allows — the box in front reads that name and lets the rest through"},
-		{"value": "spoof", "label": "Spoof", "needsRoot": "1", "cliOnly": "1",
+		{"value": "spoof", "label": "IP Spoofing", "needsRoot": "1", "cliOnly": "1",
 			"desc": "raw packets with a forged source address — needs testing on your route"},
-		{"value": "xdi", "label": "ICMP", "needsRoot": "1",
-			"desc": "inside ping, for a path that filters UDP and TCP but lets ping through"},
+		{"value": "sni", "label": "SNI Spoofing", "needsRoot": "1", "cliOnly": "1",
+			"desc": "PCK, plus a TLS hello naming a domain your route allows — the box in front reads that name and lets the rest through"},
 	}
 }
 
@@ -214,6 +227,13 @@ func CreateDirectTunnel(n NewDirectTunnel) (service string, active bool, err err
 		if spec.Ports, err = shareL3PortsQuietly(spec); err != nil {
 			return "", false, err
 		}
+		if busy := busyForwardPorts(spec.Ports, spec.PeerIP); len(busy) > 0 {
+			return "", false, fmt.Errorf("already in use on this server: %s — "+
+				"the web panel's own port is the usual one; pick other ports", strings.Join(busy, ", "))
+		}
+	}
+	if why := kharejPortClash(spec); why != "" {
+		return "", false, fmt.Errorf("%s", why)
 	}
 	name, body, err := directBodyFromSpec(spec)
 	if err != nil {
@@ -383,6 +403,20 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 	if local == "" || peer == "" {
 		local, peer = freeL3Subnet(side)
 	}
+	if err := l3.CheckTunnelEnds(local, peer); err != nil {
+		return l3Spec{}, err
+	}
+	// Given addresses — from a setup link, or typed into the form — were
+	// chosen on the other machine or by hand, not against this one's tunnels.
+	// Two tunnels here on one block put two interfaces on one subnet, and the
+	// second one never carries anything.
+	if strings.TrimSpace(n.LocalIP) != "" {
+		if other := l3BlockOwner(local); other != "" {
+			return l3Spec{}, fmt.Errorf("tunnel %s on this server already uses %sx, the block given for "+
+				"this one: pick a free block on the %s server and set up both ends again",
+				other, l3Block(local), map[directSide]string{sideIran: "kharej", sideKharej: "Iran"}[side])
+		}
+	}
 
 	spec := l3Spec{
 		Name: name, Side: side, Carrier: carrier,
@@ -416,10 +450,16 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 	if n.Paths > 1 {
 		spec.Paths = n.Paths
 	}
-	if n.FEC {
+	if n.FECData > 0 && n.FECParity > 0 {
+		spec.FECData, spec.FECParity = n.FECData, n.FECParity
+	} else if n.FEC {
 		plan := defaultL3FEC()
 		spec.FECData, spec.FECParity = plan.Data, plan.Parity
 	}
+	if n.MTU > 0 {
+		spec.MTU = n.MTU
+	}
+	spec.MSSClamp, spec.AutoMTU = n.MSSClamp, n.AutoMTU
 	if carrier == "spoof" {
 		if n.Spoof != nil {
 			if err := n.Spoof.apply(&spec.Spoof); err != nil {
@@ -728,4 +768,20 @@ func directSpecFrom(name string, l config.L3Config) l3Spec {
 		Spoof:          l.SpoofConfig,
 		Pck:            l.PckConfig,
 	}
+}
+
+// l3BlockOwner names the layer-3 tunnel on this machine that uses the block
+// addr belongs to, or "".
+func l3BlockOwner(addr string) string {
+	block := l3Block(addr)
+	for _, t := range List() {
+		cfg, err := LoadTunnelConfig(t.Name)
+		if err != nil || !cfg.L3.Enabled() {
+			continue
+		}
+		if l3Block(cfg.L3.LocalIP) == block || l3Block(cfg.L3.PeerIP) == block {
+			return t.Name
+		}
+	}
+	return ""
 }

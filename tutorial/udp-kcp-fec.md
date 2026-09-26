@@ -81,7 +81,7 @@ Apply the **same preset on both ends**.
 
 ## The KCP settings, if you fine-tune
 
-Under **Fine-tune the advanced settings by hand**, or the panel's Fine Tune
+Under **Fine-Tune The Advanced Settings**, or the panel's Fine Tune
 drawer:
 
 | Setting | What it is |
@@ -110,9 +110,7 @@ ratio is too thin for the loss on the route.
 
 For a multi-exit gaming setup — several kharej servers, traffic steered to the
 healthiest one — see
-[failover & load balancing](../docs/failover-load-balancing.md) and
-**Manage → Game Latency Test**, which estimates in-game ping to real game
-publishers through this exit.
+[failover & load balancing](../docs/failover-load-balancing.md).
 
 ---
 

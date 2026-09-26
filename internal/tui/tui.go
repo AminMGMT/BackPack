@@ -42,9 +42,42 @@ var reader = bufio.NewReader(os.Stdin)
 // It is not concurrency-safe and is not meant to be: prompts are read by one
 // goroutine because there is one terminal.
 func SetInput(r io.Reader) (restore func()) {
-	prev := reader
-	reader = bufio.NewReader(r)
-	return func() { reader = prev }
+	prev, prevEnded := reader, inputEnded
+	reader, inputEnded = bufio.NewReader(r), false
+	return func() { reader, inputEnded = prev, prevEnded }
+}
+
+// inputEnded is set once a prompt finds no input left: the terminal went away,
+// or a script feeding the wizard ran out of answers.
+var inputEnded bool
+
+// onInputEnd is what StopIfInputGone does. A variable only so a test can watch
+// it happen without the test binary exiting.
+var onInputEnd = func() {
+	fmt.Println()
+	Warn("The input ended (the session closed?) — stopped here, nothing more was done.")
+	os.Exit(0)
+}
+
+// StopIfInputGone ends the program when there is no input left to read.
+//
+// A prompt that refuses an answer and asks again is a loop, and after the input
+// has gone every answer is the same empty string — so a wizard left on "Choose
+// a different name" when an SSH session dropped asked again for ever, burning a
+// core and writing to a terminal nobody had. Such a loop calls this before it
+// asks again.
+func StopIfInputGone() {
+	if inputEnded {
+		onInputEnd()
+	}
+}
+
+// OnInputEnd replaces what StopIfInputGone does, for tests, and returns the
+// function that puts it back.
+func OnInputEnd(f func()) (restore func()) {
+	prev := onInputEnd
+	onInputEnd = f
+	return func() { onInputEnd = prev }
 }
 
 // Clear clears the terminal screen.
@@ -96,29 +129,20 @@ func Logo(version string) {
 	fmt.Print(Reset)
 	fmt.Printf("%s Backpack  %s%s%s\n", Bold+White, Red, version, Reset)
 	fmt.Println(Gray + " TeleGram : @BlackProtocols  |  GitHub : https://github.com/AminMGMT" + Reset)
-	// The attribution NOTICE requires a modified version to keep. Printed here
-	// because this banner is the program's About screen, and that is one of the
-	// places the additional term under AGPL-3.0 §7(b) names.
-	fmt.Println(Gray + " " + attribution + Reset)
-}
-
-// attribution is set from app.Attribution by the caller, so this package does
-// not import app — tui is the bottom of the dependency order and everything
-// imports it.
-var attribution = "Based on BackPack by Amin Mohammadi (AminMGMT)"
-
-// SetAttribution lets the binary hand tui the single definition of the line,
-// rather than tui carrying a second copy that can drift from it.
-func SetAttribution(s string) {
-	if s != "" {
-		attribution = s
-	}
 }
 
 // Prompt reads a trimmed line after printing label.
 func Prompt(label string) string {
 	v, _ := promptLine(label)
 	return v
+}
+
+// PromptOrEnd is Prompt for a loop that redraws on anything it does not
+// recognise: ok is false once the input is gone, and the loop must stop. The
+// main menu used Prompt, so a session whose stdin closed printed "Invalid
+// option" for ever — a wizard driven from a file filled a disk with it.
+func PromptOrEnd(label string) (string, bool) {
+	return promptLine(label)
 }
 
 // promptLine is Prompt with the one thing Prompt throws away: whether there is
@@ -141,6 +165,7 @@ func promptLine(label string) (string, bool) {
 	// A final line with no newline is still a line; only an error with nothing
 	// on it means the input is gone.
 	if err != nil && trimmed == "" {
+		inputEnded = true
 		return "", false
 	}
 	return trimmed, true

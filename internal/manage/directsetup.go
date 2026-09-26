@@ -5,13 +5,17 @@ import (
 	"math"
 	"net"
 	"os"
+	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
 	"github.com/backpack/backpack/internal/snispoof"
 	"github.com/backpack/backpack/internal/tui"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
 // The direct tunnel wizard.
@@ -68,20 +72,17 @@ func (s directSide) String() string {
 // exactly like a blocked port, which is the single most expensive way this can
 // go wrong.
 //
-// So only the listening side offers one. The dialling side is asked for the
-// token from the other machine, with no default to accept by reflex — and if
-// that machine has not been set up yet, saying so generates one to carry over
-// instead, which keeps either order workable without ever silently producing
-// two different tokens.
+// So only one side offers one, and it is the Iran side: that is where the
+// tunnel is set up first, since it is the side that knows the kharej's address,
+// and it hands the token over inside the setup link it prints (sharelink.go). The
+// kharej, set up by hand, is asked for the Iran server's token with no default
+// to accept by reflex.
 func askSharedToken(side directSide) (string, bool) {
 	fmt.Println()
 
-	if side == sideKharej {
-		suggested := randomToken(64)
-		tui.Info("Suggested 64-character token — press Enter to accept, then copy it")
-		tui.Info("to the Iran server. Both ends must use exactly the same token.")
-		fmt.Println("  " + tui.Color(tui.Bold+tui.White, suggested))
-		token := strings.TrimSpace(tui.PromptDefault("Security token", suggested))
+	if side == sideIran {
+		// Enter takes the generated one; the setup link carries it to kharej.
+		token := strings.TrimSpace(tui.PromptDefault("Security Token", randomToken(64)))
 		if token == "" {
 			tui.Error("A token is required.")
 			tui.PressEnter()
@@ -90,22 +91,17 @@ func askSharedToken(side directSide) (string, bool) {
 		return token, true
 	}
 
-	tui.Info("The kharej server generates the token. Paste it here — it must")
-	tui.Info("match exactly, and a token that does not match looks identical to")
-	tui.Info("a blocked port, because a wrong one is answered with silence.")
-	fmt.Println()
-	tui.Warn("Not set up the kharej server yet? Leave this blank and one will be")
-	tui.Warn("generated here for you to copy over there instead.")
-	token := strings.TrimSpace(tui.Prompt("Token from the kharej server: "))
-	if token != "" {
-		return token, true
+	// No default here: a token that does not match looks identical to a
+	// blocked port, because a wrong one is answered with silence.
+	token := strings.TrimSpace(tui.Prompt("Security Token (From The Iran Server): "))
+	if token == "" {
+		fmt.Println()
+		tui.Error("Set up the Iran server first: it makes the token, and a setup link")
+		tui.Error("that fills in this whole side for you.")
+		tui.PressEnter()
+		return "", false
 	}
-
-	generated := randomToken(64)
-	fmt.Println()
-	tui.Info("Generated here instead — copy it to the kharej server:")
-	fmt.Println("  " + tui.Color(tui.Bold+tui.White, generated))
-	return generated, true
+	return token, true
 }
 
 // ---------------------------------------------------------------- layer 3
@@ -113,14 +109,34 @@ func askSharedToken(side directSide) (string, bool) {
 // setupL3 builds an [l3] tunnel: a private network between the two servers.
 func setupL3(side directSide) {
 	fmt.Println()
-	tui.Warn("A full IP tunnel puts both servers on one private network, so they")
-	tui.Warn("can reach each other by address and carry anything — not just the")
-	tui.Warn("ports you list. It needs root and a Linux kernel with TUN support.")
-	fmt.Println()
-
 	carrier, ok := askL3Carrier()
 	if !ok {
 		return
+	}
+	// IP and SNI spoofing keep the wizard they had: both ends set up by hand,
+	// the token made on kharej. Their answers depend on the route, and the
+	// operator wanted them left as they were. See directsetup_classic.go.
+	if carrier == "spoof" || carrier == "sni" {
+		setupL3Classic(side, carrier)
+		return
+	}
+
+	// The Iran side decides everything the two ends must agree on and hands
+	// it over as one setup link (see sharelink.go). Typing it in by hand stays
+	// possible, for a code that cannot be carried across, but it is the
+	// second choice rather than the only one.
+	if side == sideKharej {
+		switch tui.ChooseOpt("How Do You Want To Set Up This Side?", []tui.Option{
+			{Title: "Setup Link", Desc: "recommended — paste the link the Iran server printed; everything is filled in"},
+			{Title: "Manual", Desc: "type the port, the tunnel addresses and the token yourself"},
+		}) {
+		case 0:
+			setupL3FromLink(carrier)
+			return
+		case 1:
+		default:
+			return
+		}
 	}
 
 	// There is nothing to ask about the encapsulation. Every direct tunnel is
@@ -136,76 +152,134 @@ func setupL3(side directSide) {
 
 	cfg := l3Spec{Side: side, Carrier: carrier, Encap: encap, GREKey: greKey}
 	// Chosen against what is already on the machine, so a second tunnel does
-	// not land on the first one's subnet. See freeL3Subnet.
-	suggestedLocal, suggestedPeer := freeL3Subnet(side)
+	// not land on the first one's subnet. See freeL3Subnet. On Iran they are
+	// not asked at all — the code carries them to kharej — and can be changed
+	// under the advanced settings.
+	cfg.LocalIP, cfg.PeerIP = freeL3Subnet(side)
 
-	// The Iran side dials out, which is the whole point of "direct".
+	// The Iran side dials out, which is the whole point of "direct". Its
+	// questions are short and in the order an operator has the answers:
+	// where, which port, what to forward, then the name and the token.
 	if side == sideIran {
-		host := tui.Prompt("Kharej server address (IP or domain): ")
+		host := tui.Prompt("Kharej IP Or Domain: ")
 		if strings.TrimSpace(host) == "" {
 			tui.Error("An address is required.")
 			tui.PressEnter()
 			return
 		}
-		port := tui.PromptDefault("Tunnel port on the kharej server", "9000")
+		port := tui.PromptDefault("Tunnel Port", "9000")
 		if !validPort(port) {
 			tui.Error("Invalid port.")
 			tui.PressEnter()
 			return
 		}
 		cfg.Addr = net.JoinHostPort(strings.TrimSpace(host), port)
-		cfg.LocalIP, cfg.PeerIP = suggestedLocal, suggestedPeer
-	} else {
-		port := tui.PromptDefault("Tunnel port to listen on", "9000")
-		if !validPort(port) {
-			tui.Error("Invalid port.")
-			tui.PressEnter()
-			return
-		}
-		cfg.Addr = net.JoinHostPort("0.0.0.0", port)
-		cfg.LocalIP, cfg.PeerIP = suggestedLocal, suggestedPeer
-	}
 
-	fmt.Println()
-	tui.Info("Private addresses for the two ends of the tunnel. The defaults are")
-	tui.Info("fine unless " + l3Block(cfg.LocalIP) + "x is already used on either machine.")
-	tui.Info("Both servers must agree, with the addresses swapped.")
-	cfg.LocalIP = tui.PromptDefault("This machine's tunnel address", cfg.LocalIP)
-	cfg.PeerIP = tui.PromptDefault("The other machine's tunnel address", cfg.PeerIP)
-
-	// Same order as the reverse wizard and as the direct one above: address,
-	// name, token, ports, carrier-specific extras, then optional tuning.
-	cfg.Name = uniqueName(tui.PromptDefault("Tunnel name", cfg.defaultName()))
-
-	if !askL3Token(&cfg) {
-		return
-	}
-
-	// Ports over a layer-3 tunnel are optional: without them it simply routes.
-	if side == sideIran {
-		fmt.Println()
-		tui.Info("Optionally forward ports over the tunnel as well. Leave blank to")
-		tui.Info("just have the private network and route traffic yourself.")
-		raw := tui.Prompt("Ports to expose here (blank for none): ")
-		if strings.TrimSpace(raw) != "" {
+		// Ports over a layer-3 tunnel are optional: without them it is a
+		// plain private network (TUN) and routes whatever it is given.
+		if raw := tui.Prompt("Forwarded Ports (Blank For TUN): "); strings.TrimSpace(raw) != "" {
 			cfg.Ports = parsePorts(raw)
 			if err := validatePortSpecs(cfg.Ports); err != nil {
 				tui.Error(err.Error())
 				tui.PressEnter()
 				return
 			}
-			cfg.AcceptUDP = tui.Confirm("Carry UDP as well as TCP on those ports", false)
-			// A second kharej asking for the first one's ports means "serve
-			// them from both", not "fail to bind". See l3share.go.
-			cfg.Ports = offerL3Sharing(cfg)
+		}
+	} else {
+		port := tui.PromptDefault("Tunnel Port", "9000")
+		if !validPort(port) {
+			tui.Error("Invalid port.")
+			tui.PressEnter()
+			return
+		}
+		cfg.Addr = net.JoinHostPort("0.0.0.0", port)
+
+		// Exactly as the Iran server printed them: this machine's comes first.
+		cfg.LocalIP = tui.PromptDefault("This Server's Tunnel Address", cfg.LocalIP)
+		cfg.PeerIP = tui.PromptDefault("The Iran Server's Tunnel Address", cfg.PeerIP)
+		for l3.CheckTunnelEnds(cfg.LocalIP, cfg.PeerIP) != nil {
+			tui.Error("The Iran server's address cannot be this machine's own (" +
+				hostOnly(cfg.LocalIP) + "). It is the address the Iran server has on the tunnel.")
+			cfg.PeerIP = tui.PromptDefault("The Iran Server's Tunnel Address", "")
 		}
 	}
 
+	cfg.Name = uniqueName(tui.PromptDefault("Tunnel Name", cfg.defaultName()))
+
+	if !askL3Token(&cfg) {
+		return
+	}
+
+	if side == sideIran && len(cfg.Ports) > 0 {
+		cfg.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP On Those Ports", false)
+		// A second kharej asking for the first one's ports means "serve them
+		// from both", not "fail to bind". See l3share.go. Asked after UDP,
+		// because a shared port takes this tunnel's answer to it.
+		cfg.Ports = offerL3Sharing(cfg)
+		if busy := busyForwardPorts(cfg.Ports, cfg.PeerIP); len(busy) > 0 {
+			tui.Error("Already in use on this server: " + strings.Join(busy, ", ") +
+				" — the web panel's own port is the usual one. Pick other ports.")
+			tui.PressEnter()
+			return
+		}
+	}
+
+	if !askL3CarrierExtras(&cfg, side) {
+		return
+	}
+
+	askL3FEC(&cfg, side)
+	askL3Paths(&cfg, carrier, side)
+
+	cfg.MTU, cfg.Iface = defaultL3MTU, freeL3Iface()
+	chooseL3Preset(false).apply(&cfg)
+	if tui.Confirm("Fine-Tune The Advanced Settings", false) {
+		askL3Advanced(&cfg, side, side == sideIran)
+	}
+
+	// The Iran side shows the kharej's setup link before anything is written,
+	// so the whole tunnel — and what to paste on the other server — is on one
+	// screen when the operator says yes.
+	link := ""
+	if side == sideIran {
+		link = pendingShareLink(cfg)
+	}
+	summariseL3(cfg, link)
+	if why := kharejPortClash(cfg); why != "" {
+		tui.Error(why)
+		tui.PressEnter()
+		return
+	}
+	if !tui.Confirm("Create This Tunnel", true) {
+		return
+	}
+	writeAndStart(cfg.Name, cfg.render(), cfg.Side, cfg.Token, link != "")
+}
+
+// pendingShareLink is the setup link the tunnel will have once it is written,
+// built from the config the wizard is about to write. Empty if it cannot be
+// built, in which case the link is printed after the tunnel is created, from
+// the file, as before.
+func pendingShareLink(cfg l3Spec) string {
+	var c config.Config
+	if _, err := toml.Decode(cfg.render(), &c); err != nil {
+		return ""
+	}
+	link, err := shareLinkOf(cfg.Name, "", c)
+	if err != nil {
+		return ""
+	}
+	return link
+}
+
+// askL3CarrierExtras asks the questions only some carriers have. It reports
+// false when the setup cannot go on.
+func askL3CarrierExtras(cfg *l3Spec, side directSide) bool {
 	// The SNI carrier has one question: which name to announce. It matters
 	// more than most defaults do — the whole technique is that the box in
 	// front already lets that name through, and which names those are is a
 	// property of the route rather than of this program.
-	if carrier == "sni" {
+	if cfg.Carrier == "sni" && (side == sideIran || cfg.SNIDomain == "") {
 		fmt.Println()
 		tui.Info("This carrier sends a TLS hello naming a domain, once, at the start")
 		tui.Info("of the flow. A filter that decides by server name reads it and lets")
@@ -222,7 +296,7 @@ func setupL3(side directSide) {
 	// used to hang off the reverse spoof transport, which is where all of that
 	// explanation was written; the carrier is a direct one now, so the screen
 	// came with it. See askSpoofCarrier.
-	if carrier == "spoof" {
+	if cfg.Carrier == "spoof" {
 		askSpoofCarrier(&cfg.Spoof, side == sideIran)
 		// Whatever the operator chose above, the listening side cannot work out
 		// where to answer: every packet it receives carries a forged source. The
@@ -233,7 +307,7 @@ func setupL3(side directSide) {
 			tui.Error("This side needs the Iran server's real IP — it cannot be learned")
 			tui.Error("from the forged packets, and the tunnel will not start without it.")
 			tui.PressEnter()
-			return
+			return false
 		}
 		// The one piece of host setup the tunnel cannot do for itself: a strict
 		// reverse-path filter drops every forged-source packet before the tunnel
@@ -247,21 +321,73 @@ func setupL3(side directSide) {
 		}
 		OfferRelaxRPFilter(cfg.Spoof.SpoofInterface, peerReal)
 	}
+	return true
+}
 
-	askL3FEC(&cfg, side)
-	askL3Paths(&cfg, carrier, side)
-
-	cfg.MTU, cfg.Iface = defaultL3MTU, freeL3Iface()
-	chooseL3Preset().apply(&cfg)
-	if tui.Confirm("Fine-tune the advanced settings by hand", false) {
-		askL3Advanced(&cfg, side)
-	}
-
-	summariseL3(cfg)
-	if !tui.Confirm("Create this tunnel", true) {
+// setupL3FromLink builds the kharej side of a tunnel from the Iran server's
+// setup link (sharelink.go). Everything the two ends must agree on comes from
+// the link, mirrored by MirrorForPeer; what is this machine's own business —
+// the interface, the name — is chosen here.
+func setupL3FromLink(chosen string) {
+	// The one line the Iran server printed under its summary.
+	link, err := DecodeShareLink(tui.Prompt("Setup Link: "))
+	if err != nil {
+		tui.Error(err.Error())
+		tui.PressEnter()
 		return
 	}
-	writeAndStart(cfg.Name, cfg.render(), cfg.Side, cfg.Token)
+	if link.Kind != "direct" || !strings.EqualFold(link.From, "iran") {
+		tui.Error("This link is for the " + link.PeerSide() + " side of a " + link.Kind +
+			" tunnel, not for the kharej side of a direct one.")
+		tui.PressEnter()
+		return
+	}
+	if link.Tr != chosen {
+		tui.Warn("This link is for a " + link.Tr + " tunnel, not " + chosen +
+			" — setting up " + link.Tr + ", as the Iran server has it.")
+	}
+
+	form := MirrorForPeer(link)
+	form.Name = uniqueName(tui.PromptDefault("Tunnel Name", form.Name))
+	if link.Tr == "spoof" {
+		// The one carrier whose far end needs something of its own that a link
+		// cannot carry: where the Iran server really is, behind its forged
+		// sources. MirrorForPeer fills it when the link has it.
+		if net.ParseIP(form.SpoofPeerIP) == nil {
+			form.SpoofPeerIP = strings.TrimSpace(tui.Prompt("The Iran Server's Real IP: "))
+		}
+	}
+
+	row := func(label, value string) {
+		fmt.Printf("%s%-16s:%s %s\n", tui.Gray, label, tui.Reset, tui.Color(tui.White, value))
+	}
+	fmt.Println()
+	tui.Rule()
+	tui.Title("Direct " + carrierLabel(link.Tr) + " (Kharej)")
+	fmt.Println()
+	row("Name", form.Name)
+	row("Listens On", "port "+form.TunnelPort)
+	row("Interface", form.LocalIP+" ↔ "+form.PeerIP+" (the Iran server)")
+	row("Config File", app.ConfigPath(form.Name))
+	tui.Rule()
+	fmt.Println()
+	if !tui.Confirm("Create This Tunnel", true) {
+		return
+	}
+	service, active, err := applyPeerForm(form)
+	if err != nil {
+		tui.Error("Failed: " + err.Error())
+		tui.PressEnter()
+		return
+	}
+	fmt.Println()
+	if active {
+		tui.Success("Created and running: " + service)
+	} else {
+		tui.Warn("Created, but " + service + " is not running yet — check its log.")
+	}
+	tui.Info("It comes up as soon as the Iran server dials in.")
+	tui.PressEnter()
 }
 
 // Picking an interface and a subnet that are not already taken.
@@ -350,7 +476,24 @@ const defaultL3MTU = 1400
 
 // askL3Advanced is what sits behind "fine-tune by hand", matching where the
 // reverse wizard keeps its own. None of it needs answering.
-func askL3Advanced(cfg *l3Spec, side directSide) {
+//
+// addresses asks the tunnel addresses here, which the Iran side of the
+// link-based flow does: they are chosen there, from the blocks free on the
+// Iran server, and the link carries them to kharej. The classic flow asks
+// them in the main questions instead.
+func askL3Advanced(cfg *l3Spec, side directSide, addresses bool) {
+	if addresses {
+		fmt.Println()
+		tui.Info("The two ends of the private network. The defaults are a block no")
+		tui.Info("other tunnel on this server uses; the code carries them to kharej.")
+		cfg.LocalIP = tui.PromptDefault("This server's tunnel address", cfg.LocalIP)
+		cfg.PeerIP = tui.PromptDefault("The kharej server's tunnel address", cfg.PeerIP)
+		for l3.CheckTunnelEnds(cfg.LocalIP, cfg.PeerIP) != nil {
+			tui.Error("The kharej server's address cannot be this server's own (" + hostOnly(cfg.LocalIP) + ").")
+			cfg.PeerIP = tui.PromptDefault("The kharej server's tunnel address", "")
+		}
+	}
+
 	fmt.Println()
 	tui.Info("The tunnel measures what the path really carries once it is up and")
 	tui.Info("corrects the MTU itself, so this is only a starting point. Turn that")
@@ -388,20 +531,13 @@ func askL3Advanced(cfg *l3Spec, side directSide) {
 	}
 }
 
-// askL3Carrier offers the datagram carriers, in the order they are worth
-// trying: pck first, because it survives the most, then plain udp where the
-// path allows it, then spoof for a route that needs it.
+// askL3Carrier offers the datagram carriers, in the operator's order: xDi,
+// PCK, UDP, Quic, then IP and SNI spoofing for a route that needs them.
 //
 // A layer-3 tunnel carries IP packets, which already belong to something that
 // handles its own loss; stacking that on a retransmitting transport makes
 // throughput collapse rather than degrade, so tcp, ws and kcp are not offered
 // at all.
-//
-// The order is what to reach for first. pck survives the most; udp is the
-// plain one; quic is the one that is not pretending — a real QUIC session, so
-// it looks like the HTTP/3 that dominates a modern path, and it is the only
-// obfuscated choice here that needs no root. spoof and xdi are for routes that
-// have defeated the others.
 func askL3Carrier() (string, bool) {
 	// Built from the same list the panel offers, so the two cannot drift: they
 	// used to be two literals in two files, which is a difference nobody sees
@@ -415,7 +551,7 @@ func askL3Carrier() (string, bool) {
 		}
 		opts = append(opts, tui.Option{Title: c["label"], Desc: desc})
 	}
-	i := tui.ChooseOpt("How should the packets travel?", opts)
+	i := tui.ChooseOpt("How Should The Packets Travel?", opts)
 	if i < 0 || i >= len(carriers) {
 		return "", false
 	}
@@ -450,51 +586,63 @@ func askL3Token(cfg *l3Spec) bool {
 
 // ---------------------------------------------------------------- summaries
 
-func summariseL3(cfg l3Spec) {
+// summariseL3 is the one screen before "Create This Tunnel": short, one fact a
+// line, and on Iran the kharej's setup link under it.
+//
+// The kharej set up by hand is not left out: the link carries its port, its
+// addresses and the token, and the same values are under Manage tunnels → the
+// tunnel for anyone who types them in.
+func summariseL3(cfg l3Spec, link string) {
+	row := func(label, value string) {
+		fmt.Printf("%s%-16s:%s %s\n", tui.Gray, label, tui.Reset, tui.Color(tui.White, value))
+	}
 	fmt.Println()
 	tui.Rule()
-	tui.Title("About to create")
-	tui.Info("Kind        : full IP tunnel (layer 3)")
-	tui.Info("This machine: " + sideLabel(cfg.Side))
-	tui.Info("Carrier     : " + cfg.Carrier)
-	encap := cfg.Encap
-	if cfg.GREKey != 0 {
-		encap += fmt.Sprintf(" (key %d)", cfg.GREKey)
-	}
-	tui.Info("Wrapping    : " + encap)
+	tui.Title("Direct " + carrierLabel(cfg.Carrier))
+	fmt.Println()
+	row("Interface", cfg.Iface+"  "+cfg.LocalIP+" ↔ "+hostOnly(cfg.PeerIP))
 	if cfg.Side == sideIran {
-		tui.Info("Dials       : " + cfg.Addr)
+		row("Dials", cfg.Addr)
+		ports := "none (TUN)"
+		if len(cfg.Ports) > 0 {
+			ports = strings.Join(cfg.Ports, ", ")
+			if cfg.AcceptUDP {
+				ports += "  (TCP + UDP)"
+			}
+		}
+		row("Forwarded Ports", ports)
 	} else {
-		tui.Info("Listens on  : " + cfg.Addr)
+		row("Listens On", cfg.Addr)
 	}
-	tui.Info("Interface   : " + cfg.Iface + "  " + cfg.LocalIP + " ↔ " + cfg.PeerIP)
-	tui.Info("MTU         : " + fmt.Sprint(cfg.MTU) + "  (measured and corrected once the tunnel is up)")
-	tui.Info("Tuning      : " + presetLabel(cfg.Preset) + ", " + cfg.Qdisc +
-		fmt.Sprintf(", queue %d", cfg.TxQueueLen))
-	if len(cfg.Ports) > 0 {
-		tui.Info("Exposes     : " + strings.Join(cfg.Ports, ", "))
+	if cfg.FECData > 0 && cfg.FECParity > 0 {
+		row("Error Correction", fmt.Sprintf("%d spare per %d", cfg.FECParity, cfg.FECData))
 	}
-	tui.Info("Config file : " + app.ConfigPath(cfg.Name))
+	if cfg.Paths > 1 {
+		row("Sockets", fmt.Sprintf("%d  (UDP ports %s open on kharej)", cfg.Paths, socketPorts(cfg)))
+	}
+	if cfg.GREKey != 0 {
+		row("GRE Key", fmt.Sprint(cfg.GREKey))
+	}
+	row("Tuning", presetLabel(cfg.Preset))
+	row("Config File", app.ConfigPath(cfg.Name))
+	if link != "" {
+		fmt.Println()
+		tui.Info("Setup Link (Setup Kharej → Direct → The Same Carrier → Setup Link) :")
+		fmt.Println(tui.Color(tui.Bold+tui.White, link))
+	}
 	tui.Rule()
 	fmt.Println()
-	// Spelled out because these three are the values that must be identical on
-	// the other machine, and getting one wrong used to produce a tunnel that
-	// came up, reported a peer and carried nothing.
-	tui.Warn("The other machine must use exactly these three:")
-	tui.Warn("  carrier " + cfg.Carrier + "   wrapping " + encap + "   the same token")
-	// And the addresses, the other way round. The kharej wizard proposes the
-	// first block free on *its* machine, which for a second kharej is not the
-	// block this Iran server gave the tunnel — a tunnel set up that way comes
-	// up, reports a peer, and carries nothing.
-	if cfg.Side == sideIran {
-		tui.Warn("  and these tunnel addresses when its wizard asks:")
-		tui.Warn("    this machine's tunnel address   " + l3PeerWithPrefix(cfg))
-		tui.Warn("    the other machine's address     " + hostOnly(cfg.LocalIP))
+}
+
+// carrierLabel is the name a carrier has in the menu — PCK, ICMP — so the
+// summary says what the operator chose in the words they chose it in.
+func carrierLabel(value string) string {
+	for _, c := range DirectCarriers() {
+		if c["value"] == value {
+			return c["label"]
+		}
 	}
-	fmt.Println()
-	tui.Warn("Once both ends are up, test it with:  ping " + strings.SplitN(cfg.PeerIP, "/", 2)[0])
-	fmt.Println()
-	remindOtherSide(cfg.Side, cfg.Token)
+	return strings.ToUpper(value)
 }
 
 // remindOtherSide says what has to happen on the machine this is not, and
@@ -520,41 +668,35 @@ func remindOtherSide(side directSide, token string) {
 	fmt.Println()
 }
 
-func sideLabel(s directSide) string {
-	if s == sideIran {
-		return "Iran (dials out, exposes the ports)"
-	}
-	return "Kharej (listens, holds the service)"
-}
-
 // ---------------------------------------------------------------- writing
 
-// writeAndStart puts the rendered config on disk and brings the service up. It
+// createAndStart puts the rendered config on disk and brings the service up. It
 // deliberately mirrors what finishSetup does for a reverse tunnel, so a direct
-// tunnel is managed, backed up and deleted by exactly the same machinery.
-func writeAndStart(name, body string, side directSide, token string) {
+// tunnel is managed, backed up and deleted by exactly the same machinery. It
+// reports false, having already said why and waited for Enter, on a failure.
+func createAndStart(name, body string) bool {
 	tui.Info("Applying system network optimizations...")
 	optimize.ApplyQuiet(ReservedPorts())
 
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		tui.Error("Cannot create the config directory: " + err.Error())
 		tui.PressEnter()
-		return
+		return false
 	}
 	if err := app.WriteFileAtomic(app.ConfigPath(name), []byte(body), app.TunnelConfigMode); err != nil {
 		tui.Error("Cannot write the config: " + err.Error())
 		tui.PressEnter()
-		return
+		return false
 	}
 	if err := writeUnit(name); err != nil {
 		tui.Error("Cannot create the service: " + err.Error())
 		tui.PressEnter()
-		return
+		return false
 	}
 	if err := DaemonReload(); err != nil {
 		tui.Error("systemd reload failed: " + err.Error())
 		tui.PressEnter()
-		return
+		return false
 	}
 
 	service := app.ServiceName(name)
@@ -562,7 +704,7 @@ func writeAndStart(name, body string, side directSide, token string) {
 		tui.Error("The tunnel was created but would not start: " + err.Error())
 		tui.Warn("Check the log with:  journalctl -u " + service + " -n 50")
 		tui.PressEnter()
-		return
+		return false
 	}
 
 	fmt.Println()
@@ -572,6 +714,15 @@ func writeAndStart(name, body string, side directSide, token string) {
 		tui.Warn(fmt.Sprintf("Tunnel %q created but not active yet — check the log:", name))
 		tui.Warn("  journalctl -u " + service + " -n 50")
 	}
+	return true
+}
+
+// writeAndStart creates the tunnel and says what to do on the other server:
+// on Iran, paste the setup link.
+func writeAndStart(name, body string, side directSide, token string, linkShown bool) {
+	if !createAndStart(name, body) {
+		return
+	}
 
 	// Repeated here, after the tunnel exists, because this is the moment the
 	// operator turns to the other machine — and the token they need has been
@@ -579,10 +730,24 @@ func writeAndStart(name, body string, side directSide, token string) {
 	//
 	// A kernel GRE tunnel has no token at all, and printing an empty one under
 	// "copy this exactly" would be worse than saying nothing.
-	if token != "" {
+	if side == sideIran {
+		// The setup link is what the kharej side is built from: everything
+		// the two ends must agree on, in one line, so none of it is typed
+		// twice. The summary showed it already; it is printed here only when
+		// it could not be built before the file existed.
+		if linkShown {
+			tui.Info("Paste the setup link above on the kharej server. It is shown again under")
+			tui.Info("Manage Tunnels → this tunnel → Setup Link.")
+		} else {
+			fmt.Println()
+			tui.Rule()
+			if !printShareLink(name) && token != "" {
+				remindOtherSide(side, token)
+			}
+		}
+	} else {
 		fmt.Println()
-		tui.Rule()
-		remindOtherSide(side, token)
+		tui.Info("This side is ready. The tunnel comes up as soon as the Iran server dials in.")
 	}
 
 	tui.PressEnter()
@@ -614,23 +779,17 @@ func askL3FEC(cfg *l3Spec, side directSide) {
 		there = "Iran"
 	}
 
-	fmt.Println()
-	tui.Info("Does this route drop packets? A congested international path or a")
-	tui.Info("lossy last mile shows up as a game that stutters, calls that break")
-	tui.Info("up, or transfers that crawl while the link looks idle.")
-	fmt.Println()
-	tui.Info("Error correction sends a few spare packets with every group, so the")
-	tui.Info("far end rebuilds what the path lost instead of waiting for it again.")
-	tui.Warn("It costs about a third more traffic. On a clean route that is pure")
-	tui.Warn("waste — say no unless you have a reason.")
-	tui.Warn("The " + there + " end must answer this the same way.")
-	fmt.Println()
-	if !tui.Confirm("Turn on error correction", false) {
+	// Worth it on a route that drops packets; about a third more traffic, so
+	// pure waste on a clean one — hence the default no. On Iran the setup link
+	// carries the answer; a kharej set up by hand must give the same one.
+	if side == sideKharej {
+		tui.Warn("The " + there + " end must answer this the same way.")
+	}
+	if !tui.Confirm("Turn On Error Correction (FEC)", false) {
 		return
 	}
 	plan := defaultL3FEC()
 	cfg.FECData, cfg.FECParity = plan.Data, plan.Parity
-	tui.Success(fmt.Sprintf("Error correction on: %d spare packets per %d.", cfg.FECParity, cfg.FECData))
 }
 
 // askL3FECPair is the exact-numbers version for the advanced screen, for a path
@@ -671,31 +830,36 @@ func askL3Paths(cfg *l3Spec, carrier string, side directSide) {
 		there = "Iran"
 	}
 
-	fmt.Println()
-	tui.Info("Some providers give each connection its own speed limit. A tunnel on")
-	tui.Info("one socket is one connection to them, so it gets one limit however")
-	tui.Info("fast the link really is — the usual sign is a tunnel that sits at the")
-	tui.Info("same speed no matter what you tune.")
-	fmt.Println()
-	tui.Info("Spreading it over several sockets makes it several connections, and")
-	tui.Info("several limits. Measured against a link capped at 8 Mbit per")
-	tui.Info("connection: one socket carried 5.8 Mbit/s, four carried 23.6.")
-	tui.Warn("It uses one port per socket, counting up from the tunnel port, and")
-	tui.Warn("they must be open. The " + there + " end must use the same number.")
-	fmt.Println()
-	if !tui.Confirm("Spread this tunnel over several sockets", false) {
+	// For a provider that limits each connection: several sockets are several
+	// connections, and several limits. Measured against a link capped at
+	// 8 Mbit per connection: one socket carried 5.8 Mbit/s, four carried 23.6.
+	// It takes one port per socket, counting up from the tunnel port, all open
+	// on kharej — which the summary says. On Iran the setup link carries the
+	// count; a kharej set up by hand must give the same one.
+	if side == sideKharej {
+		tui.Warn("The " + there + " end must use the same number of sockets.")
+	}
+	if !tui.Confirm("Spread The Tunnel Over Several Sockets", false) {
 		return
 	}
 	for {
-		n := tui.PromptInt("How many sockets", 4)
+		n := tui.PromptInt("How Many Sockets (2-8)", 4)
 		if n >= 2 && n <= 8 {
 			cfg.Paths = n
-			base := addrPort(cfg.Addr)
-			tui.Success(fmt.Sprintf("Using %d sockets. Open the ports from %s upward on the listening side.", n, base))
 			return
 		}
 		tui.Error("Choose between 2 and 8.")
 	}
+}
+
+// socketPorts is the range of kharej ports a multi-socket udp tunnel uses,
+// for the summary: "9000-9003".
+func socketPorts(cfg l3Spec) string {
+	base, err := strconv.Atoi(addrPort(cfg.Addr))
+	if err != nil || cfg.Paths < 2 {
+		return addrPort(cfg.Addr)
+	}
+	return fmt.Sprintf("%d-%d", base, base+cfg.Paths-1)
 }
 
 // l3PeerWithPrefix is the peer's tunnel address carrying this end's prefix

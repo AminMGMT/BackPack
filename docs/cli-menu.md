@@ -42,23 +42,30 @@ Both setup entries ask **Reverse or Direct** before anything else. The table
 below is the reverse flow; the direct flow is much shorter and is listed after
 it.
 
+Set up the **Iran server first**; its summary shows a setup link the kharej
+server pastes.
+
 | Prompt | Notes |
 |---|---|
-| **Select transport family** | TCP / UDP / WebSocket / Experimental. [Transports](transports.md) |
-| **Select … transport** | the variant within that family |
-| **Tunnel (control) port** | what the client dials. Refused if already in use for that protocol. A port alone listens on every address; `85.10.11.51:443` pins it to one, so another service can hold the same port on another address — see [Port mappings](port-mappings.md#binding-to-one-local-address) |
-| **Listen on IPv6 as well** `[y/N]` | binds `::`, which accepts IPv4 too on a dual-stack host — "as well", not "instead" |
-| **Tunnel name** | names the service (`backpack-<name>`) and the config file |
-| **Security token** | a 64-char token is suggested; the client needs the identical string |
-| **Exposed ports** | `443`, `443=127.0.0.1:2096`, `443=a:1\|b:2`, `10000-10009`, `85.11.12.13:443=127.0.0.1:2096`, comma separated. Setup prints the resolved targets. [Every form](port-mappings.md) |
-| **Carry UDP as well as TCP** `[y/N]` | off by default. [Forwarded UDP](forwarded-udp.md) |
-| **TLS certificate** | wss/wssmux only — self-signed, Let's Encrypt, or existing files |
-| **Simple token auth** `[y/N]` | wss/wssmux only — for a TLS-terminating proxy in front |
-| **IP Spoofing** (4 steps) | spoof only. [IP Spoofing](ip-spoofing.md) |
-| **Flag pattern** / interface override | pck only. [TCP + PCK](tcp-pck.md) |
-| **Enable PROXY protocol** `[y/N]` | [Real client IP](real-client-ip.md) |
-| **Performance preset** | [Presets](performance-presets.md) |
-| **Fine-tune the advanced settings by hand** `[y/N]` | [↓ the advanced settings](#the-advanced-settings-fine-tune) |
+| **Select Transport Family** / **Select … Transport** | TCP / UDP / WebSocket, then the variant. [Transports](transports.md) |
+| **Iran IP Or Domain (What Kharej Dials)** | this server's detected public IP is the default; the setup link carries it to kharej |
+| **Tunnel Port** | what the client dials. Refused if already in use for that protocol. `85.10.11.51:443` pins it to one address — see [Port mappings](port-mappings.md#binding-to-one-local-address) |
+| **Listen On IPv6 As Well** `[y/N]` | only for a bare port; binds `::`, which accepts IPv4 too on a dual-stack host |
+| **Forwarded Ports** | `443`, `443=127.0.0.1:2096`, `443=a:1\|b:2`, `10000-10009`, `85.11.12.13:443=127.0.0.1:2096`, comma separated. [Every form](port-mappings.md) |
+| **Tunnel Name** | names the service (`backpack-<name>`) and the config file |
+| **Security Token** | generated here — press Enter. The setup link carries it |
+| **Carry UDP As Well As TCP On Those Ports** `[y/N]` | off by default. [Forwarded UDP](forwarded-udp.md) |
+| **TLS Certificate** | wss/wssmux only — Self-Signed, Let's Encrypt, or Existing Files |
+| **Simple Token Auth** `[y/N]` | wss/wssmux only — for a TLS-terminating proxy in front |
+| **TCP Flag Pattern** / interface override | pck only. [TCP + PCK](tcp-pck.md) |
+| **Send Real Client IP (PROXY Protocol)** `[y/N]` | where the transport can carry it. [Real client IP](real-client-ip.md) |
+| **How Should The Tunnel Be Tuned?** | [Presets](performance-presets.md) |
+| **Fine-Tune The Advanced Settings** `[y/N]` | [↓ the advanced settings](#the-advanced-settings-fine-tune) |
+
+Then one short summary — *Reverse TCP*, where it listens, the address kharej
+dials, the forwarded ports and where each lands on kharej, the certificate,
+tuning, config file — with the **Setup Link** under it, and **Create This
+Tunnel**.
 
 ### Setup Iran / Setup Kharej → Direct
 
@@ -66,41 +73,60 @@ A direct tunnel is always a full IP tunnel wrapped in Backpack's own GRE, so
 there is nothing to choose about the shape or the framing — only how it travels.
 [Direct tunnel](l3-direct-tunnel.md)
 
+Set up the **Iran server first**; its summary shows a setup link the kharej
+server pastes. The Iran questions, in order:
+
 | Prompt | Notes |
 |---|---|
-| **How should the packets travel?** | **PCK** (looks like an ordinary TCP flow, no socket a firewall can hold), **UDP** (plain, where the path does not interfere), **Spoof** (forged source — test it on your route) |
-| **Kharej server address** | Iran side only. Iran dials out, so it needs no inbound port of its own |
-| **Tunnel port** | what kharej binds and Iran reaches |
-| **Private addresses** | the two ends of the tunnel's own subnet. A free `10.10.N.0/30` is suggested, so a second tunnel does not collide with the first |
-| **Tunnel name** | names the service and the config file |
-| **Security token** | suggested on the **kharej** side only, and pasted on the Iran side — offering one on both ends is how two different tokens happen |
-| **Ports to expose here** | Iran side only, optional. Without them the tunnel just routes |
-| **The Iran server's real IP** | spoof carrier, kharej side only: the peer forges every source, so this side has to be told where replies go |
-| **How should the tunnel be tuned?** | Turbo / Balance / Aggressive — the queue and the socket buffers. [Presets](performance-presets.md) |
-| **Fine-tune the advanced settings by hand** `[y/N]` | starting MTU, interface name, GRE key, segment cap, caps |
+| **How Should The Packets Travel?** | **xDi**, **PCK**, **UDP**, **Quic**, **IP Spoofing**, **SNI Spoofing**, in that order; both ends choose the same one |
+| **Kharej IP Or Domain** | Iran dials out, so it needs no inbound port of its own |
+| **Tunnel Port** `[9000]` | what kharej binds and Iran reaches |
+| **Forwarded Ports (Blank For TUN)** | optional. Blank is a plain private network that routes what it is given. A port something here already listens on (the panel's `7777`) is refused |
+| **Tunnel Name** | names the service and the config file |
+| **Security Token** | generated here — press Enter. The setup link carries it to kharej |
+| **Carry UDP As Well As TCP On Those Ports** `[y/N]` | only when ports were given |
+| **Turn On Error Correction (FEC)** `[y/N]` | for a route that drops packets; about a third more traffic |
+| **Spread The Tunnel Over Several Sockets** `[y/N]` / **How Many Sockets (2-8)** | UDP only — for a provider that limits each connection. One port per socket from the tunnel port up, open on kharej; the summary shows the range |
+| **How Should The Tunnel Be Tuned?** | Turbo / Balance / Aggressive — the queue and the socket buffers. [Presets](performance-presets.md) |
+| **Fine-Tune The Advanced Settings** `[y/N]` | tunnel addresses (a free `10.10.N.0/30` by default), starting MTU, interface name, GRE key, segment cap, caps |
+
+Then one short summary — interface, where it dials, forwarded ports, tuning,
+config file — with the **Setup Link** (`backpack://…`) under it, and
+**Create This Tunnel**. The link is shown again under **Manage tunnels → the
+tunnel → Setup Link**.
+
+On kharej: the same carrier, then **How Do You Want To Set Up This Side?** —
+**Setup Link** (paste the line; asks only for a name) or **Manual** (tunnel
+port, both tunnel addresses as Iran printed them, a name, and the Iran
+server's token, which kharej never generates). A spoof kharej is also asked
+for the Iran server's real IP.
+
+**IP Spoofing** and **SNI Spoofing** keep the classic wizard: no setup link,
+both ends set up by hand, the **kharej** side suggests the token and the Iran
+side pastes it (left blank, Iran generates one to carry over), and both are
+asked the tunnel addresses. Their answers — which forged source a route
+carries, which domain it lets through — are worked out on each machine.
 
 The MTU is not a question worth agonising over: the tunnel measures the path
 once it is up and corrects the interface itself.
 
 ### Setup Kharej
 
+After the transport (the same one as Iran), **How Do You Want To Set Up This
+Side?** — **Setup Link** (paste the line; only the name is asked) or
+**Manual**:
+
 | Prompt | Notes |
 |---|---|
-| **Select transport family / transport** | must match the server |
-| **Server address** | the Iran IP or a domain. Resolved and checked: a CDN in front of a raw transport, or an AAAA record that would send the tunnel over IPv6, is warned about |
-| **Server tunnel port** | the same one the server binds |
-| **Tunnel name** | |
-| **Security token** | the **same** string as the server |
-| **Edge IP** | WebSocket family only — connect to a CDN edge rather than the server address |
-| **Simple token auth**, **IP Spoofing**, **Flag pattern** | as above, where the transport calls for them |
-| **Configure optional connection settings** `[y/N]` | opens the three below |
-| ‣ **Proxy URL** | reach the server through `socks5://…` or `http://…`. Not offered on datagram transports — a TCP proxy cannot relay UDP |
-| ‣ **Interface / Source address** | pin the tunnel to one uplink. Only asked on a multi-homed host |
-| ‣ **Backup addresses** | comma separated; a bare IP reuses the main port. [Failover](failover-load-balancing.md) |
-| ‣ **Automatic failover to the healthiest server** `[y/N]` | offered when backups exist — scores every exit and steers to the best. Overrides load balancing |
-| ‣ **Load balancing** `[y/N]` | offered instead — spread connections over all addresses at once |
-| **Performance preset** | use the same one as the server |
-| **Fine-tune the advanced settings by hand** `[y/N]` | |
+| **Iran IP Or Domain** | resolved and checked: a CDN in front of a raw transport, or an AAAA record that would send the tunnel over IPv6, is warned about |
+| **Tunnel Port** | the same one Iran binds |
+| **Tunnel Name** | |
+| **Security Token (From The Iran Server)** | no default — paste Iran's |
+| **Edge IP (Optional, For A CDN)** | WebSocket family only — connect to a CDN edge rather than the server address |
+| **Simple Token Auth**, **TCP Flag Pattern** | as above, where the transport calls for them |
+| **Optional Connection Settings** `[y/N]` | opens: **Proxy URL** (not on datagram transports), **Interface** / **Source Address** (multi-homed hosts only), **Backup Addresses**, then **Automatic Failover To The Healthiest Address** or **Load Balance Over All Addresses**. [Failover](failover-load-balancing.md) |
+| **How Should The Tunnel Be Tuned?** | the same one as Iran |
+| **Fine-Tune The Advanced Settings** `[y/N]` | |
 
 ---
 
@@ -112,8 +138,6 @@ once it is up and corrects the interface itself.
 | **Status** | A live table of every tunnel: role, transport, state, uptime, traffic. |
 | **Health Check** | Tests the server, the panel and every tunnel, and prints a **fix** under each problem it finds. Start here when something is wrong. [More](health-check.md) |
 | **Link Test** | Measures the real route (latency, jitter, loss) and recommends a transport with matching timers. On a lossy link it names the exact FEC ratio and offers to apply it. [More](choosing-a-transport.md) |
-| **Speed Test** | Measures what a tunnel actually carries, end to end — encapsulation, encryption, carrier and path together. Needs both servers: start **Receive** on one, then **Send and measure** on the other, which is the side that reports. It runs eight connections at once, so the figure is the tunnel's capacity rather than one TCP window's. Link Test above measures how the path *behaves*; this measures how much it *moves*. Full IP tunnels only. |
-| **Game Latency Test** | Estimates the in-game ping a player would feel through this exit — pings the nearest edge of Dota 2, CS2, Valorant, PUBG, Fortnite and others from the kharej server, adds the tunnel leg, and rates the result. Endpoint list at `/etc/backpack/game-endpoints.list`. |
 | **Exit Health** | Scores and ranks every server address of a tunnel by `rtt + 2·jitter + 20·loss%`, and offers to pin the healthiest as the primary. The manual companion to health failover. |
 | **IP Spoofing Tester** | Two-node test that finds which forged source IPs actually cross the path. [More](ip-spoofing.md#the-ip-spoofing-tester) |
 | **Tunnel Metrics** | Traffic and connections per transport and, on KCP, retransmits, loss and packets repaired by FEC. Totals survive restarts. [More](tunnel-metrics.md) |
@@ -249,7 +273,7 @@ count.
 ## The advanced settings (Fine Tune)
 
 Asked at the end of both setup wizards behind
-**"Fine-tune the advanced settings by hand"** (default: no), and available
+**"Fine-Tune The Advanced Settings"** (default: no), and available
 per-tunnel in the web panel's **Fine Tune** drawer.
 
 **You do not need any of these.** The preset has already filled in every value,
@@ -380,8 +404,7 @@ range back.
 
 **منوی Manage** علاوه بر مدیریت تونل‌ها این‌ها را دارد: **Status** (جدول زنده)،
 **Health Check** (مشکل را پیدا می‌کند و زیر هرکدام راه‌حل می‌نویسد — از اینجا
-شروع کن)، **Link Test** (مسیر را می‌سنجد و ترنسپورت و نسبت FEC پیشنهاد می‌دهد)، **Speed Test** (اندازه می‌گیرد تونل واقعاً چقدر حجم رد می‌کند — روی یک سرور Receive و روی دیگری Send)،
-**Game Latency Test** (تخمین پینگ واقعی بازی از این خروجی)، **Exit Health**
+شروع کن)، **Link Test** (مسیر را می‌سنجد و ترنسپورت و نسبت FEC پیشنهاد می‌دهد)، **Exit Health**
 (امتیازدهی و رتبه‌بندی همهٔ آدرس‌های سرور)، **IP Spoofing Tester**،
 **Tunnel Metrics**، **Restart ALL**، **Auto Refresh**، **Built-in Proxy**
 (خود این سرور SOCKS5/HTTP شود) و **File Locations**.
@@ -407,4 +430,4 @@ FEC؛ و zero-copy (فقط روی tcp ساده).
 
 ---
 
-*Last verified against Backpack v1.8.3.*
+*Last verified against Backpack v1.8.4.*
