@@ -425,6 +425,13 @@ func localForwardPort(conn net.Conn) int {
 // lost to a UDP backend anyway, so the header is skipped rather than corrupting
 // the stream.
 func isUDPFlow(conn net.Conn) bool {
+	// A bandwidth cap wraps the flow; it is still a UDP flow underneath. Seen
+	// only as a *limitedConn, it was given a PROXY header — which cannot
+	// describe it, so the handler refused it and closed every UDP flow on a
+	// capped tunnel with proxy_protocol on.
+	if lc, wrapped := conn.(*limitedConn); wrapped {
+		conn = lc.Conn
+	}
 	_, ok := conn.(*udpFlow)
 	return ok
 }

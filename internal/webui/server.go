@@ -563,7 +563,10 @@ func (s *server) note(r *http.Request, who caller, status int) {
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		ip := clientIP(r)
-		if blocked, left := limiter.blocked(ip); blocked {
+		// Every attempt is counted as it starts, and cleared only by a full
+		// sign-in. Checking first and counting after the answer let a burst
+		// of parallel requests all pass the check before any was counted.
+		if ok, left := limiter.attempt(ip); !ok {
 			http.Error(w, fmt.Sprintf("too many failed attempts — try again in %d minutes",
 				int(left.Minutes())+1), http.StatusTooManyRequests)
 			return
@@ -577,7 +580,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// The second step of a two-factor login: the password was accepted a
 		// moment ago and this is the code for it. Checked first, because a
 		// request carrying a pending token is never a password attempt.
-		if c, err := r.Cookie(twoFactorCookie); err == nil && s.pending.valid(c.Value, ip) {
+		if c, err := r.Cookie(twoFactorCookie); err == nil && s.pending.attempt(c.Value, ip) {
 			if checkSecondFactor(r.FormValue("code")) {
 				s.pending.destroy(c.Value)
 				limiter.reset(ip)
@@ -587,13 +590,20 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				redirectTo(w, r, "/", http.StatusSeeOther)
 				return
 			}
-			// A wrong code counts against the address exactly as a wrong
-			// password does. The pending token is left alive so the operator
-			// can try again within its three minutes rather than starting from
-			// the password.
-			limiter.fail(ip)
+			// A wrong code has counted against the address, exactly as a wrong
+			// password does, and against the pending sign-in: it survives a
+			// few typos within its three minutes, and then the operator starts
+			// again from the password. Once it has ended, the code prompt is
+			// not shown again — a code typed into it could no longer succeed.
 			time.Sleep(1 * time.Second)
-			s.serveSecondFactorPage(w, r, http.StatusUnauthorized)
+			if s.pending.valid(c.Value, ip) {
+				s.serveSecondFactorPage(w, r, http.StatusUnauthorized)
+				return
+			}
+			http.SetCookie(w, clearedCookie(r, twoFactorCookie))
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write(withNonce(withBase(withLoginState(loginHTML, true), basePrefix()), r))
 			return
 		}
 
@@ -604,7 +614,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// factor. Where there is one, it buys the code prompt and nothing
 			// else — see totpauth.go.
 			if twoFactorOn() {
-				limiter.reset(ip)
+				// The failure count is NOT cleared here. The password alone
+				// is not a sign-in when a second factor follows; clearing the
+				// count on it let a caller who knew the password alternate
+				// password and wrong codes for ever and never reach the
+				// lockout. It is cleared when the code is right, below.
 				tok := s.pending.create(ip)
 				http.SetCookie(w, authCookie(r, twoFactorCookie, tok, twoFactorTTL))
 				s.serveSecondFactorPage(w, r, http.StatusOK)
@@ -616,7 +630,6 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			redirectTo(w, r, "/", http.StatusSeeOther)
 			return
 		}
-		limiter.fail(ip)
 		time.Sleep(1 * time.Second)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -728,8 +741,11 @@ func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	r.ParseForm()
-	pw := strings.TrimSpace(r.FormValue("password"))
+	pw, err := passwordFrom(w, r)
+	if err != nil {
+		http.Error(w, "could not read the request", http.StatusBadRequest)
+		return
+	}
 	if len(pw) < 4 || len(pw) > 128 {
 		http.Error(w, "password must be 4–128 characters", http.StatusBadRequest)
 		return
@@ -759,6 +775,9 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			err := manage.ApplyUpdate(updateProgress.log)
 			updateProgress.finish(err)
+			// The panel's own unit restarts last, after the outcome is recorded
+			// (the restart ends this process).
+			manage.FinishDeferredRestarts()
 		}()
 		writeJSON(w, map[string]string{"status": "started"})
 	default:
@@ -854,6 +873,25 @@ func (s *server) handlePanelPort(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		manage.RestartService(app.WebUIService)
 	}()
+}
+
+// passwordFrom reads the new password from a form or, for a panel page cached
+// from before it sent a form, from a JSON body.
+func passwordFrom(w http.ResponseWriter, r *http.Request) (string, error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Password string `json:"password"`
+		}
+		if err := decodeJSON(w, r, &body); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(body.Password), nil
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
+	if err := r.ParseForm(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(r.FormValue("password")), nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -70,3 +71,50 @@ func requeueLocal(ch chan LocalTCPConn, conn LocalTCPConn, lim *limiter, logger 
 		return false
 	}
 }
+
+// drainOnEnd gives back everything still queued in a generation's local
+// channel once that generation has ended: each connection is closed and its
+// connection-limit slot released.
+//
+// Every restart builds a fresh queue, and the workers of the old one return on
+// their context without emptying it. The limiter outlives every generation, so
+// a queued connection's slot used to be lost for the life of the process — a
+// tunnel with max_connections that lost its control channel under load a few
+// times ended up refusing everyone. The sweep repeats for a short while after
+// the end, because an accept already past its context check can still push one
+// more in.
+func drainOnEnd(ctx context.Context, queue <-chan LocalTCPConn, limits *limiter) {
+	sweepAfterEnd(ctx, func() bool {
+		select {
+		case c := <-queue:
+			if c.conn != nil {
+				c.conn.Close()
+			}
+			limits.release()
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// sweepAfterEnd waits for ctx to end, then calls take until it reports the
+// queue empty, again and again for drainGrace — an accept that was already past
+// its context check can still push one more in.
+func sweepAfterEnd(ctx context.Context, take func() bool) {
+	<-ctx.Done()
+	until := time.Now().Add(drainGrace)
+	for {
+		for take() {
+		}
+		if time.Now().After(until) {
+			return
+		}
+		time.Sleep(drainSweep)
+	}
+}
+
+const (
+	drainGrace = 3 * time.Second
+	drainSweep = 100 * time.Millisecond
+)

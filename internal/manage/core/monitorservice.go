@@ -73,34 +73,36 @@ WantedBy=multi-user.target
 // so it is safe to call on every menu launch and after every update — which is
 // also how an install that predates the service acquires it.
 func EnsureMonitorService() error {
-	path := app.ServiceDir + "/" + app.MonitorService
-	want := fmt.Sprintf(monitorUnit, app.BinPath)
-
-	// Only touch systemd when the unit actually changed, so a normal launch
-	// does not churn the daemon or bounce a healthy monitor.
-	current, err := os.ReadFile(path)
-	unchanged := err == nil && string(current) == want
-
-	if unchanged {
-		if IsActive(app.MonitorService) {
+	changed, err := writeMonitorUnitIfChanged()
+	if err != nil {
+		return err
+	}
+	if IsActive(app.MonitorService) {
+		if !changed {
 			return nil
 		}
-		return StartService(app.MonitorService)
-	}
-
-	if err := os.WriteFile(path, []byte(want), 0644); err != nil {
-		return err
-	}
-	if err := DaemonReload(); err != nil {
-		return err
-	}
-	// A rewritten unit has to be restarted, not started: `systemctl start` is a
-	// no-op on a service that is already active, which would leave the old
-	// definition running while the file on disk says something else.
-	if IsActive(app.MonitorService) {
+		// A rewritten unit has to be restarted, not started: `systemctl start`
+		// is a no-op on a service that is already active, which would leave the
+		// old definition running while the file on disk says something else.
 		return RestartService(app.MonitorService)
 	}
 	return StartService(app.MonitorService)
+}
+
+// writeMonitorUnitIfChanged brings the unit file up to date, reloading systemd
+// when it changed, and touches no running process. Only a changed unit touches
+// systemd, so a normal launch does not churn the daemon or bounce a healthy
+// monitor.
+func writeMonitorUnitIfChanged() (bool, error) {
+	path := app.ServiceDir + "/" + app.MonitorService
+	want := fmt.Sprintf(monitorUnit, app.BinPath)
+	if current, err := os.ReadFile(path); err == nil && string(current) == want {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(want), 0644); err != nil {
+		return false, err
+	}
+	return true, DaemonReload()
 }
 
 // RestartMonitorService installs the unit if needed and always restarts the

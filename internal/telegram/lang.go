@@ -63,15 +63,16 @@ var fa = map[string]string{
 	"Support":  "حمایت",
 
 	// Navigation
-	"Back":            "بازگشت",
-	"Refresh":         "به‌روزرسانی",
-	"Cancel":          "لغو",
-	"Confirm":         "تأیید",
-	"Manage tunnels":  "مدیریت تونل‌ها",
-	"OVERVIEW":        "وضعیت کلی",
-	"Saved.":          "ذخیره شد.",
-	"Not authorised.": "دسترسی ندارید.",
-	"Measuring…":      "در حال اندازه‌گیری…",
+	"Back":                            "بازگشت",
+	"Refresh":                         "به‌روزرسانی",
+	"Cancel":                          "لغو",
+	"Confirm":                         "تأیید",
+	"Manage tunnels":                  "مدیریت تونل‌ها",
+	"OVERVIEW":                        "وضعیت کلی",
+	"Saved.":                          "ذخیره شد.",
+	"Not authorised.":                 "دسترسی ندارید.",
+	"Use this bot in a private chat.": "از این ربات در چت خصوصی استفاده کنید.",
+	"Measuring…":                      "در حال اندازه‌گیری…",
 
 	// The tunnel list and detail screen
 	"Select your tunnel to manage.": "تونل موردنظر را برای مدیریت انتخاب کنید.",

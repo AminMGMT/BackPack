@@ -33,6 +33,19 @@ import (
 // which connects and says nothing never delays the ones behind it.
 const controlClaimTimeout = 15 * time.Second
 
+// tunnelHeaderTimeout bounds how long the ws/wsmux tunnel port waits for a
+// request's headers — and, on wss, for the TLS handshake, which net/http times
+// by the same setting.
+//
+// The port is public and unauthenticated until a request arrives, and it had
+// no bound at all: a peer that connected and sent nothing held a goroutine and
+// a file descriptor for as long as it liked, and a slow one also stalled the
+// server's graceful shutdown at every restart. Fifteen seconds is the budget
+// the direct engine's websocket listener already uses. net/http clears the
+// deadline once the headers are in, so an upgraded tunnel is not affected.
+// A variable so a test can shorten it.
+var tunnelHeaderTimeout = 15 * time.Second
+
 // portListen is one listener a forwarding mapping expands into: the address to
 // bind, and the port on its own, which is the target for a mapping that named
 // no destination and so forwards each port to itself.

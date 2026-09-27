@@ -136,6 +136,9 @@ func (s *TcpTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *TcpTransport) start(g *tcpGen) {
+	// Whatever is still queued when this generation ends gives its slot back.
+	go drainOnEnd(g.ctx, g.localChannel, s.limits)
+
 	s.status.set("Disconnected (TCP)")
 
 	if s.config.WebPort > 0 {

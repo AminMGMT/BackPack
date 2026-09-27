@@ -128,6 +128,8 @@ type pckConn struct {
 
 // pckPeer is the numbering of one conversation.
 type pckPeer struct {
+	used   int64 // unix nanoseconds of the last segment to or from it, for eviction
+	sent   bool  // this carrier has sent to it: a peer the tunnel accepted
 	addr   *net.UDPAddr
 	seq    uint32 // our next sequence number
 	ack    uint32 // the next byte we expect from them
@@ -406,7 +408,7 @@ func (c *pckConn) timestamp() uint32 {
 
 // peerFor returns the numbering for one peer, starting a fresh conversation the
 // first time it is seen.
-func (c *pckConn) peerFor(addr *net.UDPAddr) *pckPeer {
+func (c *pckConn) peerFor(addr *net.UDPAddr, sending bool) *pckPeer {
 	var key pckPeerKey
 	copy(key.ip[:], addr.IP.To4())
 	key.port = uint16(addr.Port)
@@ -414,6 +416,17 @@ func (c *pckConn) peerFor(addr *net.UDPAddr) *pckPeer {
 	defer c.mu.Unlock()
 	p := c.peers[key]
 	if p == nil {
+		// The table is filled from segments nobody has authenticated —
+		// anything with a payload aimed at this port — and forged sources are
+		// free, so it is bounded. Peers this carrier has sent to are the ones
+		// the tunnel above has accepted, so they are kept: at the cap, a batch
+		// of the others makes room in one pass, and only when there are none
+		// of those does the oldest peer go. A batch rather than one entry, so
+		// a flood of new sources costs one scan per batch, not one per packet,
+		// under the lock real segments take too.
+		if len(c.peers) >= pckMaxPeers {
+			c.evictLocked()
+		}
 		p = &pckPeer{
 			addr: &net.UDPAddr{IP: append(net.IP(nil), addr.IP...), Port: addr.Port},
 			// A connection's first sequence number is unpredictable, and a
@@ -422,8 +435,43 @@ func (c *pckConn) peerFor(addr *net.UDPAddr) *pckPeer {
 		}
 		c.peers[key] = p
 	}
+	p.used = time.Now().UnixNano()
+	if sending {
+		p.sent = true
+	}
 	return p
 }
+
+// evictLocked frees room in the peer table: up to pckEvictBatch peers never
+// sent to (map order, which is random), or failing that the one idle longest.
+func (c *pckConn) evictLocked() {
+	freed := 0
+	var oldest pckPeerKey
+	var oldestUsed int64
+	haveOldest := false
+	for k, v := range c.peers {
+		if !v.sent {
+			delete(c.peers, k)
+			if freed++; freed >= pckEvictBatch {
+				return
+			}
+			continue
+		}
+		if !haveOldest || v.used < oldestUsed {
+			oldest, oldestUsed, haveOldest = k, v.used, true
+		}
+	}
+	if freed == 0 && haveOldest {
+		delete(c.peers, oldest)
+	}
+}
+
+// pckMaxPeers bounds how many sources the carrier keeps sequence state for. A
+// tunnel has one peer; a reverse server has one per pool session of one client.
+const pckMaxPeers = 1024
+
+// pckEvictBatch is how many never-sent-to peers one eviction pass removes.
+const pckEvictBatch = pckMaxPeers / 8
 
 // WriteTo builds one segment carrying p and puts it on the wire.
 func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
@@ -434,7 +482,7 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if !ok {
 		return 0, net.InvalidAddrError("pck: unusable destination address")
 	}
-	peer := c.peerFor(dst)
+	peer := c.peerFor(dst, true)
 
 	c.mu.Lock()
 	seq, ack, tsEcr := peer.seq, peer.ack, peer.lastTS
@@ -573,7 +621,7 @@ func (c *pckConn) accept(frame []byte) ([]byte, *net.UDPAddr, bool) {
 		return nil, nil, false
 	}
 	addr := &net.UDPAddr{IP: seg.SrcIP, Port: int(seg.SrcPort)}
-	peer := c.peerFor(addr)
+	peer := c.peerFor(addr, false)
 
 	c.mu.Lock()
 	// Acknowledge what we have actually received, as a real receiver does.

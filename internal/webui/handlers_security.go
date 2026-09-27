@@ -90,6 +90,37 @@ func (l *loginLimiter) fail(ip string) {
 	}
 }
 
+// attempt counts one sign-in attempt from ip as it starts and reports whether
+// it may go ahead — the check and the count in one step, so parallel requests
+// cannot all pass the check before any of them is counted. A full sign-in
+// clears the count (reset); nothing else does.
+func (l *loginLimiter) attempt(ip string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.byIP == nil {
+		l.byIP = map[string]*loginAttempt{}
+	}
+	now := time.Now()
+	a, ok := l.byIP[ip]
+	if !ok {
+		l.evictLocked()
+		a = &loginAttempt{}
+		l.byIP[ip] = a
+	}
+	if a.isBlocked(now) {
+		return false, a.until.Sub(now)
+	}
+	if !a.until.IsZero() {
+		*a = loginAttempt{} // the block ran out; a clean slate
+	}
+	a.fails++
+	a.seen = now
+	if a.fails >= loginMaxFails {
+		a.until = now.Add(loginBlockPeriod)
+	}
+	return true, 0
+}
+
 func (l *loginLimiter) reset(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -30,6 +30,13 @@ var (
 	RestartAll       = core.RestartAll
 	TunnelCountry    = core.TunnelCountry
 
+	RestartForNewBinary = core.RestartForNewBinary
+	RestartLater        = core.RestartLater
+	// FinishDeferredRestarts is what a caller running inside the panel or the
+	// monitor calls after reporting an update or a rollback; see
+	// core/restartorder.go.
+	FinishDeferredRestarts = core.FinishDeferredRestarts
+
 	DaemonReload   = core.DaemonReload
 	IsActive       = core.IsActive
 	IsEnabled      = core.IsEnabled

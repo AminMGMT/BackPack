@@ -157,7 +157,7 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	if n == 0 {
 		return 0, nil
 	}
-	peer := c.peerFor(dst)
+	peer := c.peerFor(dst, true)
 
 	b := &c.txBatch
 	b.mu.Lock()

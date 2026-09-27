@@ -209,8 +209,8 @@ func (c *Config) Validate() error {
 		c.Carrier = CarrierUDP
 	}
 	if !knownCarrier(c.Carrier) {
-		return fmt.Errorf("l3: carrier %q is not available (have %q, %q, %q, %q)",
-			c.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof)
+		return fmt.Errorf("l3: carrier %q is not available (have %q, %q, %q, %q, %q, %q)",
+			c.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic, CarrierSNI)
 	}
 	// The listening side of the forged-source carrier cannot learn where its
 	// peer really is, because every packet it receives carries a forged

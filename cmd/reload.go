@@ -101,8 +101,9 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 		// now, wait for it to come back rather than treating that as a change.
 		logger.Debugf("cannot stat the configuration file: %v", err)
 	}
-	// Remembering the last fingerprint that failed to parse keeps a broken file
-	// from being reported once every poll for as long as it stays broken.
+	// Remembering the last fingerprint that was refused — because it did not
+	// parse, or parsed and could not run — keeps a broken file from being
+	// reported once every poll for as long as it stays broken.
 	var lastComplaint fingerprint
 
 	ticker := time.NewTicker(configPollInterval)
@@ -132,6 +133,16 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 			continue
 		}
 		applyDefaults(next)
+		// A file that parses but cannot run is refused exactly as one that does
+		// not parse is: loudly, once per version of the file, and without
+		// touching the tunnel that is running.
+		if err := validateConfig(next); err != nil {
+			if fp != lastComplaint {
+				lastComplaint = fp
+				logger.Errorf("the configuration file changed but cannot be used, so the tunnel keeps running the previous one: %v", err)
+			}
+			continue
+		}
 
 		if reflect.DeepEqual(current, next) {
 			logger.Debug("the configuration file changed but means the same thing; leaving the tunnel alone")

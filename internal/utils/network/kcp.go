@@ -198,13 +198,26 @@ func (s KCPSettings) effectiveMTU() int {
 // tunnel unreadable to anyone who does not already know the token. The key is
 // stretched with PBKDF2 so that even a short token yields a usable AES key.
 func kcpCrypt(token string) (kcp.BlockCrypt, error) {
+	// The derivation is a hundred thousand rounds by design, and it used to run
+	// on every dial — the client dials a session for every connection it adds
+	// to its pool, so each paid tens of milliseconds of CPU on exactly the path
+	// that has to be quick when a tunnel is reconnecting. The key depends on
+	// the token alone, so it is derived once per token.
+	if key, ok := kcpKeys.Load(token); ok {
+		return kcp.NewAESBlockCrypt(key.([]byte))
+	}
 	key := pbkdf2.Key([]byte(token), []byte("backpack-kcp-v1"), 100_000, 32, sha256.New)
+	kcpKeys.Store(token, key)
 	block, err := kcp.NewAESBlockCrypt(key)
 	if err != nil {
 		return nil, fmt.Errorf("kcp: failed to derive cipher: %w", err)
 	}
 	return block, nil
 }
+
+// kcpKeys caches the derived KCP key per token. A process runs one tunnel, so
+// it holds one entry, or a few across a fallback chain.
+var kcpKeys sync.Map
 
 // ApplyKCPSettings pushes the tuning onto a live KCP session. It is called on
 // every accepted and dialled session, on both sides.

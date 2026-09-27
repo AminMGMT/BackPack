@@ -205,6 +205,9 @@ func applyUpdateReply(c Config, u tgUser, lang string) reply {
 			}
 			_ = sendTo(c, chat, b(head)+"\n\n"+preBlock(tailLines(log.String(), 20)),
 				kb(backTo(lang, "nav:tools")))
+			// Only now: the monitor this bot runs in restarts last, and the
+			// restart ends this process — the report above must go first.
+			manage.FinishDeferredRestarts()
 		}()
 	}
 	return r
@@ -310,6 +313,9 @@ func restoreReply(c Config, u tgUser, lang, arg string) reply {
 			}
 			_ = sendTo(c, chat, b(head)+"\n\n"+preBlock(tailLines(log.String(), 20)),
 				kb(backTo(lang, "nav:tools")))
+			// Only now: the monitor this bot runs in restarts last, and the
+			// restart ends this process — the report above must go first.
+			manage.FinishDeferredRestarts()
 		}()
 	}
 	return r

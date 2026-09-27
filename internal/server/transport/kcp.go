@@ -220,6 +220,9 @@ func (s *KcpTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *KcpTransport) start(g *kcpGen) {
+	// Whatever is still queued when this generation ends gives its slot back.
+	go drainOnEnd(g.ctx, g.localChannel, s.limits)
+
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}

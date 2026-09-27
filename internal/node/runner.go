@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/app"
+	"golang.org/x/crypto/ssh"
 )
 
 // Runner is how the panel reaches a managed server.
@@ -331,33 +332,85 @@ func mustJSON(v any) json.RawMessage {
 //
 // It is slow — a download and possibly a build — so the caller gives it room.
 func (r *SSHRunner) Install(name string) (string, error) {
-	t, err := targetFor(name)
+	c, err := r.clientFor(name)
 	if err != nil {
 		return "", err
 	}
-	c, seen, err := r.pool.get(context.Background(), name, t)
-	if err != nil {
-		return "", err
-	}
-	if seen != "" && t.Fingerprint == "" {
-		_ = NoteFingerprint(name, seen)
-	}
-
-	// stdin is closed so the installer takes its own quiet path: with no
-	// terminal it prints how to open the menu rather than opening one, and a
-	// menu waiting for a keypress over SSH would hang until the timeout.
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/install.sh",
-		app.RepoOwner, app.RepoName)
-	cmd := "curl -fsSL " + quote(url) + " | bash < /dev/null 2>&1"
-
-	out, err := runLong(c, cmd)
+	out, err := runLong(c, installCommand(installerURL()))
 	if err != nil {
 		return string(out), fmt.Errorf("installing Backpack on %s failed: %w", name, err)
 	}
 	return string(out), nil
 }
 
+// clientFor is the SSH connection to a managed server, recording its host key
+// the first time it is seen.
+func (r *SSHRunner) clientFor(name string) (*ssh.Client, error) {
+	t, err := targetFor(name)
+	if err != nil {
+		return nil, err
+	}
+	c, seen, err := r.pool.get(context.Background(), name, t)
+	if err != nil {
+		return nil, err
+	}
+	if seen != "" && t.Fingerprint == "" {
+		_ = NoteFingerprint(name, seen)
+	}
+	return c, nil
+}
+
 // Upgrade reinstalls Backpack on a server, which is how a node is brought to
 // the release the panel is on. It is the same script; the installer replaces
 // the binary and restarts what was running.
-func (r *SSHRunner) Upgrade(name string) (string, error) { return r.Install(name) }
+//
+// It is the installer followed by a restart of everything that runs the binary.
+// The installer replaces the file and stops there — it restarts nothing — so
+// without the second half every tunnel on the server kept running the old
+// build, the version the server reports came from the new file, and a staged
+// rollout verified a server that had not actually changed.
+func (r *SSHRunner) Upgrade(name string) (string, error) {
+	c, err := r.clientFor(name)
+	if err != nil {
+		return "", err
+	}
+	out, err := runLong(c, upgradeCommand(installerURL(), app.BinPath))
+	if err != nil {
+		return string(out), fmt.Errorf("upgrading Backpack on %s failed: %w", name, err)
+	}
+	return string(out), nil
+}
+
+func installerURL() string {
+	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/install.sh",
+		app.RepoOwner, app.RepoName)
+}
+
+// installCommand is the shell line that fetches the installer and runs it.
+//
+// The installer is downloaded whole before it runs, and runs with stdin closed.
+// It used to be `curl … | bash < /dev/null`: the redirection replaced the pipe
+// as bash's stdin, so bash read an empty script and exited 0 — every remote
+// install and upgrade reported success having run nothing. Downloading first
+// also means a failed download fails the line instead of running half a script,
+// and nothing the installer reads from stdin can consume its own text.
+func installCommand(url string) string {
+	// A private temporary file rather than bash -c "$script": no limit on the
+	// installer's size (one argument is capped at 128 KB), and the file is
+	// removed whatever happens. The subshell makes the whole line one command,
+	// so upgradeCommand can chain on its exit status.
+	return `(f="$(mktemp)" || exit 1; ` +
+		`if curl -fsSL ` + quote(url) + ` -o "$f" && [ -s "$f" ]; then bash "$f" < /dev/null 2>&1; rc=$?; else rc=1; fi; ` +
+		`rm -f "$f"; exit $rc)`
+}
+
+// upgradeCommand is installCommand followed by restarting what runs the binary:
+// every tunnel (the same --restart-all the scheduled refresh uses), then the
+// monitor, proxy and panel units if they are running. The unit restarts are
+// best effort — a server without a panel has no panel to restart.
+func upgradeCommand(url, bin string) string {
+	return installCommand(url) +
+		" && " + quote(bin) + " --restart-all 2>&1" +
+		" && { systemctl try-restart " + app.MonitorService + " " + app.ProxyService + " " + app.WebUIService +
+		" >/dev/null 2>&1; true; }"
+}

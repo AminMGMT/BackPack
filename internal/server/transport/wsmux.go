@@ -148,6 +148,9 @@ func (s *WsMuxTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *WsMuxTransport) start(g *wsMuxGen) {
+	// Whatever is still queued when this generation ends gives its slot back.
+	go drainOnEnd(g.ctx, g.localChannel, s.limits)
+
 	// for  webui
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
@@ -365,8 +368,9 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 
 	// Create an HTTP server
 	server := &http.Server{
-		Addr:        addr,
-		IdleTimeout: -1,
+		Addr:              addr,
+		IdleTimeout:       -1,
+		ReadHeaderTimeout: tunnelHeaderTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			s.logger.Tracef("received http request from %s", r.RemoteAddr)
 

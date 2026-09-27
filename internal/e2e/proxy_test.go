@@ -199,15 +199,23 @@ func TestLocalBackendDialNeverUsesTheProxy(t *testing.T) {
 	// the proxy would show up here too.
 	time.Sleep(6 * time.Second)
 
-	close(asked)
+	// What has arrived so far, without closing the channel: the client keeps
+	// retrying, and the fake proxy's handlers are still sending into it. A
+	// close here raced those sends — flagged by -race, and a panic on a send
+	// that landed after it.
 	seen := 0
-	for target := range asked {
-		seen++
-		if target != fmt.Sprintf("127.0.0.1:%d", tunnelPort) {
-			t.Fatalf("the proxy was asked for %q; only the tunnel server should ever go through it", target)
-		}
-		if target == backend.addr {
-			t.Fatalf("the local backend dial went through the proxy")
+	for drained := false; !drained; {
+		select {
+		case target := <-asked:
+			seen++
+			if target != fmt.Sprintf("127.0.0.1:%d", tunnelPort) {
+				t.Fatalf("the proxy was asked for %q; only the tunnel server should ever go through it", target)
+			}
+			if target == backend.addr {
+				t.Fatalf("the local backend dial went through the proxy")
+			}
+		default:
+			drained = true
 		}
 	}
 	if seen == 0 {

@@ -48,6 +48,9 @@ func ApplyTCPTuning() {
 			logger.Errorf("Error getting Rlimit: %v", err)
 		} else {
 			logger.Debugf("Current file descriptor limit: %d", rLimit.Cur)
+			// Kept, because the warning below has to name the limit actually in
+			// force; rLimit is overwritten with the one asked for.
+			current := rLimit.Cur
 
 			// Set the maximum and current file descriptor limits to 1048576
 			rLimit.Max = 1048576
@@ -61,7 +64,7 @@ func ApplyTCPTuning() {
 				// not an error about something that went wrong. Logging it at
 				// ERROR is how a log full of harmless red teaches people to
 				// stop reading it.
-				logger.Warnf("could not raise the file descriptor limit (%v) — continuing on the current limit of %d", err, rLimit.Cur)
+				logger.Warnf("could not raise the file descriptor limit (%v) — continuing on the current limit of %d", err, current)
 			} else {
 				logger.Debugf("Successfully set file descriptor limit to: %d", rLimit.Cur)
 			}

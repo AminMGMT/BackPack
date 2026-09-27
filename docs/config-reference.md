@@ -68,7 +68,7 @@ them both ends have to agree on. This says what exists.
 | `mux_session` | `int` | MuxSession is how many multiplexed sessions the tunnel keeps open. Only the mux transports read it; a preset fills it in. |
 | `mux_streambuffer` | `int` | MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a preset. |
 | `mux_version` | `int` | MuxVersion is the smux protocol version. Negotiated with the peer, so the two ends may differ and the lower wins. |
-| `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. On by default: it trades a little bandwidth for latency, which is what an interactive session wants and a bulk transfer does not notice. |
+| `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and a bulk transfer does not notice. |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on loopback. Off by default, and loopback-only on purpose: its heap dump contains this tunnel's token. |
 | `preset` | `string` | Preset records which performance profile the tuning values came from — balance, turbo or aggressive. A label: the engine reads the values, never this. |
 | `proxy` | `string` | Proxy routes the connection to the tunnel server through a local or nearby proxy, for a client that cannot open an arbitrary outbound connection itself. One URL: "socks5://127.0.0.1:1080" or "http://user:pass@10.0.0.1:8080". Empty means dial the server directly. |
@@ -126,7 +126,7 @@ them both ends have to agree on. This says what exists.
 | `auto_mtu` | `*bool` | AutoMTU measures what the path really carries, once the tunnel is up, and sets the interface to match. |
 | `bandwidth_mbps` | `int` | BandwidthMbps caps total throughput across this tunnel, in megabits per second. 0 is unlimited. |
 | `carrier` | `string` | Carrier is the datagram transport underneath: "udp" (the default, and the right choice on a path that does not interfere), "pck" (raw TCP segments, so a capture sees an ordinary flow), "quic" (a real QUIC session, so a capture sees HTTP/3), "sni" (pck, plus a TLS ClientHello naming an allowed domain at the start of the flow), "xdi" (inside ICMP echo) or "spoof" (raw IP with a forged source). All but udp and quic are Linux-only and need CAP_NET_RAW. |
-| `encap` | `string` | Encap is "ipip" (the default, and free) or "gre" (four bytes, or eight with a key). One tunnel carries both IPv4 and IPv6 either way. |
+| `encap` | `string` | Encap is always GRE now: four bytes, or eight with gre_key. "ipip" is still accepted and read as GRE, so a file written when there was a choice keeps working. One tunnel carries both IPv4 and IPv6. |
 | `fec_data` | `int` | FECData and FECParity add forward error correction to the carrier: for every FECData datagrams, FECParity extra ones are sent, and any FECParity of the group may be lost without losing anything. Both zero — the default — is no error correction. |
 | `fec_parity` | `int` | FECParity is how many parity packets accompany each group. Both ends must agree on this and on fec_data. |
 | `gre_key` | `uint32` | GREKey is the RFC 2890 key, letting more than one logical tunnel share a carrier. Zero omits the field. Ignored unless encap is "gre". |
@@ -195,7 +195,7 @@ them both ends have to agree on. This says what exists.
 | `mux_session` | `int` | MuxSession is how many multiplexed sessions the tunnel keeps open. Only the mux transports read it; a preset fills it in. |
 | `mux_streambuffer` | `int` | MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a preset. |
 | `mux_version` | `int` | MuxVersion is the smux protocol version. Negotiated with the peer, so the two ends may differ and the lower wins. |
-| `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. On by default: it trades a little bandwidth for latency, which is what an interactive session wants and what a bulk transfer does not notice. |
+| `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and what a bulk transfer does not notice. |
 | `ports` | `[]string` | Ports are the forwarded ports this server exposes, as "443", "8080=127.0.0.1:80", "443-450" or "10.0.0.5:443". See docs/port-mappings.md for every form. |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on 127.0.0.1:6060. Off by default and loopback-only: its heap dump contains this tunnel's token. |
 | `preset` | `string` | Preset records which performance profile the tuning values came from — balance, turbo or aggressive. A label: the engine reads the values, never this. Set by hand only if you want the menu to stop offering to change them. |
@@ -238,4 +238,4 @@ them both ends have to agree on. This says what exists.
 
 ---
 
-*Generated from `config/` on 2026-09-26. Last verified against Backpack v1.8.4.*
+*Generated from `config/` on 2026-09-27. Last verified against Backpack v1.8.4.*

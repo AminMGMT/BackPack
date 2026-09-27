@@ -13,7 +13,11 @@ import (
 )
 
 // Systemctl runs a systemctl subcommand and returns combined output.
-func Systemctl(args ...string) (string, error) {
+func Systemctl(args ...string) (string, error) { return runSystemctl(args...) }
+
+// runSystemctl is what Systemctl calls; a variable so a test can record the
+// calls instead of making them.
+var runSystemctl = func(args ...string) (string, error) {
 	out, err := exec.Command("systemctl", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -30,6 +31,10 @@ import (
 // — and bounded, so a peer that floods a stalled flow cannot grow the process
 // without limit.
 const udpPayloadQueue = 256
+
+// udpReadErrorPause is how long a read loop waits after an error that is not
+// the socket closing, so one that repeats does not spin a core.
+const udpReadErrorPause = 50 * time.Millisecond
 
 // idleForward is how long a forwarded UDP flow may go without a packet before
 // its two copy goroutines give up on it.
@@ -245,8 +250,15 @@ func (s *UdpTransport) Restart() {
 	s.status.set("")
 	s.controlChannel.Clear()
 	metrics.ClearPeer()
+	// Replaced under its lock, and the lock itself is never replaced. It used to
+	// be reassigned here while the previous generation's copy loops were still
+	// finishing and locking it: overwriting a mutex another goroutine holds makes
+	// that goroutine's Unlock a fatal error, which took the whole engine down.
+	// Their flows are simply not in the new table, so their cleanup finds
+	// nothing to remove.
+	s.activeMu.Lock()
 	s.activeConnections = map[string]*TunnelUDPConn{}
-	s.activeMu = sync.Mutex{}
+	s.activeMu.Unlock()
 
 	// set the log level again
 	s.logger.SetLevel(level)
@@ -551,7 +563,11 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 		default:
 			n, addr, err := listener.ReadFromUDP(buf)
 			if err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					return // the generation ended and closed it
+				}
 				s.logger.Errorf("failed to read from tunnel UDP listener: %v", err)
+				time.Sleep(udpReadErrorPause) // an error that repeats must not spin
 				continue
 			}
 
@@ -590,7 +606,11 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 			s.activeMu.Unlock()
 
 			if !tokenMatches(string(buf[:n]), s.config.Token) { // For new connections, validate the token
-				s.logger.Errorf("invalid token received from %s", addr.String())
+				// Debug, not error: this port is public, and anything at all
+				// sent to it lands here. At error level every junk datagram
+				// was a journal line, so anyone could fill the disk and bury
+				// the real errors at line rate.
+				s.logger.Debugf("invalid token received from %s", addr.String())
 				continue
 			}
 
@@ -711,6 +731,9 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 
 	// handle channel
 	go s.handleLoop(g, udpChan, &activeConnections, mu)
+	// The same leak the stream transports had: flows still queued when the
+	// generation ends hold their connection-limit slots. See drainOnEnd.
+	go s.drainFlowsOnEnd(g.ctx, udpChan, &activeConnections, mu)
 
 	go func() {
 		for {
@@ -720,7 +743,11 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 			default:
 				n, addr, err := listener.ReadFromUDP(buf)
 				if err != nil {
+					if errors.Is(err, net.ErrClosed) {
+						return
+					}
 					s.logger.Errorf("failed to read from UDP listener: %v", err)
+					time.Sleep(udpReadErrorPause)
 					continue
 				}
 
@@ -931,6 +958,21 @@ func (s *UdpTransport) udpCopy(g *udpGen, udpLocal *LocalUDPConn, udpTunnel *Tun
 
 	// Remove tunnel connection from active connections and close the channel.
 	s.dropTunnelConn(udpTunnel)
+}
+
+// drainFlowsOnEnd releases every flow still queued in udpChan once the
+// generation has ended, sweeping briefly for one pushed in at the last moment.
+func (s *UdpTransport) drainFlowsOnEnd(ctx context.Context, udpChan chan *LocalUDPConn,
+	activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
+	sweepAfterEnd(ctx, func() bool {
+		select {
+		case flow := <-udpChan:
+			s.dropLocalFlow(flow, activeConnections, mu)
+			return true
+		default:
+			return false
+		}
+	})
 }
 
 // dropLocalFlow takes a forwarded flow out of the active set, closes its

@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -34,26 +35,25 @@ func ResolveRemoteAddr(remoteAddr string) (int, string, error) {
 	}
 
 	// Split the address into host and port
-	parts := strings.Split(remoteAddr, ":")
-	var port int
-	var err error
-
-	// Handle cases where only the port is sent or host:port format
-	if len(parts) < 2 {
-		port, err = strconv.Atoi(parts[0])
+	// A port on its own means this machine's loopback.
+	if !strings.Contains(remoteAddr, ":") {
+		port, err := strconv.Atoi(remoteAddr)
 		if err != nil {
 			return 0, "", fmt.Errorf("invalid port format: %v", err)
 		}
-		// Default to localhost if only the port is provided
 		return port, fmt.Sprintf("127.0.0.1:%d", port), nil
 	}
 
-	// If both host and port are provided
-	port, err = strconv.Atoi(parts[1])
+	// host:port, including a bracketed IPv6 host. This used to split on ':'
+	// and read the second field as the port, so "[2001:db8::1]:443" was
+	// refused as a bad port on every connection to it.
+	_, portStr, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		return 0, "", fmt.Errorf("invalid port format: %v", err)
 	}
-
-	// Return the full resolved address
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid port format: %v", err)
+	}
 	return port, remoteAddr, nil
 }

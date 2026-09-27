@@ -218,7 +218,10 @@ export const sessionRevoke = id =>
   post('/api/sessions', new URLSearchParams({ action: 'revoke', id }));
 export const sessionRevokeOthers = () =>
   post('/api/sessions', new URLSearchParams({ action: 'others' }));
-export const setPassword = payload => post('/api/password', payload);
+/* A form, like every other endpoint the handler reads with ParseForm. A plain
+   object here went out as JSON, the handler found no password field in it, and
+   every change was refused as the wrong length. */
+export const setPassword = payload => post('/api/password', new URLSearchParams({ password: payload.password }));
 
 /* Two-factor. The panel is root on this machine and a password is the
    credential most likely to be reused or phished, so the second factor is the

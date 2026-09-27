@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/enginectl"
 	"github.com/backpack/backpack/internal/metrics"
 )
@@ -23,11 +25,14 @@ import (
 
 // engineControl is the handler behind the socket for one tunnel.
 type engineControl struct {
-	name      string
-	role      string
-	transport string
+	name string
 
 	mu sync.Mutex
+	// role and transport say what this generation runs. They were never set,
+	// so every Status answered without them; they change with a reload that
+	// switches engine or transport, hence under mu.
+	role      string
+	transport string
 	// restart ends the running generation. It is replaced on every generation,
 	// because each one has its own context to cancel.
 	restart func()
@@ -47,10 +52,13 @@ func (e *engineControl) Status() enginectl.Status {
 	if c := metrics.SnapshotConnected(); c != nil {
 		connected = *c
 	}
+	e.mu.Lock()
+	role, transport := e.role, e.transport
+	e.mu.Unlock()
 	return enginectl.Status{
 		Name:       e.name,
-		Role:       e.role,
-		Transport:  e.transport,
+		Role:       role,
+		Transport:  transport,
 		Connected:  connected,
 		Peer:       metrics.SnapshotPeer(),
 		BytesIn:    in,
@@ -77,12 +85,43 @@ func (e *engineControl) RestartTransport() error {
 	return nil
 }
 
-// setGeneration records how to end the generation that is starting.
-func (e *engineControl) setGeneration(stop func()) {
+// setGeneration records how to end the generation that is starting, and what
+// that generation runs.
+func (e *engineControl) setGeneration(stop func(), cfg *config.Config) {
+	role, transport := engineIdentity(cfg)
 	e.mu.Lock()
 	e.restart = stop
+	e.role, e.transport = role, transport
 	e.mu.Unlock()
 	e.generation.Add(1)
+}
+
+// engineIdentity names the role and transport a configuration runs, in the
+// words the metrics file uses for the same tunnel.
+func engineIdentity(cfg *config.Config) (role, transport string) {
+	switch {
+	case cfg.L3.Enabled():
+		carrier := cfg.L3.Carrier
+		if carrier == "" {
+			carrier = "udp"
+		}
+		return l3Role(strings.ToLower(strings.TrimSpace(cfg.L3.Mode))), "l3-" + carrier
+	case cfg.Direct.Enabled():
+		role := "iran-edge"
+		if cfg.Direct.ResolvedRole() == "origin" {
+			role = "kharej-origin"
+		}
+		transport := cfg.Direct.Transport
+		if transport == "" {
+			transport = "tcp"
+		}
+		return role, "direct-" + transport
+	case cfg.Server.BindAddr != "":
+		return "server", string(cfg.Server.Transport)
+	case cfg.Client.RemoteAddr != "":
+		return "client", string(cfg.Client.Transport)
+	}
+	return "", ""
 }
 
 // errNoGeneration is what a restart asked for between generations reports. It

@@ -295,9 +295,9 @@ type ServerConfig struct {
 	// a mismatch is refused without saying so — a peer without the token learns
 	// nothing, not even that something is listening.
 	Token string `toml:"token"`
-	// Nodelay disables Nagle's algorithm on the tunnel's sockets. On by default:
-	// it trades a little bandwidth for latency, which is what an interactive
-	// session wants and what a bulk transfer does not notice.
+	// Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless
+	// set; every preset sets it. It trades a little bandwidth for latency, which
+	// is what an interactive session wants and what a bulk transfer does not notice.
 	Nodelay bool `toml:"nodelay"`
 	// Keepalive is how often, in seconds, an idle connection is probed. It also
 	// decides how long a dead peer takes to notice — too low tears down a tunnel
@@ -480,9 +480,9 @@ type ClientConfig struct {
 	// RetryInterval is how many seconds to wait before dialling again after a
 	// failed attempt.
 	RetryInterval int `toml:"retry_interval"`
-	// Nodelay disables Nagle's algorithm on the tunnel's sockets. On by default:
-	// it trades a little bandwidth for latency, which is what an interactive
-	// session wants and a bulk transfer does not notice.
+	// Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless
+	// set; every preset sets it. It trades a little bandwidth for latency, which
+	// is what an interactive session wants and a bulk transfer does not notice.
 	Nodelay bool `toml:"nodelay"`
 	// Keepalive is how often, in seconds, an idle connection is probed. It also
 	// decides how long a dead peer takes to notice — too low tears down a tunnel

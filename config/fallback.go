@@ -32,6 +32,17 @@ var fallbackCapable = map[TransportType]bool{
 	KCP: true, QUIC: true, UDP: true, XDI: true, PCK: true,
 }
 
+// reverseTransports are the transports the reverse engine runs. spoof is not
+// one: it is refused by name elsewhere, with what to build instead.
+var reverseTransports = map[TransportType]bool{
+	TCP: true, TCPMUX: true, STEALTH: true,
+	WS: true, WSS: true, WSMUX: true, WSSMUX: true,
+	KCP: true, QUIC: true, UDP: true, XDI: true, PCK: true,
+}
+
+// IsReverseTransport reports whether t is a transport the reverse engine runs.
+func IsReverseTransport(t TransportType) bool { return reverseTransports[t] }
+
 // ValidateFallbackTransports checks a configured chain.
 //
 // The rules are deliberately narrow. A candidate must be a reverse transport,

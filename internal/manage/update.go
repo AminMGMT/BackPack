@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -599,22 +600,19 @@ func ApplyUpdate(logf func(string)) error {
 	logf("Bringing this server up to date with " + tag + "...")
 	MigrateAfterUpdate(logf)
 
+	// Tunnels first, then the monitor and the panel — and whichever of those
+	// this process runs inside is left for last. See core/restartorder.go: an
+	// update started from the panel or the bot used to restart its own unit
+	// first and die there, before the tunnels, the health check or the
+	// rollback. The monitor is (re)installed on the way, so upgrading does not
+	// leave a machine that predates it with no watchdog and no alerts.
 	logf("Restarting services...")
-	RestartService(app.WebUIService)
-	// Installs from before the monitor service acquire it here, so upgrading
-	// does not leave a machine with no watchdog and no alerts. This restarts
-	// unconditionally: the unit text is identical across versions, so an
-	// install-if-missing check would decide there was nothing to do and leave
-	// the old binary running.
-	if err := RestartMonitorService(); err != nil {
-		logf("Warning: monitor service could not start: " + err.Error())
-	}
-	ok, failed := RestartAll()
+	ok, failed, later := RestartForNewBinary(logf)
 	logf(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 
 	// Health check: every tunnel that has a unit must come back active.
 	logf("Checking health...")
-	if bad := unhealthyAfterUpdate(); len(bad) > 0 {
+	if bad := unhealthyAfterUpdate(later); len(bad) > 0 {
 		logf("Health check FAILED for: " + strings.Join(bad, ", "))
 		logf("Rolling back to the previous version...")
 		if rerr := backup.RestoreSnapshot(snap, logf); rerr != nil {
@@ -627,21 +625,35 @@ func ApplyUpdate(logf func(string)) error {
 
 	logf("Health check passed.")
 	logf("Update complete — now running " + tag + ".")
+	restartLast(later, logf)
 	return nil
+}
+
+// restartLast says that the unit this process runs in is restarted once the
+// caller has reported the outcome (FinishDeferredRestarts).
+func restartLast(units []string, logf func(string)) {
+	if len(units) == 0 {
+		return
+	}
+	logf(strings.Join(units, ", ") + " restarts onto the new version next — this connection drops for a moment.")
 }
 
 // unhealthyAfterUpdate returns the names of services that did not come back up
 // after an update. It waits briefly, since systemd restarts are not instant.
-func unhealthyAfterUpdate() []string {
+//
+// skip names units restarted only after the check (the one hosting the caller),
+// which cannot be judged yet.
+func unhealthyAfterUpdate(skip []string) []string {
+	skipped := func(unit string) bool { return slices.Contains(skip, unit) }
 	var bad []string
-	if fileExists(app.ServiceDir+"/"+app.WebUIService) &&
+	if !skipped(app.WebUIService) && fileExists(app.ServiceDir+"/"+app.WebUIService) &&
 		!WaitServiceActive(app.WebUIService, 20*time.Second) {
 		bad = append(bad, "web panel")
 	}
 	// The monitor counts: if the new version cannot run the watchdog and the
 	// alerts, the update has broken something even though every tunnel is still
 	// carrying traffic — and without this it would be judged healthy and kept.
-	if fileExists(app.ServiceDir+"/"+app.MonitorService) &&
+	if !skipped(app.MonitorService) && fileExists(app.ServiceDir+"/"+app.MonitorService) &&
 		!WaitServiceActive(app.MonitorService, 20*time.Second) {
 		bad = append(bad, "monitor")
 	}

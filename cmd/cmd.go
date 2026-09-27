@@ -84,6 +84,9 @@ func Run(configPath string, ctx context.Context) {
 		logger.Fatalf("failed to load configuration: %v", err)
 	}
 	applyDefaults(cfg)
+	if err := validateConfig(cfg); err != nil {
+		logger.Fatalf("%v", err)
+	}
 
 	// The kernel tuning is process-wide and does not depend on anything in the
 	// file that a reload can change, so it is applied once rather than on every
@@ -114,7 +117,7 @@ func Run(configPath string, ctx context.Context) {
 		// Ending this generation is exactly what a configuration change does,
 		// so a restart asked for over the socket takes the path a reload takes
 		// rather than a second way of stopping a transport.
-		ctl.setGeneration(cancel)
+		ctl.setGeneration(cancel, cfg)
 		go func() {
 			defer close(done)
 			runEngine(&running, runCtx, configPath, applyTuning)

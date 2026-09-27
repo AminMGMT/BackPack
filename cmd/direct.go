@@ -32,32 +32,7 @@ const directRestartDelay = 5 * time.Second
 func runDirectTunnel(cfg *config.Config, ctx context.Context, configPath string) {
 	logger := utils.NewLoggerWithFormat(directLogLevel(cfg), directLogFormat(cfg))
 
-	dc := cfg.Direct
-	tunnelCfg := direct.Config{
-		Role:             dc.ResolvedRole(),
-		Addr:             dc.Addr,
-		Token:            dc.Token,
-		Transport:        dc.Transport,
-		ServerName:       dc.ServerName,
-		TLSCertFile:      dc.TLSCertFile,
-		TLSKeyFile:       dc.TLSKeyFile,
-		ACMEDomain:       dc.ACMEDomain,
-		ACMEEmail:        dc.ACMEEmail,
-		Ports:            dc.Ports,
-		AcceptUDP:        dc.AcceptUDP,
-		MaxConnections:   dc.MaxConnections,
-		BandwidthMbps:    dc.BandwidthMbps,
-		Sessions:         dc.Sessions,
-		DialTimeout:      time.Duration(dc.DialTimeout) * time.Second,
-		RetryDelay:       time.Duration(dc.RetryInterval) * time.Second,
-		Keepalive:        time.Duration(dc.Keepalive) * time.Second,
-		Nodelay:          dc.Nodelay,
-		MSS:              dc.MSS,
-		MuxVersion:       dc.MuxVersion,
-		MaxFrameSize:     dc.MaxFrameSize,
-		MaxReceiveBuffer: dc.MaxReceiveBuffer,
-		MaxStreamBuffer:  dc.MaxStreamBuffer,
-	}
+	tunnelCfg := directConfigOf(cfg)
 
 	// Built before anything is opened, so a bad configuration is a startup
 	// error the operator can see rather than a tunnel that retries silently.
@@ -133,4 +108,36 @@ func directLogFormat(cfg *config.Config) string {
 		return cfg.Server.LogFormat
 	}
 	return cfg.Client.LogFormat
+}
+
+// directConfigOf turns a [direct] table into the engine's configuration. Shared
+// by the engine and by validateConfig.
+func directConfigOf(cfg *config.Config) direct.Config {
+	dc := cfg.Direct
+	tunnelCfg := direct.Config{
+		Role:             dc.ResolvedRole(),
+		Addr:             dc.Addr,
+		Token:            dc.Token,
+		Transport:        dc.Transport,
+		ServerName:       dc.ServerName,
+		TLSCertFile:      dc.TLSCertFile,
+		TLSKeyFile:       dc.TLSKeyFile,
+		ACMEDomain:       dc.ACMEDomain,
+		ACMEEmail:        dc.ACMEEmail,
+		Ports:            dc.Ports,
+		AcceptUDP:        dc.AcceptUDP,
+		MaxConnections:   dc.MaxConnections,
+		BandwidthMbps:    dc.BandwidthMbps,
+		Sessions:         dc.Sessions,
+		DialTimeout:      time.Duration(dc.DialTimeout) * time.Second,
+		RetryDelay:       time.Duration(dc.RetryInterval) * time.Second,
+		Keepalive:        time.Duration(dc.Keepalive) * time.Second,
+		Nodelay:          dc.Nodelay,
+		MSS:              dc.MSS,
+		MuxVersion:       dc.MuxVersion,
+		MaxFrameSize:     dc.MaxFrameSize,
+		MaxReceiveBuffer: dc.MaxReceiveBuffer,
+		MaxStreamBuffer:  dc.MaxStreamBuffer,
+	}
+	return tunnelCfg
 }

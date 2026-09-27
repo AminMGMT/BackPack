@@ -514,7 +514,19 @@ type tgMessage struct {
 	From      tgUser `json:"from"`
 	Chat      struct {
 		ID int64 `json:"id"`
+		// Type is "private" for a one-to-one chat with the bot, "group",
+		// "supergroup" or "channel" otherwise.
+		Type string `json:"type"`
 	} `json:"chat"`
+}
+
+// privateChat reports whether a message was written in a one-to-one chat with
+// the bot. Every real update names its chat's type; one that does not is not
+// trusted to be private. A button press with no message at all (inline mode,
+// which this bot does not use) is answered in the owner's private chat, which
+// is where handleUpdate sends it, so it counts as private.
+func (m *tgMessage) privateChat() bool {
+	return m == nil || m.Chat.Type == "private"
 }
 
 type tgUser struct {
@@ -614,6 +626,15 @@ func getUpdates(c Config, offset int64) ([]tgUpdate, error) {
 func handleUpdate(c Config, u tgUpdate) {
 	if u.Callback != nil {
 		user := strconv.FormatInt(u.Callback.From.ID, 10)
+		// Replies go to the chat the request came from. Authorisation is by
+		// the sender, which is right, but in a group the answer — the panel
+		// password on /webui, the owner's backup archive — would be posted to
+		// every member. The bot is a console for its admins, so it answers
+		// in private chats only.
+		if !u.Callback.Message.privateChat() {
+			answerCallback(c, u.Callback.ID, tr(c.Language(), "Use this bot in a private chat."), true)
+			return
+		}
 		if !c.isAdmin(user) {
 			answerCallback(c, u.Callback.ID, tr(c.Language(), "Not authorised."), true)
 			return
@@ -633,7 +654,7 @@ func handleUpdate(c Config, u tgUpdate) {
 		return
 	}
 	user := strconv.FormatInt(u.Message.From.ID, 10)
-	if !c.isAdmin(user) {
+	if !c.isAdmin(user) || !u.Message.privateChat() {
 		return
 	}
 	chat := strconv.FormatInt(u.Message.Chat.ID, 10)

@@ -28,9 +28,13 @@ const twoFactorCookie = "backpack_2fa"
 // machine is worth nothing by the time anybody finds it.
 const twoFactorTTL = 3 * time.Minute
 
+// pendingMaxFails is how many wrong codes one pending sign-in survives.
+const pendingMaxFails = 3
+
 type pendingEntry struct {
 	ip      string
 	expires time.Time
+	fails   int // code attempts reserved against this sign-in so far
 }
 
 // pendingStore holds the tokens that have passed the password and not the code.
@@ -74,7 +78,24 @@ func (p *pendingStore) valid(tok, ip string) bool {
 		delete(p.entries, tok)
 		return false
 	}
-	return e.ip == ip
+	return e.ip == ip && e.fails < pendingMaxFails
+}
+
+// attempt reserves one code attempt against a pending sign-in and reports
+// whether it may be checked. At most pendingMaxFails are ever reserved, in one
+// step with the validity check, so parallel posts cannot run more guesses than
+// that against one password entry; a sign-in whose attempts are used up has
+// ended (valid reports false), and a right code destroys it.
+func (p *pendingStore) attempt(tok, ip string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[tok]
+	if !ok || e.ip != ip || time.Now().After(e.expires) || e.fails >= pendingMaxFails {
+		return false
+	}
+	e.fails++
+	p.entries[tok] = e
+	return true
 }
 
 func (p *pendingStore) destroy(tok string) {

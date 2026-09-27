@@ -149,6 +149,9 @@ func (s *QuicTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *QuicTransport) start(g *quicGen) {
+	// Whatever is still queued when this generation ends gives its slot back.
+	go drainOnEnd(g.ctx, g.localChannel, s.limits)
+
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}

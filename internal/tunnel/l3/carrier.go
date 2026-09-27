@@ -222,8 +222,22 @@ func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 // why several, and why only this carrier gets the option.
 func openUDPPaths(cfg Config) (DatagramCarrier, net.Addr, error) {
 	n := cfg.Multipath.Paths
-	if n < 1 {
-		n = 1
+	if n <= 1 {
+		// One socket is handed to the tunnel bare. The tunnel already knows
+		// where its peer is — it moves it only on a datagram that decrypted
+		// (notePeer) — and it is the batch read, the batch write and the
+		// segmentation offload of this carrier that the wrapper below hid.
+		//
+		// It used to be wrapped in pinnedCarrier like every multipath path.
+		// That wrapper learns its peer from whatever arrives, before anything
+		// is authenticated, and then sends there regardless of the address it
+		// is given: one datagram from anywhere pointed the listener's whole
+		// egress at the sender.
+		if cfg.Mode == ModeDial {
+			return dialUDP(cfg.Addr, cfg.SockBuf)
+		}
+		c, err := listenUDP(cfg.Addr, cfg.SockBuf)
+		return c, nil, err
 	}
 	if cfg.Mode == ModeDial {
 		paths := make([]DatagramCarrier, 0, n)
@@ -269,6 +283,10 @@ func openUDPPaths(cfg Config) (DatagramCarrier, net.Addr, error) {
 
 // pinnedCarrier remembers the address one path talks to, so the multipath layer
 // above can hand it a datagram without saying where it goes.
+//
+// Only multipath (paths > 1, opt-in) uses it. It learns from unauthenticated
+// datagrams, which is the price of spreading one tunnel over several sockets
+// the tunnel above cannot tell apart; a single path is never wrapped.
 //
 // The dialling side is given its peer up front. The listening side learns it
 // from the first datagram that arrives on that path and answers there, which is

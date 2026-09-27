@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -74,12 +75,21 @@ func applyDefaults(cfg *config.Config) {
 		}
 	}
 
-	// Token
+	// Token. A reverse tunnel written without one falls back to a built-in
+	// default, for compatibility with files that have always relied on it —
+	// but that default is in the public source, so anyone can claim the control
+	// channel of such a tunnel. It is said out loud rather than silently.
 	if cfg.Server.Token == "" {
 		cfg.Server.Token = defaultToken
+		if cfg.Server.BindAddr != "" {
+			logger.Warn(defaultTokenWarning)
+		}
 	}
 	if cfg.Client.Token == "" {
 		cfg.Client.Token = defaultToken
+		if cfg.Client.RemoteAddr != "" {
+			logger.Warn(defaultTokenWarning)
+		}
 	}
 
 	// Nodelay default is false if not valid value found
@@ -182,11 +192,49 @@ func applyDefaults(cfg *config.Config) {
 	}
 
 	warnUnusedStreamBuffer(cfg)
-	checkOutbound(cfg)
-	checkXdi(cfg)
-	checkSpoof(cfg)
-	checkPck(cfg)
-	checkFallbackChain(cfg)
+	warnIgnoredProxyProtocol(cfg)
+}
+
+const defaultTokenWarning = "this tunnel has no token set, so it uses the built-in default one — which is in the public source code, so anybody can claim this tunnel. Set the same long random token on both ends."
+
+// warnIgnoredProxyProtocol says so when proxy_protocol is set on a server
+// transport that cannot carry the header. The wizard never offers it there, but
+// a hand-written file could, and the key was then accepted and ignored.
+func warnIgnoredProxyProtocol(cfg *config.Config) {
+	if !cfg.Server.ProxyProtocol || cfg.Server.BindAddr == "" {
+		return
+	}
+	switch cfg.Server.Transport {
+	case config.WS, config.WSS, config.UDP:
+		logger.Warnf("proxy_protocol has no effect on the %s transport and is ignored: use tcp, tcpmux, stealth, kcp, pck, quic, wsmux or wssmux to pass the client's address to the service", cfg.Server.Transport)
+	}
+}
+
+// validateConfig reports the first reason a configuration cannot run, or nil.
+//
+// It is apart from applyDefaults on purpose. The checks used to end in
+// logger.Fatalf inside applyDefaults, which the reload watcher also calls — so
+// an edit that parsed but was wrong (a proxy URL, a pck flag, a spoof listener
+// without its peer) did not leave the running tunnel alone as a parse error
+// does: it exited the process, and systemd's restart read the same file and
+// exited again. The first load still treats an error as fatal; a reload logs
+// it and keeps what is running. See reload.go.
+func validateConfig(cfg *config.Config) error {
+	for _, check := range []func(*config.Config) error{
+		checkOutbound,
+		checkXdi,
+		checkSpoof,
+		checkPck,
+		checkFallbackChain,
+		// Last: the specific checks above explain a refusal better than the
+		// engine's own validation of the same field would.
+		checkEngine,
+	} {
+		if err := check(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkFallbackChain refuses a fallback list that cannot work, at load time.
@@ -195,12 +243,12 @@ func applyDefaults(cfg *config.Config) {
 // produce a tunnel that quietly skips a candidate — and the whole point of the
 // chain is that nobody is watching when it rotates, so a silent skip would only
 // be discovered as an outage that never recovered.
-func checkFallbackChain(cfg *config.Config) {
+func checkFallbackChain(cfg *config.Config) error {
 	if err := config.ValidateFallbackTransports(cfg.Server.Transport, cfg.Server.FallbackTransports); err != nil {
-		logger.Fatalf("[server] %v", err)
+		return fmt.Errorf("[server] %v", err)
 	}
 	if err := config.ValidateFallbackTransports(cfg.Client.Transport, cfg.Client.FallbackTransports); err != nil {
-		logger.Fatalf("[client] %v", err)
+		return fmt.Errorf("[client] %v", err)
 	}
 	// The two ends walk the same list and never tell each other where they are,
 	// so a mismatch is not a protocol error — it is a tunnel that takes longer
@@ -211,6 +259,7 @@ func checkFallbackChain(cfg *config.Config) {
 			"same list in the same order, or the two ends may not meet.",
 			config.FallbackNames(cfg.Client.FallbackTransports))
 	}
+	return nil
 }
 
 // checkPck refuses a pck tunnel that cannot work, and validates the flag cycle
@@ -221,7 +270,7 @@ func checkFallbackChain(cfg *config.Config) {
 // local address and the next hop are read from the routing and neighbour
 // tables. What cannot be worked out is whether the process is allowed to open a
 // packet socket at all, and that is what this checks.
-func checkPck(cfg *config.Config) {
+func checkPck(cfg *config.Config) error {
 	// A reverse tunnel naming pck as its transport, or a direct one naming it
 	// as its carrier.
 	//
@@ -238,13 +287,13 @@ func checkPck(cfg *config.Config) {
 	carrier := l3Carrier(cfg)
 	reverse := cfg.Server.Transport == config.PCK || cfg.Client.Transport == config.PCK
 	if !reverse && carrier != l3.CarrierPck && carrier != l3.CarrierSNI {
-		return
+		return nil
 	}
 	if runtime.GOOS != "linux" {
-		logger.Fatalf("the pck transport is only available on Linux (it needs a packet socket)")
+		return fmt.Errorf("the pck transport is only available on Linux (it needs a packet socket)")
 	}
 	if os.Geteuid() != 0 {
-		logger.Fatalf("the pck transport needs a packet socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+		return fmt.Errorf("the pck transport needs a packet socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
 
 	pc := cfg.Server.PckConfig
@@ -255,16 +304,16 @@ func checkPck(cfg *config.Config) {
 		pc = cfg.Client.PckConfig
 	}
 	if _, err := network.ParseTCPFlagList(pc.PckFlags); err != nil {
-		logger.Fatalf("invalid pck_flags: %v", err)
+		return fmt.Errorf("invalid pck_flags: %v", err)
 	}
 	if pc.PckGatewayMAC != "" {
 		if _, err := net.ParseMAC(pc.PckGatewayMAC); err != nil {
-			logger.Fatalf("invalid pck_gateway_mac %q: %v", pc.PckGatewayMAC, err)
+			return fmt.Errorf("invalid pck_gateway_mac %q: %v", pc.PckGatewayMAC, err)
 		}
 	}
 	if pc.PckInterface != "" {
 		if _, err := net.InterfaceByName(pc.PckInterface); err != nil {
-			logger.Fatalf("pck_interface %q does not exist on this machine: %v", pc.PckInterface, err)
+			return fmt.Errorf("pck_interface %q does not exist on this machine: %v", pc.PckInterface, err)
 		}
 	}
 
@@ -278,6 +327,7 @@ func checkPck(cfg *config.Config) {
 	} else {
 		logger.Info("pck: rules dropping the kernel's RSTs and keeping the flow out of conntrack are installed on start and removed on stop.")
 	}
+	return nil
 }
 
 // l3Carrier returns the carrier a direct tunnel is configured to use, in lower
@@ -308,9 +358,9 @@ func l3Carrier(cfg *config.Config) string {
 // So a reverse configuration naming it is refused here, by name, with what to
 // build instead — rather than started and left to fail in a way that reads like
 // a network fault.
-func checkSpoof(cfg *config.Config) {
+func checkSpoof(cfg *config.Config) error {
 	if cfg.Server.Transport == config.SPOOF || cfg.Client.Transport == config.SPOOF {
-		logger.Fatalf("transport = \"spoof\" is no longer a reverse tunnel: IP spoofing is a " +
+		return fmt.Errorf("transport = \"spoof\" is no longer a reverse tunnel: IP spoofing is a " +
 			"direct-tunnel carrier, and a reverse tunnel over it could never carry traffic " +
 			"(every one of its pooled sessions arrives at the same address, so each closed the " +
 			"one before it). Build it again as a direct tunnel — `sudo backpack` → Setup Iran / " +
@@ -320,7 +370,7 @@ func checkSpoof(cfg *config.Config) {
 
 	// Everything below is the direct tunnel's carrier.
 	if l3Carrier(cfg) != l3.CarrierSpoof {
-		return
+		return nil
 	}
 	listening := strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen")
 	// The peer's real address is where forged packets actually arrive from, and
@@ -332,25 +382,25 @@ func checkSpoof(cfg *config.Config) {
 			peerReal = host
 		}
 	}
-	checkSpoofCarrier(cfg.L3.SpoofConfig, listening, peerReal)
+	return checkSpoofCarrier(cfg.L3.SpoofConfig, listening, peerReal)
 }
 
 // checkSpoofCarrier validates the forged-source carrier and reports what the
 // host has to be set up for. It is the same advice the reverse transport used
 // to print, which was the only place any of it existed — a direct tunnel over
 // the same carrier needs every word of it.
-func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) {
+func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) error {
 	if runtime.GOOS != "linux" {
-		logger.Fatalf("the spoof carrier is only available on Linux (it needs a raw IP socket)")
+		return fmt.Errorf("the spoof carrier is only available on Linux (it needs a raw IP socket)")
 	}
 	if os.Geteuid() != 0 {
-		logger.Fatalf("the spoof carrier needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+		return fmt.Errorf("the spoof carrier needs a raw IP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
 	// Validate both directions' profiles. A direction defaults to
 	// spoof_profile, then to udp.
 	for _, p := range []string{sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink} {
 		if _, err := network.ParseSpoofProfile(p); err != nil {
-			logger.Fatalf("invalid spoof profile: %v", err)
+			return fmt.Errorf("invalid spoof profile: %v", err)
 		}
 	}
 	up, down := network.ResolveSpoofDirections(sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink)
@@ -371,14 +421,14 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) {
 	// packets, so it must be told it. The dialling side derives it from the
 	// address it was given, so spoof_peer_ip is optional there.
 	if listening && net.ParseIP(sc.SpoofPeerIP).To4() == nil {
-		logger.Fatalf("the spoof carrier needs spoof_peer_ip set to the peer's real IPv4 address on the listening side (it cannot be learned from the forged packets)")
+		return fmt.Errorf("the spoof carrier needs spoof_peer_ip set to the peer's real IPv4 address on the listening side (it cannot be learned from the forged packets)")
 	}
 
 	// A typo in any forged source is caught here rather than silently sending
 	// nothing.
 	for _, ip := range sc.SpoofSrcPool {
 		if net.ParseIP(ip).To4() == nil {
-			logger.Fatalf("invalid IPv4 %q in spoof_src_pool", ip)
+			return fmt.Errorf("invalid IPv4 %q in spoof_src_pool", ip)
 		}
 	}
 
@@ -434,6 +484,7 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) {
 	}
 
 	logger.Warn("spoof is experimental: it forges the source address of raw IP packets. It only carries traffic where the upstream network does not drop forged-source packets (no egress/BCP38 filtering) — prove this with the spoof tester on your real route before relying on it.")
+	return nil
 }
 
 // checkXdi refuses an xdi tunnel that cannot possibly work, before it tries.
@@ -443,22 +494,23 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) {
 // operator should not have to decode; caught here, it names the cause and what
 // to do. The server is normally root anyway — this is for the case where it is
 // not.
-func checkXdi(cfg *config.Config) {
+func checkXdi(cfg *config.Config) error {
 	// The carrier as well as the transport — see checkPck for why this gate was
 	// blind to every configuration the wizard writes.
 	usesXdi := cfg.Server.Transport == config.XDI ||
 		cfg.Client.Transport == config.XDI ||
 		l3Carrier(cfg) == l3.CarrierXdi
 	if !usesXdi {
-		return
+		return nil
 	}
 	if runtime.GOOS != "linux" {
-		logger.Fatalf("the xdi transport is only available on Linux (it needs a raw ICMP socket)")
+		return fmt.Errorf("the xdi transport is only available on Linux (it needs a raw ICMP socket)")
 	}
 	if os.Geteuid() != 0 {
-		logger.Fatalf("the xdi transport needs a raw ICMP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
+		return fmt.Errorf("the xdi transport needs a raw ICMP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
 	logger.Warn("xdi is experimental: it carries the tunnel inside ICMP echo (ping) packets, for networks that filter UDP and TCP but not ICMP. It is slower than the other transports and heavier on ICMP rate limits.")
+	return nil
 }
 
 // checkOutbound rejects a proxy or a routing binding that cannot work, at load
@@ -468,10 +520,10 @@ func checkXdi(cfg *config.Config) {
 // otherwise surface as a tunnel that simply never connects, with the reason
 // buried in a dial error. Failing here says which line of the file is wrong,
 // before anything has started.
-func checkOutbound(cfg *config.Config) {
+func checkOutbound(cfg *config.Config) error {
 	proxy, err := network.ParseProxy(cfg.Client.Proxy)
 	if err != nil {
-		logger.Fatalf("invalid proxy setting: %v", err)
+		return fmt.Errorf("invalid proxy setting: %v", err)
 	}
 	out := &network.Outbound{
 		Proxy:     proxy,
@@ -480,10 +532,10 @@ func checkOutbound(cfg *config.Config) {
 		Mark:      cfg.Client.SOMark,
 	}
 	if !out.IsSet() {
-		return
+		return nil
 	}
 	if err := out.Validate(); err != nil {
-		logger.Fatalf("invalid outbound setting: %v", err)
+		return fmt.Errorf("invalid outbound setting: %v", err)
 	}
 
 	// The datagram transports carry their data outside the TCP dialer entirely,
@@ -502,10 +554,11 @@ func checkOutbound(cfg *config.Config) {
 	// reached ..." in its own log, and then dialled by whatever route the
 	// kernel chose. That is the exact failure the function exists to prevent.
 	if transportIgnoresOutbound(cfg.Client.Transport) {
-		logger.Fatalf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is not carried over the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
+		return fmt.Errorf("proxy, local_addr, interface and so_mark are not supported on the %s transport: its data is not carried over the TCP dialer these settings apply to. Use tcp, tcpmux, ws, wss or wsmux, or remove them.", cfg.Client.Transport)
 	}
 
 	logger.Infof("the tunnel server will be reached %s", out)
+	return nil
 }
 
 // transportIgnoresOutbound reports whether a transport carries its data outside

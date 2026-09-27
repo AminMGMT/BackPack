@@ -34,8 +34,30 @@ func localUpdateDirs() []string { return localUpdateDirsFn() }
 
 // localUpdateDirsFn is the list, behind a variable so a test can point the
 // search somewhere that is not this machine's /root.
+//
+// The working directory is not on it. It used to be, and `sudo backpack` keeps
+// the caller's working directory — so root opening the Update menu from /tmp
+// ran, as root, the binary inside any archive another account had left there.
+// The binary is run to read its version the moment the menu is drawn, before
+// anything is verified. See trustedUpdateDir for the rule every directory on
+// the list must also pass.
 var localUpdateDirsFn = func() []string {
-	return []string{"/root", app.InstallDir, "."}
+	return []string{"/root", app.InstallDir}
+}
+
+// trustedUpdateDir reports whether an archive found in dir may be looked at at
+// all: the directory must belong to root or to this user, nobody outside it may
+// write to it, and a group that may write to it must be root's or this user's. It is install.sh's trusted_dir rule (BP-011), which the
+// installer applied to the same kind of file and this did not.
+func trustedUpdateDir(dir string) bool {
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return false
+	}
+	if fi.Mode().Perm()&0o002 != 0 {
+		return false
+	}
+	return ownedByRootOrMe(fi)
 }
 
 // LocalAssetName is the file this machine can install: the archive for its own
@@ -69,6 +91,9 @@ type LocalUpdate struct {
 func FindLocalUpdate() (LocalUpdate, bool) {
 	name := LocalAssetName()
 	for _, dir := range localUpdateDirs() {
+		if !trustedUpdateDir(dir) {
+			continue
+		}
 		path := filepath.Join(dir, name)
 		fi, err := os.Stat(path)
 		if err != nil || fi.IsDir() || fi.Size() == 0 {
@@ -219,15 +244,11 @@ func ApplyLocalUpdate(u LocalUpdate, logf func(string)) error {
 	MigrateAfterUpdate(logf)
 
 	logf("Restarting services...")
-	RestartService(app.WebUIService)
-	if err := RestartMonitorService(); err != nil {
-		logf("Warning: monitor service could not start: " + err.Error())
-	}
-	ok, failed := RestartAll()
+	ok, failed, later := RestartForNewBinary(logf)
 	logf(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
 
 	logf("Checking health...")
-	if bad := unhealthyAfterUpdate(); len(bad) > 0 {
+	if bad := unhealthyAfterUpdate(later); len(bad) > 0 {
 		logf("Health check FAILED for: " + strings.Join(bad, ", "))
 		logf("Rolling back to the previous version...")
 		if rerr := backup.RestoreSnapshot(snap, logf); rerr != nil {
@@ -261,6 +282,7 @@ func ApplyLocalUpdate(u LocalUpdate, logf func(string)) error {
 	}
 
 	logf("Update complete — now running " + installedVersion() + ".")
+	restartLast(later, logf)
 	return nil
 }
 

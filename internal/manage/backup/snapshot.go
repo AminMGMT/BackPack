@@ -157,13 +157,14 @@ func RestoreSnapshot(s Snapshot, logf func(string)) error {
 		_ = core.WriteUnit(t.Name)
 	}
 	_ = core.DaemonReload()
-	core.RestartService(app.WebUIService)
-	// The monitor runs the binary that was just rolled back, so it has to be
-	// restarted too — otherwise a rollback leaves the watchdog and the alerts
-	// running the version that failed.
-	_ = core.RestartMonitorService()
-	ok, failed := core.RestartAll()
+	// The same order as the update itself, for the same reason: a rollback
+	// started from the panel runs inside the panel's unit. See
+	// core/restartorder.go.
+	ok, failed, later := core.RestartForNewBinary(logf)
 	logf(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
+	if len(later) > 0 {
+		logf(strings.Join(later, ", ") + " restarts next — this connection drops for a moment.")
+	}
 	return nil
 }
 

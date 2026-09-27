@@ -61,8 +61,9 @@ type L3Config struct {
 	// wasteful.
 	Carrier string `toml:"carrier"`
 
-	// Encap is "ipip" (the default, and free) or "gre" (four bytes, or eight
-	// with a key). One tunnel carries both IPv4 and IPv6 either way.
+	// Encap is always GRE now: four bytes, or eight with gre_key. "ipip" is
+	// still accepted and read as GRE, so a file written when there was a choice
+	// keeps working. One tunnel carries both IPv4 and IPv6.
 	Encap string `toml:"encap"`
 
 	// GREKey is the RFC 2890 key, letting more than one logical tunnel share
