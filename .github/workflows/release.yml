@@ -2,11 +2,21 @@ name: Release
 
 # Publishes the assets for a tag. A tag containing a suffix (v1.6.0-beta.1) is
 # published as a pre-release, which is what the Beta release channel installs.
+#
+# A manual run (Actions -> Release -> Run workflow) publishes the commit it was
+# started on. Its tag is the `tag` input, or VERSION when that is left blank, so
+# a run started on main publishes main as the version main declares. Either way
+# the tag still has to match VERSION, exactly as a pushed tag does.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, e.g. v1.8.5 or v1.8.5-beta.1. Blank uses VERSION."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -16,6 +26,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Resolve the tag
+        # A pushed tag is its own name. A manual run started on a branch has
+        # only the branch name in GITHUB_REF_NAME ("main"), which is not a
+        # release, so it takes the tag from the input or from VERSION instead.
+        #
+        # Resolved before the test suite so a bad input fails in seconds.
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -eu
+          input="$(printf '%s' "${INPUT_TAG:-}" | tr -d ' ')"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+            if [ -n "$input" ] && [ "$input" != "$tag" ]; then
+              echo "Started on tag $tag but asked to publish $input."
+              exit 1
+            fi
+          else
+            tag="${input:-$(tr -d ' \n' < VERSION)}"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "\"$tag\" is not a release tag (vX.Y.Z or vX.Y.Z-suffix)."
+            exit 1
+          fi
+          # A manual run creates the tag at this commit. If the tag already
+          # exists somewhere else, publishing would put this commit's binaries
+          # under a release whose tag points at different source.
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            existing="$(git ls-remote --tags origin "refs/tags/$tag^{}" "refs/tags/$tag" | awk '{print $1}' | tail -1)"
+            if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "Tag $tag already exists at $existing, not at $GITHUB_SHA."
+              echo "Bump VERSION, or start the run on the tag itself."
+              exit 1
+            fi
+          fi
+          echo "Publishing $tag from $GITHUB_SHA"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v7
         with:
@@ -37,8 +86,10 @@ jobs:
         run: make release
 
       - name: Verify the tag matches the built version
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           declared="$(tr -d ' \n' < VERSION)"
           # A pre-release tag (v1.6.0-beta.1) carries the version it is a
           # pre-release of, so compare only the part before the suffix.
@@ -50,8 +101,10 @@ jobs:
 
       - name: Mark pre-releases
         id: kind
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          case "${GITHUB_REF_NAME}" in
+          case "$TAG" in
             *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
             *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
@@ -59,8 +112,10 @@ jobs:
       - name: Release notes from CHANGELOG
         # The release description is this tag's section of CHANGELOG.md — from
         # its "## <tag>" heading up to the next version heading.
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           awk -v h="## ${tag}" '
             index($0, h) == 1 { f = 1; next }
             f && /^## v/ { exit }
@@ -78,6 +133,10 @@ jobs:
         # SHA belongs to written beside it.
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          # Explicit, because a manual run on a branch has no tag in its ref.
+          # For a pushed tag this is the same tag, so nothing changes there.
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ steps.kind.outputs.prerelease }}
           body_path: RELEASE_NOTES.md
           # Every archive make release produced, by glob rather than by name.
