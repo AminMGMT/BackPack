@@ -10,7 +10,7 @@
  */
 
 import { $$, esc } from '../lib/dom.js';
-import { isUp } from '../lib/tstate.js';
+import { isUp, isStopped, stateLabel, stateTone } from '../lib/tstate.js';
 import { bytes, speed, ago, kindLabel, flag } from '../lib/format.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
@@ -310,8 +310,16 @@ export async function metricsView(ctx) {
         const sub = root.querySelector('.dh .ttl small');
         if (sub) sub.textContent =
           [t.peerLocation, t.peerISP, kindLabel(t)].filter(Boolean).join(' · ');
-        const state = root.querySelector('.dh .stt, .dh .state');
-        if (state) state.textContent = t.state;
+        /* The chip is the preview's, and it said "Running" in green over a
+           stopped tunnel because nothing ever wrote to it: this looked for
+           .stt and .state, and the markup has .chip2. */
+        const chip = root.querySelector('.dh .chip2, .dh .stt, .dh .state');
+        if (chip) {
+          const tone = stateTone(t);
+          chip.className = 'chip2 ' + (isStopped(t) ? 'n'
+            : tone === 'off' ? 'x' : tone === 'warn' ? 'w' : 'o');
+          chip.innerHTML = `<i></i>${esc(stateLabel(t))}`;
+        }
         fill(root, t);
         spark(root, t);
       };

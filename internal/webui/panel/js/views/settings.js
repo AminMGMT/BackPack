@@ -3,7 +3,7 @@
  * CLI: 5 Web Panel, 7 Telegram Bot, 8 Update → Release channel.
  */
 
-import { $$, el, esc, dialogSubtitle } from '../lib/dom.js';
+import { $$, el, esc, dialogSubtitle, copyText, flashCopied } from '../lib/dom.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
 import { openScreen } from '../ui/screen.js';
@@ -28,6 +28,11 @@ function setControl(node, v) {
   const opt = new Option(val, val, true, true);
   node.add(opt);
 }
+
+const shortDate = t => {
+  const d = new Date(t);
+  return isNaN(d) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+};
 
 const dig = (o, path) => path.split('.').reduce((x, k) => (x ?? {})[k], o);
 
@@ -106,7 +111,9 @@ function summarise(root, { tg, ses, ab, upd, cert }) {
   const tag = upd?.summary?.match(/v?[\d.]+/)?.[0];
   const u = say('Update', upd ? (upd.available && tag ? `${tag} available` : 'up to date') : '');
   if (u) {
-    const dot = u.parentElement?.querySelector('.dot, .badge');
+    /* The dot sits inside the label itself (.flag2), and it was drawn lit on
+       every server whether or not anything was out. */
+    const dot = u.querySelector('.flag2') || u.parentElement?.querySelector('.dot, .badge');
     if (dot) dot.hidden = !upd?.available;
   }
 }
@@ -122,6 +129,12 @@ export function settingsView(ctx) {
         api.autoBackup(), api.updateCheck(), api.panelCertRead(),
       ]);
       const val = r => (r.status === 'fulfilled' ? r.value : null);
+      /* The faces of the switches and menus are set from these at the end of
+         the bind. They were read there under these names and never declared,
+         so the last step of the screen threw on every open. */
+      const tgNow = val(tg) || {};
+      const abNow = val(ab) || {};
+      const chNow = val(ch) || {};
 
       /* Buttons matched by what they say, because the preview gave most of them
          no id. Declared here rather than beside its first use: it was a const
@@ -317,16 +330,32 @@ export function settingsView(ctx) {
            whether it still holds, and names its head — the same number every
            line forwarded to Telegram carries, which is how a rewrite that
            recomputed the chain is still caught. */
+        /* Drawn as rows in the screen's own type, not as a monospace dump: the
+           dump was a second typeface and a second size in the middle of a pane
+           set in the body face, and it read as something pasted in. */
+        const sealEl = root.querySelector('#audseal');
         const drawAudit = async () => {
           try {
             const a = await api.audit(200);
-            const lines = a.lines || [];
-            const seal = a.intact === false
-              ? `⚠ This record has been altered: entry ${a.brokenAt + 1} from the top does not follow from the one before it.`
-              : (a.head ? `Record intact · head #${a.head} — compare with the number on the latest Telegram notice.` : '');
-            if (log) log.textContent = (seal ? seal + '\n\n' : '') + (lines.length ? lines.join('\n')
-              : 'Nothing has been changed through this panel yet.');
-          } catch (e) { if (log) log.textContent = 'Could not read the record.'; }
+            const rows = a.entries || [];
+            if (sealEl) {
+              sealEl.hidden = !(a.intact === false || a.head);
+              sealEl.className = 'audseal ' + (a.intact === false ? 'bad' : 'ok');
+              sealEl.innerHTML = a.intact === false
+                ? `<i></i><span><b>This record has been altered.</b> Entry ${a.brokenAt + 1} from the top does not follow from the one before it.</span>`
+                : `<i></i><span><b>Record intact</b> · head <code>#${esc(a.head || '')}</code> — compare with the number on the latest Telegram notice.</span>`;
+            }
+            if (!log) return;
+            log.innerHTML = rows.length ? rows.map(e => {
+              const d = new Date(e.at * 1000);
+              const refused = e.status >= 400;
+              const what = (e.path || '').replace(/^\/api\//, '') + (e.action ? ` · ${e.action}` : '');
+              return `<div class="aud${refused ? ' no' : ''}">
+                <span class="at" title="${esc(d.toLocaleString())}">${esc(d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}<em>${esc(d.toTimeString().slice(0, 5))}</em></span>
+                <span class="wh"><b>${esc(what)}</b><small>${esc([e.who, e.ip].filter(Boolean).join(' · '))}</small></span>
+                <span class="st">${refused ? `refused ${e.status}` : esc(e.method || '')}</span></div>`;
+            }).join('') : '<div class="audnone">Nothing has been changed through this panel yet.</div>';
+          } catch (e) { if (log) log.innerHTML = '<div class="audnone">Could not read the record.</div>'; }
         };
         await drawAudit();
       }
@@ -486,6 +515,19 @@ export function settingsView(ctx) {
         const kf = root.querySelector('[name="keyFile"]');
         if (kf) kf.value = certSnap.keyFile || '';
       } /* else the section still selects, it just starts on self-signed */
+      /* Copy the address this section spells out. It had no handler of its
+         own: the shared one looks for an input or a code element beside the
+         button, and the address is five spans, so it found nothing and the
+         button did nothing. */
+      root.querySelector('.cp2')?.addEventListener('click', async ev => {
+        const btn = ev.currentTarget;
+        const text = ['#uScheme', '#uHost', '#uPort', '#uPath']
+          .map(s => root.querySelector(s)?.textContent || '').join('').trim();
+        const ok = await copyText(text);
+        flashCopied(btn, ok);
+        if (!ok) toast('The browser would not copy it — select the address and copy it by hand.', true);
+      });
+
       certOpts.forEach(o => o.addEventListener('click', () => {
         certMode = o.dataset.mode;
         paintCert(certSnap);
@@ -498,19 +540,47 @@ export function settingsView(ctx) {
 
       /* "Where you are": what runs now, and the versions there are restore
          points for. The preview listed three by hand. */
+      /* Asked once and used by both lists below. */
+      const pr = await api.restorePoints().catch(() => []);
+      const points = Array.isArray(pr) ? pr : [];
+      const runningTag = store.get().stats?.version || '';
+      const next = upd.status === 'fulfilled' && upd.value?.available
+        ? upd.value?.summary?.match(/v?\d+(?:\.\d+)+/)?.[0] : '';
+
+      /* The Release row said "Install 1.7.6" on every server, whatever it was
+         running and whatever was out — it was the preview's own sentence and
+         nothing ever rewrote it. It says what is true now: the version that is
+         available, or that there is none. */
+      {
+        const inst = byText(/^install$/i)[0];
+        const row = inst?.closest('.arow');
+        const b = row?.querySelector('.tx b');
+        const s = row?.querySelector('.tx span');
+        if (b && s) {
+          if (next) {
+            b.textContent = `Install ${next}`;
+            s.textContent = `You are on ${runningTag || 'an older version'} · a restore point is taken first · tunnels restart once`;
+            inst.hidden = false;
+          } else {
+            b.textContent = runningTag ? `${runningTag} is the latest` : 'Up to date';
+            s.textContent = upd.status === 'fulfilled' && upd.value?.error
+              ? `Could not check: ${upd.value.summary}`
+              : 'Nothing newer on this channel.';
+            inst.hidden = true;
+          }
+        }
+      }
+
       if (upd.status === 'fulfilled') {
-        const runningTag = store.get().stats?.version || '';
-        const pts = await api.restorePoints().catch(() => []);
         const rows = [];
-        const next = upd.value?.summary?.match(/v?[\d.]+/)?.[0];
-        if (upd.value?.available && next) {
+        if (next) {
           rows.push([next, 'available',
             'Not installed yet. A restore point is taken before it installs.']);
         }
         rows.push([runningTag, 'running', 'What every tunnel here is running on.']);
-        for (const p of pts.slice(0, 3)) {
+        for (const p of points.slice(0, 3)) {
           if (p.version === runningTag) continue;
-          rows.push([p.version, '', `Restore point ${p.stamp} kept`]);
+          rows.push([p.version, '', `Restore point from ${shortDate(p.created)}`]);
         }
         const first = root.querySelector('.ev');
         const list = first?.parentElement;
@@ -530,12 +600,20 @@ export function settingsView(ctx) {
           .find(g => g.textContent.trim().toLowerCase() === 'restore points');
         const box = label?.parentElement;
         if (box) {
-          const pts = await api.restorePoints().catch(() => []);
-          box.innerHTML = `<div class="gl2">Restore points</div>` + (pts.length
-            ? pts.map(x => `<div class="arow"><div class="tx">
-                 <b>Before ${esc(x.version)}</b>
-                 <span>${esc(new Date(x.created).toLocaleDateString())} · ${x.tunnels.length} tunnels</span>
-               </div></div>`).join('')
+          /* tunnels is null on a restore point taken while there were none —
+             which is every point on a fresh server. Reading .length off it
+             threw "Cannot read properties of null", and because it threw
+             inside this bind, everything after it was never wired and the
+             preview's sample points ("Before 1.7.5", "Before 1.7.4") stayed
+             on screen as if this machine had them. */
+          box.innerHTML = `<div class="gl2">Restore points</div>` + (points.length
+            ? points.map(x => {
+                const n = (x.tunnels || []).length;
+                return `<div class="arow"><div class="tx">
+                 <b>Before ${esc(x.version || 'an update')}</b>
+                 <span>${esc(shortDate(x.created))} · ${n} tunnel${n === 1 ? '' : 's'}${x.reason ? ` · ${esc(x.reason)}` : ''}</span>
+               </div></div>`;
+              }).join('')
             : `<div class="arow"><div class="tx"><b>None yet</b>
                  <span>One is taken automatically before every update.</span></div></div>`) +
             `<div class="hint">Rolling one back is done from the Telegram bot, under

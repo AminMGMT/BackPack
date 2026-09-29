@@ -268,6 +268,29 @@ export const channel      = () => get('/api/channel');
 export const setChannel   = beta =>
   post('/api/channel', new URLSearchParams({ channel: beta ? 'beta' : 'stable' }));
 
+/* ---- CLI: 0 Connection Test --------------------------------------------- */
+/* The Iran side of a test: start it, read how it is going, stop it. The kharej
+   side is the one line the state carries in `command`. */
+export const connTest = () => get('/api/conntest');
+export const connTestStart = ({ host = '', preset = '' } = {}) =>
+  post('/api/conntest', new URLSearchParams({ action: 'start', host, preset }));
+export const connTestStop = () => post('/api/conntest', new URLSearchParams({ action: 'stop' }));
+
+/* ---- CLI: 3 Manage → Auto Refresh, Proxy, File Locations ------- */
+export const manageState = () => get('/api/manage');
+export const setAutoRefresh = hours =>
+  post('/api/manage/refresh', new URLSearchParams({ hours: String(hours) }));
+export const proxyEnable = ({ type, port, username = '', password = '' }) =>
+  post('/api/manage/proxy', new URLSearchParams({ action: 'enable', type, port: String(port), username, password }));
+export const proxyDisable = () => post('/api/manage/proxy', new URLSearchParams({ action: 'disable' }));
+export const proxyTest = () => post('/api/manage/proxy', new URLSearchParams({ action: 'test' }));
+
+/* ---- the terminal -------------------------------------------------------- */
+/* A WebSocket, not a fetch, so it is the one address here built by hand — on
+   the same base, with ws: or wss: to match the page. */
+export const terminalURL = (cols, rows) =>
+  `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${at('/api/terminal')}?cols=${cols}&rows=${rows}`;
+
 /* ---- alerts -------------------------------------------------------------- */
 export const alerts = () => get('/api/alerts');
 

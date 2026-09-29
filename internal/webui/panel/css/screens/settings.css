@@ -353,6 +353,52 @@ body[data-t="light"]{
  * Both are lists of fixed-width facts — a hash-shaped name, a date, a status —
  * and both are read by scanning down a column, so they are set in the same
  * monospace the rollout plan uses rather than in the body face. */
+/* A hint that is not inside a field. The Security groups — two-factor, tokens,
+   the record — open with one, and only .f2b .hint was styled, so those three
+   paragraphs fell back to the browser's 16px body text in the middle of a pane
+   set at 11–12.5. */
+.dlg.set .hint{font-size:11.5px;color:var(--dim);line-height:1.6;max-width:66ch}
+.dlg.set .grp2 > .hint{margin:0 0 11px}
+.dlg.set .hint a{color:var(--tx2);text-decoration:underline;text-underline-offset:2px;
+  text-decoration-color:var(--ln3)}
+.dlg.set .hint a:hover{color:var(--tx)}
+.dlg.set .hint code,.dlg.set .audseal code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;background:var(--sunk);padding:1px 5px;border-radius:4px}
+.dlg.set #twofagrp .f2b{margin-top:4px}
+.dlg.set #twofagrp .btn2 + .btn2{margin-left:0}
+.dlg.set #twofagrp > .btn2{margin-top:2px}
+.dlg.set #tokmake{margin-top:4px}
+
+/* The record, as rows in the pane's own type. */
+.dlg.set .audseal{display:flex;gap:9px;align-items:flex-start;padding:9px 12px;border-radius:10px;
+  margin-bottom:10px;font-size:11.5px;line-height:1.55;color:var(--tx2)}
+.dlg.set .audseal i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none;margin-top:5px}
+.dlg.set .audseal b{font-weight:620;color:var(--tx)}
+.dlg.set .audseal.ok{background:color-mix(in srgb,var(--ok) 9%,transparent);
+  border:1px solid color-mix(in srgb,var(--ok) 26%,transparent)}
+.dlg.set .audseal.ok i{color:var(--ok)}
+.dlg.set .audseal.bad{background:color-mix(in srgb,var(--er) 9%,transparent);
+  border:1px solid color-mix(in srgb,var(--er) 32%,transparent)}
+.dlg.set .audseal.bad i{color:var(--er)}
+.dlg.set .audlist{border:1px solid var(--ln);border-radius:11px;background:var(--field);
+  max-height:300px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--ln2) transparent}
+.dlg.set .aud{display:grid;grid-template-columns:62px 1fr auto;gap:12px;align-items:center;
+  padding:9px 12px;border-bottom:1px solid var(--ln)}
+.dlg.set .aud:last-child{border-bottom:0}
+.dlg.set .aud:hover{background:var(--sunk)}
+.dlg.set .aud .at{display:flex;flex-direction:column;font-size:11px;color:var(--mu);
+  font-variant-numeric:tabular-nums;line-height:1.35}
+.dlg.set .aud .at em{font-style:normal;font-size:10.5px;color:var(--dim)}
+.dlg.set .aud .wh{min-width:0}
+.dlg.set .aud .wh b{display:block;font-size:12px;font-weight:580;color:var(--tx2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dlg.set .aud .wh small{display:block;font-size:10.5px;color:var(--dim);margin-top:1px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dlg.set .aud .st{font-size:10px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 7px;border-radius:6px;background:var(--sunk);color:var(--mu)}
+.dlg.set .aud.no .st{background:color-mix(in srgb,var(--er) 13%,transparent);color:var(--er)}
+.dlg.set .audnone{padding:18px 12px;text-align:center;font-size:12px;color:var(--dim)}
+
 .tokout,.audout{margin:10px 0 0;padding:11px 13px;border:1px solid var(--ln);border-radius:11px;
   background:var(--s2);font:11.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;
   white-space:pre-wrap;word-break:break-all;color:var(--tx2);max-height:260px;overflow:auto}

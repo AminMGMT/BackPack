@@ -2,6 +2,7 @@ package manage
 
 import (
 	"os/exec"
+	"regexp"
 	"strconv"
 
 	"github.com/backpack/backpack/internal/app"
@@ -25,14 +26,29 @@ func Logs(name string, n int) string {
 	})
 }
 
+// journalctl runs journalctl; a variable so a test can answer instead.
+var journalctl = func(args ...string) ([]byte, error) {
+	return exec.Command("journalctl", args...).CombinedOutput()
+}
+
+// ansiEscape matches the colour codes the engine's text log wraps its level in.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
 // readLogs is the uncached read, and the only place that runs journalctl.
+//
+// --all, because the engine colours its level tag and journalctl up to systemd
+// 254 — Ubuntu 20.04 and 22.04 — prints "[63B blob data]" for any line holding
+// a control character when no terminal is attached. Every line in the panel's
+// log and the bot's was a blob there, while the CLI's Live Log, which runs in
+// a terminal, read the same journal fine. The codes are then taken out, since
+// neither a browser nor Telegram draws them.
 func readLogs(name string, n int) string {
-	out, err := exec.Command("journalctl",
+	out, err := journalctl(
 		"-u", app.ServiceName(name),
 		"-n", strconv.Itoa(n),
-		"--no-pager", "-o", "short-iso").CombinedOutput()
+		"--no-pager", "--all", "-o", "short-iso")
 	if err != nil && len(out) == 0 {
 		return "No logs available for " + name
 	}
-	return string(out)
+	return ansiEscape.ReplaceAllString(string(out), "")
 }

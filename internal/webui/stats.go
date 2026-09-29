@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
@@ -173,12 +174,23 @@ func gatherTunnels(run node.Runner) []TunnelInfo {
 	}
 	peersByPort := listeningPeers(listenPorts)
 
+	// When each service started, asked of systemd once for all of them. See
+	// serviceuptime.go.
+	units := make([]string, 0, len(tunnels))
+	for _, t := range tunnels {
+		units = append(units, t.Service)
+	}
+	since := serviceSince(units)
+
 	var wg sync.WaitGroup
 	for i, t := range tunnels {
 		wg.Add(1)
 		go func(i int, t manage.Tunnel) {
 			defer wg.Done()
 			out[i] = tunnelInfo(t, health[t.Name], peersByPort, run)
+			if at, ok := since[t.Service]; ok && out[i].State != "stopped" {
+				out[i].Uptime = upFor(time.Since(at))
+			}
 		}(i, t)
 	}
 	wg.Wait()
@@ -390,6 +402,47 @@ func (r *rateTracker) sample(name string, snap metrics.Snapshot) []RatePoint {
 		r.last[name] = snap
 	}
 	return append([]RatePoint(nil), r.hist[name]...)
+}
+
+// The rate history is kept whether or not anybody is looking.
+//
+// It used to be fed only by the tunnel list's poll — so only while a browser
+// had the panel open. Close the tab for an hour, sign in again, and every
+// card's chart started from nothing: the first point was the average over the
+// whole hour it had been away (the gap between the last snapshot it had seen
+// and the current one), and the live line had to grow again from there. That
+// is the "metric pare va reset mishe" on every sign-in.
+//
+// The panel is a long-running service, so it samples on its own clock. The
+// engines write a snapshot every 30 seconds; sampling every 10 means no
+// snapshot is missed, and rateTracker ignores a snapshot it has already seen.
+const rateSampleEvery = 10 * time.Second
+
+// sampleRates records every tunnel's latest snapshot into the rate history.
+// list and read are parameters so a test can hand it tunnels without a
+// config directory.
+func sampleRates(list func() []manage.Tunnel, read func(name string) (metrics.Snapshot, error)) {
+	for _, t := range list() {
+		if snap, err := read(t.Name); err == nil {
+			rates.sample(t.Name, snap)
+		}
+	}
+}
+
+// runRateSampler keeps the rate history filling until ctx ends.
+func runRateSampler(stop <-chan struct{}) {
+	read := func(name string) (metrics.Snapshot, error) { return metrics.Read(app.ConfigDir, name) }
+	sampleRates(manage.List, read)
+	t := time.NewTicker(rateSampleEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			sampleRates(manage.List, read)
+		}
+	}
 }
 
 // fillMetrics copies traffic and link-quality numbers from the tunnel's

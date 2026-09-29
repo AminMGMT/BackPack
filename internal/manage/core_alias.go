@@ -44,6 +44,7 @@ var (
 	// core/restartorder.go.
 	FinishDeferredRestarts = core.FinishDeferredRestarts
 
+	Systemctl      = core.Systemctl
 	DaemonReload   = core.DaemonReload
 	IsActive       = core.IsActive
 	IsEnabled      = core.IsEnabled

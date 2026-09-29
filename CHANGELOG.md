@@ -6,6 +6,20 @@ All notable changes to Backpack are documented here.
 
 ### Added
 
+- **Web panel: the dock is now Overview · Connection test · Tunnels · Terminal
+  · Manage.** *Connection test* runs the Iran side of the menu's Connection
+  Test from the browser — start it, copy the one `sudo backpack link apply
+  '…'` line (or the install-and-test line for a kharej without Backpack), and
+  watch every transport's row fill live, ending in the best-settings card.
+  *Terminal* is a root shell on the server (xterm.js, vendored under
+  `panel/js/vendor`, MIT): browser sessions only — never an API token —
+  same-origin WebSocket, at most four at once, and every one opened is written
+  to the audit record and the alert feed. The shell survives moving between
+  sections. *Manage* carries Auto Refresh (with a 24-hour dial of when the
+  restarts land), the Built-in Proxy (enable, disable, and a test that speaks
+  the SOCKS5/HTTP handshake with the configured credentials) and File
+  Locations (grouped, filterable, with size, item count and age). *Servers* is
+  out of the dock for now; its route still answers.
 - **Connection Test (main menu, option 0): which transports actually hold
   between two servers.** Started on the Iran server, it runs a real engine for
   every reverse transport the wizard offers (tcp, tcpmux, stealth, pck, ws,
@@ -147,6 +161,34 @@ All notable changes to Backpack are documented here.
 
 ### Fixed
 
+- **Web panel field report, 2026-09-29.**
+  - Tunnel cards' live chart started from nothing on every sign-in: the rate
+    history was fed only by the browser's poll. The panel now samples every
+    tunnel's snapshot on its own clock.
+  - A tunnel card's "up" figure reset whenever the engine reloaded; it is the
+    systemd service's ActiveEnterTimestamp now.
+  - The overview's server uptime was the host node's on OpenVZ/Virtuozzo
+    guests (gopsutil reads /proc/stat's btime there); it is read from
+    /proc/uptime.
+  - Logs showed "[blob data]" instead of the engine's lines on systemd ≤ 254
+    (Ubuntu 20.04/22.04): the coloured level tag made journalctl refuse the
+    line without `--all`. The read now passes `--all` and strips the colour
+    codes, and the dialog parses the short-iso line into clock, level and
+    message.
+  - Settings threw "Cannot read properties of null" on any restore point taken
+    with no tunnels, which left the preview's sample points (1.7.4/1.7.5) and
+    its "Install 1.7.6" row on screen; the Release row now says what is
+    actually available.
+  - Panel access → Copy did nothing (it found no input to copy, and plain HTTP
+    has no `navigator.clipboard`); every Copy button now falls back to
+    `execCommand`.
+  - Security's two-factor, token and audit text fell back to 16px browser
+    type; the audit record is drawn as rows.
+  - Alerts: newest first, with day separators, real insets and no "NaN d ago".
+  - Metrics dialog: the legend sat on the edge, and the state chip said
+    "Running" for any state.
+  - Tabbed dialogs (Edit, Settings, Add) keep one height between tabs.
+  - The Link test button is gone from tunnel cards.
 - **Editing a direct tunnel in the web panel opened the reverse form and could
   not save.** The Edit dialog filled the reverse form — transport families,
   mux and KCP settings a direct tunnel does not have — and posted its fields

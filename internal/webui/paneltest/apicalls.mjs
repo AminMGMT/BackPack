@@ -88,11 +88,15 @@ const samples = {
   alerts: [[]],
   tokens: [[]], tokenIssue: [[{ name: 'ci', scope: 'read', days: 30 }]], tokenRevoke: [['ci']],
   audit: [[]],
+  connTest: [[]], connTestStart: [[{ host: '203.0.113.7', preset: 'turbo' }]], connTestStop: [[]],
+  manageState: [[]], setAutoRefresh: [[12]],
+  proxyEnable: [[{ type: 'socks5', port: 1085, username: 'u', password: 'p' }]],
+  proxyDisable: [[]], proxyTest: [[]],
 };
 // Exports that build an address instead of fetching one; the address is
 // checked as the GET a browser makes when it follows it.
 const addresses = { backupExportURL: [[]] };
-const notRoutes = new Set(['base']);
+const notRoutes = new Set(['base', 'terminalURL']);
 
 const api = await import(new URL('../panel/js/api.js', import.meta.url));
 const missing = [];

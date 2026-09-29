@@ -72,4 +72,9 @@
     --ln:rgba(0,0,0,.09);--ln2:rgba(0,0,0,.16);--ln3:rgba(0,0,0,.34);
     --tx:#0a0a0a;--tx2:#2e2e2e;--mu:#6b6b6b;--dim:#949494;--faint:#c4c4c4;
     --sunk:rgba(0,0,0,.045);--lift:0 22px 46px -26px rgba(0,0,0,.32);--spark:#1a1a1a}
+  /* The ground of a text field. Two screens defined it for themselves and every
+     other screen that used it — Settings, the alerts — got nothing, so their
+     fields were transparent. */
+  body[data-t="dark"]{--field:#0c0c0c}
+  body[data-t="light"]{--field:#ffffff}
   :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.32,.72,0,1)}

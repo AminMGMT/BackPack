@@ -190,6 +190,14 @@ type server struct {
 	// internal/control/desired.go.
 	want *control.Desired
 
+	// The tools of the Connection Test and Manage sections, each of which runs
+	// one thing at a time in the background. Values rather than pointers so a
+	// server built as a literal in a test has them too. See handlers_conntest.go
+	// and handlers_manage.go.
+	conntest conntestRunner
+	// terminals counts the open root shells; see terminal.go.
+	terminals terminalCount
+
 	// ctx is the panel's own lifetime, which is what a background job is tied
 	// to. A job tied to the request that started it would be cancelled the
 	// moment the browser had its reply, and a fleet rollout answers in
@@ -252,6 +260,9 @@ func Serve() error {
 	probeCtx, stopProbing := context.WithCancel(context.Background())
 	defer stopProbing()
 	srv.net.Start(probeCtx)
+	// The cards' rate history, kept whether or not a browser is polling. See
+	// runRateSampler.
+	go runRateSampler(probeCtx.Done())
 	// Background jobs share that lifetime. A rollout left running against a
 	// fleet after the panel has gone is exactly the thing nobody would notice
 	// until it had finished.
@@ -406,6 +417,15 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/confhist", s.requireAuth(s.handleConfHistory))
 	mux.HandleFunc("/api/confhist/restore", s.requireAuth(s.handleConfRestore))
 	mux.HandleFunc("/api/restorepoints", s.requireAuth(s.handleRestorePoints))
+	// The Connection Test and Manage sections: the menu's tools, from the
+	// browser. See handlers_conntest.go and handlers_manage.go.
+	mux.HandleFunc("/api/conntest", s.requireAuth(s.handleConnTest))
+	mux.HandleFunc("/api/manage", s.requireAuth(s.handleManage))
+	mux.HandleFunc("/api/manage/refresh", s.requireAuth(s.handleAutoRefresh))
+	mux.HandleFunc("/api/manage/proxy", s.requireAdmin(s.handleProxy))
+	// A root shell on this machine. Admin, and a browser session only — never a
+	// token, whatever its scope. See terminal.go.
+	mux.HandleFunc("/api/terminal", s.requireAdmin(s.handleTerminal))
 	// Access control. Issuing a credential is guarded harder than using one:
 	// a write token must not be able to mint itself a better one. See access.go.
 	mux.HandleFunc("/api/tokens", s.guard(ScopeAdmin, s.handleTokens))

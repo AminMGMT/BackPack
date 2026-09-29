@@ -9,6 +9,7 @@ package metrics
 
 import (
 	"encoding/json"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -487,8 +488,16 @@ type retired struct {
 // Retired is what the tunnels deleted from this server carried between them.
 func Retired(dir string) (in, out uint64) {
 	var r retired
-	if b, err := os.ReadFile(filepath.Join(dir, retiredFile)); err == nil {
-		_ = json.Unmarshal(b, &r)
+	path := filepath.Join(dir, retiredFile)
+	if b, err := os.ReadFile(path); err == nil {
+		// A damaged ledger is read as zero, so the server's lifetime total
+		// drops by whatever deleted tunnels carried. Said, because an empty
+		// ledger and a damaged one look identical on the overview.
+		if err := json.Unmarshal(b, &r); err != nil {
+			log.Printf("metrics: %s is damaged and is being read as zero — the traffic of "+
+				"deleted tunnels is missing from the server total: %v", path, err)
+			return 0, 0
+		}
 	}
 	return r.BytesIn, r.BytesOut
 }

@@ -35,6 +35,8 @@
 <link rel="stylesheet" href="css/accent.css">
 <link rel="stylesheet" href="css/components/dialog.css">
 <link rel="stylesheet" href="css/components/toast.css">
+<link rel="stylesheet" href="css/screens/tools.css">
+<link rel="stylesheet" href="css/vendor/xterm.css">
 
 <script nonce="__CSP_NONCE__">
   /* The theme is read before first paint so a dark panel never flashes white. */
@@ -132,13 +134,23 @@
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
           <span>Overview</span><span class="n" id="dock-o"></span>
         </button>
-        <button data-dock="/servers" role="tab" aria-selected="false">
-          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 17.5h.01"/></svg>
-          <span>Servers</span><span class="n" id="dock-s"></span>
+        <!-- Servers is out of the dock for now (the fleet is being reworked);
+             its screen is still in js/views/servers.js. -->
+        <button data-dock="/conntest" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7.2 12h2.3M11 12h2M14.5 12h2.3"/><path d="M12 5v2M12 17v2"/></svg>
+          <span>Connection test</span><span class="n live" id="dock-c"></span>
         </button>
         <button data-dock="/tunnels" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24"><path d="M4 12h4l3-7 3 14 3-7h3"/></svg>
           <span>Tunnels</span><span class="n" id="dock-t"></span>
+        </button>
+        <button data-dock="/terminal" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9l3 3-3 3"/><path d="M12.5 15H17"/></svg>
+          <span>Terminal</span>
+        </button>
+        <button data-dock="/manage" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+          <span>Manage</span>
         </button>
       </div>
     </div>

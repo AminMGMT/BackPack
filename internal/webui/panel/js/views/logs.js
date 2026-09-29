@@ -3,43 +3,29 @@
  * CLI: Manage → Manage Tunnels → Live Log.
  */
 
-import { $, $$, el, esc } from '../lib/dom.js';
+import { $, $$, el, esc, copyText } from '../lib/dom.js';
 import { flag, kindLabel } from '../lib/format.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
 import { openScreen } from '../ui/screen.js';
 import { toast, oops } from '../ui/toast.js';
 import { go } from '../router.js';
+import { parseLine } from '../lib/logline.js';
 
-/* journald prefixes the level; the preview colours by it. */
-/* journald hands the panel free text, so the level is read from the line. The
-   list is the failures this tunnel actually produces, not a generic word list:
-   a bind clash and a refused dial are errors however they are phrased. */
-function levelOf(line) {
-  const s = line.toLowerCase();
-  if (/error|fatal|panic|refused|failed|address already in use|no route to host|permission denied|cannot|could not/.test(s))
-    return 'error';
-  if (/warn|retry|flap|dropped|overflow|timeout|reverted/.test(s)) return 'warn';
-  return 'info';
-}
+/* Taking a journal line apart lives in lib/logline.js, where it is tested. */
 
 function render(box, lines, level) {
   const rows = lines
-    .map(l => ({ text: typeof l === 'string' ? l : (l.message || l.line || ''), }))
-    .filter(r => r.text)
-    .map(r => ({ ...r, lv: levelOf(r.text) }))
+    .map(l => (typeof l === 'string' ? l : (l.message || l.line || '')))
+    .filter(Boolean)
+    .map(parseLine)
     .filter(r => level === 'all' || r.lv === level);
 
   box.innerHTML = rows.length
-    ? rows.map(r => {
-        /* Only the clock: the date is the same all the way down, and printing
-           it on every row pushed the column onto two lines. */
-        const m = r.text.match(/^\S+\s+\d+\s+([\d:]+)\s+(.*)$/);
-        const [, when, rest] = m || [null, '', r.text];
-        return `<div class="ln ${r.lv}"><span class="t">${esc(when)}</span>` +
-               `<span class="lv ${r.lv}">${r.lv}</span>` +
-               `<span class="msg">${esc(rest)}</span></div>`;
-      }).join('')
+    ? rows.map(r =>
+        `<div class="ln ${r.lv}"><span class="t">${esc(r.when)}</span>` +
+        `<span class="lv ${r.lv}">${r.lv}</span>` +
+        `<span class="msg">${esc(r.msg)}</span></div>`).join('')
     : `<div class="ln info"><span class="msg">Nothing at this level.</span></div>`;
 }
 
@@ -186,9 +172,8 @@ export async function logsView(ctx) {
       pauseBtn?.addEventListener('click', () => setFollow(!follow));
 
       const copyLog = async () => {
-        const text = lines.join('\n');
-        try { await navigator.clipboard.writeText(text); toast('Log copied.'); }
-        catch (e) { toast('This browser will not let the page read the clipboard.', true); }
+        if (await copyText(lines.join('\n'))) toast('Log copied.');
+        else toast('This browser would not copy it — use Download instead.', true);
       };
       const tools = $$('.tool', root);
       (root.querySelector('#copyBtn')

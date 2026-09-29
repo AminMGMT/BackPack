@@ -99,6 +99,21 @@ body.modal #grid{transform:scale(.988)}
 .dlg .ftgrid label{font-size:11px}
 .dlg .ftgrid input[type=text],.dlg .ftgrid .sel{padding:8px 10px;font-size:12px}
 
+/* A dialog with sections holds its size while you move between them.
+ *
+ * Its height used to be whatever the open section happened to need, up to the
+ * cap — so Edit went tall on Connection, short on Carrier and tall again on
+ * Fine-tune, and the footer with Save on it jumped up and down the screen under
+ * the pointer on every tab. The same went for Settings' sections and the Add
+ * wizard's steps. A fixed height, with the section scrolling inside it, is what
+ * a tabbed surface is expected to do. */
+.dlg:has(> .tabs),.dlg:has(> .panes),.dlg.set,.dlg.add{height:min(720px,88vh);max-height:88vh}
+.dlg.set{height:min(760px,88vh)}
+.dlg:has(> .tabs) > .panes,.dlg:has(> .panes) > .panes{flex:1;min-height:0}
+@media (max-width:600px){
+  .dlg:has(> .tabs),.dlg:has(> .panes),.dlg.set,.dlg.add{height:calc(100dvh - 56px);max-height:none}
+}
+
 .dlg .df{border-top:1px solid var(--ln);padding:14px 18px;display:flex;align-items:center;gap:10px}
 .dlg .df .note{flex:1;font-size:11px;color:var(--dim);line-height:1.45}
 .dlg .bt{font:inherit;font-size:12.5px;font-weight:600;padding:10px 17px;border-radius:11px;cursor:pointer;

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -43,6 +44,8 @@ func TestAKharejMadeFromTheSetupLinkCarriesTraffic(t *testing.T) {
 	cert, key := testCertPair(t)
 
 	transports := []string{"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux", "kcp", "quic", "udp"}
+	slots := make(chan struct{}, linkedPairsAtOnce)
+	var wg sync.WaitGroup
 	for _, tr := range transports {
 		presets := []string{PresetBalance, PresetTurbo, PresetAggressive}
 		if tr == "kcp" {
@@ -86,25 +89,39 @@ func TestAKharejMadeFromTheSetupLinkCarriesTraffic(t *testing.T) {
 		for name, variant := range variants {
 			for _, path := range []string{"wizard", "set up from a link", "link apply"} {
 				tr, name, variant, path := tr, name, variant, path
-				t.Run(tr+"/"+name+"/"+path, func(t *testing.T) {
-					t.Parallel()
-					// Hundreds of engines pick free ports at once, and now and
-					// then two pick the same one. That is this test's collision,
-					// not the tunnel's, and it is retried with new ports.
-					for attempt := 1; ; attempt++ {
-						msg, clash := runLinkedPair(t, bin, tr, variant, path, cert, key)
-						if msg == "" {
-							return
+				slots <- struct{}{}
+				wg.Add(1)
+				go func() {
+					defer func() { <-slots; wg.Done() }()
+					t.Run(tr+"/"+name+"/"+path, func(t *testing.T) {
+						// Hundreds of engines pick free ports at once, and now
+						// and then two pick the same one. That is this test's
+						// collision, not the tunnel's, and it is retried with
+						// new ports.
+						for attempt := 1; ; attempt++ {
+							msg, clash := runLinkedPair(t, bin, tr, variant, path, cert, key)
+							if msg == "" {
+								return
+							}
+							if !clash || attempt == 3 {
+								t.Fatal(msg)
+							}
 						}
-						if !clash || attempt == 3 {
-							t.Fatal(msg)
-						}
-					}
-				})
+					})
+				}()
 			}
 		}
 	}
+	wg.Wait()
 }
+
+// linkedPairsAtOnce is how many pairs run together. Each one spends almost
+// all of its time asleep in the 25-second soak, so the limit is not the
+// processor: t.Parallel capped them at GOMAXPROCS, which on a four-core CI
+// runner made ~250 cases take 27 minutes and the package hit the 20-minute
+// timeout. A fixed number of goroutines, each running one subtest, makes the
+// wall time the same on any machine (~5 minutes).
+const linkedPairsAtOnce = 24
 
 // isMuxTransport reports whether a transport carries smux, whose settings the
 // Fine-Tune drawer offers.

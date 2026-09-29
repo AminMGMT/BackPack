@@ -1,11 +1,13 @@
 package webui
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -239,6 +241,20 @@ func (s *statusRecorder) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack hands over the connection, for the terminal's WebSocket. Without it
+// the recorder every request passes through hid the connection underneath, and
+// the upgrade failed with "response does not implement http.Hijacker".
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("the connection cannot be taken over")
+	}
+	if s.status == 0 {
+		s.status = http.StatusSwitchingProtocols
+	}
+	return h.Hijack()
 }
 
 // auditAction pulls the sub-operation out of a request, for the endpoints that

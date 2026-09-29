@@ -137,7 +137,12 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
  * ground, then the headline numbers with what each did since the reading
  * before it.
  */
-.dlg .mlegend{display:flex;gap:16px;align-items:center;margin:0 0 10px}
+/* The legend sits straight in the scrolling body — above the first chart, and
+   above the 24-hour one where setSection puts it — so it keeps the same 18px
+   gutter as everything around it. Without it "Down · Up" was pressed against
+   the dialog's left edge while the chart under it was inset. */
+.dlg .mlegend{display:flex;gap:16px;align-items:center;margin:0;padding:6px 18px 8px}
+.dlg .mbody > .mlegend:first-child{padding-top:16px}
 .dlg .mlegend span{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--mu)}
 .dlg .mlegend i{width:10px;height:10px;border-radius:3px;flex:none}
 
@@ -183,6 +188,17 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .dlg .mrow:nth-child(3){animation-delay:.1s}
 @keyframes mrIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){ .dlg .mrow{animation:none} }
+
+.dlg .chip2.x{background:color-mix(in srgb,var(--er) 15%,transparent);color:var(--er)}
+.dlg .chip2.n{background:var(--sunk);color:var(--mu)}
+.dlg .mbody{padding-bottom:18px}
+.dlg .mbody > .dl:first-child{padding-top:14px}
+@media (max-width:560px){
+  .dlg .dr2 .k2{min-width:0}
+  .dlg .dr2{flex-wrap:wrap}
+  .dlg .sec2,.dlg .dl,.dlg .chartbox,.dlg .mlegend,.dlg .mrows{padding-left:14px;padding-right:14px}
+  .dlg .lt,.dlg .ch2{margin-left:14px;margin-right:14px}
+}
 
 /* The times under a chart, as type rather than as part of the drawing. */
 .dlg .mticks{display:flex;justify-content:space-between;margin-top:5px;

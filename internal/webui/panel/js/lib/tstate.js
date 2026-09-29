@@ -17,6 +17,9 @@ const UP = 'online';
 
 export const isUp = t => !!t && t.state === UP;
 
+/* Stopped on purpose — the service is not running — as against offline. */
+export const isStopped = t => !!t && t.state === 'stopped';
+
 /* A tunnel that is online and delivering into nothing.
  *
  * The state is still "online" and that is not a mistake: the tunnel is up, and

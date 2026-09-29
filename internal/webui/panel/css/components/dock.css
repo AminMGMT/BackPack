@@ -43,3 +43,6 @@
     overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .panel .dock button:not(.on) .n{display:none}
 }
+
+/* Five sections now: the one label shown on a phone stays on one line. */
+.panel .dock button span{white-space:nowrap}

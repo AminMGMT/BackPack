@@ -12,6 +12,17 @@ import { openScreen } from '../ui/screen.js';
 import { oops, toast } from '../ui/toast.js';
 
 /* ---- alerts -------------------------------------------------------------- */
+const clock = d => d.toTimeString().slice(0, 5);
+
+/* Today, Yesterday, or the date — the feed is read by day. */
+function dayLabel(d) {
+  const start = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((start(new Date()) - start(d)) / 864e5);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 export function alertsView(ctx) {
   openScreen('monitor', {
     pick: '.dlg.al2',
@@ -19,21 +30,44 @@ export function alertsView(ctx) {
       let data;
       try { data = await api.alerts(); } catch (e) { return oops(e); }
 
+      /* The template's own shapes — .ah2/.ai2 for what is firing, .daysep/.ev2
+         for the feed — because they carry the insets the dialog was designed
+         with. The rows this used to write (.arow/.erow) had two pixels either
+         side, so every line sat pressed against the dialog's edge. */
       const active = root.querySelector('.active');
       const list = data.active || [];
       if (active) {
+        active.classList.toggle('calm', !list.length);
         active.innerHTML = list.length
-          ? list.map(a => `<div class="arow"><span class="adot"></span><span>${esc(a)}</span></div>`).join('')
-          : `<div class="arow quiet"><span>Nothing is firing right now.</span></div>`;
+          ? `<div class="ah2">Firing now · ${list.length}</div>` +
+            list.map(a => `<div class="ai2"><i>!</i><span>${esc(a)}</span></div>`).join('')
+          : `<div class="ai2 ok"><i>✓</i><span>Nothing is firing right now.</span></div>`;
       }
 
+      /* Newest first. The file keeps them oldest first, and drawing it in that
+         order put the last thing that happened at the bottom of a list that
+         opens at the top — the current state was the one line you had to
+         scroll for. */
       const feed = root.querySelector('.evs');
       if (feed) {
-        feed.innerHTML = (data.events || []).map(e =>
-          `<div class="erow"><span class="et">${esc(ago(e.time))}</span>` +
-          `<span class="em">${esc(e.message)}</span></div>`).join('')
-          || `<div class="erow"><span class="em">No events recorded yet.</span></div>`;
+        const evs = (data.events || []).slice().reverse();
+        let day = '';
+        feed.innerHTML = evs.map(e => {
+          const d = new Date(e.time);
+          const label = dayLabel(d);
+          const sep = label !== day ? `<div class="daysep">${esc(label)}</div>` : '';
+          day = label;
+          return sep + `<div class="ev2"><span class="tm" title="${esc(d.toLocaleString())}">` +
+            /* ago() takes unix seconds and the file holds RFC 3339 — handed
+               the string, every line said "NaN d ago". */
+            `${esc(clock(d))}<em>${esc(ago(d.getTime() / 1000))}</em></span>` +
+            `<span class="ms">${esc(e.message)}</span></div>`;
+        }).join('') || `<div class="ev2 none"><span class="ms">No events recorded yet.</span></div>`;
+        const body = root.querySelector('.body4');
+        if (body) body.scrollTop = 0;
       }
+      const note = root.querySelector('.df .note');
+      if (note) note.textContent = 'Kept by the monitor service · newest first.';
       ctx.setTeardown(close);
     },
   }).catch(oops);

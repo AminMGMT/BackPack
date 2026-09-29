@@ -49,6 +49,46 @@ export function delegate(root, event, selector, handler) {
   return () => root.removeEventListener(event, onEvent);
 }
 
+/* Put text on the clipboard, and say whether it got there.
+ *
+ * navigator.clipboard exists only in a secure context — HTTPS, or localhost —
+ * and a panel served over plain HTTP on a bare IP is neither. That is the
+ * default install, so every Copy button there threw and did nothing. The old
+ * execCommand path is deprecated and still works everywhere this does not. */
+export async function copyText(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through to the old way */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.append(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+/* A button that says it copied, for a moment, and then goes back. */
+export function flashCopied(btn, ok = true) {
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.textContent = ok ? 'Copied' : 'Copy failed';
+  btn.classList.toggle('copied', ok);
+  clearTimeout(btn._copyT);
+  btn._copyT = setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.classList.remove('copied');
+  }, 1400);
+}
+
 /* The preview drew every dialog's subtitle with its own server's name and its
  * own version — "ubuntu-4gb-nbg1-2 · v1.7.5" — and a screen that does not
  * overwrite it shows the operator somebody else's machine. `tail` is whatever

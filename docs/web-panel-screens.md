@@ -16,8 +16,9 @@ Three things, and it helps to know which is which before reading the list:
 right now: processor, memory, and what is moving this second. It keeps updating
 while a dialog is open.
 
-**Three sections**, chosen from the dock: **Overview**, **Servers**,
-**Tunnels**. Only these three are pages. Each renders into the same slot, and
+**Five sections**, chosen from the dock: **Overview**, **Connection test**,
+**Tunnels**, **Terminal**, **Manage**. Only these are pages (Servers is out of
+the dock for now, and its address still works). Each renders into the same slot, and
 switching between them is the only navigation that replaces what you are
 looking at.
 
@@ -34,7 +35,7 @@ Addresses in this page are relative to the panel's secret base path, which is
 random per installation: the real URL of the Overview is
 `https://your-server:7777/<base>/#/`.
 
-## The three sections
+## The sections
 
 ### Overview — `#/`
 
@@ -50,7 +51,7 @@ them is a page that gets glanced at and trusted.
 
 ### Servers — `#/servers`
 
-The managed fleet: other machines this panel can build and run tunnels on.
+Out of the dock for now; the address still opens it. The managed fleet: other machines this panel can build and run tunnels on.
 
 Adding one is a form. The panel logs into the server over SSH — which is
 already running and already how that machine is administered — so there is no
@@ -58,6 +59,30 @@ command to carry to the other end and nothing to wait for. See
 [managed servers](managed-servers.md).
 
 *CLI: nothing. There is no Backpack state on a managed server to configure.*
+
+### Connection test — `#/conntest`
+
+The Iran side of the menu's Connection Test. Start it here, copy the one line it
+gives you — `sudo backpack link apply 'backpack://t.…'` — onto the kharej, and
+watch every transport's row fill as its echoes come back, ending in the settings
+the measurement argues for. The test tunnels are removed when it ends.
+
+*CLI: 0 Connection Test → Iran.*
+
+### Terminal — `#/terminal`
+
+A root shell on this server. It opens only from its button, only for a signed-in
+browser (never an API token), and each one opened is written to the audit record
+and the alert feed. The shell stays open while you move between sections.
+
+*CLI: none — it is SSH, in the page.*
+
+### Manage — `#/manage`
+
+Auto Refresh, the Built-in Proxy (with a test that speaks its handshake) and
+File Locations, each as a panel on one page.
+
+*CLI: 3 Manage → Auto Refresh, Built-in Proxy, File Locations.*
 
 ### Tunnels — `#/tunnels`
 
@@ -122,8 +147,8 @@ it.
 
 **شکل پنل سه چیز است.** **نوار بالا** به هیچ صفحه‌ای تعلق ندارد: همین حالای این
 ماشین — پردازنده، حافظه، و آنچه همین ثانیه در حرکت است — و زیر دیالوگ هم به کارش
-ادامه می‌دهد. **سه بخش** که از dock انتخاب می‌شوند: **Overview**، **Servers** و
-**Tunnels**؛ فقط همین سه‌تا صفحه‌اند. **دیالوگ‌ها** بقیهٔ چیزهایند: روی بخشی که در
+ادامه می‌دهد. **پنج بخش** که از dock انتخاب می‌شوند: **Overview**، **Connection test**،
+**Tunnels**، **Terminal** و **Manage**؛ فقط همین‌ها صفحه‌اند (Servers فعلاً از dock بیرون است). **دیالوگ‌ها** بقیهٔ چیزهایند: روی بخشی که در
 آن بودی باز می‌شوند و بستن‌شان دقیقاً به همان‌جا برمی‌گرداند — پس بازکردن Health
 check از Overview، موقع بستن تو را روی Tunnels نمی‌اندازد.
 

@@ -10,7 +10,7 @@
  */
 
 import * as router from '../router.js';
-import { $, el } from '../lib/dom.js';
+import { $, el, copyText, flashCopied } from '../lib/dom.js';
 
 const tplCache = new Map();
 let active = null;
@@ -172,18 +172,13 @@ function wire(root, close) {
 
   /* Copy buttons sat beside the thing they copy in every preview. */
   root.querySelectorAll('button').forEach(b => {
-    if (!/^copy/i.test(b.textContent.trim())) return;
+    if (!/^copy/i.test(b.textContent.trim()) || b.dataset.copyOwn) return;
     b.addEventListener('click', async () => {
       const box = b.closest('div, li, tr') || root;
       const src = box.querySelector('input, code, .mono, .addr, .ad0');
       const text = src ? (src.value ?? src.textContent).trim() : '';
       if (!text) return;
-      try {
-        await navigator.clipboard.writeText(text);
-        const was = b.textContent;
-        b.textContent = 'Copied';
-        setTimeout(() => { b.textContent = was; }, 1400);
-      } catch (e) { /* the browser refused; the value is still on screen */ }
+      flashCopied(b, await copyText(text));
     });
   });
 

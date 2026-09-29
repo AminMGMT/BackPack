@@ -354,6 +354,25 @@ body[data-t="light"]{
 .dlg.al2 .ev2 .ms{color:var(--tx2);line-height:1.55}
 .dlg.al2 .daysep{padding:13px 17px 6px;font-size:10.5px;font-weight:660;letter-spacing:.08em;
   text-transform:uppercase;color:var(--faint)}
+/* Nothing firing is good news, drawn in the same box as bad news so the
+   screen does not change shape between the two. */
+/* A flex item in a column that also holds the scrolling feed, so it would be
+   the one squeezed to nothing on a long list. */
+.dlg.al2 .active{flex:none}
+.dlg.al2 .active.calm{border-color:color-mix(in srgb,var(--ok) 28%,transparent);
+  background:color-mix(in srgb,var(--ok) 7%,transparent)}
+.dlg.al2 .active .ai2.ok i{color:var(--ok)}
+.dlg.al2 .body4{flex:1;min-height:0;margin-top:10px;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:var(--ln2) transparent}
+.dlg.al2 .ev2 .tm{display:flex;flex-direction:column;gap:1px}
+.dlg.al2 .ev2 .tm em{font-style:normal;font-size:10px;color:var(--faint)}
+.dlg.al2 .ev2 .ms{word-break:break-word}
+.dlg.al2 .ev2.none{grid-template-columns:1fr;text-align:center;color:var(--dim);padding:26px 17px}
+@media (max-width:560px){
+  .dlg.al2 .ev2{grid-template-columns:64px 1fr;gap:10px;padding:9px 14px}
+  .dlg.al2 .active{margin:12px 14px 0}
+  .dlg.al2 .daysep{padding:13px 14px 6px}
+}
 .dlg.hc2{width:min(720px,100%);max-height:88vh}
 .dlg.hc2 .grpH{border-top:1px solid var(--ln)}
 .dlg.hc2 .grpH:first-child{border-top:0}
