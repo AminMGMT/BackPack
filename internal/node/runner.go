@@ -163,8 +163,7 @@ func (r *SSHRunner) exec(ctx context.Context, name string, t SSHTarget, req Requ
 		}
 	}
 
-	cmd := quote(app.BinPath) + " node exec " + quote(b64(raw))
-	stdout, err := runOver(c, cmd, nil)
+	stdout, err := execRequest(c, raw)
 	if err != nil {
 		// A connection that has gone stale looks exactly like a server that has
 		// gone away, so the connection is dropped and the call tried once more
@@ -174,7 +173,7 @@ func (r *SSHRunner) exec(ctx context.Context, name string, t SSHTarget, req Requ
 		if derr != nil {
 			return Response{}, err
 		}
-		stdout, err = runOver(c, cmd, nil)
+		stdout, err = execRequest(c, raw)
 		if err != nil {
 			return Response{}, backpackMissing(err)
 		}
@@ -413,4 +412,20 @@ func upgradeCommand(url, bin string) string {
 		" && " + quote(bin) + " --restart-all 2>&1" +
 		" && { systemctl try-restart " + app.MonitorService + " " + app.ProxyService + " " + app.WebUIService +
 		" >/dev/null 2>&1; true; }"
+}
+
+// execRequest runs one request on a managed server, handing it over on stdin.
+//
+// On the command line it was readable by every user of that machine for as
+// long as the command ran, and a request that sets up a tunnel carries the
+// tunnel's token. A server too old to read stdin says its argument is not
+// base64; it gets the request the old way, as the argument, which is no worse
+// than it always was — and upgrading it ends that.
+func execRequest(c *ssh.Client, raw []byte) ([]byte, error) {
+	bin := quote(app.BinPath)
+	out, err := runOver(c, bin+" node exec -", []byte(b64(raw)+"\n"))
+	if err != nil && strings.Contains(err.Error(), "not valid base64") {
+		return runOver(c, bin+" node exec "+quote(b64(raw)), nil)
+	}
+	return out, err
 }

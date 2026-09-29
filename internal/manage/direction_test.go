@@ -12,9 +12,9 @@ import (
 // a reverse tunnel with different key names.
 func TestDirectMeansIranDialsOut(t *testing.T) {
 	iran := directSpec{Side: sideIran, Transport: "tcp", Addr: "203.0.113.9:8443",
-		Token: "t", Ports: []string{"443"}}.render()
+		Token: "t", Ports: []string{"443"}}.Render()
 	kharej := directSpec{Side: sideKharej, Transport: "tcp", Addr: "0.0.0.0:8443",
-		Token: "t"}.render()
+		Token: "t"}.Render()
 
 	// Iran is given the kharej server's real address to reach out to.
 	if !strings.Contains(iran, `addr         = "203.0.113.9:8443"`) {
@@ -32,10 +32,10 @@ func TestDirectMeansIranDialsOut(t *testing.T) {
 	// Layer 3 says the same thing in its own words.
 	l3iran := l3Spec{Side: sideIran, Carrier: "pck", Encap: "gre",
 		Addr: "203.0.113.9:9000", Token: "t", Iface: "bp0",
-		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371}.render()
+		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371}.Render()
 	l3kharej := l3Spec{Side: sideKharej, Carrier: "pck", Encap: "gre",
 		Addr: "0.0.0.0:9000", Token: "t", Iface: "bp0",
-		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1371}.render()
+		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1371}.Render()
 
 	if !strings.Contains(l3iran, `mode         = "dial"`) {
 		t.Fatalf("the Iran side of a layer-3 tunnel does not dial:\n%s", l3iran)

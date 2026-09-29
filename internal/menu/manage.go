@@ -14,19 +14,20 @@ func manageMenu() {
 	for {
 		tui.Clear()
 		idx := tui.ChooseOpt("Manage", []tui.Option{
-			{Title: "Manage Tunnels", Desc: "edit ports & transport, start/stop, live log, delete"},
-			{Title: "Set up from a link", Desc: "paste the link from the other server — nothing retyped"},
+			{Title: "Manage Tunnels", Desc: "edit, start/stop, log, delete"},
+			{Title: "Set Up From A Link", Desc: "paste the other server's link"},
 			{Title: "Status", Desc: "live tunnel table"},
-			{Title: "Health Check", Desc: "find problems and get a fix for each one"},
-			{Title: "Link Test", Desc: "measure the link and get a transport recommendation"},
-			{Title: "Exit Health", Desc: "score & rank every server address, pin the healthiest (multi-exit failover)"},
-			{Title: "IP Spoofing Tester", Desc: "find which forged source IPs cross the firewall (for a direct tunnel on the spoof carrier)"},
-			{Title: "Tunnel Metrics", Desc: "traffic, packet loss and error correction per tunnel"},
-			{Title: "Restart ALL", Desc: "restart every tunnel at once"},
-			{Title: "Auto Refresh", Desc: "restart all tunnels every N hours — " + refreshLabel()},
-			{Title: "Built-in Proxy", Desc: "be your own SOCKS5/HTTP backend — " + proxyLabel()},
-			{Title: "File Locations", Desc: "where every config, service and backup lives"},
+			{Title: "Health Check", Desc: "problems and fixes"},
+			{Title: "Link Test", Desc: "latency, loss, a transport for it"},
+			{Title: "Exit Health", Desc: "rank the Iran addresses"},
+			{Title: "IP Spoofing Tester", Desc: "which forged sources pass"},
+			{Title: "Tunnel Metrics", Desc: "traffic, loss, FEC"},
+			{Title: "Restart All", Desc: "every tunnel at once"},
+			{Title: "Auto Refresh", Desc: "restart all every N hours — " + refreshLabel()},
+			{Title: "Built-in Proxy", Desc: "SOCKS5/HTTP backend — " + proxyLabel()},
+			{Title: "File Locations", Desc: "configs, services, backups"},
 		})
+
 		switch idx {
 		case 0:
 			manage.ManageTunnels()
@@ -46,7 +47,7 @@ func manageMenu() {
 			manage.TunnelMetrics()
 		case 8:
 			ok, failed := manage.RestartAll()
-			tui.Success(fmt.Sprintf("Restarted %d tunnels (%d failed).", ok, failed))
+			tui.Success(fmt.Sprintf("Restarted %d Tunnels (%d Failed).", ok, failed))
 			tui.PressEnter()
 		case 9:
 			autoRefreshMenu()

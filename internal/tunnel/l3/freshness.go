@@ -122,8 +122,13 @@ type freshJudge struct {
 }
 
 // stale decides an authenticated stamp that admit refused as not newer than
-// the last one. It is taken, and becomes the new last, when this end has no
-// session left (idle) and such stamps have been refused for clockStepGrace.
+// the last one. It is taken when this end has no session left (idle) and such
+// stamps have been refused for clockStepGrace — taken provisionally: the stamp
+// becomes the new last only when the session it opened is confirmed by a data
+// packet (adopt, from promote). A recorded handshake is answered like any
+// other, but it can never be confirmed — the keys need the dialler's
+// ephemeral, which a replay does not carry — so it cannot walk the remembered
+// stamp backwards for an older recording to use next.
 //
 // That is a dialler whose wall clock went back — NTP correcting a clock that
 // ran fast — and which then restarted, so its own memory of the last stamp is
@@ -147,8 +152,22 @@ func (j *freshJudge) stale(fresh uint64, idle bool, now time.Time) bool {
 	if !idle || now.Sub(j.staleSince) < clockStepGrace {
 		return false
 	}
-	j.last, j.required, j.staleSince = fresh, true, time.Time{}
+	// The next one waits out a grace of its own: a replay let through here
+	// cannot be followed at once by another that displaces whatever it
+	// displaced.
+	j.staleSince = now
 	return true
+}
+
+// adopt takes a stamp that stale let through as the new last, once its session
+// has been confirmed: the dialler's clock really did go back. over is the last
+// stamp at the time it was let through; if a newer handshake has been admitted
+// since, that one stands and the old stamp is not taken.
+func (j *freshJudge) adopt(fresh, over uint64) {
+	if j.last != over {
+		return
+	}
+	j.last, j.required, j.staleSince = fresh, true, time.Time{}
 }
 
 // admit decides one handshake and records it when it is admitted. fresh is zero

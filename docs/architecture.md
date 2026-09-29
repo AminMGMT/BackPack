@@ -18,7 +18,7 @@ are.
 | `backpack --monitor` | watchdog, Telegram bot, alerts, history — `internal/monitor` |
 | `backpack --proxy` | the built-in SOCKS5/HTTP proxy — `internal/localproxy` |
 | `backpack --restart-all` / `--telegram-report` | one-shot jobs, run from cron |
-| `backpack node exec <base64>` | the one operation a panel runs on a managed server over SSH |
+| `backpack node exec -` | the one operation a panel runs on a managed server over SSH |
 
 Everything except engine mode is management. Engine mode is the product.
 
@@ -56,6 +56,28 @@ channel plus a pool of data connections. Ten transports: `tcp`, `tcpmux`,
 - `internal/server/transport` / `internal/client/transport` — the transports
 - `internal/utils/handlers` — the forwarding itself: buffered relay, and kernel
   `splice` behind a flag
+
+#### Inside a reverse transport
+
+Each transport is the part that differs — how its tunnel connections are
+accepted or dialled, and how a user's connection rides one. What every one of
+them has to get the same is shared, on each side:
+
+| Module | Side | What it owns |
+|---|---|---|
+| `lifecycle.go` | both | the **generation**: one control channel and everything serving it, on one context; ending it and starting the next, one restart at a time |
+| `forward.go` (`portForwarder`) | server | the forwarded ports: bind, admit under the limits, queue, release what is still queued when the generation ends |
+| `controlloop.go` (`controlLoop`) | both | the control channel's loop: heartbeat, requests for pool connections, the goodbye, bound to the channel its generation started with |
+| `internal/controlwire` | both | how a signal travels — one byte on a stream, one binary message on a websocket — and the write bound both ends share |
+| `pairing.go`, `pairloop.go` | server | matching a queued user with a tunnel connection |
+| `poolmaintain.go` | client | sizing the pool of tunnel connections |
+
+A transport supplies adapters to these — its socket options, what a queued user
+asks for, how long its goodbye needs to leave — and nothing else. A fix to one
+of them is a fix to all seven transports; the reason for the split, and what it
+replaced, is [ADR 0001](adr/0001-reverse-transport-generations.md). A generation
+outlives the kharej it serves: a re-dialing kharej is seated in place and no
+port is re-bound — [ADR 0005](adr/0005-a-generation-outlives-its-clients.md).
 
 ### The direct tunnel — `[direct]`
 
@@ -104,8 +126,8 @@ miss looked healthy in the socket table.
 
 | Package | Responsibility |
 |---|---|
-| `internal/manage` | the real work: wizards, edit, backup, restore, update, migrate, diagnose, presets. 27,302 lines, and the seam the panel and the CLI both call |
-| `internal/menu` | the interactive TUI. One 1,400-line file with no tests and no non-interactive entry point, which is why nothing can drive it |
+| `internal/manage` | the real work, and the seam the panel and the CLI both call: wizards, editing, the panel's API, update, migration (12,600 lines). Layered below it: `manage/tunnelspec` (a tunnel's configuration: render, load, apply with revert, presets, history), `manage/health` (tunnel health, watchdog, Health Check), `manage/host` (this machine's addresses, ports, certificates), `manage/backup`, and `manage/core` + `manage/spec` at the bottom (tunnel listing, systemd, the transport and address vocabulary). Each re-exports through `internal/manage`, so callers see one package |
+| `internal/menu` | the interactive TUI, over `internal/tui`; its screens are tested through a scripted input |
 | `internal/webui` | the panel: a Go mux plus a vanilla-JS SPA under `panel/`, served beneath a random secret base path. Also currently owns the fleet |
 | `internal/telegram` | bot, alerts, scheduled reports. Has a read-only admin tier |
 | `internal/node` | the fleet: JSON over the managed server's own SSH, with a closed list of operations |
@@ -117,7 +139,7 @@ functions, which is why a setting can be changed wherever it can be chosen.
 ### The fleet
 
 The panel dials **out** over the managed server's own SSH. The far side needs no
-agent, no daemon and no state — `backpack node exec <base64>` performs one
+agent, no daemon and no state — `backpack node exec -` performs one
 operation from a closed list and prints the answer. The list is the security
 boundary: there is no operation that runs a command, reads a path or installs a
 binary.
@@ -159,12 +181,15 @@ stores. `internal/sysstat`, `internal/geo`, `internal/optimize`,
 
 ## Where to start reading
 
-- **A tunnel does not come up** → `cmd/cmd.go`, then the transport under
+- **A tunnel does not come up** → `backpack check -c <file>` first (the engine's
+  own load-time checks), then `cmd/cmd.go`, then the transport under
   `internal/server/transport`
+- **A tunnel drops or restarts** → `lifecycle.go` and `controlloop.go` on each
+  side, before any one transport
 - **Something about the panel** → `internal/webui/server.go` for the routes,
   `panel/js/api.js` for every call the page makes
 - **Something about setup or editing** → `internal/manage`
-- **Layer-3** → `internal/tunnel/l3/doc.go`, then `session.go` and `tunnel.go`
+- **Layer-3** → `internal/tunnel/l3/doc.go`, then `session.go` and `tunnel*.go` (state, pumps, receive, handshake)
 
 The package comments carry the reasoning — what was tried, what it cost, why the
 obvious alternative is wrong. They are the best documentation in the project and
@@ -183,7 +208,7 @@ they are worth reading before changing the code they sit on.
 منوی مدیریت است؛ `backpack -c <file>` **حالت موتور** است یعنی یک تونل از یک
 کانفیگ؛ `--webui` پنل وب؛ `--monitor` نگهبان و ربات تلگرام و هشدارها و تاریخچه؛
 `--proxy` پراکسی داخلی SOCKS5/HTTP؛ `--restart-all` و `--telegram-report` کارهای
-یک‌باره‌ای که از cron اجرا می‌شوند؛ و `backpack node exec <base64>` تنها عملیاتی
+یک‌باره‌ای که از cron اجرا می‌شوند؛ و `backpack node exec -` تنها عملیاتی
 که پنل روی یک سرور مدیریت‌شده از طریق SSH اجرا می‌کند. **هر چیزی جز حالت موتور،
 مدیریت است. حالت موتور، خودِ محصول است.** هر تونل یک سرویس systemd جداگانه و یک
 پروسهٔ جداگانه دارد.
@@ -203,7 +228,13 @@ heap) — و هر پروسهٔ دیگری همان فایل را می‌خوان
 تونلی که به آن تعلق دارد زنده می‌ماند، و هر خرابی‌ای که نگهبان قبلاً از دست
 می‌داد در جدول سوکت‌ها سالم به‌نظر می‌رسید.
 
-**از کجا شروع به خواندن کنی:** تونل بالا نمی‌آید → `cmd/cmd.go` و بعد ترنسپورت
+**داخل یک ترنسپورتِ معکوس** فقط چیزی است که واقعاً فرق می‌کند. بقیه — چرخهٔ
+**نسل‌ها** (`lifecycle.go`: یک کانال کنترل و هر چیزی که به آن خدمت می‌کند، روی یک
+context)، پورت‌های فوروارد (`forward.go`)، حلقهٔ کانال کنترل (`controlloop.go`) و
+شکلِ سیگنال‌ها روی سیم (`internal/controlwire`) — یک بار نوشته شده و هر هفت
+ترنسپورت از همان استفاده می‌کنند. دلیلش در [ADR 0001](adr/0001-reverse-transport-generations.md) است.
+
+**از کجا شروع به خواندن کنی:** تونل بالا نمی‌آید → اول `backpack check -c <file>`، بعد `cmd/cmd.go` و بعد ترنسپورت
 زیر `internal/server/transport`. چیزی دربارهٔ پنل → `internal/webui/server.go`
 برای مسیرها و `panel/js/api.js` برای هر فراخوانی صفحه. چیزی دربارهٔ راه‌اندازی یا
 ویرایش → `internal/manage`. لایه‌۳ → `internal/tunnel/l3/doc.go` و بعد
@@ -220,4 +251,4 @@ heap) — و هر پروسهٔ دیگری همان فایل را می‌خوان
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

@@ -23,7 +23,7 @@ func ManageTunnels() {
 	for {
 		tunnels := List()
 		if len(tunnels) == 0 {
-			tui.Warn("No tunnels configured yet.")
+			tui.Warn("No Tunnels Yet.")
 			tui.PressEnter()
 			return
 		}
@@ -37,7 +37,7 @@ func ManageTunnels() {
 			}
 		}
 
-		idx := tui.ChooseOpt("Manage Tunnels — select a tunnel:", opts)
+		idx := tui.ChooseOpt("Select A Tunnel", opts)
 		if idx < 0 {
 			return
 		}
@@ -70,20 +70,17 @@ func manageOne(t Tunnel) {
 		// first, because the failure it causes is silent. Both ends report
 		// themselves as running and no traffic passes.
 		if on, ok := NodeFor(t.Name); ok {
-			tui.Warn(fmt.Sprintf(
-				"The other end of this tunnel is on %q, a server managed from the web panel.\n"+
-					"  Changes made here are not carried across, and the two ends must agree.\n"+
-					"  Edit it from the panel instead, so both ends move together.\n", on))
+			tui.Warn(fmt.Sprintf("Other End Is On %q — Edit From The Web Panel So Both Ends Match.\n", on))
 		}
 
-		idx := tui.ChooseOpt("Choose an action:", []tui.Option{
-			{Title: "Edit", Desc: "change tunnel port & forwarded ports"},
-			{Title: "Start", Desc: "start the tunnel service"},
-			{Title: "Stop", Desc: "stop the tunnel service"},
-			{Title: "Restart", Desc: "restart the tunnel service"},
-			{Title: "Live Log", Desc: "stream the journal — Ctrl+C to return"},
-			{Title: "Setup Link", Desc: "one string that builds the other end"},
-			{Title: "Delete", Desc: "remove the tunnel permanently"},
+		idx := tui.ChooseOpt("Action", []tui.Option{
+			{Title: "Edit", Desc: "ports, transport, settings"},
+			{Title: "Start", Desc: ""},
+			{Title: "Stop", Desc: ""},
+			{Title: "Restart", Desc: ""},
+			{Title: "Live Log", Desc: "Ctrl+C to return"},
+			{Title: "Setup Link", Desc: "builds the other end"},
+			{Title: "Delete", Desc: "remove permanently"},
 		})
 		switch idx {
 		case 0:
@@ -96,22 +93,22 @@ func manageOne(t Tunnel) {
 			}
 			editPortsMenu(t.Name)
 		case 1:
-			report(StartService(t.Service), "started")
+			report(StartService(t.Service), "Started")
 		case 2:
-			report(StopService(t.Service), "stopped")
+			report(StopService(t.Service), "Stopped")
 		case 3:
-			report(RestartService(t.Service), "restarted")
+			report(RestartService(t.Service), "Restarted")
 		case 4:
-			tui.Info("Streaming logs — press Ctrl+C to return.\n")
+			tui.Info("Live Log — Ctrl+C To Return.\n")
 			FollowLog(t.Service)
 		case 5:
 			showShareLink(t.Name)
 		case 6:
-			if tui.Confirm(fmt.Sprintf("Delete tunnel %q permanently", t.Name), false) {
+			if tui.Confirm(fmt.Sprintf("Delete %q Permanently", t.Name), false) {
 				if err := Delete(t.Name); err != nil {
 					tui.Error("Delete failed: " + err.Error())
 				} else {
-					tui.Success("Tunnel deleted.")
+					tui.Success("Deleted.")
 				}
 				tui.PressEnter()
 				return // tunnel no longer exists
@@ -124,7 +121,7 @@ func manageOne(t Tunnel) {
 
 func report(err error, action string) {
 	if err != nil {
-		tui.Error(fmt.Sprintf("Action failed: %v", err))
+		tui.Error(fmt.Sprintf("Failed: %v", err))
 	} else {
 		tui.Success("Tunnel " + action + ".")
 	}
@@ -138,7 +135,7 @@ func editPortsMenu(name string) {
 	for {
 		spec, err := LoadSpec(name)
 		if err != nil {
-			tui.Error("Cannot read tunnel config: " + err.Error())
+			tui.Error("Cannot read the config: " + err.Error())
 			tui.PressEnter()
 			return
 		}
@@ -154,22 +151,22 @@ func editPortsMenu(name string) {
 			if h := bindHostOf(spec.BindAddr); h != "" {
 				shown = net.JoinHostPort(h, shown)
 			}
-			tui.Info("Tunnel (control) port : " + shown)
-			tui.Info("Forwarded ports       : " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
-			tui.Info("Transport             : " + transportLabel(spec.Transport))
-			tui.Info("Performance preset    : " + presetLabel(spec.Preset))
+			tui.Info("Tunnel Port     : " + shown)
+			tui.Info("Forwarded Ports : " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
+			tui.Info("Transport       : " + transportLabel(spec.Transport))
+			tui.Info("Preset          : " + presetLabel(spec.Preset))
 			if supportsProxyProtocol(spec.Transport) {
-				tui.Info("Real client IP        : " + onOff(spec.ProxyProtocol))
+				tui.Info("Real Client IP  : " + onOff(spec.ProxyProtocol))
 			}
-			tui.Info("Limits                : " + limitsSummary(spec))
+			tui.Info("Limits          : " + limitsSummary(spec))
 			if !isDatagram(spec.Transport) {
-				tui.Info("TCP MSS clamp         : " + mssLabel(spec.MSS))
+				tui.Info("TCP MSS Clamp   : " + mssLabel(spec.MSS))
 			}
 			if spec.Transport == "pck" {
-				tui.Info("TCP packet flags      : " + pckFlagSummary(spec.PckFlags))
+				tui.Info("TCP Flags       : " + pckFlagSummary(spec.PckFlags))
 			}
 			if needsTLS(spec.Transport) {
-				tui.Info("Certificate           : " + certSummary(spec))
+				tui.Info("Certificate     : " + certSummary(spec))
 			}
 			fmt.Println()
 			// Options and handlers are built side by side rather than dispatched
@@ -178,12 +175,12 @@ func editPortsMenu(name string) {
 			// every time one is added — which is how an entry ends up running the
 			// action below it.
 			opts := []tui.Option{
-				{Title: "Change tunnel port", Desc: "the control-channel port clients dial"},
-				{Title: "Change forwarded ports", Desc: "the ports exposed to users"},
-				{Title: "Change transport", Desc: "switch carrier — keeps the token and ports"},
-				{Title: "Change performance preset", Desc: "Balance, Turbo or Aggressive"},
-				{Title: "Real client IP", Desc: "send the user's real IP so panels can limit devices"},
-				{Title: "Limits", Desc: "cap connections and bandwidth for this tunnel"},
+				{Title: "Tunnel Port", Desc: "the port the kharej dials"},
+				{Title: "Forwarded Ports", Desc: "the ports users connect to"},
+				{Title: "Transport", Desc: "keeps the token and ports"},
+				{Title: "Preset", Desc: "Balance, Turbo or Aggressive"},
+				{Title: "Real Client IP", Desc: "PROXY protocol, for device limits"},
+				{Title: "Limits", Desc: "connections and bandwidth"},
 			}
 			actions := []func(){
 				func() { changeTunnelPort(name, spec) },
@@ -195,69 +192,69 @@ func editPortsMenu(name string) {
 			}
 			opts = append(opts, tui.Option{
 				Title: "Forward UDP: " + onOff(spec.AcceptUDP),
-				Desc:  "carry UDP on the exposed ports too — off unless you need it",
+				Desc:  "off unless you need UDP",
 			})
 			actions = append(actions, func() { toggleAcceptUDP(name, spec) })
 			opts = append(opts, tui.Option{
-				Title: "Transport fallback chain",
-				Desc:  "carriers to try when this one stops getting through",
+				Title: "Fallback Transports",
+				Desc:  "tried when this one is blocked",
 			})
 			actions = append(actions, func() { changeFallbackTransports(name, spec) })
 			if !isDatagram(spec.Transport) {
 				opts = append(opts, tui.Option{
-					Title: "TCP MSS clamp",
-					Desc:  "cap the segment size when the path cannot carry full-sized packets",
+					Title: "TCP MSS Clamp",
+					Desc:  "for a path that drops full-size packets",
 				})
 				actions = append(actions, func() { editMSS(name, spec) })
 			}
 			if spec.Transport == "pck" {
 				opts = append(opts, tui.Option{
-					Title: "TCP packet flags",
-					Desc:  "what this end's packets say in the flag field",
+					Title: "TCP Flags",
+					Desc:  "this end's packet flags",
 				})
 				actions = append(actions, func() { editPckFlags(name, spec) })
 			}
 			if needsTLS(spec.Transport) {
 				opts = append(opts, tui.Option{
 					Title: "Certificate",
-					Desc:  "self-signed, or a real one from Let's Encrypt (needs a domain)",
+					Desc:  "self-signed or Let's Encrypt",
 				})
 				actions = append(actions, func() { editCertificate(name, spec) })
 			}
 			if len(ConfigHistory(name)) > 0 {
 				opts = append(opts, tui.Option{
-					Title: "Undo a change",
-					Desc:  "put back the configuration from before an earlier edit",
+					Title: "Undo A Change",
+					Desc:  "restore an earlier config",
 				})
 				actions = append(actions, func() { editConfigHistory(name) })
 			}
-			idx := tui.ChooseOpt("Choose:", opts)
+			idx := tui.ChooseOpt("Edit", opts)
 			if idx < 0 || idx >= len(actions) {
 				return
 			}
 			actions[idx]()
 		} else {
-			tui.Info("Server address : " + spec.RemoteAddr)
+			tui.Info("Iran Address   : " + spec.RemoteAddr)
 			tui.Info("Transport      : " + transportLabel(spec.Transport))
-			tui.Info("Backup servers : " + fallbackSummary(spec.FallbackAddrs))
-			tui.Info("Carrier chain  : " + chainSummary(spec.Transport, spec.FallbackTransports))
+			tui.Info("Backups        : " + fallbackSummary(spec.FallbackAddrs))
+			tui.Info("Fallbacks      : " + chainSummary(spec.Transport, spec.FallbackTransports))
 			tui.Info("Preset         : " + presetLabel(spec.Preset))
-			tui.Info("Load balancing : " + onOff(spec.LoadBalance))
+			tui.Info("Load Balancing : " + onOff(spec.LoadBalance))
 			if !isDatagram(spec.Transport) {
-				tui.Info("TCP MSS clamp  : " + mssLabel(spec.MSS))
+				tui.Info("TCP MSS Clamp  : " + mssLabel(spec.MSS))
 			}
 			if spec.Transport == "pck" {
-				tui.Info("Packet flags   : " + pckFlagSummary(spec.PckFlags))
+				tui.Info("TCP Flags      : " + pckFlagSummary(spec.PckFlags))
 			}
 			fmt.Println()
 			opts := []tui.Option{
-				{Title: "Change server tunnel port", Desc: "must match the server side"},
-				{Title: "Change server address", Desc: "IP or domain of the Iran server"},
-				{Title: "Change transport", Desc: "switch carrier — keeps the token"},
-				{Title: "Backup server addresses", Desc: "auto-failover when the main IP gets blocked"},
-				{Title: "Transport fallback chain", Desc: "auto-failover when the carrier gets blocked"},
-				{Title: "Change performance preset", Desc: "Balance, Turbo or Aggressive"},
-				{Title: "Load balancing", Desc: "use all backup addresses at once, not just as spares"},
+				{Title: "Tunnel Port", Desc: "must match the Iran side"},
+				{Title: "Iran Address", Desc: "IP or domain"},
+				{Title: "Transport", Desc: "keeps the token"},
+				{Title: "Backup Addresses", Desc: "failover when the main IP is blocked"},
+				{Title: "Fallback Transports", Desc: "failover when the transport is blocked"},
+				{Title: "Preset", Desc: "Balance, Turbo or Aggressive"},
+				{Title: "Load Balancing", Desc: "use all addresses at once"},
 			}
 			actions := []func(){
 				func() { changeTunnelPort(name, spec) },
@@ -270,26 +267,26 @@ func editPortsMenu(name string) {
 			}
 			if !isDatagram(spec.Transport) {
 				opts = append(opts, tui.Option{
-					Title: "TCP MSS clamp",
-					Desc:  "cap the segment size when the path cannot carry full-sized packets",
+					Title: "TCP MSS Clamp",
+					Desc:  "for a path that drops full-size packets",
 				})
 				actions = append(actions, func() { editMSS(name, spec) })
 			}
 			if spec.Transport == "pck" {
 				opts = append(opts, tui.Option{
-					Title: "TCP packet flags",
-					Desc:  "what this end's packets say in the flag field",
+					Title: "TCP Flags",
+					Desc:  "this end's packet flags",
 				})
 				actions = append(actions, func() { editPckFlags(name, spec) })
 			}
 			if len(ConfigHistory(name)) > 0 {
 				opts = append(opts, tui.Option{
-					Title: "Undo a change",
-					Desc:  "put back the configuration from before an earlier edit",
+					Title: "Undo A Change",
+					Desc:  "restore an earlier config",
 				})
 				actions = append(actions, func() { editConfigHistory(name) })
 			}
-			idx := tui.ChooseOpt("Choose:", opts)
+			idx := tui.ChooseOpt("Edit", opts)
 			if idx < 0 || idx >= len(actions) {
 				return
 			}
@@ -312,9 +309,9 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 	}
 	fmt.Println()
 	if spec.Role == "server" {
-		tui.Info("A port alone listens on every address; 85.10.11.51:443 pins it to one.")
+		tui.Info("Port Alone = All Addresses; 1.2.3.4:443 = One.")
 	}
-	entered := tui.PromptDefault("New tunnel port", cur)
+	entered := tui.PromptDefault("New Tunnel Port", cur)
 	if entered == cur {
 		return
 	}
@@ -329,8 +326,7 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 		// On a client this field is the port on the SERVER, not something
 		// bound here — so an address in it is almost certainly aimed at the
 		// wrong question.
-		tui.Error("A client dials the server; it binds nothing. Change the server's")
-		tui.Error("address with \"Change server address\" instead.")
+		tui.Error("This side binds nothing — use Iran Address instead.")
 		tui.PressEnter()
 		return
 	}
@@ -340,7 +336,7 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 	// another.
 	if spec.Role == "server" {
 		if bind.HasHost() && !localAddrExists(bind.Host) {
-			tui.Warn(bind.Host + " is not on any interface of this server right now.")
+			tui.Warn(bind.Host + " is not on this server.")
 		}
 		if TunnelPortInUse(spec.Transport, bind.Addr(false)) {
 			tui.Error(fmt.Sprintf("%s is already in use on this machine.", bind.Addr(false)))
@@ -353,9 +349,9 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success(fmt.Sprintf("Tunnel port changed to %s and the tunnel was restarted.", entered))
+	tui.Success(fmt.Sprintf("Tunnel Port: %s — Restarted.", entered))
 	if spec.Role == "server" {
-		tui.Warn("Update the CLIENT side to port " + port + ", or it will not reconnect.")
+		tui.Warn("Set Port " + port + " On The Kharej Too.")
 	}
 	tui.PressEnter()
 }
@@ -364,11 +360,10 @@ func changeTunnelPort(name string, spec TunnelSpec) {
 func changeForwardedPorts(name string, spec TunnelSpec) {
 	fmt.Println()
 	tui.Info("Current: " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
-	tui.Warn("Enter the FULL new list (comma separated, e.g. 443,8080 or 443=1.1.1.1:443).")
-	raw := tui.Prompt("New forwarded ports: ")
+	raw := tui.Prompt("Forwarded Ports (Full List, e.g. 443,8080): ")
 	ports := parsePorts(raw)
 	if len(ports) == 0 {
-		tui.Error("No valid ports entered.")
+		tui.Error("No valid ports.")
 		tui.PressEnter()
 		return
 	}
@@ -377,7 +372,7 @@ func changeForwardedPorts(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Forwarded ports updated and the tunnel was restarted.")
+	tui.Success("Forwarded Ports Saved — Restarted.")
 	tui.PressEnter()
 }
 
@@ -393,8 +388,7 @@ func fallbackSummary(addrs []string) string {
 // and ports. Both ends must match, so the user is reminded to switch the peer.
 func changeTunnelTransport(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Info("Current transport: " + transportLabel(spec.Transport))
-	tui.Warn("The other side must use the SAME transport, so switch it there too.")
+	tui.Info("Current: " + transportLabel(spec.Transport) + " (The Other Side Must Match)")
 	fmt.Println()
 
 	newTransport := chooseTransport()
@@ -402,14 +396,13 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 		return
 	}
 	if newTransport == spec.Transport {
-		tui.Info("That is already the current transport.")
+		tui.Info("Already In Use.")
 		tui.PressEnter()
 		return
 	}
 	if spec.Role == "server" && needsTLS(newTransport) {
-		tui.Info("A self-signed TLS certificate will be generated automatically if needed.")
 	}
-	if !tui.Confirm(fmt.Sprintf("Switch %q to %s now", name, transportLabel(newTransport)), true) {
+	if !tui.Confirm(fmt.Sprintf("Switch To %s", transportLabel(newTransport)), true) {
 		return
 	}
 
@@ -418,8 +411,8 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Transport switched to " + transportLabel(newTransport) + " and the tunnel restarted.")
-	tui.Warn("Now switch the OTHER side to the same transport, or it cannot reconnect.")
+	tui.Success("Transport: " + transportLabel(newTransport) + " — Restarted.")
+	tui.Warn("Switch The Other Side Too.")
 	tui.PressEnter()
 }
 
@@ -434,18 +427,10 @@ func onOff(v bool) string {
 // toggleLoadBalance switches balancing across the backup addresses on or off.
 func toggleLoadBalance(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Load balancing")
-	tui.Warn("Off, the backup addresses are spares: the tunnel uses one at a time")
-	tui.Warn("and only moves when that one stops answering.")
-	tui.Warn("On, the tunnel's connections are spread over all of them at once, so")
-	tui.Warn("one throttled route only slows its own share of the traffic.")
-	fmt.Println()
-	tui.Error("Every address must reach the SAME server — a second IP of it, another")
-	tui.Error("of its ports, or a CDN edge in front of it. Addresses that lead to a")
-	tui.Error("different machine will not work: only one of them has your tunnel.")
-	fmt.Println()
-	tui.Info("Backup addresses : " + fallbackSummary(spec.FallbackAddrs))
-	tui.Info("Currently        : " + onOff(spec.LoadBalance))
+	tui.Title("Load Balancing")
+	tui.Warn("Spreads connections over all addresses. Every address must reach the same server.")
+	tui.Info("Backups : " + fallbackSummary(spec.FallbackAddrs))
+	tui.Info("Now     : " + onOff(spec.LoadBalance))
 	fmt.Println()
 
 	want := !spec.LoadBalance
@@ -453,7 +438,7 @@ func toggleLoadBalance(name string, spec TunnelSpec) {
 	if !want {
 		verb = "Disable"
 	}
-	if !tui.Confirm(verb+" load balancing for "+name, false) {
+	if !tui.Confirm(verb+" Load Balancing", false) {
 		return
 	}
 	if err := SetLoadBalance(name, want); err != nil {
@@ -461,7 +446,7 @@ func toggleLoadBalance(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Load balancing is now " + onOff(want) + " and the tunnel restarted.")
+	tui.Success("Load Balancing: " + onOff(want) + " — Restarted.")
 	tui.PressEnter()
 }
 
@@ -482,25 +467,20 @@ func limitsSummary(spec TunnelSpec) string {
 // editLimits sets the per-tunnel connection and bandwidth caps.
 func editLimits(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Limits for " + name)
-	fmt.Println()
-	tui.Warn("Caps for this tunnel as a whole — useful when several services or")
-	tui.Warn("customers share one link and you do not want any of them able to")
-	tui.Warn("take all of it.")
-	tui.Warn("Enter 0 for no limit. Both are 0 by default.")
+	tui.Title("Limits — " + name)
 	fmt.Println()
 
-	maxConns := tui.PromptInt("Maximum simultaneous connections", spec.MaxConnections)
-	bandwidth := tui.PromptInt("Bandwidth limit in Mbit/s", spec.BandwidthMbps)
+	maxConns := tui.PromptInt("Max Connections (0 = No Limit)", spec.MaxConnections)
+	bandwidth := tui.PromptInt("Bandwidth Mbit/s (0 = No Limit)", spec.BandwidthMbps)
 
 	if maxConns == spec.MaxConnections && bandwidth == spec.BandwidthMbps {
-		tui.Info("Nothing changed.")
+		tui.Info("No Change.")
 		tui.PressEnter()
 		return
 	}
 	if maxConns > 0 && maxConns < 10 {
-		tui.Warn(fmt.Sprintf("%d is a very low connection cap — a single browser can open more than that.", maxConns))
-		if !tui.Confirm("Use it anyway", false) {
+		tui.Warn(fmt.Sprintf("%d is very low — one browser opens more.", maxConns))
+		if !tui.Confirm("Use It Anyway", false) {
 			return
 		}
 	}
@@ -509,7 +489,7 @@ func editLimits(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Limits updated and the tunnel restarted.")
+	tui.Success("Limits Saved — Restarted.")
 	tui.PressEnter()
 }
 
@@ -517,16 +497,8 @@ func editLimits(name string, spec TunnelSpec) {
 // sends.
 func editPckFlags(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("TCP packet flags for " + name)
-	fmt.Println()
-	tui.Warn("What the flag field of this tunnel's packets says. The default is")
-	tui.Warn("push+ack, which is what a connection carrying data sends, and it is")
-	tui.Warn("the right answer unless the path is known to match on the pattern.")
-	fmt.Println()
-	tui.Info("Each end decides only its OWN packets, so this need not match the")
-	tui.Info("other side and changing it here cannot strand the peer.")
-	fmt.Println()
-	tui.Info("Currently : " + pckFlagSummary(spec.PckFlags))
+	tui.Title("TCP Flags — " + name)
+	tui.Info("Now: " + pckFlagSummary(spec.PckFlags) + " (This End Only; Default push+ack)")
 	fmt.Println()
 
 	opts := network.SuggestedTCPFlagCycles()
@@ -534,7 +506,7 @@ func editPckFlags(name string, spec TunnelSpec) {
 	for i, o := range opts {
 		menu[i] = tui.Option{Title: o.Value, Desc: o.Desc}
 	}
-	i := tui.ChooseOpt("Flag pattern:", menu)
+	i := tui.ChooseOpt("Flag Pattern", menu)
 	if i < 0 {
 		return
 	}
@@ -547,7 +519,7 @@ func editPckFlags(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Flags set to " + pckFlagSummary(flags) + " and the tunnel restarted.")
+	tui.Success("Flags: " + pckFlagSummary(flags) + " — Restarted.")
 	tui.PressEnter()
 }
 
@@ -556,18 +528,9 @@ func editPckFlags(name string, spec TunnelSpec) {
 // created then carries an explicit accept_udp = true that only an edit clears.
 func toggleAcceptUDP(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Forward UDP for " + name)
-	fmt.Println()
-	tui.Warn("Off, the exposed ports carry TCP only — which is what a web or")
-	tui.Warn("proxy tunnel wants. On, they also carry UDP.")
-	fmt.Println()
-	tui.Error("Turn it on only if you actually need UDP — a VPN, a game, an Xray or")
-	tui.Error("Shadowsocks inbound. A browser's QUIC is UDP on 443, so on a ws/wss")
-	tui.Error("or mux tunnel leaving this on funnels every QUIC flow through the")
-	tui.Error("connection pool and starves the TCP forwards — a site half-loads and")
-	tui.Error("a restart fixes it for a while. That is what this being off prevents.")
-	fmt.Println()
-	tui.Info("Currently : " + onOff(spec.AcceptUDP))
+	tui.Title("Forward UDP — " + name)
+	tui.Warn("Only for UDP services (VPN, games); on ws/mux it can starve TCP.")
+	tui.Info("Now: " + onOff(spec.AcceptUDP))
 	fmt.Println()
 
 	want := !spec.AcceptUDP
@@ -575,7 +538,7 @@ func toggleAcceptUDP(name string, spec TunnelSpec) {
 	if !want {
 		verb = "Disable"
 	}
-	if !tui.Confirm(verb+" UDP forwarding for "+name, false) {
+	if !tui.Confirm(verb+" UDP Forwarding", false) {
 		return
 	}
 	if err := SetAcceptUDP(name, want); err != nil {
@@ -583,7 +546,7 @@ func toggleAcceptUDP(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("UDP forwarding is now " + onOff(want) + " and the tunnel restarted.")
+	tui.Success("UDP Forwarding: " + onOff(want) + " — Restarted.")
 	tui.PressEnter()
 }
 
@@ -591,26 +554,13 @@ func toggleAcceptUDP(name string, spec TunnelSpec) {
 // Diagnose asks for, and the reason this entry exists at all.
 func editMSS(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("TCP MSS clamp for " + name)
-	fmt.Println()
-	tui.Warn("The largest TCP payload this tunnel will put in a single packet.")
-	tui.Warn("Leave it at 0 unless something has told you otherwise — the kernel")
-	tui.Warn("normally works this out for itself and gets it right.")
-	fmt.Println()
-	tui.Error("Set it when Diagnose reports the path MTU as smaller than the segments")
-	tui.Error("the tunnel is sending. That fault is silent by nature: the oversized")
-	tui.Error("packets are dropped with no ICMP reply, so the tunnel connects, stays")
-	tui.Error("up and looks healthy while every real transfer stalls. Diagnose prints")
-	tui.Error("the exact number to enter here.")
-	fmt.Println()
-	tui.Warn("Each end clamps only what IT sends, so put the SAME value on both.")
-	fmt.Println()
-	tui.Info("Currently : " + mssLabel(spec.MSS))
-	fmt.Println()
+	tui.Title("TCP MSS Clamp — " + name)
+	tui.Warn("Set only when Health Check asks; use the same value on both ends.")
+	tui.Info("Now: " + mssLabel(spec.MSS))
 
-	mss := tui.PromptInt("MSS in bytes (0 = automatic)", spec.MSS)
+	mss := tui.PromptInt("MSS Bytes (0 = Auto)", spec.MSS)
 	if mss == spec.MSS {
-		tui.Info("Nothing changed.")
+		tui.Info("No Change.")
 		tui.PressEnter()
 		return
 	}
@@ -619,29 +569,17 @@ func editMSS(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("MSS clamp set to " + mssLabel(mss) + " and the tunnel restarted.")
-	tui.Warn("Set the same value on the OTHER side too — its packets are still")
-	tui.Warn("full-sized until you do, and those are the ones being dropped.")
+	tui.Success("MSS Clamp: " + mssLabel(mss) + " — Restarted.")
+	tui.Warn("Set The Same Value On The Other Side.")
 	tui.PressEnter()
 }
 
 // toggleProxyProtocol switches forwarding of the real client IP on or off.
 func toggleProxyProtocol(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Real client IP (PROXY protocol)")
-	fmt.Println()
-	tui.Warn("Off, the service behind the tunnel sees every connection as coming")
-	tui.Warn("from the tunnel itself — so a panel counts all your users as one")
-	tui.Warn("device and per-user device limits cannot work.")
-	tui.Warn("On, each connection is prefixed with a PROXY protocol v2 header")
-	tui.Warn("carrying the user's real IP and port.")
-	fmt.Println()
-	tui.Error("The service MUST be configured to accept the PROXY protocol first.")
-	tui.Error("If it is not, it reads the header as traffic and every connection")
-	tui.Error("breaks — so turn it on there before turning it on here.")
-	tui.Warn("In X-UI / Marzban it is the inbound option \"Accept Proxy Protocol\".")
-	fmt.Println()
-	tui.Info("Currently : " + onOff(spec.ProxyProtocol))
+	tui.Title("Real Client IP (PROXY Protocol)")
+	tui.Warn("Enable \"Accept Proxy Protocol\" on the service first, or every connection breaks.")
+	tui.Info("Now: " + onOff(spec.ProxyProtocol))
 	fmt.Println()
 
 	want := !spec.ProxyProtocol
@@ -649,7 +587,7 @@ func toggleProxyProtocol(name string, spec TunnelSpec) {
 	if !want {
 		verb = "Disable"
 	}
-	if !tui.Confirm(verb+" the real client IP header for "+name, false) {
+	if !tui.Confirm(verb+" Real Client IP", false) {
 		return
 	}
 	if err := SetProxyProtocol(name, want); err != nil {
@@ -657,26 +595,23 @@ func toggleProxyProtocol(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Real client IP is now " + onOff(want) + " and the tunnel restarted.")
+	tui.Success("Real Client IP: " + onOff(want) + " — Restarted.")
 	tui.PressEnter()
 }
 
 // changeTunnelPreset re-applies a whole performance profile to a tunnel.
 func changeTunnelPreset(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Info("Current preset: " + presetLabel(spec.Preset))
-	tui.Warn("A preset rewrites every tuning value — buffers, pool size, mux windows")
-	tui.Warn("and, on KCP, the retransmission and error-correction settings.")
-	tui.Warn("Use the SAME preset on both sides so the two ends stay matched.")
+	tui.Info("Current: " + presetLabel(spec.Preset) + " (Use The Same On Both Sides)")
 	fmt.Println()
 
 	newPreset := choosePreset(spec.Transport)
 	if newPreset == spec.Preset {
-		tui.Info("That is already the current preset.")
+		tui.Info("Already In Use.")
 		tui.PressEnter()
 		return
 	}
-	if !tui.Confirm(fmt.Sprintf("Apply the %s preset to %q now", presetLabel(newPreset), name), true) {
+	if !tui.Confirm(fmt.Sprintf("Apply %s", presetLabel(newPreset)), true) {
 		return
 	}
 
@@ -685,8 +620,8 @@ func changeTunnelPreset(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Preset changed to " + presetLabel(newPreset) + " and the tunnel restarted.")
-	tui.Warn("Apply the same preset on the OTHER side too.")
+	tui.Success("Preset: " + presetLabel(newPreset) + " — Restarted.")
+	tui.Warn("Apply The Same Preset On The Other Side.")
 	tui.PressEnter()
 }
 
@@ -695,20 +630,12 @@ func changeTunnelPreset(name string, spec TunnelSpec) {
 // list until one address answers.
 func changeFallbackAddrs(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Backup server addresses")
-	tui.Warn("If the main server address stops answering (a filtered IP, a blocked")
-	tui.Warn("port, or a CDN edge you want to use), the client automatically tries")
-	tui.Warn("these in order until one connects — no manual switching needed.")
-	fmt.Println()
-	tui.Info("Main address : " + spec.RemoteAddr)
-	tui.Info("Backups now  : " + fallbackSummary(spec.FallbackAddrs))
-	fmt.Println()
-	tui.Warn("Enter the FULL new list, comma separated. A bare IP/host reuses the")
-	tui.Warn("main port, e.g.:  1.2.3.4, 5.6.7.8:8443, edge.example.com:443")
-	tui.Warn("Leave empty to remove all backups.")
+	tui.Title("Backup Addresses")
+	tui.Info("Main : " + spec.RemoteAddr)
+	tui.Info("Now  : " + fallbackSummary(spec.FallbackAddrs))
 	fmt.Println()
 
-	raw := tui.Prompt("Backup addresses: ")
+	raw := tui.Prompt("Backup Addresses (Full List, Blank = None): ")
 	var addrs []string
 	for _, p := range strings.Split(raw, ",") {
 		if p = strings.TrimSpace(p); p != "" {
@@ -722,10 +649,9 @@ func changeFallbackAddrs(name string, spec TunnelSpec) {
 		return
 	}
 	if len(addrs) == 0 {
-		tui.Success("Backup addresses cleared — the tunnel restarted.")
+		tui.Success("Backups Cleared — Restarted.")
 	} else {
-		tui.Success(fmt.Sprintf("%d backup address(es) saved — the tunnel restarted.", len(addrs)))
-		tui.Info("The client will fail over automatically if the main address stops answering.")
+		tui.Success(fmt.Sprintf("%d Backup(s) Saved — Restarted.", len(addrs)))
 	}
 	tui.PressEnter()
 }
@@ -733,9 +659,9 @@ func changeFallbackAddrs(name string, spec TunnelSpec) {
 // changeClientHost prompts for and applies a new server address on a client.
 func changeClientHost(name string, spec TunnelSpec) {
 	fmt.Println()
-	host := tui.PromptDefault("New server address (IP or domain)", addrHost(spec.RemoteAddr, ""))
+	host := tui.PromptDefault("Iran IP Or Domain", addrHost(spec.RemoteAddr, ""))
 	if strings.TrimSpace(host) == "" {
-		tui.Error("Address cannot be empty.")
+		tui.Error("An address is required.")
 		tui.PressEnter()
 		return
 	}
@@ -744,7 +670,7 @@ func changeClientHost(name string, spec TunnelSpec) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Server address updated and the tunnel was restarted.")
+	tui.Success("Iran Address Saved — Restarted.")
 	tui.PressEnter()
 }
 
@@ -760,26 +686,19 @@ func certSummary(s TunnelSpec) string {
 // self-signed certificate and a real one from Let's Encrypt.
 func editCertificate(name string, s TunnelSpec) {
 	tui.Clear()
-	tui.Title("Certificate for " + name)
-	fmt.Println()
-	tui.Info("Current: " + certSummary(s))
-	fmt.Println()
-	tui.Warn("A self-signed certificate encrypts exactly as well — the client is")
-	tui.Warn("Backpack's own code and does not verify it. The reason to use a real")
-	tui.Warn("one is how the connection looks from outside: real HTTPS on port 443")
-	tui.Warn("is never self-signed, so a self-signed certificate is a distinguishing")
-	tui.Warn("mark. A real one removes it, and a CDN in front of the tunnel needs it.")
+	tui.Title("Certificate — " + name)
+	tui.Info("Now: " + certSummary(s))
 	fmt.Println()
 
-	idx := tui.ChooseOpt("Use:", []tui.Option{
-		{Title: "Self-signed", Desc: "works anywhere, including on a bare IP — the default"},
-		{Title: "Let's Encrypt", Desc: "needs a domain pointing at THIS server"},
+	idx := tui.ChooseOpt("Certificate", []tui.Option{
+		{Title: "Self-Signed", Desc: "works on a bare IP — default"},
+		{Title: "Let's Encrypt", Desc: "needs a domain pointing here; needed for a CDN"},
 	})
 
 	switch idx {
 	case 0:
 		if s.ACMEDomain == "" {
-			tui.Info("Already using the self-signed certificate.")
+			tui.Info("Already Self-Signed.")
 			tui.PressEnter()
 			return
 		}
@@ -802,12 +721,10 @@ func editCertificate(name string, s TunnelSpec) {
 		return
 	}
 
-	tui.Success("Certificate settings saved and the tunnel restarted.")
+	tui.Success("Certificate Saved — Restarted.")
 	if s.ACMEDomain != "" {
 		fmt.Println()
-		tui.Warn("The certificate is requested on the first connection, which can")
-		tui.Warn("take a few seconds. If it does not appear, check the log:")
-		tui.Warn("  journalctl -u " + app.ServiceName(name) + " -n 50")
+		tui.Warn("Issued On The First Connection. Log: journalctl -u " + app.ServiceName(name) + " -n 50")
 	}
 	tui.PressEnter()
 }

@@ -97,13 +97,8 @@ func TestEveryPanelAPIFunctionIsCalled(t *testing.T) {
 // than by the panel, so an unmatched action is reported and not failed — it is
 // a list to read, not a gate.
 func TestEveryNodeActionHasACaller(t *testing.T) {
-	src, err := os.ReadFile("handlers_nodes.go")
-	if err != nil {
-		t.Fatalf("reading handlers_nodes.go: %v", err)
-	}
-	actions := regexp.MustCompile(`(?m)^\tcase "(\w+)":`).FindAllStringSubmatch(string(src), -1)
-	if len(actions) < 5 {
-		t.Fatalf("found %d actions — the pattern has stopped matching", len(actions))
+	if len(nodeActions) < 5 {
+		t.Fatalf("found %d node actions — the table has moved", len(nodeActions))
 	}
 
 	api, err := os.ReadFile(filepath.Join("panel", "js", "api.js"))
@@ -111,8 +106,7 @@ func TestEveryNodeActionHasACaller(t *testing.T) {
 		t.Fatalf("reading api.js: %v", err)
 	}
 
-	for _, m := range actions {
-		action := m[1]
+	for action := range nodeActions {
 		if strings.Contains(string(api), `'`+action+`'`) || strings.Contains(string(api), `"`+action+`"`) {
 			continue
 		}

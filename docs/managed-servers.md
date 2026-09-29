@@ -93,7 +93,12 @@ was rebuilt, or something is answering in its place. Remove it from the fleet
 and add it again if the change was expected.
 
 Changing a server's address clears the key with it: a different machine is
-entitled to a different one.
+entitled to a different one. For the same reason a new address needs the
+password typed again. Keeping the stored one would hand it, on the first
+connection, to whatever answers at the new address — so the panel refuses the
+change without it. Adding a server, changing its login and removing it need the
+panel password or an `admin` token; a `write` token can refresh, upgrade and
+pin, but not touch a login (see [access control](access-control.md)).
 
 ### Where the password is kept
 
@@ -197,14 +202,23 @@ Nothing. There is no Backpack service, no config and no state that belongs to
 being managed: the panel logs in, runs one command, and logs out. Removing the
 server from the fleet leaves nothing behind to clean up.
 
-The one command is `backpack node exec`, which performs a single operation from
-a fixed list — create or update a tunnel, start, stop, restart, report, read a
-log — and refuses anything else. It is not meant to be typed.
+The one command is `backpack node exec -`, which reads one request from stdin
+and performs a single operation from a fixed list — create or update a tunnel,
+start, stop, restart, report, read a log — and refuses anything else. It is not
+meant to be typed. The request comes on stdin rather than as an argument
+because it can carry a tunnel's token, and a command line is readable by every
+user of the machine; a server too old to read stdin is sent it as an argument,
+as before, until it is upgraded.
 
 ## What to think about before turning it on
 
 - The panel holds a root login for every server in the fleet. Its own password
   and its own exposure now matter as much as theirs.
+- Adding a server and upgrading one run `install.sh` from GitHub on that server,
+  which checks the release against its published SHA-256 — but not the release
+  signature that **Update** on this machine requires. A checksum fetched from
+  the same place as the archive proves the download is whole, not who made it.
+  Where that matters, upgrade the far server from its own menu.
 - A server behind NAT with no inbound route cannot be managed.
 - The far server's sshd must accept password authentication for the user you
   give.
@@ -280,4 +294,4 @@ log — and refuses anything else. It is not meant to be typed.
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

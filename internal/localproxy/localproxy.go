@@ -13,7 +13,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/backpack/backpack/internal/app"
@@ -37,9 +36,10 @@ type Config struct {
 	// Port is chosen by the operator; there is no default, so nothing starts
 	// listening on a well-known port by surprise.
 	Port int `json:"port"`
-	// Username/Password gate the proxy. Empty means no authentication, which is
-	// safe here: the proxy binds loopback and is only reachable through the
-	// token-authenticated tunnel.
+	// Username/Password gate the proxy. Empty means no authentication — an
+	// open proxy for anyone who can reach the Iran server's forwarded port,
+	// since the tunnel token authenticates the servers, not the users of the
+	// ports. Its destinations are limited either way (socks.Target).
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 }
@@ -52,9 +52,7 @@ func path() string { return filepath.Join(Dir, "proxy.json") }
 // Load reads the config, returning a disabled zero value if none exists.
 func Load() Config {
 	var c Config
-	if data, err := os.ReadFile(path()); err == nil {
-		json.Unmarshal(data, &c)
-	}
+	app.WarnState(app.LoadState(path(), &c))
 	if c.Type == "" {
 		c.Type = SOCKS5
 	}

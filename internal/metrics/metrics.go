@@ -235,6 +235,11 @@ type Collector struct {
 	// baseIn/baseOut are the totals this tunnel had already accumulated before
 	// this process started, read from the last written snapshot.
 	baseIn, baseOut uint64
+	// startIn/startOut are what the byte sources already read when this
+	// collector was made. Only what they count after that is new: a reload
+	// makes a new collector in the same process, whose process-wide counters
+	// the baseline above already holds.
+	startIn, startOut uint64
 
 	dir       string
 	name      string
@@ -274,7 +279,30 @@ func NewCollector(dir, name, transport, role string, bytesIn, bytesOut func() ui
 	if prev, err := Read(dir, name); err == nil {
 		c.baseIn, c.baseOut = prev.BytesIn, prev.BytesOut
 	}
+	c.startIn, c.startOut = c.live()
 	return c
+}
+
+// live is what this tunnel's byte sources read now: the engine's own counters
+// when it keeps them, the process-wide ones otherwise.
+func (c *Collector) live() (in, out uint64) {
+	in, out = Traffic()
+	if c.bytesIn != nil {
+		in = c.bytesIn()
+	}
+	if c.bytesOut != nil {
+		out = c.bytesOut()
+	}
+	return in, out
+}
+
+// since is what a counter has moved from start. A source that went back —
+// an engine that rebuilt its counters — counts from zero again.
+func since(now, start uint64) uint64 {
+	if now < start {
+		return now
+	}
+	return now - start
 }
 
 // Snapshot reads the current counters without writing anything.
@@ -288,15 +316,11 @@ func (c *Collector) Snapshot() Snapshot {
 		Peer:      currentPeer(),
 		Connected: connected.Load(),
 	}
-	// The persisted baseline plus what this process has carried.
-	liveIn, liveOut := Traffic()
-	s.BytesIn, s.BytesOut = c.baseIn+liveIn, c.baseOut+liveOut
-	if c.bytesIn != nil {
-		s.BytesIn = c.bytesIn()
-	}
-	if c.bytesOut != nil {
-		s.BytesOut = c.bytesOut()
-	}
+	// The persisted baseline plus what has been carried since this collector
+	// took over from it.
+	liveIn, liveOut := c.live()
+	s.BytesIn = c.baseIn + since(liveIn, c.startIn)
+	s.BytesOut = c.baseOut + since(liveOut, c.startOut)
 	if live, target, configured, mbps := PoolState(); configured > 0 {
 		s.Pool = &PoolStats{Live: live, Target: target, Configured: configured, Mbps: mbps}
 	}
@@ -441,3 +465,58 @@ func AddBytes(in, out uint64) {
 
 // Traffic returns the bytes carried over the tunnel so far.
 func Traffic() (in, out uint64) { return bytesIn.Load(), bytesOut.Load() }
+
+// The server's own ledger: what tunnels that no longer exist carried.
+//
+// The panel's headline figure is "carried since this server was set up", and
+// it is added up from the tunnels' own files. Deleting a tunnel took its whole
+// history out of that sum, and left the file behind for the next tunnel given
+// the same name to start from. So a delete moves the tunnel's totals here, and
+// the file goes. It lives in the config directory beside the tunnels' files,
+// and so is inside every backup with them.
+
+// retiredFile is the ledger's name. Not "<name>.metrics.json": no tunnel may
+// ever be read as owning it.
+const retiredFile = "retired-traffic.json"
+
+type retired struct {
+	BytesIn  uint64 `json:"bytes_in"`
+	BytesOut uint64 `json:"bytes_out"`
+}
+
+// Retired is what the tunnels deleted from this server carried between them.
+func Retired(dir string) (in, out uint64) {
+	var r retired
+	if b, err := os.ReadFile(filepath.Join(dir, retiredFile)); err == nil {
+		_ = json.Unmarshal(b, &r)
+	}
+	return r.BytesIn, r.BytesOut
+}
+
+// Retire adds a deleted tunnel's totals to the server's ledger and removes the
+// tunnel's own file. Call it once the tunnel has stopped, so its last write is
+// in. A tunnel that never wrote a file has nothing to add.
+func Retire(dir, name string) error {
+	snap, err := Read(dir, name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		// Unreadable: nothing can be carried over, but the file must still
+		// go, or a new tunnel of this name would try to start from it.
+		return os.Remove(Path(dir, name))
+	}
+	in, out := Retired(dir)
+	b, err := json.MarshalIndent(retired{BytesIn: in + snap.BytesIn, BytesOut: out + snap.BytesOut}, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, retiredFile)
+	if err := os.WriteFile(path+".tmp", b, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		return err
+	}
+	return os.Remove(Path(dir, name))
+}

@@ -42,7 +42,7 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 	}
 }
 
-// Run starts the client and begins dialing the tunnel server
+// Start starts the client and begins dialing the tunnel server.
 func (c *Client) Start() {
 	// Profiling endpoint, off unless explicitly enabled in the config. Bound to
 	// loopback: pprof is unauthenticated and its heap dump would expose the
@@ -163,6 +163,13 @@ type runner interface{ Running() bool }
 // ctx tears it down; nothing else here reaches for c.ctx, so a chain can run
 // several of these one after another in the same process.
 func (c *Client) startTransport(ctx context.Context, tr config.TransportType, endpoints *network.Endpoints, outbound *network.Outbound) runner {
+	// Steering asks the tunnel port itself where it can, not only ping; which
+	// way depends on the transport running now. See SetReachProbe.
+	if tcpPortTransport(tr) {
+		endpoints.SetReachProbe(network.TCPReach(2 * time.Second))
+	} else {
+		endpoints.SetReachProbe(nil)
+	}
 	switch tr {
 	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
@@ -353,4 +360,14 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 		c.logger.Fatal("invalid transport type: ", tr)
 		return nil
 	}
+}
+
+// tcpPortTransport reports whether a transport's tunnel port is TCP, so a
+// connection to it says whether it answers.
+func tcpPortTransport(tr config.TransportType) bool {
+	switch tr {
+	case config.TCP, config.TCPMUX, config.WS, config.WSS, config.WSMUX, config.WSSMUX, config.STEALTH:
+		return true
+	}
+	return false
 }

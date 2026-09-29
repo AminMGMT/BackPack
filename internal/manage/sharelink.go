@@ -113,6 +113,29 @@ type ShareLink struct {
 	// zero on both meaning off.
 	SimpleAuth bool `json:"sa,omitempty"`
 	MuxVer     int  `json:"mv,omitempty"`
+
+	// Hosts are the producing side's other addresses — a second IP, a domain,
+	// a CDN edge — each a host alone (the tunnel port is Port) or host:port.
+	// The side that dials takes Host first and these as its backups, so it
+	// fails over from the day it is made rather than once somebody adds them
+	// by hand. An older build ignores them and dials Host alone.
+	Hosts []string `json:"hs,omitempty"`
+	// RestartHours and RestartMinute are a restart schedule both ends keep:
+	// every RestartHours hours at RestartMinute past, in UTC, so the two
+	// restart together. Zero hours is none. See core.SetScheduledRestart.
+	RestartHours  int `json:"rh,omitempty"`
+	RestartMinute int `json:"rm,omitempty"`
+
+	// Fallbacks and Dwell are a reverse tunnel's transport fallback chain,
+	// which both ends must hold in the same order (see config.FallbackTransports).
+	Fallbacks []string `json:"ft,omitempty"`
+	Dwell     int      `json:"fw,omitempty"`
+
+	// Edit marks a link that changes a tunnel rather than builds one: the
+	// fingerprint of the token the tunnel has now (editFingerprint), which is
+	// how the other server finds it whatever it is called there — and even
+	// when this very edit changes the token. See editlink.go.
+	Edit string `json:"ed,omitempty"`
 }
 
 // Encode renders a link as the string an operator copies.
@@ -144,19 +167,8 @@ func (l ShareLink) Encode() (string, error) {
 		return "", fmt.Errorf("the %s contains a byte that cannot be carried in a setup "+
 			"link — retype it, or the other end would receive something different", field)
 	}
-	raw, err := json.Marshal(l)
-	if err != nil {
-		return "", fmt.Errorf("could not build the setup link: %w", err)
-	}
-	var buf bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if _, err := zw.Write(raw); err != nil {
-		return "", err
-	}
-	if err := zw.Close(); err != nil {
-		return "", err
-	}
-	return shareScheme + shareVersion + "." + base64.RawURLEncoding.EncodeToString(buf.Bytes()), nil
+	// Format 2: the same fields at half the length. See sharelinkv2.go.
+	return encodeShareLinkV2(l)
 }
 
 // DecodeShareLink parses a pasted string.
@@ -174,14 +186,27 @@ func DecodeShareLink(s string) (ShareLink, error) {
 	if !strings.HasPrefix(s, shareScheme) {
 		return out, fmt.Errorf("that does not look like a Backpack setup link — it should begin with %s", shareScheme)
 	}
+	if strings.HasPrefix(s, connTestScheme) {
+		return out, fmt.Errorf("this is a connection-test link, not a setup link — on the kharej run " +
+			"sudo backpack → 0) Connection Test, or: backpack link apply '<the link>'")
+	}
 	body := strings.TrimPrefix(s, shareScheme)
 	ver, payload, ok := strings.Cut(body, ".")
 	if !ok {
 		return out, fmt.Errorf("the setup link is incomplete — copy the whole of it, including the end")
 	}
-	if ver != shareVersion {
-		return out, fmt.Errorf("this setup link is version %s and this server understands version %s — "+
-			"update the older of the two machines", ver, shareVersion)
+	switch ver {
+	case shareVersion2:
+		out, err := decodeShareLinkV2(payload)
+		if err != nil {
+			return out, err
+		}
+		return out, checkShareLink(out)
+	case shareVersion:
+		// Format 1, from an older build: gzipped JSON, read below.
+	default:
+		return out, fmt.Errorf("this setup link is version %s and this server understands versions %s and %s — "+
+			"update the older of the two machines", ver, shareVersion, shareVersion2)
 	}
 	gz, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
@@ -198,18 +223,32 @@ func DecodeShareLink(s string) (ShareLink, error) {
 	if err != nil {
 		return out, fmt.Errorf("the setup link is incomplete — copy the whole of it, including the end")
 	}
+	// A Connection Test link has the same shape and other fields; it is told
+	// apart before the rest is read, so it is named rather than called damaged.
+	var kind struct {
+		Kind string `json:"k"`
+	}
+	if json.Unmarshal(raw, &kind) == nil && kind.Kind == connTestKind {
+		return out, fmt.Errorf("this is a connection-test link, not a setup link — on the kharej run " +
+			"sudo backpack → 0) Connection Test, or: backpack link apply '<the link>'")
+	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return out, fmt.Errorf("the setup link is damaged — copy it again, all of it")
 	}
+	return out, checkShareLink(out)
+}
+
+// checkShareLink refuses a decoded link that cannot build anything.
+func checkShareLink(out ShareLink) error {
 	if out.Tok == "" || out.Tr == "" {
-		return out, fmt.Errorf("the setup link is missing the token or the transport — it was not made by this version")
+		return fmt.Errorf("the setup link is missing the token or the transport — it was not made by this version")
 	}
 	switch out.Kind {
 	case "reverse", "direct":
 	default:
-		return out, fmt.Errorf("the setup link does not say what kind of tunnel it is")
+		return fmt.Errorf("the setup link does not say what kind of tunnel it is")
 	}
-	return out, nil
+	return nil
 }
 
 // PeerSide is the side a link is meant to be pasted into: the opposite of the
@@ -278,6 +317,19 @@ type PeerForm struct {
 	// Note is anything the operator should read once, in plain words — a
 	// setting the link could not carry across, rather than an error.
 	Note string `json:"note,omitempty"`
+}
+
+// PeerNeedsAddress reports whether the side this link is for dials the side
+// that made it — the kharej of a reverse tunnel, the Iran end of a direct one —
+// and so needs the link's Host.
+func (l ShareLink) PeerNeedsAddress() bool {
+	side := l.PeerSide()
+	return (l.Kind == "reverse" && side == "kharej") || (l.Kind == "direct" && side == "iran")
+}
+
+// NeedsServerAddr reports whether the side this form builds dials the other.
+func (f PeerForm) NeedsServerAddr() bool {
+	return (f.Kind == "reverse" && f.Side == "kharej") || (f.Kind == "direct" && f.Side == "iran")
 }
 
 // MirrorForPeer turns a link into the other side's form.
@@ -468,7 +520,32 @@ func ShareLinkFor(name, host string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return shareLinkOf(name, host, cfg)
+	hours, minute := ScheduledRestart(name)
+	return shareLinkWith(name, host, cfg, linkExtras{hosts: LinkHosts(name), restartHours: hours, restartMinute: minute})
+}
+
+// linkExtras is what a link carries that is not in the tunnel's config: this
+// server's backup addresses and the restart schedule both ends keep.
+type linkExtras struct {
+	hosts                       []string
+	restartHours, restartMinute int
+}
+
+// shareLinkWith is shareLinkOf with the extras added.
+func shareLinkWith(name, host string, cfg config.Config, x linkExtras) (string, error) {
+	raw, err := shareLinkOf(name, host, cfg)
+	if err != nil || (len(x.hosts) == 0 && x.restartHours <= 0) {
+		return raw, err
+	}
+	l, err := DecodeShareLink(raw)
+	if err != nil {
+		return "", err
+	}
+	l.Hosts = x.hosts
+	if x.restartHours > 0 {
+		l.RestartHours, l.RestartMinute = x.restartHours, x.restartMinute
+	}
+	return l.Encode()
 }
 
 // shareLinkOf builds the link from a config in hand, which is how the direct
@@ -513,6 +590,10 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		l.MSS = cfg.Server.MSS
 		l.SimpleAuth = cfg.Server.SimpleAuth
 		l.MuxVer = cfg.Server.MuxVersion
+		for _, t := range cfg.Server.FallbackTransports {
+			l.Fallbacks = append(l.Fallbacks, string(t))
+		}
+		l.Dwell = cfg.Server.FallbackDwell
 		if cfg.Server.Transport == "kcp" {
 			l.FECData, l.FECParity = cfg.Server.DataShards, cfg.Server.ParityShards
 		}
@@ -567,6 +648,7 @@ func firstUncarryableField(l ShareLink) (string, bool) {
 		"From": "side", "Preset": "preset", "Profile": "packet profile",
 		"LocalIP": "local address", "PeerIP": "peer address",
 		"Uplink": "uplink", "Downlink": "downlink", "SrcIPs": "source addresses",
+		"Hosts": "backup addresses",
 	}
 	v := reflect.ValueOf(l)
 	t := v.Type()

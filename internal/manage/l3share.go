@@ -166,8 +166,7 @@ func offerL3Sharing(cfg l3Spec) []string {
 
 	if len(clash) > 0 {
 		fmt.Println()
-		tui.Warn("These ports overlap ports another tunnel here already forwards, as a")
-		tui.Warn("range, which cannot be shared between kharej servers. They are left out:")
+		tui.Warn("Left Out (Another Tunnel Forwards Them As A Range):")
 		tui.Warn("  " + strings.Join(clash, ", "))
 	}
 	if len(shares) == 0 {
@@ -175,15 +174,12 @@ func offerL3Sharing(cfg l3Spec) []string {
 	}
 
 	fmt.Println()
-	tui.Info("Some of these ports are already forwarded by another tunnel on this")
-	tui.Info("server. They can be spread over both kharej servers instead: each new")
-	tui.Info("connection goes to the kharej carrying the fewest, and one that stops")
-	tui.Info("answering is skipped.")
+	tui.Info("Another Tunnel Already Forwards These — Share Them Across Both Kharej Servers:")
 	for _, s := range shares {
 		tui.Info(fmt.Sprintf("  %s (tunnel %s)  →  %s", s.OldSpec, s.Tunnel.T.Name, s.NewSpec))
 	}
-	if !tui.Confirm("Share these ports across the kharej servers", true) {
-		tui.Warn("Left out of this tunnel, since the other one already holds them.")
+	if !tui.Confirm("Share These Ports", true) {
+		tui.Warn("Left Out Of This Tunnel.")
 		return keep
 	}
 
@@ -195,13 +191,13 @@ func offerL3Sharing(cfg l3Spec) []string {
 		// for UDP here, the new kharej would otherwise get TCP only on it.
 		if cfg.AcceptUDP && !l.AcceptUDP {
 			l.AcceptUDP = true
-			tui.Info("UDP forwarding turned on for tunnel " + name + ", as asked for here.")
+			tui.Info("UDP Forwarding On For " + name + ".")
 		}
 		if err := writeL3AndRestart(g.tunnel.T, l); err != nil {
-			tui.Error("Could not update tunnel " + name + ": " + err.Error())
+			tui.Error("Could not update " + name + ": " + err.Error())
 			continue
 		}
-		tui.Success("Tunnel " + name + " now shares its ports with this kharej.")
+		tui.Success(name + " Now Shares Its Ports.")
 	}
 	return keep
 }
@@ -209,7 +205,7 @@ func offerL3Sharing(cfg l3Spec) []string {
 // writeL3AndRestart saves a layer-3 config and restarts its service, quietly:
 // it runs in the middle of the setup wizard, which has its own screens.
 func writeL3AndRestart(t Tunnel, l config.L3Config) error {
-	body := l3SpecOf(t, l).render()
+	body := l3SpecOf(t, l).Render()
 	if err := validateRendered(body); err != nil {
 		return err
 	}

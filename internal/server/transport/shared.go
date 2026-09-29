@@ -221,3 +221,38 @@ type TunnelUDPConn struct {
 	ping        chan struct{}
 	mu          *sync.Mutex //mutex for ping channel
 }
+
+// The websocket buffers.
+//
+// The relay hands the websocket up to 64 KiB at a time (see handlers.relaybuf);
+// with a 16 KiB write buffer each of those went out as four frames and four
+// system calls, which held plain ws to 2.8 Gbit/s on loopback where wsmux made
+// 5; with these, and the relay reading each message through its pooled buffer
+// (handlers.transferWebSocketToTCP), it makes 6.7–7.0 (internal/e2e
+// TestTransportThroughput). A write
+// buffer is only in use while a message is being written, so they come from
+// one pool rather than one per connection — plain ws is a websocket per user,
+// and 64 KiB held for each would be the tunnel's memory. The read buffer stays
+// small: a read as large as the relay's goes around it straight into the
+// relay buffer.
+const (
+	wsReadBufferSize  = 16 * 1024
+	wsWriteBufferSize = 64 * 1024
+)
+
+var wsWriteBuffers = &sync.Pool{}
+
+// serverProof is the response header that proves this server holds the token,
+// on a wss upgrade bound to its TLS session (see network.WSSServerAnswer); nil
+// over plain ws, and with simpleAuth, where a proxy in front holds a different
+// session and no answer could match.
+func serverProof(r *http.Request, token string, simpleAuth bool) http.Header {
+	if r.TLS == nil || simpleAuth {
+		return nil
+	}
+	answer, err := network.WSSServerAnswer(r.TLS, token)
+	if err != nil {
+		return nil
+	}
+	return http.Header{network.WSSServerProofHeader: {answer}}
+}

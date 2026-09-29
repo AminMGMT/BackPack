@@ -104,16 +104,3 @@ func (l *listenerSet) wait(ctx context.Context) {
 		// The caller is going away regardless; waiting longer helps nobody.
 	}
 }
-
-// Wait blocks until this transport has closed every listener it holds.
-//
-// One method per transport, for the same reason Running is: the set is held by
-// value on each struct, and embedding it to share a method would change the
-// memory layout of all seven for no gain.
-func (s *TcpTransport) Wait(ctx context.Context)    { s.listeners.wait(ctx) }
-func (s *TcpMuxTransport) Wait(ctx context.Context) { s.listeners.wait(ctx) }
-func (s *WsTransport) Wait(ctx context.Context)     { s.listeners.wait(ctx) }
-func (s *WsMuxTransport) Wait(ctx context.Context)  { s.listeners.wait(ctx) }
-func (s *KcpTransport) Wait(ctx context.Context)    { s.listeners.wait(ctx) }
-func (s *QuicTransport) Wait(ctx context.Context)   { s.listeners.wait(ctx) }
-func (s *UdpTransport) Wait(ctx context.Context)    { s.listeners.wait(ctx) }

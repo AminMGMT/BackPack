@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,7 +39,9 @@ type fakeServer struct {
 	prefix  string // printed before the answer, like a login banner
 	failing bool   // the binary is not there
 	old     bool   // the binary is there and predates "node exec"
+	argOnly bool   // "node exec" is there but reads its request only as an argument
 	refuse  string // the far side answers, and says no
+	binary  string // run this Backpack build for real instead of answering; see farside_test.go
 }
 
 // oldNodeUsage is verbatim what Backpack v1.7.6 and earlier print when asked to
@@ -141,8 +144,27 @@ func (s *fakeServer) handle(c net.Conn, cfg *ssh.ServerConfig) {
 
 				s.mu.Lock()
 				s.ran = append(s.ran, payload.Command)
-				failing, isOld, prefix, refuse := s.failing, s.old, s.prefix, s.refuse
+				failing, isOld, prefix, refuse, argOnly := s.failing, s.old, s.prefix, s.refuse, s.argOnly
 				s.mu.Unlock()
+
+				if s.binary != "" {
+					runFarSide(ch, s.binary, payload.Command)
+					return
+				}
+
+				// "node exec -" takes its request from stdin; a build from
+				// before that reads "-" as the request and says it is not
+				// base64, exactly as the real one did.
+				cmd := payload.Command
+				if strings.HasSuffix(cmd, " -") {
+					if argOnly {
+						fmt.Fprintln(ch.Stderr(), "the request is not valid base64: illegal base64 data at input byte 0")
+						ch.SendRequest("exit-status", false, ssh.Marshal(struct{ S uint32 }{2}))
+						return
+					}
+					line, _ := bufio.NewReader(ch).ReadString('\n')
+					cmd = strings.TrimSuffix(cmd, "-") + strings.TrimSpace(line)
+				}
 
 				if failing {
 					fmt.Fprintln(ch.Stderr(), "sh: backpack: command not found")
@@ -163,7 +185,7 @@ func (s *fakeServer) handle(c net.Conn, cfg *ssh.ServerConfig) {
 					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ S uint32 }{0}))
 					return
 				}
-				fmt.Fprintln(ch, answerTo(payload.Command))
+				fmt.Fprintln(ch, answerTo(cmd))
 				ch.SendRequest("exit-status", false, ssh.Marshal(struct{ S uint32 }{0}))
 				return
 			}
@@ -579,4 +601,57 @@ func hasField(v any, name string) bool {
 	rt := reflect.TypeOf(v)
 	_, ok := rt.FieldByName(name)
 	return ok
+}
+
+// A request is handed over on stdin, never on the command line: a request that
+// sets up a tunnel carries its token, and a command line is readable by every
+// user of the far machine for as long as the command runs.
+func TestARequestNeverTravelsOnTheCommandLine(t *testing.T) {
+	isolateStore(t)
+	srv := newFakeServer(t, "root", "hunter2")
+	host, port := srv.addr()
+	if _, err := Add("kharej", host, port, "root", "hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	r := NewSSHRunner(nil)
+	defer r.Close()
+
+	const secret = "a-tunnel-token-nobody-else-may-read"
+	var got struct{ Body map[string]string }
+	if err := r.Call("kharej", OpHello, map[string]string{"token": secret}, &got); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if got.Body["token"] != secret {
+		t.Fatalf("the request did not arrive whole: %+v", got)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	for _, cmd := range srv.ran {
+		if strings.Contains(cmd, secret) || !strings.HasSuffix(cmd, " -") {
+			t.Fatalf("the request travelled on the command line: %q", cmd)
+		}
+	}
+}
+
+// A server from before stdin was read still answers: it gets the request as its
+// argument, the way it always did.
+func TestAnOlderServerStillGetsItsRequestAsAnArgument(t *testing.T) {
+	isolateStore(t)
+	srv := newFakeServer(t, "root", "hunter2")
+	srv.mu.Lock()
+	srv.argOnly = true
+	srv.mu.Unlock()
+	host, port := srv.addr()
+	if _, err := Add("kharej", host, port, "root", "hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	r := NewSSHRunner(nil)
+	defer r.Close()
+	var got struct{ Op string }
+	if err := r.Call("kharej", OpHello, nil, &got); err != nil {
+		t.Fatalf("an older server was not reached: %v", err)
+	}
+	if got.Op != OpHello {
+		t.Fatalf("answered %+v", got)
+	}
 }

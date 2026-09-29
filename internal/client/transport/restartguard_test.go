@@ -2,12 +2,8 @@ package transport
 
 import (
 	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // A goroutine dying during a teardown must not queue a restart of the tunnel
@@ -22,10 +18,11 @@ import (
 // another Restart of a transport that was already going away.
 //
 // The server transports were corrected to ask their generation's own context
-// instead, with the reasoning written out at internal/server/transport/tcp.go.
-// The client ones kept the original. This is the same check on this side.
+// instead; both sides' control loops now do (controlloop.go, read). The client
+// engines kept the original, and this is the check that it does not come back —
+// in an engine or in the shared lifecycle and loop.
 func TestNoClientEngineRestartsOnAVestigialGuard(t *testing.T) {
-	for _, engine := range clientEngines {
+	for _, engine := range append([]string{"lifecycle", "controlloop"}, clientEngines...) {
 		lines := codeLines(readEngine(t, "client", engine))
 		for i, line := range lines {
 			if !strings.Contains(line, "c.state.Cancel() != nil") {
@@ -63,12 +60,13 @@ func codeLines(src string) []string {
 //
 // A write into a peer that has stopped reading fills the kernel's send buffer
 // and then blocks until the retransmit timer gives up — around fifteen minutes
-// on Linux defaults. The server side grew SendBinaryByteWithin and writeControl
-// for precisely that failure, and the client kept writing unbounded: the
+// on Linux defaults. The server side grew a bounded write for precisely that
+// failure (now controlwire.WriteTimeout, shared), and the client kept writing
+// unbounded: the
 // shutdown notice, which stalls a restart, and the RTT probe, which parks a
 // goroutine on a timer forever and quietly stops the figure the panel shows.
 func TestEveryClientEngineBoundsItsControlWrites(t *testing.T) {
-	for _, engine := range clientEngines {
+	for _, engine := range append([]string{"controlloop"}, clientEngines...) {
 		src := readEngine(t, "client", engine)
 		if strings.Contains(src, "utils.SendBinaryByte(c.state.Conn()") {
 			t.Errorf("%s writes to its control channel with no bound — a peer that "+
@@ -79,27 +77,6 @@ func TestEveryClientEngineBoundsItsControlWrites(t *testing.T) {
 				"gorilla's WriteMessage takes the deadline from the connection, and "+
 				"nothing sets one", engine)
 		}
-	}
-}
-
-// And the bound has to be one both sides agree on, or a channel one end has
-// given up on is one the other is still waiting for.
-func TestTheControlWriteBoundMatchesTheServer(t *testing.T) {
-	srv, err := os.ReadFile(filepath.Join("..", "..", "server", "transport", "control.go"))
-	if err != nil {
-		t.Fatalf("reading the server's control channel: %v", err)
-	}
-	want := regexp.MustCompile(`controlWriteTimeout = (\d+) \* time\.Second`).FindStringSubmatch(string(srv))
-	if want == nil {
-		t.Fatal("the server no longer names a control-write bound")
-	}
-	n, err := strconv.Atoi(want[1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if controlWriteTimeout != time.Duration(n)*time.Second {
-		t.Errorf("the client bounds a control write at %v and the server at %ds — one end "+
-			"gives up on a channel the other is still waiting for", controlWriteTimeout, n)
 	}
 }
 

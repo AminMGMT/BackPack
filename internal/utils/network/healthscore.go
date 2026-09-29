@@ -147,8 +147,12 @@ func (e *Endpoints) steerLoop(ctx context.Context, interval time.Duration, log f
 		list := e.All()
 		scores := make([]EndpointScore, len(list))
 		best := -1
+		probe := e.reach.Load()
 		for i, a := range list {
 			scores[i] = ScoreEndpoint(a, 5)
+			if scores[i].Reachable && probe != nil && !(*probe)(a) {
+				scores[i].Reachable, scores[i].Score = false, 1e9 // answers ping, not the tunnel
+			}
 			if scores[i].Reachable && (best == -1 || scores[i].Score < scores[best].Score) {
 				best = i
 			}
@@ -183,5 +187,18 @@ func (e *Endpoints) steerLoop(ctx context.Context, interval time.Duration, log f
 					" (score " + strconv.FormatFloat(scores[best].Score, 'f', 0, 64) + ")")
 			}
 		}
+	}
+}
+
+// TCPReach reports whether addr takes a TCP connection within timeout: the
+// reach probe for a tunnel whose port is TCP. See SetReachProbe.
+func TCPReach(timeout time.Duration) func(addr string) bool {
+	return func(addr string) bool {
+		c, err := net.DialTimeout("tcp", addr, timeout)
+		if err != nil {
+			return false
+		}
+		c.Close()
+		return true
 	}
 }

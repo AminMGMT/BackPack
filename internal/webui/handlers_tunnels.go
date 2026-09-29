@@ -84,26 +84,7 @@ func (s *server) handleTunnelDefaults(w http.ResponseWriter, r *http.Request) {
 // already in use — is something the operator fixes by editing the tunnel, not
 // by creating it again.
 func (s *server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var n manage.NewTunnel
-	if err := decodeJSON(w, r, &n); err != nil {
-		http.Error(w, "could not read the form: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	service, active, err := manage.CreateTunnel(n)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	writeJSON(w, map[string]any{
-		"status":  "ok",
-		"name":    strings.TrimSpace(n.Name),
-		"service": service,
-		"active":  active,
-	})
+	serveCreate(w, r, manage.CreateTunnel, func(n manage.NewTunnel) string { return n.Name })
 }
 
 // handleTunnelSettings serves one tunnel's editable settings, for filling the
@@ -412,23 +393,29 @@ func (s *server) handleDirectDefaults(w http.ResponseWriter, r *http.Request) {
 
 // handleDirectCreate builds a direct tunnel from the form.
 func (s *server) handleDirectCreate(w http.ResponseWriter, r *http.Request) {
+	serveCreate(w, r, manage.CreateDirectTunnel, func(n manage.NewDirectTunnel) string { return n.Name })
+}
+
+// serveCreate is a POST that builds a tunnel from a form: decode it, create the
+// tunnel, and report the unit and whether it came up.
+func serveCreate[F any](w http.ResponseWriter, r *http.Request, create func(F) (string, bool, error), name func(F) string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var n manage.NewDirectTunnel
-	if err := decodeJSON(w, r, &n); err != nil {
+	var form F
+	if err := decodeJSON(w, r, &form); err != nil {
 		http.Error(w, "could not read the form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	service, active, err := manage.CreateDirectTunnel(n)
+	service, active, err := create(form)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]any{
 		"status":  "ok",
-		"name":    strings.TrimSpace(n.Name),
+		"name":    strings.TrimSpace(name(form)),
 		"service": service,
 		"active":  active,
 	})

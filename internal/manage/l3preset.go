@@ -88,15 +88,12 @@ func chooseL3Preset(classic bool) l3Preset {
 	fmt.Println()
 	title := "How Should The Tunnel Be Tuned?"
 	if classic {
-		tui.Info("These tune the queue between the kernel and the tunnel, and how much")
-		tui.Info("room the carrier's sockets get. All three keep latency bounded with")
-		tui.Info("fq_codel, so what really separates them is memory.")
 		title = "How should the tunnel be tuned?"
 	}
 	switch tui.ChooseOpt(title, []tui.Option{
-		{Title: "Turbo", Desc: "the default — 8 MB of socket buffer, suits most links. Start here"},
-		{Title: "Balance", Desc: "smallest footprint, for a small VPS or several tunnels on one box"},
-		{Title: "Aggressive", Desc: "for a fast link with bursts — 32 MB of buffer and a deep queue, wants RAM"},
+		{Title: "Turbo", Desc: "default — 8 MB buffers, most links"},
+		{Title: "Balance", Desc: "least memory — small VPS"},
+		{Title: "Aggressive", Desc: "fast links — 32 MB buffers, needs RAM"},
 	}) {
 	case 1:
 		return findL3Preset(PresetBalance)

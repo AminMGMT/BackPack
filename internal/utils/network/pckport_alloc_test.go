@@ -25,6 +25,7 @@ func resetPckPorts() {
 	pckPortMu.Lock()
 	defer pckPortMu.Unlock()
 	pckPortsInUse = map[uint16]bool{}
+	pckClientBases = map[string]uint16{}
 }
 
 func TestALivePortIsNeverHandedOutTwice(t *testing.T) {
@@ -57,7 +58,7 @@ func TestALivePortIsNeverHandedOutTwice(t *testing.T) {
 	}
 
 	// Once a carrier closes, its port comes back.
-	releasePckClientPort(held[0])
+	releasePckClientPort("", held[0])
 	port, err := nextPckClientPort(base)
 	if err != nil {
 		t.Fatalf("a released port was not reusable: %v", err)
@@ -92,7 +93,7 @@ func TestChurningThePoolNeverStealsTheControlChannelPort(t *testing.T) {
 			t.Fatalf("pool dial %d was handed the control channel's port %d, which "+
 				"is what killed the tunnel and forced a manual restart", i, port)
 		}
-		releasePckClientPort(port)
+		releasePckClientPort("", port)
 	}
 }
 

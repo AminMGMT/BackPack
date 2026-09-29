@@ -45,7 +45,7 @@ func TestTheWizardAlwaysWritesGRE(t *testing.T) {
 			Addr: "1.2.3.4:9000", Token: "t", Iface: "bp0",
 			LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 		}
-		cfg := decode(t, spec.render())
+		cfg := decode(t, spec.Render())
 		if cfg.L3.Encap != "gre" {
 			t.Errorf("%s: encap = %q, want gre", side, cfg.L3.Encap)
 		}
@@ -56,7 +56,7 @@ func TestTheWizardAlwaysWritesGRE(t *testing.T) {
 	if got := l3EncapLabel(decode(t, l3Spec{
 		Side: sideIran, Carrier: "pck", Encap: "gre", Addr: "1.2.3.4:9000",
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
-	}.render()).L3); got != "GRE + Noise" {
+	}.Render()).L3); got != "GRE + Noise" {
 		t.Errorf("label = %q, want \"GRE + Noise\"", got)
 	}
 }
@@ -74,7 +74,7 @@ func TestAConfigThatStillSaysIPIPLoadsAndRunsAsGRE(t *testing.T) {
 		Side: sideIran, Carrier: "pck", Encap: "ipip",
 		Addr: "1.2.3.4:9000", Token: "t", Iface: "bp0",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
-	}.render())
+	}.Render())
 	// What is rendered now says gre, whatever it was asked for.
 	if cfg.L3.Encap != "gre" {
 		t.Fatalf("encap = %q, want gre", cfg.L3.Encap)

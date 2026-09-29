@@ -50,13 +50,18 @@ const (
 
 // Fail records an accept error and waits for the current backoff. It returns
 // false if the context was cancelled while waiting, so the caller can return.
-func (b *Backoff) Fail(ctx context.Context) bool {
+func (b *Backoff) Fail(ctx context.Context) bool { return b.Wait(ctx, first, max) }
+
+// Wait is Fail on a schedule of the caller's own: the first pause, doubling to
+// the ceiling. A loop waiting for another process to let go of a port wants
+// seconds where an accept loop wants milliseconds; the stepping is the same.
+func (b *Backoff) Wait(ctx context.Context, initial, ceiling time.Duration) bool {
 	if b.delay == 0 {
-		b.delay = first
-	} else if b.delay < max {
+		b.delay = initial
+	} else if b.delay < ceiling {
 		b.delay *= 2
-		if b.delay > max {
-			b.delay = max
+		if b.delay > ceiling {
+			b.delay = ceiling
 		}
 	}
 	t := time.NewTimer(b.delay)
@@ -68,6 +73,10 @@ func (b *Backoff) Fail(ctx context.Context) bool {
 		return true
 	}
 }
+
+// Delay is the pause the last failure waited, or zero since the last success.
+// For tests and logs; the schedule itself is Fail's and Wait's.
+func (b *Backoff) Delay() time.Duration { return b.delay }
 
 // OK clears the backoff after a successful accept, so an occasional bad
 // connection never slows the next good one.

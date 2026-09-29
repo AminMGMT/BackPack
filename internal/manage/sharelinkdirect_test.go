@@ -35,7 +35,7 @@ func TestTheKharejGetsEveryPairedSettingFromTheLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := spec.render()
+	body := spec.Render()
 	for _, want := range []string{
 		`mode         = "listen"`,
 		`local_ip     = "10.10.2.2"`,

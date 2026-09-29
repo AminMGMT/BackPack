@@ -368,33 +368,6 @@ func (f *udpFlow) SetDeadline(time.Time) error      { return nil }
 func (f *udpFlow) SetReadDeadline(time.Time) error  { return nil }
 func (f *udpFlow) SetWriteDeadline(time.Time) error { return nil }
 
-// udpAdmitter builds the callback startUDPForward hands a new flow to.
-//
-// It is the same three steps every transport already takes for an accepted TCP
-// connection — take a slot from the connection limit, put it on the local
-// channel, nudge the pool for somewhere to carry it — so a datagram flow is
-// paired, counted and torn down by the code that does it for everything else.
-// The slot is released where every other one is: by the handler that finishes
-// the transfer, or by the loop that gives up on a connection nobody claimed.
-func udpAdmitter(ctx context.Context, local chan LocalTCPConn, reqNewConn chan struct{}, limits *limiter) func(net.Conn, string) bool {
-	return func(conn net.Conn, target string) bool {
-		if !limits.acquire() {
-			return false
-		}
-		select {
-		case local <- LocalTCPConn{conn: limits.wrap(ctx, conn), remoteAddr: target, timeCreated: time.Now().UnixMilli()}:
-			select {
-			case reqNewConn <- struct{}{}:
-			default:
-			}
-			return true
-		default:
-			limits.release()
-			return false
-		}
-	}
-}
-
 // localForwardPort is the forwarded port a local connection arrived on.
 //
 // It used to be read with a bare type assertion to *net.TCPAddr, which was true

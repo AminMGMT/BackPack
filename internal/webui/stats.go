@@ -2,131 +2,17 @@ package webui
 
 import (
 	"net"
-	"os/exec"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/geo"
-	"github.com/backpack/backpack/internal/localproxy"
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/node"
 	"github.com/backpack/backpack/internal/sysstat"
-	"github.com/backpack/backpack/internal/utils/network"
-	psnet "github.com/shirou/gopsutil/v4/net"
 )
-
-// SystemStats is the payload for /api/stats.
-type SystemStats struct {
-	Hostname string `json:"hostname"`
-	OS       string `json:"os"`
-	Uptime   string `json:"uptime"`
-
-	IPv4 string `json:"ipv4"`
-	IPv6 string `json:"ipv6"`
-	// Where IPv4 was decided from — "interface" when the machine holds the
-	// address itself, "echo" when it had to be inferred from how this host
-	// appears to an outside service. Location and ISP are looked up from this
-	// address, so when it is the inferred one the panel says so rather than
-	// presenting a guess as a fact.
-	IPv4Source string `json:"ipv4Source"`
-	Location   string `json:"location"`
-	ISP        string `json:"isp"`
-
-	CPUPercent float64 `json:"cpuPercent"`
-	CPUCores   int     `json:"cpuCores"`
-	Load       string  `json:"load"`
-
-	MemUsed    string  `json:"memUsed"`
-	MemTotal   string  `json:"memTotal"`
-	MemPercent float64 `json:"memPercent"`
-
-	SwapUsed    string  `json:"swapUsed"`
-	SwapTotal   string  `json:"swapTotal"`
-	SwapPercent float64 `json:"swapPercent"`
-
-	DiskUsed    string  `json:"diskUsed"`
-	DiskTotal   string  `json:"diskTotal"`
-	DiskPercent float64 `json:"diskPercent"`
-
-	// Traffic carried by the tunnels — every tunnel's persisted counters added
-	// up, so the headline figure is the sum of what the cards show rather than a
-	// larger number nothing on the page accounts for. It used to be the machine's
-	// NIC counters, which also include ssh, apt and the panel itself, and which
-	// reset on reboot while the per-tunnel counters survive one.
-	TotalSent    string `json:"totalSent"`
-	TotalRecv    string `json:"totalRecv"`
-	TotalTraffic string `json:"totalTraffic"`
-	// Speed stays on the interface counters: it answers "what is this box doing
-	// right now", which is the question a live rate is read for, and a tunnel's
-	// own rate is already on its card.
-	UpSpeed   string `json:"upSpeed"`
-	DownSpeed string `json:"downSpeed"`
-
-	// The same five measurements as plain numbers — bytes, and bytes per
-	// second.
-	//
-	// The strings above are formatted for a reader and are what the classic
-	// panel prints. Anything that has to compute rather than print needs the
-	// number: the new panel scales a column history against a peak, works out
-	// each tunnel's share of the total, and animates the headline figure up to
-	// its value. Number("873 B/s") is NaN, so every one of those silently
-	// became zero — a page reporting no traffic on a link that was carrying
-	// it. Sending both is the honest fix; parsing a formatted string back into
-	// a number in the browser is guesswork about units that will be wrong the
-	// first time the formatter changes.
-	UpBps             float64 `json:"upBps"`
-	DownBps           float64 `json:"downBps"`
-	TotalSentBytes    uint64  `json:"totalSentBytes"`
-	TotalRecvBytes    uint64  `json:"totalRecvBytes"`
-	TotalTrafficBytes uint64  `json:"totalTrafficBytes"`
-
-	TunnelsTotal   int `json:"tunnelsTotal"`
-	TunnelsRunning int `json:"tunnelsRunning"`
-
-	// MonitorRunning reports the backpack-monitor service — the watchdog, the
-	// Telegram bot and the alerts live there, not in this panel. When it is
-	// down, dropped tunnels are not restarted and no alert fires, and nothing
-	// else visibly breaks — which is exactly why the panel must say so.
-	MonitorRunning bool `json:"monitorRunning"`
-
-	// Version is what is running here, so the update notice can say what it is
-	// asking the operator to move away from rather than only where to.
-	Version string `json:"version,omitempty"`
-
-	// UpdateTag is the newer release the cached background check knows about,
-	// empty when this version is current. Same source as the CLI's notice and
-	// the Telegram announcement, so the three can never disagree.
-	UpdateTag string `json:"updateTag,omitempty"`
-
-	// The built-in proxy, when the operator has turned it on. It is off by
-	// default, so all of this stays empty and the panel shows nothing.
-	//
-	// ProxyEnabled and ProxyRunning are deliberately separate. The proxy is a
-	// service of its own, and a tunnel can be forwarding a port to it while it
-	// is dead: the tunnel is up, the panel is green, and every connection
-	// through that port is refused at the far end. Only the two together say
-	// whether the thing actually answers.
-	ProxyEnabled bool   `json:"proxyEnabled,omitempty"`
-	ProxyRunning bool   `json:"proxyRunning,omitempty"`
-	ProxyType    string `json:"proxyType,omitempty"`
-	ProxyPort    int    `json:"proxyPort,omitempty"`
-
-	// Congestion is the TCP congestion control the tunnel's own sockets run
-	// under; CongestionWanted is what they ask for. They differ when the kernel
-	// does not have the requested algorithm, and the request is silently
-	// dropped by design — the connection still works, just not as fast on a
-	// long lossy path, and the presets were tuned expecting it to be there.
-	// Empty means the question has no answer here (not Linux), so the panel
-	// says nothing rather than guessing.
-	Congestion       string `json:"congestion,omitempty"`
-	CongestionWanted string `json:"congestionWanted,omitempty"`
-}
 
 // TunnelInfo is one row for /api/tunnels.
 type TunnelInfo struct {
@@ -255,227 +141,6 @@ func splitBotRelay(ports []string, token string) (string, int, bool) {
 
 // --- network speed sampling -------------------------------------------------
 
-type netSample struct {
-	sent, recv uint64
-	at         time.Time
-}
-
-var (
-	lastNet netSample
-	netMu   sync.Mutex
-)
-
-// --- identity (public addresses + geo) ---------------------------------------
-
-// All four values come from the network: two calls to an address echo, then a
-// geo lookup on the result. None of it belongs on the request path — a poll that
-// lands while they are being fetched would wait on up to three third-party HTTP
-// calls, and /api/stats is polled every few seconds.
-//
-// So the endpoint reads a cache and a refresher fills it in the background. The
-// first poll after a restart shows dashes and the one after that is complete,
-// which is the right trade: a blank field for a few seconds costs nothing, a
-// stalled dashboard costs the page.
-//
-// The addresses used to be behind a sync.Once. That made a transient failure
-// permanent — the panel starts from systemd at boot, often before the network is
-// up, and one failed lookup then left IPv4 (and with it Location and ISP, which
-// are derived from it) empty for as long as the process ran. Anything still
-// missing is retried; what has been found is refreshed hourly in case the VPS
-// is renumbered.
-type identityInfo struct {
-	ipv4, ipv6, location, isp string
-	ipv4Source                string
-}
-
-var (
-	idMu        sync.Mutex
-	idCur       identityInfo
-	idRefreshed time.Time
-	idBusy      bool
-)
-
-// identity returns the cached values and kicks a refresh when they are stale or
-// incomplete. It never blocks on the network.
-func identity() identityInfo {
-	idMu.Lock()
-	cur, at, busy := idCur, idRefreshed, idBusy
-	// Complete answers keep for an hour; an incomplete one is retried every
-	// 30 seconds until it fills in, rather than being frozen by the first
-	// failure.
-	ttl := time.Hour
-	if cur.ipv4 == "" || cur.location == "" || cur.isp == "" {
-		ttl = 30 * time.Second
-	}
-	if !busy && time.Since(at) > ttl {
-		idBusy = true
-		go refreshIdentity()
-	}
-	idMu.Unlock()
-	return cur
-}
-
-func refreshIdentity() {
-	ipv4, ipv4Source := manage.PublicIPv4Detail()
-	next := identityInfo{ipv4: ipv4, ipv4Source: ipv4Source, ipv6: manage.PublicIPv6()}
-	if g := geo.Lookup(next.ipv4); g != nil {
-		next.location = strings.Trim(strings.TrimSpace(g.City+", "+g.Country), ", ")
-		next.isp = g.ISP
-	}
-
-	idMu.Lock()
-	defer idMu.Unlock()
-	idBusy = false
-	idRefreshed = time.Now()
-	// Keep what we already knew when a round comes back empty: a lookup that
-	// fails once should blank nothing on the page.
-	if next.ipv4 != "" {
-		// The source travels with the address it describes: keeping one and
-		// replacing the other would label this address with where the previous
-		// one came from.
-		idCur.ipv4, idCur.ipv4Source = next.ipv4, next.ipv4Source
-	}
-	if next.ipv6 != "" {
-		idCur.ipv6 = next.ipv6
-	}
-	if next.location != "" {
-		idCur.location = next.location
-	}
-	if next.isp != "" {
-		idCur.isp = next.isp
-	}
-}
-
-// GatherSystem collects the current system statistics.
-func GatherSystem() SystemStats {
-	var s SystemStats
-
-	// Shared with the Telegram bot, so an alert and the dashboard can never
-	// disagree about the same instant.
-	m := sysstat.Get()
-
-	s.Hostname, s.OS = m.Hostname, m.OS
-	s.Uptime = sysstat.HumanDuration(m.Uptime)
-
-	s.CPUPercent, s.CPUCores = m.CPUPercent, m.CPUCores
-	s.Load = m.LoadString()
-
-	s.MemUsed, s.MemTotal = sysstat.HumanBytes(m.MemUsed), sysstat.HumanBytes(m.MemTotal)
-	s.MemPercent = m.MemPercent
-
-	s.SwapUsed, s.SwapTotal = sysstat.HumanBytes(m.SwapUsed), sysstat.HumanBytes(m.SwapTotal)
-	s.SwapPercent = m.SwapPercent
-
-	s.DiskUsed, s.DiskTotal = sysstat.HumanBytes(m.DiskUsed), sysstat.HumanBytes(m.DiskTotal)
-	s.DiskPercent = m.DiskPercent
-
-	tunnels := manage.List()
-	s.TunnelsTotal = len(tunnels)
-	for _, t := range tunnels {
-		if manage.IsActive(t.Service) {
-			s.TunnelsRunning++
-		}
-	}
-
-	fillNetwork(&s, tunnels)
-
-	// Identity — the public addresses and where they are. Read from a cache that
-	// a background refresher fills, never inline: the lookups are HTTP calls to
-	// third parties, and this endpoint is polled every few seconds.
-	id := identity()
-	s.IPv4, s.IPv6, s.Location, s.ISP = id.ipv4, id.ipv6, id.location, id.isp
-	s.IPv4Source = id.ipv4Source
-
-	s.MonitorRunning = manage.MonitorRunning()
-	s.Congestion, s.CongestionWanted = network.TunnelCongestion()
-
-	// Only ask systemd about the proxy when it is supposed to be there; an
-	// operator who never enabled it should not pay for the check.
-	if pc := localproxy.Load(); pc.Enabled {
-		s.ProxyEnabled = true
-		s.ProxyType = string(pc.Type)
-		s.ProxyPort = pc.Port
-		s.ProxyRunning = manage.ProxyRunning()
-	}
-
-	// Refresh in the background so the stats endpoint never waits on GitHub —
-	// and at most once per interval, not once per poll: this endpoint is hit
-	// every few seconds and does not need a goroutine each time.
-	kickUpdateCheck()
-	s.Version = app.Version
-	if tag, ok := manage.UpdateAvailable(); ok {
-		s.UpdateTag = tag
-	}
-	return s
-}
-
-var (
-	updKickMu   sync.Mutex
-	updKickedAt time.Time
-)
-
-// kickUpdateCheck starts a background staleness check, but no more than once
-// every 10 minutes across all polls.
-func kickUpdateCheck() {
-	updKickMu.Lock()
-	defer updKickMu.Unlock()
-	if time.Since(updKickedAt) < 10*time.Minute {
-		return
-	}
-	updKickedAt = time.Now()
-	go manage.RefreshUpdateCheckIfStale(6 * time.Hour)
-}
-
-// fillNetwork sets the traffic totals from the tunnels and the live rate from
-// the interface counters.
-//
-// The two come from different places on purpose. The total answers "how much has
-// this tunnel setup carried", so it is the sum of exactly what the cards show —
-// counting the box's ssh and apt traffic into a headline figure the cards cannot
-// account for is what made the number look wrong. The rate answers "what is
-// happening now", where the interface is the honest source.
-func fillNetwork(s *SystemStats, tunnels []manage.Tunnel) {
-	var in, out uint64
-	for _, t := range tunnels {
-		// A tunnel with no snapshot yet simply contributes nothing; the file
-		// appears once it has carried its first bytes.
-		snap, err := metrics.Read(app.ConfigDir, t.Name)
-		if err != nil {
-			continue
-		}
-		in += snap.BytesIn
-		out += snap.BytesOut
-	}
-	s.TotalRecv = sysstat.HumanBytes(in)
-	s.TotalSent = sysstat.HumanBytes(out)
-	s.TotalTraffic = sysstat.HumanBytes(in + out)
-	s.TotalRecvBytes, s.TotalSentBytes, s.TotalTrafficBytes = in, out, in+out
-
-	counters, err := psnet.IOCounters(false)
-	if err != nil || len(counters) == 0 {
-		return
-	}
-	cur := netSample{sent: counters[0].BytesSent, recv: counters[0].BytesRecv, at: time.Now()}
-
-	netMu.Lock()
-	prev := lastNet
-	lastNet = cur
-	netMu.Unlock()
-
-	if !prev.at.IsZero() {
-		secs := cur.at.Sub(prev.at).Seconds()
-		if secs > 0 {
-			s.UpBps = float64(cur.sent-prev.sent) / secs
-			s.DownBps = float64(cur.recv-prev.recv) / secs
-			s.UpSpeed = sysstat.HumanBytes(uint64(s.UpBps)) + "/s"
-			s.DownSpeed = sysstat.HumanBytes(uint64(s.DownBps)) + "/s"
-		}
-	}
-	if s.UpSpeed == "" {
-		s.UpSpeed, s.DownSpeed = "0 B/s", "0 B/s"
-	}
-}
-
 // gatherTunnels collects per-tunnel info concurrently, including ping and peer
 // geo. State reflects *real* connectivity, not just the local systemd unit:
 //
@@ -513,368 +178,179 @@ func gatherTunnels(run node.Runner) []TunnelInfo {
 		wg.Add(1)
 		go func(i int, t manage.Tunnel) {
 			defer wg.Done()
-			// One read serves both the peer fallback and the traffic fields.
-			snap, snapErr := metrics.Read(app.ConfigDir, t.Name)
-			ports, relayPort, bot := splitBotRelay(t.Ports, "")
-			pair, paired := manage.PairFor(t.Name)
-			info := TunnelInfo{
-				Name:         t.Name,
-				Role:         t.Role,
-				Transport:    t.Transport,
-				Addr:         t.Addr,
-				Ports:        ports,
-				BotRelay:     bot,
-				BotRelayPort: relayPort,
-				// The port clients dial. It was declared and documented but
-				// never filled in, so every server card showed a dash where
-				// its own port should be — the one number on the card you
-				// cannot look up anywhere else on the page.
-				TunnelPort: tunnelPortOf(t.Addr),
-				Country:    manage.TunnelCountry(t.Name),
-				Ping:       -1,
-				Direction:  manage.TunnelDirection(t),
-				Carrier:    manage.TunnelCarrier(t),
-			}
-			if paired {
-				info.Node, info.PeerName = pair.Node, pair.PeerName
-			}
-			// The question is whether this side can ping the far end from its
-			// own config, or has to detect whoever connected to it. A reverse
-			// server listens and a reverse client dials; a direct tunnel has
-			// the same split, with Iran on the dialling side. See DialsOut.
-			if !manage.DialsOut(t) {
-				// Listening side (e.g. the Iran node of a reverse tunnel): we
-				// can't ping our own bind_addr,
-				// but we can detect the connected client(s) — the kharej peers
-				// dialing in — and measure/geo-locate them. This gives the Iran
-				// web panel real per-tunnel health + latency to each kharej.
-				_, tport := splitHostPort(t.Addr)
-				peers := peersByPort[tport]
-				// A datagram listener has no peers in the socket table — the
-				// kernel genuinely does not know. The transport does, and writes
-				// it to the metrics file, so fall back to that rather than
-				// showing a working tunnel with no ping and no location.
-				if len(peers) == 0 && snapErr == nil {
-					if ip := peerHost(snap.Peer); ip != "" {
-						peers = []peerConn{{IP: ip, RTT: -1}}
-					}
-				}
-				if len(peers) > 0 {
-					p := peers[0]
-					// Prefer the kernel-measured RTT of the live tunnel socket
-					// (works even where ICMP is blocked); fall back to ping.
-					info.Ping = p.RTT
-					if info.Ping < 0 {
-						info.Ping = icmpPing(p.IP)
-					}
-					if g := geo.Lookup(p.IP); g != nil {
-						info.PeerLocation = strings.TrimSpace(g.City + ", " + g.Country)
-						info.PeerISP = g.ISP
-						info.PeerCountry = g.Code
-					}
-				}
-				info.State = health[t.Name].State
-			} else {
-				// Client (e.g. the kharej node): measure and geo-locate the
-				// remote server.
-				h, port := splitHostPort(t.Addr)
-				resolvable := h != "" && h != "0.0.0.0" && h != "::" && h != "[::]"
-				datagram := manage.IsDatagram(t.Transport)
-				if resolvable {
-					ip := resolveIP(h)
-					// A TCP probe is only meaningful for the TCP-based transports.
-					// KCP and UDP listen on a UDP port, so a TCP connect there
-					// always fails — using its result for ping (or worse, for
-					// liveness) reports a working datagram tunnel as dead, with no
-					// ping. ICMP is the only probe left for those, and it is
-					// best-effort: many routes drop it while carrying the tunnel.
-					if datagram {
-						if ip != "" {
-							info.Ping = icmpPing(ip)
-						}
-					} else {
-						info.Ping = tcpPing(h, port)
-					}
-					if ip != "" {
-						if g := geo.Lookup(ip); g != nil {
-							info.PeerLocation = strings.TrimSpace(g.City + ", " + g.Country)
-							info.PeerISP = g.ISP
-							info.PeerCountry = g.Code
-						}
-					}
-				}
-				info.State = health[t.Name].State
-				// A failed TCP probe is evidence the tunnel is down; a failed
-				// ICMP one is not (it may simply be filtered), so a datagram
-				// tunnel's liveness rests on the socket check in AllHealth alone,
-				// never on ping.
-				if info.State == "online" && resolvable && !datagram && info.Ping < 0 {
-					info.State = "offline"
-				}
-				// Geo is a lookup against providers this machine may not be
-				// able to reach — on an Iran server it usually cannot — and
-				// when it fails the card shows a dot where a flag belongs and
-				// a dash where a location belongs. A managed server holding
-				// the other end is outside that route and answers for itself,
-				// so ask it rather than guessing again.
-				if paired && (info.PeerCountry == "" || info.PeerLocation == "") {
-					if n, ok := node.Find(pair.Node); ok {
-						if info.PeerCountry == "" {
-							info.PeerCountry = n.Info.Country
-						}
-						if info.PeerLocation == "" {
-							info.PeerLocation = strings.TrimSpace(
-								strings.TrimSuffix(n.Info.City+", "+n.Info.Country, ", "))
-						}
-						if info.PeerISP == "" {
-							info.PeerISP = n.Info.ISP
-						}
-					}
-				}
-				if d := health[t.Name].ServiceDown; d != nil && info.State == "online" {
-					info.ServiceDown = health[t.Name].Detail
-				}
-				// This side is the listening end of a reverse tunnel, so the
-				// forwarded service is on the far machine and only that machine
-				// can see it refusing. Ask the server holding it — from cache,
-				// never blocking this poll. See farservice.go.
-				if info.ServiceDown == "" && info.State == "online" && paired {
-					info.ServiceDown = farService.lookup(run, pair.Node, pair.PeerName)
-				}
-			}
-			if snapErr == nil {
-				fillMetrics(&info, snap)
-			}
-			// The snapshot's uptime describes the last run; on a stopped tunnel
-			// that is history, not state. The traffic totals stay — they are
-			// cumulative and survive restarts by design.
-			if info.State == "stopped" {
-				info.Uptime = ""
-			}
-			fillConfig(&info, t)
-			out[i] = info
+			out[i] = tunnelInfo(t, health[t.Name], peersByPort, run)
 		}(i, t)
 	}
 	wg.Wait()
 	return out
 }
 
+// tunnelInfo is one tunnel's card: what its config says, what its snapshot
+// says, and what can be learned about the far end from here.
+func tunnelInfo(t manage.Tunnel, h manage.Health, peersByPort map[string][]peerConn, run node.Runner) TunnelInfo {
+	// One read serves both the peer fallback and the traffic fields.
+	snap, snapErr := metrics.Read(app.ConfigDir, t.Name)
+	ports, relayPort, bot := splitBotRelay(t.Ports, "")
+	pair, paired := manage.PairFor(t.Name)
+	info := TunnelInfo{
+		Name:         t.Name,
+		Role:         t.Role,
+		Transport:    t.Transport,
+		Addr:         t.Addr,
+		Ports:        ports,
+		BotRelay:     bot,
+		BotRelayPort: relayPort,
+		// The port clients dial. It was declared and documented but
+		// never filled in, so every server card showed a dash where
+		// its own port should be — the one number on the card you
+		// cannot look up anywhere else on the page.
+		TunnelPort: tunnelPortOf(t.Addr),
+		Country:    manage.TunnelCountry(t.Name),
+		Ping:       -1,
+		Direction:  manage.TunnelDirection(t),
+		Carrier:    manage.TunnelCarrier(t),
+	}
+	if paired {
+		info.Node, info.PeerName = pair.Node, pair.PeerName
+	}
+	// The question is whether this side can ping the far end from its
+	// own config, or has to detect whoever connected to it. A reverse
+	// server listens and a reverse client dials; a direct tunnel has
+	// the same split, with Iran on the dialling side. See DialsOut.
+	if !manage.DialsOut(t) {
+		observeInbound(&info, t, h, peersByPort, snap, snapErr)
+	} else {
+		observeOutbound(&info, t, h, pair, paired, run)
+	}
+	if snapErr == nil {
+		fillMetrics(&info, snap)
+	}
+	// The snapshot's uptime describes the last run; on a stopped tunnel
+	// that is history, not state. The traffic totals stay — they are
+	// cumulative and survive restarts by design.
+	if info.State == "stopped" {
+		info.Uptime = ""
+	}
+	fillConfig(&info, t)
+	return info
+}
+
+// observeInbound fills in the far end of a tunnel this side listens on: the
+// peer that dialled in, found in the socket table or, for a datagram listener,
+// in the snapshot.
+func observeInbound(info *TunnelInfo, t manage.Tunnel, th manage.Health, peersByPort map[string][]peerConn, snap metrics.Snapshot, snapErr error) {
+	// Listening side (e.g. the Iran node of a reverse tunnel): we
+	// can't ping our own bind_addr,
+	// but we can detect the connected client(s) — the kharej peers
+	// dialing in — and measure/geo-locate them. This gives the Iran
+	// web panel real per-tunnel health + latency to each kharej.
+	_, tport := splitHostPort(t.Addr)
+	peers := peersByPort[tport]
+	// A datagram listener has no peers in the socket table — the
+	// kernel genuinely does not know. The transport does, and writes
+	// it to the metrics file, so fall back to that rather than
+	// showing a working tunnel with no ping and no location.
+	if len(peers) == 0 && snapErr == nil {
+		if ip := peerHost(snap.Peer); ip != "" {
+			peers = []peerConn{{IP: ip, RTT: -1}}
+		}
+	}
+	if len(peers) > 0 {
+		p := peers[0]
+		// Prefer the kernel-measured RTT of the live tunnel socket
+		// (works even where ICMP is blocked); fall back to ping.
+		info.Ping = p.RTT
+		if info.Ping < 0 {
+			info.Ping = icmpPingCached(p.IP)
+		}
+		locate(info, p.IP)
+	}
+	info.State = th.State
+}
+
+// observeOutbound fills in the far end of a tunnel this side dials: the server
+// it dials, probed and located from here, or from the managed server holding
+// it when this machine cannot reach the geo providers.
+func observeOutbound(info *TunnelInfo, t manage.Tunnel, th manage.Health, pair manage.Pair, paired bool, run node.Runner) {
+	// Client (e.g. the kharej node): measure and geo-locate the
+	// remote server.
+	h, port := splitHostPort(t.Addr)
+	resolvable := h != "" && h != "0.0.0.0" && h != "::" && h != "[::]"
+	datagram := manage.IsDatagram(t.Transport)
+	if resolvable {
+		ip := resolveIPCached(h)
+		// A TCP probe is only meaningful for the TCP-based transports.
+		// KCP and UDP listen on a UDP port, so a TCP connect there
+		// always fails — using its result for ping (or worse, for
+		// liveness) reports a working datagram tunnel as dead, with no
+		// ping. ICMP is the only probe left for those, and it is
+		// best-effort: many routes drop it while carrying the tunnel.
+		if datagram {
+			if ip != "" {
+				info.Ping = icmpPingCached(ip)
+			}
+		} else {
+			info.Ping = tcpPingCached(h, port)
+		}
+		if ip != "" {
+			locate(info, ip)
+		}
+	}
+	info.State = th.State
+	// A failed TCP probe is evidence the tunnel is down; a failed
+	// ICMP one is not (it may simply be filtered), so a datagram
+	// tunnel's liveness rests on the socket check in AllHealth alone,
+	// never on ping.
+	if info.State == "online" && resolvable && !datagram && info.Ping < 0 {
+		info.State = "offline"
+	}
+	// Geo is a lookup against providers this machine may not be
+	// able to reach — on an Iran server it usually cannot — and
+	// when it fails the card shows a dot where a flag belongs and
+	// a dash where a location belongs. A managed server holding
+	// the other end is outside that route and answers for itself,
+	// so ask it rather than guessing again.
+	if paired && (info.PeerCountry == "" || info.PeerLocation == "") {
+		if n, ok := node.Find(pair.Node); ok {
+			if info.PeerCountry == "" {
+				info.PeerCountry = n.Info.Country
+			}
+			if info.PeerLocation == "" {
+				info.PeerLocation = strings.TrimSpace(
+					strings.TrimSuffix(n.Info.City+", "+n.Info.Country, ", "))
+			}
+			if info.PeerISP == "" {
+				info.PeerISP = n.Info.ISP
+			}
+		}
+	}
+	if d := th.ServiceDown; d != nil && info.State == "online" {
+		info.ServiceDown = th.Detail
+	}
+	// When the forwarded service is on the far machine — the Iran end of a
+	// direct tunnel dials out while its users arrive here — only that
+	// machine can see it refusing. Ask the server holding it, from cache,
+	// never blocking this poll. See farservice.go.
+	if info.ServiceDown == "" && info.State == "online" && paired {
+		info.ServiceDown = farService.lookup(run, pair.Node, pair.PeerName)
+	}
+}
+
+// locate fills in where an address is, when the geo lookup knows.
+func locate(info *TunnelInfo, ip string) {
+	// Never waits on the network: the providers are asked in the background
+	// and the card fills in on a later poll. See geo.Peek.
+	if g := geo.Peek(ip); g != nil {
+		info.PeerLocation = strings.TrimSpace(g.City + ", " + g.Country)
+		info.PeerISP = g.ISP
+		info.PeerCountry = g.Code
+	}
+}
+
 // TunnelLogs returns the last N journal lines for a tunnel service.
 func TunnelLogs(name string) string { return manage.Logs(name, 150) }
 
 // --- helpers ----------------------------------------------------------------
-
-func tcpPing(host, port string) int {
-	if port == "" {
-		port = "80"
-	}
-	start := time.Now()
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 2*time.Second)
-	if err != nil {
-		return -1
-	}
-	conn.Close()
-	return int(time.Since(start).Milliseconds())
-}
-
-// peerConn is a client (kharej) currently connected to a server tunnel, with
-// the kernel-measured RTT of that socket (ms), or -1 if unknown.
-type peerConn struct {
-	IP  string
-	RTT int
-}
-
-// peerConn's are read with `ss -tin`: the `-i` flag adds a second, indented
-// info line per socket containing `rtt:`, which is the real latency of the
-// tunnel connection (no ICMP needed).
-//
-// The peers of every listening tunnel, from one read of the socket table.
-//
-// This was one `ss -tin state established` per listening tunnel on every
-// tunnel poll — every six seconds, from every open tab — and each of them
-// dumped the TCP state of every established socket on the machine, to keep the
-// handful on one port. On a server that is what these usually are, a proxy
-// carrying tens of thousands of connections, that was the panel's cost:
-// measured with 40,000 sockets, five tunnels and one tab open, 45% of a core.
-//
-// Now the kernel does the filtering — ss hands the port list to it, so only the
-// tunnels' own sockets come back — it happens once per poll for all tunnels,
-// and the answer is shared for a few seconds, so a second tab costs nothing.
-var peerCache struct {
-	mu     sync.Mutex
-	key    string
-	at     time.Time
-	byPort map[string][]peerConn
-}
-
-// peerCacheTTL is how long one read of the peers is reused. Under the panel's
-// own poll interval, so every poll sees a fresh-enough answer.
-const peerCacheTTL = 3 * time.Second
-
-// listeningPeers returns, for each port, the remote peers established on it.
-func listeningPeers(ports []string) map[string][]peerConn {
-	want := map[string]bool{}
-	var list []string
-	for _, p := range ports {
-		if p != "" && !want[p] {
-			want[p] = true
-			list = append(list, p)
-		}
-	}
-	if len(list) == 0 {
-		return nil
-	}
-	sort.Strings(list)
-	key := strings.Join(list, ",")
-
-	peerCache.mu.Lock()
-	defer peerCache.mu.Unlock()
-	if peerCache.key == key && time.Since(peerCache.at) < peerCacheTTL {
-		return peerCache.byPort
-	}
-
-	filter := make([]string, 0, len(list))
-	for _, p := range list {
-		filter = append(filter, "sport = :"+p)
-	}
-	out, err := exec.Command("ss", "-Htin", "state", "established",
-		"( "+strings.Join(filter, " or ")+" )").Output()
-	if err != nil {
-		return nil
-	}
-	byPort := parsePeers(string(out), want)
-	peerCache.key, peerCache.at, peerCache.byPort = key, time.Now(), byPort
-	return byPort
-}
-
-// parsePeers reads `ss -Htin` output into the peers on each wanted local port,
-// one entry per remote address.
-func parsePeers(out string, want map[string]bool) map[string][]peerConn {
-	byPort := map[string][]peerConn{}
-	seen := map[string]bool{}
-	var cur *peerConn
-	var curPort string
-	flush := func() {
-		if cur != nil && !seen[curPort+"|"+cur.IP] {
-			seen[curPort+"|"+cur.IP] = true
-			byPort[curPort] = append(byPort[curPort], *cur)
-		}
-		cur = nil
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if line == "" {
-			continue
-		}
-		if line[0] == ' ' || line[0] == '\t' {
-			// Info line for the current connection — extract rtt:X/Y.
-			if cur != nil {
-				cur.RTT = parseRTT(line)
-			}
-			continue
-		}
-		// Connection line.
-		flush()
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			continue
-		}
-		local, peer := f[len(f)-2], f[len(f)-1]
-		_, lp := splitHostPort(local)
-		if !want[lp] {
-			continue
-		}
-		ph, _ := splitHostPort(peer)
-		if ph == "" || ph == "127.0.0.1" || ph == "::1" {
-			continue
-		}
-		cur, curPort = &peerConn{IP: ph, RTT: -1}, lp
-	}
-	flush()
-	return byPort
-}
-
-// parseRTT extracts the smoothed RTT (in ms) from an `ss -i` info line.
-func parseRTT(line string) int {
-	idx := strings.Index(line, "rtt:")
-	if idx < 0 {
-		return -1
-	}
-	var num strings.Builder
-	for _, c := range line[idx+4:] {
-		if (c >= '0' && c <= '9') || c == '.' {
-			num.WriteRune(c)
-		} else {
-			break // stops at the '/' separating srtt from rttvar
-		}
-	}
-	f, err := strconv.ParseFloat(num.String(), 64)
-	if err != nil {
-		return -1
-	}
-	return int(f + 0.5)
-}
-
-// icmpPing returns the round-trip time to ip in milliseconds using the system
-// ping command, or -1 if unreachable/blocked.
-func icmpPing(ip string) int {
-	out, err := exec.Command("ping", "-c", "1", "-W", "1", ip).CombinedOutput()
-	if err != nil {
-		return -1
-	}
-	s := string(out)
-	idx := strings.Index(s, "time=")
-	if idx < 0 {
-		return -1
-	}
-	var num strings.Builder
-	for _, c := range s[idx+5:] {
-		if (c >= '0' && c <= '9') || c == '.' {
-			num.WriteRune(c)
-		} else {
-			break
-		}
-	}
-	f, err := strconv.ParseFloat(num.String(), 64)
-	if err != nil {
-		return -1
-	}
-	return int(f + 0.5)
-}
-
-func resolveIP(host string) string {
-	if net.ParseIP(host) != nil {
-		return host
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return ""
-	}
-	return ips[0].String()
-}
-
-// tunnelPortOf reduces a bind address to the part that matters. A server binds
-// "0.0.0.0:1231" or "[::]:1231"; the host half is noise on a card, and on a
-// client the address is the peer's and belongs in full.
-func tunnelPortOf(addr string) string {
-	if _, port := splitHostPort(addr); port != "" {
-		return port
-	}
-	return ""
-}
-
-func splitHostPort(addr string) (string, string) {
-	if h, p, err := net.SplitHostPort(addr); err == nil {
-		return h, p
-	}
-	return addr, ""
-}
-
-// --- transfer-rate history ---------------------------------------------------
-
-// rateKeep is how many sparkline points are kept per tunnel. Snapshots are
-// written every few seconds, so this covers roughly the last few minutes —
-// enough to see a stall or a spike, which is what a sparkline is for.
-const rateKeep = 48
 
 // rateTracker derives bytes-per-second from successive metrics snapshots.
 //

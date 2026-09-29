@@ -45,7 +45,7 @@ func NewTTLCache[T any](ttl, prune time.Duration) *TTLCache[T] {
 	return &TTLCache[T]{ttl: ttl, prune: prune, entries: make(map[string]*ttlEntry[T])}
 }
 
-// get returns a fresh cached value, waits for one already being read, or reads
+// Get returns a fresh cached value, waits for one already being read, or reads
 // it. read is never called concurrently for the same key.
 func (c *TTLCache[T]) Get(key string, read func() T) T {
 	for {
@@ -90,7 +90,7 @@ func (c *TTLCache[T]) Get(key string, read func() T) T {
 	}
 }
 
-// forget drops everything cached, for when something has just made it wrong.
+// Forget drops everything cached, for when something has just made it wrong.
 //
 // A read already in flight is left alone: its waiters are owed an answer, and
 // it will simply be a moment out of date, which is what they would have got

@@ -226,11 +226,14 @@ type quicCarrier struct {
 // quicPeer is one accepted connection.
 type quicPeer struct {
 	conn *quic.Conn
-	// wrote is when this end last sent on it, as unix nanoseconds: the
-	// tunnel only writes to a peer that authenticated (and to a handshake it
-	// is answering), so the connection written to most recently is the one
-	// the tunnel trusts, and the last to be evicted.
+	// wrote is when this end last sent on it, as unix nanoseconds, and zero
+	// until it first does. The tunnel only writes to a peer that
+	// authenticated (and to a handshake it is answering, which needs the
+	// token too), so a connection never written to is a stranger's, and the
+	// one written to most recently is the one the tunnel trusts.
 	wrote atomic.Int64
+	// added orders the strangers, oldest first.
+	added int64
 }
 
 type quicDatagram struct {
@@ -277,8 +280,11 @@ func (c *quicCarrier) acceptLoop() {
 // replaces the first.
 func (c *quicCarrier) addPeer(conn *quic.Conn) bool {
 	key := conn.RemoteAddr().String()
-	p := &quicPeer{conn: conn}
-	p.wrote.Store(time.Now().UnixNano())
+	// Not written to yet: a stranger until the tunnel answers it. It used to
+	// start as if just written to, which made sixteen connections from anyone
+	// — no token needed — newer than an idle tunnel's genuine peer, and the
+	// sixteenth evicted it.
+	p := &quicPeer{conn: conn, added: time.Now().UnixNano()}
 
 	c.mu.Lock()
 	if c.closed {
@@ -289,15 +295,9 @@ func (c *quicCarrier) addPeer(conn *quic.Conn) bool {
 	if old, ok := c.peers[key]; ok {
 		evict = append(evict, old.conn)
 	} else if len(c.peers) >= quicMaxPeers {
-		var oldestKey string
-		var oldest int64
-		for k, q := range c.peers {
-			if w := q.wrote.Load(); oldestKey == "" || w < oldest {
-				oldestKey, oldest = k, w
-			}
-		}
-		evict = append(evict, c.peers[oldestKey].conn)
-		delete(c.peers, oldestKey)
+		k := evictionVictim(c.peers)
+		evict = append(evict, c.peers[k].conn)
+		delete(c.peers, k)
 	}
 	c.peers[key] = p
 	c.mu.Unlock()
@@ -306,6 +306,36 @@ func (c *quicCarrier) addPeer(conn *quic.Conn) bool {
 		e.CloseWithError(0, "replaced")
 	}
 	return true
+}
+
+// evictionVictim chooses which connection a full listener lets go: the oldest
+// stranger — a connection the tunnel has never written to — while there is
+// one, and only when every connection has been written to, the one written to
+// least recently. The tunnel's peer is never chosen while strangers remain.
+func evictionVictim(peers map[string]*quicPeer) string {
+	var victim string
+	var best *quicPeer
+	for k, q := range peers {
+		if best == nil || lessTrusted(q, best) {
+			victim, best = k, q
+		}
+	}
+	return victim
+}
+
+// lessTrusted orders peers for eviction: a stranger (never written to) before
+// any peer the tunnel has written to; among strangers the oldest first; among
+// the rest the one written to least recently first.
+func lessTrusted(a, b *quicPeer) bool {
+	aw, bw := a.wrote.Load(), b.wrote.Load()
+	switch {
+	case (aw == 0) != (bw == 0):
+		return aw == 0
+	case aw == 0:
+		return a.added < b.added
+	default:
+		return aw < bw
+	}
 }
 
 // readPeer feeds one connection's datagrams to ReadFrom until it ends.

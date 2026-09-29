@@ -55,7 +55,7 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 			localChannel:   make(chan LocalTCPConn, queueSize),
 			reqNewConnChan: make(chan struct{}, 1),
 		}
-		s := &TcpMuxTransport{logger: log, limits: lim, config: &TcpMuxConfig{MuxCon: 8}}
+		s := &TcpMuxTransport{lifecycle: lifecycle{logger: log}, limits: lim, config: &TcpMuxConfig{MuxCon: 8}}
 		subs = append(subs, sessionErrorSubject{
 			name: "tcpmux",
 			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
@@ -75,7 +75,7 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 			localChannel:   make(chan LocalTCPConn, queueSize),
 			reqNewConnChan: make(chan struct{}, 1),
 		}
-		s := &WsMuxTransport{logger: log, limits: lim, config: &WsMuxConfig{MuxCon: 8}}
+		s := &WsMuxTransport{lifecycle: lifecycle{logger: log}, limits: lim, config: &WsMuxConfig{MuxCon: 8}}
 		subs = append(subs, sessionErrorSubject{
 			name: "wsmux",
 			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
@@ -95,7 +95,7 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 			localChannel:   make(chan LocalTCPConn, queueSize),
 			reqNewConnChan: make(chan struct{}, 1),
 		}
-		s := &KcpTransport{logger: log, limits: lim, config: &KcpConfig{MuxCon: 8}}
+		s := &KcpTransport{lifecycle: lifecycle{logger: log}, limits: lim, config: &KcpConfig{MuxCon: 8}}
 		subs = append(subs, sessionErrorSubject{
 			name: "kcp",
 			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },

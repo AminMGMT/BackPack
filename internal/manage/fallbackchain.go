@@ -74,25 +74,18 @@ func chainSummary(primary string, list []string) string {
 // need the same list, and nothing on this machine can check the other end.
 func changeFallbackTransports(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Transport fallback chain")
-	tui.Warn("Backup addresses handle a server IP that stops answering. This handles")
-	tui.Warn("the other case: the server is reachable but the carrier itself is being")
-	tui.Warn("filtered. The tunnel then tries the next carrier on the list by itself.")
+	tui.Title("Fallback Transports")
+	tui.Warn("Tried In Order When The Transport Is Blocked.")
 	fmt.Println()
-	tui.Info("Transport now : " + transportLabel(spec.Transport))
-	tui.Info("Chain now     : " + chainSummary(spec.Transport, spec.FallbackTransports))
+	tui.Info("Transport : " + transportLabel(spec.Transport))
+	tui.Info("Chain     : " + chainSummary(spec.Transport, spec.FallbackTransports))
 	fmt.Println()
-	tui.Warn("BOTH ENDS must carry the same list in the same order. They never tell")
-	tui.Warn("each other where they are — they meet because the server holds each")
-	tui.Warn("carrier while the other end tries the whole list. A list on one end")
-	tui.Warn("only will leave the tunnel down.")
-	fmt.Println()
-	tui.Warn("Enter the carriers to fall back to, comma separated, in order, e.g.:")
-	tui.Warn("    wss, quic, kcp")
-	tui.Warn("Leave empty to switch fallback off.")
+	tui.Warn("Both Ends Need The Same List In The Same Order.")
 	fmt.Println()
 
-	raw := tui.Prompt("Fallback carriers: ")
+	fmt.Println()
+
+	raw := tui.Prompt("Fallback Transports (e.g. wss, quic, kcp; Blank = Off): ")
 	var list []string
 	for _, p := range strings.Split(raw, ",") {
 		if p = strings.TrimSpace(p); p != "" {
@@ -102,15 +95,11 @@ func changeFallbackTransports(name string, spec TunnelSpec) {
 
 	dwell := spec.FallbackDwell
 	if len(list) > 0 {
-		fmt.Println()
-		tui.Warn("How long to hold each carrier before moving on, in seconds.")
-		tui.Warn("Too short and a slow path looks blocked; too long and recovery drags.")
-		tui.Warn(fmt.Sprintf("Leave empty for the default (%d).",
-			int(config.DefaultFallbackDwell.Seconds())))
-		if v := strings.TrimSpace(tui.Prompt("Seconds: ")); v != "" {
+		if v := strings.TrimSpace(tui.Prompt(fmt.Sprintf("Seconds On Each Before Moving On (Blank = %d): ",
+			int(config.DefaultFallbackDwell.Seconds())))); v != "" {
 			n := 0
 			if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n <= 0 {
-				tui.Error("Not a number of seconds.")
+				tui.Error("Not a number.")
 				tui.PressEnter()
 				return
 			}
@@ -124,13 +113,12 @@ func changeFallbackTransports(name string, spec TunnelSpec) {
 		return
 	}
 	if len(list) == 0 {
-		tui.Success("Transport fallback switched off — the tunnel restarted.")
+		tui.Success("Fallback Off — Restarted.")
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Chain saved — the tunnel restarted: " + chainSummary(spec.Transport, list))
+	tui.Success("Saved — Restarted: " + chainSummary(spec.Transport, list))
 	fmt.Println()
-	tui.Warn("Now set the SAME chain on the other end, or this tunnel will spend")
-	tui.Warn("its time on carriers the other end is not listening for.")
+	tui.Warn("Set The Same List On The Other End.")
 	tui.PressEnter()
 }

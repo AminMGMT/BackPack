@@ -33,7 +33,16 @@ type geoEntry struct {
 
 var (
 	geoCache = map[string]geoEntry{}
+	// geoMiss is when a lookup last found nothing. Without it an address the
+	// providers cannot answer for — every address, on a server that cannot
+	// reach them, which an Iran server usually cannot — was asked about again
+	// on every call, three providers at up to six seconds each, and the web
+	// panel's tunnel list waited for all of it on every poll.
+	geoMiss  = map[string]time.Time{}
+	geoBusy  = map[string]bool{}
 	geoMu    sync.Mutex
+	missTTL  = 10 * time.Minute
+	foundTTL = 6 * time.Hour
 )
 
 // geoProviders is an ordered list of lookup functions. The first that succeeds
@@ -47,21 +56,67 @@ func Lookup(ip string) *Info {
 	if ip == "" || ip == "-" {
 		return nil
 	}
+	if g, fresh := cached(ip); fresh {
+		return g
+	}
+	return lookup(ip)
+}
+
+// Peek is Lookup for a caller that must not wait on the network: it answers
+// from the cache at once — nil when nothing is known yet — and, when the
+// answer is missing or old, asks the providers in the background so a later
+// call has it. One question per address is in flight at a time.
+func Peek(ip string) *Info {
+	if ip == "" || ip == "-" {
+		return nil
+	}
+	g, fresh := cached(ip)
+	if fresh {
+		return g
+	}
 	geoMu.Lock()
-	if e, ok := geoCache[ip]; ok && time.Since(e.at) < 6*time.Hour {
-		geoMu.Unlock()
-		return e.info
+	if !geoBusy[ip] {
+		geoBusy[ip] = true
+		go func() {
+			lookup(ip)
+			geoMu.Lock()
+			delete(geoBusy, ip)
+			geoMu.Unlock()
+		}()
 	}
 	geoMu.Unlock()
+	return g // an old answer is better than none while the new one comes
+}
 
+// cached is what the cache holds for ip, and whether it is still fresh — a
+// recent failure counting as a fresh "nothing".
+func cached(ip string) (*Info, bool) {
+	geoMu.Lock()
+	defer geoMu.Unlock()
+	e, ok := geoCache[ip]
+	if ok && time.Since(e.at) < foundTTL {
+		return e.info, true
+	}
+	if at, missed := geoMiss[ip]; missed && time.Since(at) < missTTL {
+		return e.info, true
+	}
+	return e.info, false
+}
+
+// lookup asks the providers in turn and records the answer, or the miss.
+func lookup(ip string) *Info {
 	for _, provider := range geoProviders {
 		if g := provider(ip); g != nil && (g.Country != "" || g.ISP != "") {
 			geoMu.Lock()
 			geoCache[ip] = geoEntry{info: g, at: time.Now()}
+			delete(geoMiss, ip)
 			geoMu.Unlock()
 			return g
 		}
 	}
+	geoMu.Lock()
+	geoMiss[ip] = time.Now()
+	geoMu.Unlock()
 	return nil
 }
 

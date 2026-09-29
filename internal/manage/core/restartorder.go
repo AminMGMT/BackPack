@@ -79,8 +79,12 @@ func RestartForNewBinary(logf func(string)) (ok, failed int, later []string) {
 
 	if own == app.WebUIService {
 		later = append(later, app.WebUIService)
-	} else {
-		RestartService(app.WebUIService)
+	} else if IsEnabled(app.WebUIService) || IsActive(app.WebUIService) {
+		// The panel is optional; a machine without its unit has nothing to
+		// restart, and saying it failed would be a false alarm on every update.
+		if err := RestartService(app.WebUIService); err != nil {
+			logf("Warning: web panel could not restart: " + err.Error())
+		}
 	}
 	deferred.add(later)
 	return ok, failed, later

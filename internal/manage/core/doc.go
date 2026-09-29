@@ -11,13 +11,14 @@
 // is that a change to how a systemd unit is written is a change to the package
 // the panel, the CLI, the monitor and the node RPC all depend on.
 //
-// This is the one seam in that package that could be cut without untangling
+// This was the one seam in that package that could be cut without untangling
 // anything first: everything above sits on it and it sits on nothing above.
-// Every other candidate — configuration, update, diagnosis — is mutually
-// entangled through the tunnel-spec lifecycle, where config rendering, editing
-// and direct-tunnel rendering each call into the other two. Cutting one of
-// those means breaking a real cycle, which is design work rather than moving
-// files, and doing it as one sweep is how a working install breaks quietly.
+// The candidates above it — configuration, diagnosis — were mutually entangled
+// through the tunnel-spec lifecycle, and were cut later, once the few edges
+// that held the cycle together had been turned round: see tunnelspec, host and
+// health. The layers are now core and spec at the bottom, then host,
+// tunnelspec and backup, then health, then the wizards, the panel's API,
+// update and migration in internal/manage itself (docs/adr/0003).
 //
 // # The names did not move
 //

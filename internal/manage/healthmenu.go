@@ -12,7 +12,7 @@ import (
 func HealthCheck() {
 	tui.Clear()
 	tui.Title("Health Check")
-	tui.Warn("Checking the server, the web panel and every tunnel...")
+	tui.Warn("Checking The Server, Panel And Tunnels...")
 	fmt.Println()
 
 	checks := Diagnose()
@@ -43,12 +43,12 @@ func HealthCheck() {
 	}
 	switch {
 	case failCount > 0:
-		tui.Error("Problems found — " + summary)
-		tui.Warn("Follow the red suggestions above, then run the check again.")
+		tui.Error("Problems Found — " + summary)
+		tui.Warn("Fix The Red Items, Then Check Again.")
 	case warnCount > 0:
-		tui.Info("Mostly healthy — " + summary)
+		tui.Info("Mostly Healthy — " + summary)
 	default:
-		tui.Success("Everything looks healthy — " + summary)
+		tui.Success("Healthy — " + summary)
 	}
 	tui.PressEnter()
 }
@@ -72,7 +72,6 @@ func checkMark(l CheckLevel) string {
 func FileLocations() {
 	tui.Clear()
 	tui.Title("File Locations")
-	tui.Warn("Everything Backpack owns on this server.")
 	fmt.Println()
 
 	locs := Locations()
@@ -94,7 +93,7 @@ func FileLocations() {
 
 	fmt.Println()
 	if missing > 0 {
-		tui.Warn(fmt.Sprintf("%d item(s) not present — that is normal for features you don't use.", missing))
+		tui.Warn(fmt.Sprintf("%d Not Present (Features Not In Use).", missing))
 	}
 	tui.PressEnter()
 }

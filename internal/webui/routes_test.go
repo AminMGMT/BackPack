@@ -165,7 +165,7 @@ func routeSource(t *testing.T) string {
 		t.Fatal(err)
 	}
 	src := string(data)
-	start := strings.Index(src, "func (srv *server) routes() *http.ServeMux {")
+	start := strings.Index(src, "func (s *server) routes() *http.ServeMux {")
 	if start < 0 {
 		t.Fatal("routes() is not in server.go")
 	}

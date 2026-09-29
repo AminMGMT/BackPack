@@ -143,7 +143,7 @@ The direct tunnel uses:
 * Multiple carrier options
 * Full IP routing
 
-Set up the Iran server first: `Setup Iran → Direct → carrier`. Its summary, right before **Create This Tunnel**, shows a one-line **setup link** (`backpack://…`); on the kharej server choose `Setup Kharej → Direct → the same carrier → Setup Link`. The token, addresses and tuning come across in the link. For several kharej servers behind one Iran server, repeat it once per kharej — each gets its own link.
+Set up the Iran server first: `Setup Iran → Direct → carrier`. Its summary, right before **Create This Tunnel**, shows a one-line **setup link** (`backpack://…`) and, under it, one command that installs Backpack on a fresh kharej and builds the tunnel from that link; on a kharej that already runs Backpack choose `Setup Kharej → Direct → the same carrier → Setup Link`, or run `backpack link apply '<link>'`. The token, addresses and tuning come across in the link. For several kharej servers behind one Iran server, repeat it once per kharej — each gets its own link.
 
 See [Direct layer-3 tunnel](docs/l3-direct-tunnel.md).
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -475,5 +476,25 @@ func TestAValidSessionIsNotBlockedByTokenGuesses(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("a signed-in browser was answered %d because something guessed tokens "+
 			"from the same address", w.Code)
+	}
+}
+
+// A write token handles day-to-day changes, not credentials: it cannot add a
+// server, change where a server's root login is sent, or remove one.
+func TestAWriteTokenCannotHandleFleetCredentials(t *testing.T) {
+	isolateAccess(t)
+	secret, _, err := IssueToken("ci", ScopeWrite, time.Hour)
+	if err != nil {
+		t.Fatalf("issuing: %v", err)
+	}
+	s := &server{sessions: newSessionStore()}
+	for _, action := range []string{"add", "credentials", "remove"} {
+		r := req("POST", "/api/nodes", secret)
+		r.Form = url.Values{"action": {action}, "name": {"de1"}, "host": {"198.51.100.66"}}
+		w := httptest.NewRecorder()
+		s.nodeAction(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s with a write token: status %d, want 403", action, w.Code)
+		}
 	}
 }

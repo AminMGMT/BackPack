@@ -16,7 +16,7 @@ func TestL3PresetsReachTheEngine(t *testing.T) {
 			LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 		}
 		p.apply(&spec)
-		cfg := decode(t, spec.render())
+		cfg := decode(t, spec.Render())
 
 		if cfg.L3.Preset != p.Name {
 			t.Errorf("%s: preset round trip = %q", p.Name, cfg.L3.Preset)
@@ -89,7 +89,7 @@ func TestL3PresetsCarryNoKCPTuning(t *testing.T) {
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 	}
 	findL3Preset(PresetAggressive).apply(&spec)
-	body := spec.render()
+	body := spec.Render()
 
 	for _, key := range []string{"nodelay", "resend", "nocongestion", "interval", "sndwnd", "rcvwnd", "fec"} {
 		if strings.Contains(body, key) {

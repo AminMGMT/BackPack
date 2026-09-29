@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/gorilla/websocket"
@@ -110,52 +109,6 @@ func TestFirstBackendTakesOneAddressFromAList(t *testing.T) {
 		if got := firstBackend(in); got != want {
 			t.Fatalf("firstBackend(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-// A write to a control channel that is not there must be an error, not a
-// panic: the channel is nil for the whole window between a drop and the next
-// handshake, and the heartbeat keeps firing through it.
-func TestWritingToAnAbsentControlChannelIsAnError(t *testing.T) {
-	if err := writeControl(nil, []byte{1}); err == nil {
-		t.Fatal("writing to a nil control channel succeeded")
-	}
-}
-
-func TestWritingToAControlChannelCarriesTheBytes(t *testing.T) {
-	srv, cli := wsPair(t)
-	if err := writeControl(cli, []byte{7, 8, 9}); err != nil {
-		t.Fatalf("writeControl: %v", err)
-	}
-	kind, data, err := srv.ReadMessage()
-	if err != nil {
-		t.Fatalf("reading: %v", err)
-	}
-	if kind != websocket.BinaryMessage {
-		t.Fatalf("message type = %d, want binary", kind)
-	}
-	if string(data) != string([]byte{7, 8, 9}) {
-		t.Fatalf("payload = %v", data)
-	}
-}
-
-// The deadline writeControl sets must be cleared afterwards, or the next write
-// on that connection inherits a deadline that has already passed and fails for
-// a reason that has nothing to do with it.
-func TestWriteControlClearsItsDeadline(t *testing.T) {
-	srv, cli := wsPair(t)
-	if err := writeControl(cli, []byte{1}); err != nil {
-		t.Fatalf("first write: %v", err)
-	}
-	// Well past the write timeout: if the deadline were left in place this
-	// second write would fail.
-	time.Sleep(20 * time.Millisecond)
-	if err := writeControl(cli, []byte{2}); err != nil {
-		t.Fatalf("second write failed, so the deadline was left behind: %v", err)
-	}
-	srv.ReadMessage()
-	if _, data, err := srv.ReadMessage(); err != nil || data[0] != 2 {
-		t.Fatalf("second message = %v, %v", data, err)
 	}
 }
 

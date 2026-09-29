@@ -104,12 +104,20 @@ func Title(s string) {
 	Colorize(Red, s, true)
 }
 
-// Info, Success, Warn, Error are convenience printers (white / bold white /
-// gray / bold red, matching the three-color theme).
-func Info(s string)    { Colorize(White, s, false) }
+// Info, Success, Warn and Error are convenience printers in the three-color
+// theme.
+
+// Info prints s in white.
+func Info(s string) { Colorize(White, s, false) }
+
+// Success prints s in bold white.
 func Success(s string) { Colorize(White, s, true) }
-func Warn(s string)    { Colorize(Gray, s, false) }
-func Error(s string)   { Colorize(Red, s, true) }
+
+// Warn prints s in gray.
+func Warn(s string) { Colorize(Gray, s, false) }
+
+// Error prints s in bold red.
+func Error(s string) { Colorize(Red, s, true) }
 
 // Rule prints a horizontal separator.
 func Rule() {

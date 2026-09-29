@@ -3,7 +3,6 @@ package node
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -96,14 +95,15 @@ type Store struct {
 // whichever wrote second would silently drop the other.
 var storeMu sync.Mutex
 
-// LoadStore reads the persisted state. A missing or unreadable file is an empty
-// fleet, not an error: the panel has to start on a server that has never used
-// this feature.
+// LoadStore reads the persisted state. A missing file is an empty fleet, not an
+// error: the panel has to start on a server that has never used this feature.
+// An unreadable one is an empty fleet too, but only after it has been moved
+// aside where the next save cannot reach it.
 func LoadStore() Store {
 	var s Store
-	if data, err := os.ReadFile(StorePath); err == nil {
-		json.Unmarshal(data, &s)
-	}
+	// An unreadable file is set aside rather than saved over: it holds every
+	// server's address and login. See app.LoadState.
+	app.WarnState(app.LoadState(StorePath, &s))
 	for i := range s.Nodes {
 		// A sealed value wins; a plaintext one is what an older version wrote
 		// and is kept working until the next save re-seals it.
@@ -296,7 +296,8 @@ func NoteInfo(name string, info Info) error {
 }
 
 // SetCredentials changes how a server is reached. Changing the address clears
-// the host key: a different machine is entitled to a different one.
+// the host key — a different machine is entitled to a different one — and so
+// needs the password with it.
 func SetCredentials(name, host string, sshPort int, user, password string) error {
 	return update(func(s *Store) error {
 		for i := range s.Nodes {
@@ -304,6 +305,13 @@ func SetCredentials(name, host string, sshPort int, user, password string) error
 				continue
 			}
 			if host != "" && !strings.EqualFold(host, s.Nodes[i].Host) {
+				// The stored password does not follow the server to a new
+				// address: the new address's host key is taken on first use,
+				// so whatever answers there would be handed the password in
+				// the next login. Whoever moves it enters it again.
+				if password == "" {
+					return fmt.Errorf("a new address for %q needs its password entered again", name)
+				}
 				s.Nodes[i].Host = host
 				s.Nodes[i].Fingerprint = ""
 			}

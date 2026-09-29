@@ -79,10 +79,10 @@ func findDirectPreset(name string) directPreset {
 // chooseDirectPreset asks which one, described by what it costs and buys
 // rather than by the numbers behind it.
 func chooseDirectPreset() directPreset {
-	idx := tui.ChooseOpt("How should the tunnel be tuned?", []tui.Option{
-		{Title: "Turbo", Desc: "the default — fast single downloads, modest memory. Start here"},
-		{Title: "Balance", Desc: "smallest memory footprint, for a small VPS or many tunnels on one box"},
-		{Title: "Throughput", Desc: "for a fat, high-latency link — several sessions and large buffers, wants RAM"},
+	idx := tui.ChooseOpt("Preset", []tui.Option{
+		{Title: "Turbo", Desc: "default — most links"},
+		{Title: "Balance", Desc: "least memory — small VPS"},
+		{Title: "Throughput", Desc: "fat, far links — needs RAM"},
 	})
 	switch idx {
 	case 1:

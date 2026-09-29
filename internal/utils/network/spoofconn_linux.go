@@ -218,7 +218,15 @@ func newSpoofConn(server bool, o spoofConnOpts) (net.PacketConn, error) {
 	// no ordinary receive socket is opened, and no RST guard or ICMP suppression
 	// is needed — the kernel never processes what XDP dropped. On any failure the
 	// note records why and we fall through to the ordinary receive below.
-	if o.xdpIface != "" {
+	if o.xdpIface != "" && !xdpCanCarry(mtu) {
+		// The XDP program copies at most maxXDPPayload bytes of a segment and
+		// passes anything larger to the kernel — where, with XDP attached, no
+		// socket is open to read it. Packets this large would be lost without
+		// a word, so the fast path is not used at all.
+		c.xdpNote = fmt.Sprintf("spoof: XDP receive not used: spoof_mtu %d allows segments larger than the %d bytes "+
+			"the XDP path can capture; using the raw-socket receive (lower spoof_mtu to %d or less to use XDP)",
+			mtu, maxXDPPayload, maxXDPPayload+ipv4.HeaderLen)
+	} else if o.xdpIface != "" {
 		portOff := -1
 		switch {
 		case recvProfile.isICMPFamily():

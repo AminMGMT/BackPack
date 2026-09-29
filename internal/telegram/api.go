@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,7 +102,8 @@ func postMessage(client *http.Client, botToken, chatID, text, replyMarkup string
 	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	resp, err := client.PostForm(endpoint, messageForm(chatID, text, replyMarkup))
 	if err != nil {
-		return err
+		// The client's error carries the URL, and the URL carries the token.
+		return errors.New(redactToken(err.Error(), botToken))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

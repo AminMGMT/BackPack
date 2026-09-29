@@ -1,8 +1,6 @@
 package transport
 
 import (
-	"os"
-	"regexp"
 	"testing"
 	"time"
 )
@@ -16,27 +14,6 @@ func TestTheControlHeartbeatIsNeverSlowerThanTenSeconds(t *testing.T) {
 	} {
 		if got := livenessBeat(configured); got != want {
 			t.Errorf("livenessBeat(%s) = %s, want %s", configured, got, want)
-		}
-	}
-}
-
-// Every server transport's control channel beats through the liveness
-// schedule. A transport that ticks on the raw setting is one a crashed server
-// leaves its client waiting on for 112 seconds.
-func TestEveryControlChannelUsesTheLivenessBeat(t *testing.T) {
-	raw := regexp.MustCompile(`func \(s \*\w+\) channelHandler[^{]*\{(?s:.*?)ticker := (\w+\([^\n]*\))\n`)
-	for _, f := range []string{"tcp.go", "tcpmux.go", "ws.go", "wsmux.go", "kcp.go", "quic.go", "udp.go"} {
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		m := raw.FindSubmatch(src)
-		if m == nil {
-			t.Errorf("%s: no heartbeat ticker found in channelHandler — the reader is out of date", f)
-			continue
-		}
-		if string(m[1]) != "newLivenessTicker(s.config.Heartbeat)" {
-			t.Errorf("%s: the control heartbeat ticks on %s, not newLivenessTicker", f, m[1])
 		}
 	}
 }

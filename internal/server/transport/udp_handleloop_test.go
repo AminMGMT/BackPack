@@ -24,7 +24,7 @@ func TestUDPHandleLoopReleasesAFlowItGivesUpOn(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := &UdpTransport{config: &UdpConfig{}, logger: quietLogger()}
+	s := &UdpTransport{config: &UdpConfig{}, lifecycle: lifecycle{logger: quietLogger()}}
 	g := &udpGen{ctx: ctx, tunnelChannel: make(chan *TunnelUDPConn)}
 
 	peer := &net.UDPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 51820}
@@ -77,7 +77,7 @@ func TestUDPHandleLoopPairsAFreshFlow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := &UdpTransport{config: &UdpConfig{}, logger: quietLogger()}
+	s := &UdpTransport{config: &UdpConfig{}, lifecycle: lifecycle{logger: quietLogger()}}
 	g := &udpGen{ctx: ctx, tunnelChannel: make(chan *TunnelUDPConn, 1)}
 
 	peer := &net.UDPAddr{IP: net.IPv4(203, 0, 113, 8), Port: 51821}

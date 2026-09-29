@@ -60,19 +60,25 @@ type seenInits struct {
 	when []time.Time
 }
 
-// seen reports whether this identifier has been answered inside the window, and
-// records it when it has not.
-//
-// One method rather than a check and a record, because the two must not be
-// separable: a caller that checked and then forgot to record would turn this
-// into an expensive no-op that looks like it is working.
-func (s *seenInits) seen(id uint32, now time.Time) bool {
+// known reports whether this identifier has been answered inside the window.
+func (s *seenInits) known(id uint32, now time.Time) bool {
 	s.expire(now)
-	for _, known := range s.ids {
-		if known == id {
+	for _, k := range s.ids {
+		if k == id {
 			return true
 		}
 	}
+	return false
+}
+
+// record remembers an identifier this end has just answered.
+//
+// Kept apart from known on purpose, and called only once the handshake has
+// authenticated. They used to be one method, called before the handshake was
+// judged, so a stranger — no token needed — could fill the memory with
+// made-up identifiers and push the genuine ones out, after which a recorded
+// genuine handshake was answered again as new.
+func (s *seenInits) record(id uint32, now time.Time) {
 	s.ids = append(s.ids, id)
 	s.when = append(s.when, now)
 	// Oldest out first. A ring would avoid the copy; at a handful of entries
@@ -81,7 +87,6 @@ func (s *seenInits) seen(id uint32, now time.Time) bool {
 		s.ids = s.ids[len(s.ids)-initMemory:]
 		s.when = s.when[len(s.when)-initMemory:]
 	}
-	return false
 }
 
 // expire drops entries older than the window.

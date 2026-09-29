@@ -75,7 +75,10 @@ func (m muxSession) run(session *smux.Session) {
 	// this session: the loop blocks at the top when it is full, and every path
 	// out of a stream has to give one back or the session quietly stops taking
 	// work.
-	counter := make(chan struct{}, m.muxCon)
+	// The config loader never leaves this below one, but a zero here would be an
+	// unbuffered channel the loop blocks on forever, and the session would take
+	// no streams at all — so it is not left to the caller.
+	counter := make(chan struct{}, max(m.muxCon, 1))
 	defer session.Close()
 	defer close(counter)
 
@@ -85,6 +88,13 @@ func (m muxSession) run(session *smux.Session) {
 
 		select {
 		case <-m.ctx.Done():
+			return
+
+		// The session ended under it: the client that opened it has gone, or
+		// been replaced by a newer one (see clientSeat). Ending the generation
+		// used to be what freed these; a generation now outlives its clients,
+		// so a session has to notice its own end.
+		case <-session.CloseChan():
 			return
 
 		case incomingConn := <-m.local:

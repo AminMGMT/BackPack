@@ -42,7 +42,8 @@ func runDirectTunnel(cfg *config.Config, ctx context.Context, configPath string)
 		return
 	}
 
-	startMetrics(ctx, configPath, "direct-"+tunnelCfg.Transport, role)
+	stopMetrics := startMetrics(ctx, configPath, "direct-"+tunnelCfg.Transport, role)
+	defer stopMetrics()
 
 	for {
 		if err := runner(ctx); err != nil && ctx.Err() == nil {

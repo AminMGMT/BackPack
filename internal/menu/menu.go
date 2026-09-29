@@ -23,9 +23,10 @@ func Run() {
 	requireRoot()
 
 	// Bring the monitoring web panel up in the background and start resolving
-	// the public IP (shown inside the Web Panel section).
-	if _, err := webui.EnsureRunning(); err != nil {
-		tui.Warn("Web panel could not start: " + err.Error())
+	// the public IP (shown inside the Web Panel section) — unless the operator
+	// stopped it, which is a choice this must not undo on every run.
+	if _, _, err := webui.StartUnlessStopped(); err != nil {
+		tui.Warn("Panel Could Not Start: " + err.Error())
 		tui.PressEnter()
 	}
 
@@ -39,7 +40,7 @@ func Run() {
 	// they survive the panel being stopped. Installing it here is also how an
 	// install that predates the service picks it up.
 	if err := manage.EnsureMonitorService(); err != nil {
-		tui.Warn("Monitor service could not start: " + err.Error())
+		tui.Warn("Monitor Could Not Start: " + err.Error())
 		tui.PressEnter()
 	}
 
@@ -64,6 +65,8 @@ func Run() {
 			return
 		}
 		switch choice {
+		case "0":
+			manage.ConnectionTest()
 		// Both entries ask which direction the tunnel should be built in, and
 		// a reverse one is then built by exactly the code that has always
 		// built it. See manage.SetupIran.
@@ -85,7 +88,7 @@ func Run() {
 			updateMenu()
 		case "9":
 			uninstallMenu()
-		case "10", "0":
+		case "10":
 			tui.Info("Goodbye!")
 			return
 		default:
@@ -103,23 +106,26 @@ func printUpdateBanner() {
 	if !ok {
 		return
 	}
-	fmt.Printf("  %s⬆ %s is available%s %s— option 8 to update safely%s\n",
+	fmt.Printf("  %s⬆ %s Is Available%s %s— Option 8%s\n",
 		tui.Bold+tui.Red, tag, tui.Reset, tui.Gray, tui.Reset)
 }
 
 // printMenu renders the main menu: red numbers, white titles, gray descriptions.
 func printMenu() {
 	fmt.Println()
-	menuItem(1, "Setup Iran", "the server your users connect to — it exposes the ports")
-	menuItem(2, "Setup Kharej", "the server abroad — it holds the real service")
-	menuItem(3, "Manage", "tunnels, ports, transport, status, health check")
-	menuItem(4, "Backup & Restore", "save or restore the full configuration")
-	menuItem(5, "Web Panel", "monitoring web UI — link, login code, port")
-	menuItem(6, "Optimize", "kernel & network tuning — BBR, buffers, limits")
-	menuItem(7, "Telegram Bot", "status reports, relayed through a tunnel")
-	updateDesc := "safe update with automatic rollback"
+	// First, because it is the question to answer before building anything:
+	// which transports survive the path between these two servers.
+	menuItem(0, "Connection Test", "which transports work between two servers")
+	menuItem(1, "Setup Iran", "the server users connect to")
+	menuItem(2, "Setup Kharej", "the server abroad, with the service")
+	menuItem(3, "Manage", "tunnels, status, health, tests")
+	menuItem(4, "Backup & Restore", "all settings in one file")
+	menuItem(5, "Web Panel", "link, login code, port")
+	menuItem(6, "Optimize", "BBR, buffers, limits")
+	menuItem(7, "Telegram Bot", "reports and alerts")
+	updateDesc := "with automatic rollback"
 	if tag, ok := manage.UpdateAvailable(); ok {
-		updateDesc = tag + " is out — safe update with automatic rollback"
+		updateDesc = tag + " is out"
 	}
 	menuItem(8, "Update", updateDesc)
 	menuItem(9, "Uninstall", "remove everything")
@@ -171,7 +177,7 @@ func refreshLabel() string {
 
 func requireRoot() {
 	if os.Geteuid() != 0 {
-		tui.Error("Backpack must be run as root (use: sudo backpack).")
+		tui.Error("Run as root: sudo backpack")
 		os.Exit(1)
 	}
 }

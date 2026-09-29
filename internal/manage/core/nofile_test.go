@@ -51,7 +51,7 @@ func TestEveryServiceUnitAsksForItsOpenFileLimit(t *testing.T) {
 
 // And the check must ask the tunnels, not itself.
 func TestTheOpenFileCheckMeasuresTheTunnels(t *testing.T) {
-	b, err := os.ReadFile("../diagnose.go")
+	b, err := os.ReadFile("../health/diagnose.go")
 	if err != nil {
 		t.Fatalf("cannot read diagnose.go: %v", err)
 	}

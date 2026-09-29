@@ -16,6 +16,7 @@ long form. For *how to set a tunnel up*, use the
 
 | # | Option | What it does |
 |---|--------|--------------|
+| 0 | **Connection Test** | Runs every reverse transport and direct carrier between this server and another for real — started on the Iran server, joined on the kharej with the link it prints — and shows which ones carry traffic steadily, which drop, and which never come up, with round trip and speed. Nothing is installed; the test tunnels are gone when it ends. |
 | 1 | **Setup Iran** | Create the **Iran-side** tunnel that exposes ports. Asks the direction first — reverse or direct. |
 | 2 | **Setup Kharej** | Create the **kharej-side** tunnel that holds the real service. Asks the direction first. |
 | 3 | **Manage** | Everything about existing tunnels, plus the diagnostics. [↓](#3-manage) |
@@ -49,6 +50,7 @@ server pastes.
 |---|---|
 | **Select Transport Family** / **Select … Transport** | TCP / UDP / WebSocket, then the variant. [Transports](transports.md) |
 | **Iran IP Or Domain (What Kharej Dials)** | this server's detected public IP is the default; the setup link carries it to kharej |
+| **Backup Addresses For The Kharej** | optional — this server's other IPs, a domain, a CDN edge (`host` or `host:port`). The link carries them and the kharej fails over to them on its own |
 | **Tunnel Port** | what the client dials. Refused if already in use for that protocol. `85.10.11.51:443` pins it to one address — see [Port mappings](port-mappings.md#binding-to-one-local-address) |
 | **Listen On IPv6 As Well** `[y/N]` | only for a bare port; binds `::`, which accepts IPv4 too on a dual-stack host |
 | **Forwarded Ports** | `443`, `443=127.0.0.1:2096`, `443=a:1\|b:2`, `10000-10009`, `85.11.12.13:443=127.0.0.1:2096`, comma separated. [Every form](port-mappings.md) |
@@ -61,11 +63,24 @@ server pastes.
 | **Send Real Client IP (PROXY Protocol)** `[y/N]` | where the transport can carry it. [Real client IP](real-client-ip.md) |
 | **How Should The Tunnel Be Tuned?** | [Presets](performance-presets.md) |
 | **Fine-Tune The Advanced Settings** `[y/N]` | [↓ the advanced settings](#the-advanced-settings-fine-tune) |
+| **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | off by default — the tunnel recovers from a dropped path on its own. When set, both servers restart it at the same moment (a systemd timer in UTC; the link carries the schedule) |
 
 Then one short summary — *Reverse TCP*, where it listens, the address kharej
 dials, the forwarded ports and where each lands on kharej, the certificate,
-tuning, config file — with the **Setup Link** under it, and **Create This
-Tunnel**.
+tuning, config file — with two ways to build the kharej under it, and **Create
+This Tunnel**:
+
+- **Setup Link** — the `backpack://…` line, for a kharej that already runs
+  Backpack: paste it under Setup Kharej → Setup Link (or run
+  `backpack link apply '<link>'` there).
+- **Install BackPack And Set Up This Tunnel** — one command, run as root on a
+  kharej without Backpack: it installs Backpack, builds the tunnel from the
+  link, starts it and says whether it connected. Nothing is asked.
+
+Both are shown again under **Manage tunnels → the tunnel → Setup Link**. A
+link can be pasted as it arrived — inside a message, in quotes, broken over two
+lines. Applying the same link twice on one kharej is refused: a second tunnel
+with the same token would take the connection from the first.
 
 ### Setup Iran / Setup Kharej → Direct
 
@@ -89,9 +104,11 @@ server pastes. The Iran questions, in order:
 | **Spread The Tunnel Over Several Sockets** `[y/N]` / **How Many Sockets (2-8)** | UDP only — for a provider that limits each connection. One port per socket from the tunnel port up, open on kharej; the summary shows the range |
 | **How Should The Tunnel Be Tuned?** | Turbo / Balance / Aggressive — the queue and the socket buffers. [Presets](performance-presets.md) |
 | **Fine-Tune The Advanced Settings** `[y/N]` | tunnel addresses (a free `10.10.N.0/30` by default), starting MTU, interface name, GRE key, segment cap, caps |
+| **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | as for reverse above |
 
 Then one short summary — interface, where it dials, forwarded ports, tuning,
-config file — with the **Setup Link** (`backpack://…`) under it, and
+config file — with the **Setup Link** (`backpack://…`) and the one-line
+**Install BackPack And Set Up This Tunnel** under it, as for reverse, and
 **Create This Tunnel**. The link is shown again under **Manage tunnels → the
 tunnel → Setup Link**.
 
@@ -203,7 +220,13 @@ forward a tunnel port to `127.0.0.1:<that port>`.
 |---|---|
 | **Proxy type** | SOCKS5 (works for most apps, carries UDP too) or HTTP (for clients that only take an HTTP proxy) |
 | **Port to listen on** | loopback only; you choose, nothing is assumed |
-| **Require a username/password** | optional — safe to skip, since the proxy binds loopback and is only reachable through the token-authenticated tunnel |
+| **Require a username/password** | set one unless the forwarded port on the Iran server is closed to everyone but you. The proxy binds loopback here, but the tunnel forwards it to a public port there, and the tunnel token authenticates the two servers — not the people using the port. Without auth it is an open proxy for anyone who reaches that port. |
+
+Whatever the answer, the proxy refuses to reach this server itself: loopback,
+unspecified, link-local (the cloud metadata address among them) and multicast
+destinations are refused after the name is resolved, for SOCKS5 CONNECT, SOCKS5
+UDP and the HTTP proxy. Other private addresses stay reachable — reaching a LAN
+behind the kharej is a common reason to run it.
 
 ---
 
@@ -407,7 +430,10 @@ range back.
 شروع کن)، **Link Test** (مسیر را می‌سنجد و ترنسپورت و نسبت FEC پیشنهاد می‌دهد)، **Exit Health**
 (امتیازدهی و رتبه‌بندی همهٔ آدرس‌های سرور)، **IP Spoofing Tester**،
 **Tunnel Metrics**، **Restart ALL**، **Auto Refresh**، **Built-in Proxy**
-(خود این سرور SOCKS5/HTTP شود) و **File Locations**.
+(خود این سرور SOCKS5/HTTP شود) و **File Locations**. پراکسی داخلی را بی‌رمز
+نگذار مگر پورتِ forward‌شده روی سرور ایران به روی همه جز خودت بسته باشد: توکن
+تونل دو سرور را احراز می‌کند، نه کسی را که از پورت استفاده می‌کند. در هر حال به
+loopback، link-local (از جمله metadata ابر) و multicast خودِ سرور وصل نمی‌شود.
 
 **منوی Edit** بسته به نقش و ترنسپورت فرق می‌کند. روی سرور: پورت تونل، پورت‌های
 forward شده، ترنسپورت، پریست، آی‌پی واقعی کاربر، محدودیت‌ها، **Forward UDP**،
@@ -430,4 +456,4 @@ FEC؛ و zero-copy (فقط روی tcp ساده).
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

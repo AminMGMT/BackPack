@@ -16,6 +16,13 @@ also cover update, panel port and password). Open the port first:
 sudo ufw allow 7777
 ```
 
+The panel acts only on requests its own pages make. A browser labels every
+request with where it came from, and anything that changes state — a restart, a
+save, a sign-out — is refused when it came from another site, *including a
+sibling subdomain of the panel's own domain*: a page on `blog.example.com` is a
+different origin from a panel on `panel.example.com`, even though the browser
+would send it the panel's cookie.
+
 ## Using your own certificate (certbot or any other)
 
 If Let's Encrypt cannot verify this server from here — port 80 is taken, or
@@ -69,6 +76,11 @@ for no password on purpose. Anyone who can run it is already root on the server
 and can read the file the secret is in, so a prompt would protect nothing and
 would strand an operator who had also forgotten the password.
 
+**Guessing is bounded.** A pending sign-in — the password was right, the code
+is still owed — dies after three wrong codes, and the failure count that locks
+an address out is cleared only by a sign-in that completes. Knowing the password
+therefore does not buy unlimited tries at the code.
+
 **What it does not protect.** API tokens are a separate credential and are not
 affected — a token is for things that are not browsers, and a second factor has
 nothing to prompt. Sessions already signed in stay signed in; sign them out from
@@ -116,4 +128,4 @@ that does the same job — is in
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

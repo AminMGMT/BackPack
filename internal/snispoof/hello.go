@@ -1,3 +1,5 @@
+// Package snispoof builds the decoy TLS ClientHello the layer-3 sni carrier
+// sends ahead of a flow, and recognises one on arrival.
 package snispoof
 
 import (
@@ -14,9 +16,9 @@ import (
 // github.com/therealaleph/sni-spoofing-rust (MIT). The idea: send a filtering
 // box a ClientHello naming a domain it allows, on a connection that is really
 // going somewhere else. The box reads the name, decides the flow is permitted,
-// and stops looking. The server the packet is addressed to never sees it — the
-// sequence number puts it behind the window, so its stack discards it as data
-// it has already taken. See inject_linux.go for that half.
+// and stops looking. Sending it, and having the far end of the tunnel drop it
+// before the tunnel sees it, is the sni carrier's half — see
+// internal/tunnel/l3/carrier_sni.go.
 //
 // This file is only the message. It is a fixed 517 bytes because that is the
 // size the technique was measured with: a middlebox that reassembles is being

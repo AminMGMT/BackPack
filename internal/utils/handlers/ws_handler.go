@@ -12,7 +12,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// WebSocketToTCPConnectionHandler handles data transfer between a WebSocket and a TCP connection
+// WSConnectionHandler relays between a websocket tunnel connection and a TCP
+// connection to the backend, until either side ends.
 func WSConnectionHandler(ctx context.Context, wsConn *websocket.Conn, tcpConn net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
 	// Two independent copies, for the reason given in TCPConnectionHandler: a
 	// ReadMessage on an idle websocket blocks exactly as long as an idle TCP
@@ -32,9 +33,13 @@ func WSConnectionHandler(ctx context.Context, wsConn *websocket.Conn, tcpConn ne
 
 // transferWebSocketToTCP transfers data from a WebSocket connection to a TCP connection
 func transferWebSocketToTCP(wsConn *websocket.Conn, tcpConn net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
+	// Each message is copied through the pooled relay buffer rather than read
+	// whole: ReadMessage allocated a buffer the size of every message, which
+	// on a busy tunnel was a fifth of the relay's CPU in the collector.
+	bufp := getRelayBuffer()
+	defer putRelayBuffer(bufp)
 	for {
-		// Read message from the WebSocket connection
-		messageType, message, err := wsConn.ReadMessage()
+		messageType, message, err := wsConn.NextReader()
 		if err != nil {
 			if errors.Is(err, websocket.ErrCloseSent) || errors.Is(err, io.EOF) {
 				logger.Trace("WebSocket reader stream closed or EOF received")
@@ -48,10 +53,10 @@ func transferWebSocketToTCP(wsConn *websocket.Conn, tcpConn net.Conn, logger *lo
 
 		// Only handle text or binary messages (ignore control messages like pings)
 		if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
-			// Write the message to the TCP connection
-			w, err := tcpConn.Write(message)
+			n, err := io.CopyBuffer(writerOnly{tcpConn}, readerOnly{message}, *bufp)
+			w := int(n)
 			if err != nil {
-				logger.Trace("unable to write to the TCP connection: ", err)
+				logger.Trace("unable to relay a WebSocket message to the TCP connection: ", err)
 				wsConn.Close()
 				tcpConn.Close()
 				return
@@ -112,3 +117,15 @@ func transferTCPToWebSocket(tcpConn net.Conn, wsConn *websocket.Conn, logger *lo
 		}
 	}
 }
+
+// readerOnly and writerOnly hide everything but Read and Write, so
+// io.CopyBuffer uses the buffer it is given. Left visible, a *net.TCPConn's
+// ReadFrom takes over the copy and, for a source that is not a socket or a
+// file, allocates a fresh buffer of its own on every message.
+type readerOnly struct{ r io.Reader }
+
+func (r readerOnly) Read(p []byte) (int, error) { return r.r.Read(p) }
+
+type writerOnly struct{ w io.Writer }
+
+func (w writerOnly) Write(p []byte) (int, error) { return w.w.Write(p) }

@@ -47,11 +47,9 @@ func loadUpdateState() UpdateState {
 
 func loadUpdateStateLocked() UpdateState {
 	var s UpdateState
-	data, err := os.ReadFile(UpdateStateFile)
-	if err != nil {
-		return s
-	}
-	json.Unmarshal(data, &s)
+	// Only a cache of the last answer from GitHub; an unreadable one is set
+	// aside and asked again.
+	_ = app.LoadState(UpdateStateFile, &s)
 	return s
 }
 

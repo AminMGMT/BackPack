@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // Proving both ends hold the token.
@@ -153,9 +155,13 @@ const (
 	// copied into each other.
 	kindTCP byte = 1
 
-	// kindUDP joins it to a UDP socket. A stream has no message boundaries and
-	// datagrams are nothing but boundaries, so each one is length-prefixed
-	// while it is on the stream. See writeDatagram.
+	// kindUDP joins it to a UDP socket. A stream preserves order and content
+	// but not where one write ended and the next began, and a datagram's
+	// boundary is the whole of its meaning — a UDP receiver handed two joined
+	// together would be handed something neither sender sent. So each one is
+	// length-prefixed while it is on the stream, and the length is stripped
+	// again before it reaches a socket: the same framing the reverse tunnel's
+	// UDP forwarding uses, network.WriteDatagram.
 	kindUDP byte = 2
 
 	// maxTargetLen bounds the address a stream may ask for, so a peer cannot
@@ -164,7 +170,7 @@ const (
 
 	// maxDatagram is the largest UDP payload that can be carried, which is
 	// also the most a 16-bit length can describe.
-	maxDatagram = 65535
+	maxDatagram = network.MaxDatagram
 )
 
 // writeRequest opens the conversation: what kind of stream this is, and the
@@ -200,46 +206,4 @@ func readRequest(r io.Reader) (byte, string, error) {
 		return 0, "", err
 	}
 	return kind, string(target), nil
-}
-
-// Datagrams on a stream.
-//
-// A mux stream is a byte pipe: it preserves order and content but not where
-// one write ended and the next began. A datagram is the opposite — its
-// boundary is the whole of its meaning, and a UDP receiver that was handed two
-// datagrams joined together would be handed something neither sender sent. So
-// each one carries its length while it is on the stream, and the length is
-// stripped again before it reaches a socket.
-
-// writeDatagram frames one datagram onto a stream.
-func writeDatagram(w io.Writer, payload []byte) error {
-	if len(payload) > maxDatagram {
-		return fmt.Errorf("direct: datagram of %d bytes is larger than %d", len(payload), maxDatagram)
-	}
-	buf := make([]byte, 2+len(payload))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(payload)))
-	copy(buf[2:], payload)
-	// One write, so two datagrams cannot interleave on the stream.
-	_, err := w.Write(buf)
-	return err
-}
-
-// readDatagram reads one framed datagram into buf, which must be able to hold
-// the largest the peer might send.
-func readDatagram(r io.Reader, buf []byte) (int, error) {
-	var length [2]byte
-	if _, err := io.ReadFull(r, length[:]); err != nil {
-		return 0, err
-	}
-	n := int(binary.BigEndian.Uint16(length[:]))
-	if n > len(buf) {
-		return 0, fmt.Errorf("direct: datagram of %d bytes does not fit a %d-byte buffer", n, len(buf))
-	}
-	if n == 0 {
-		return 0, nil // an empty datagram is a real thing a socket can send
-	}
-	if _, err := io.ReadFull(r, buf[:n]); err != nil {
-		return 0, err
-	}
-	return n, nil
 }

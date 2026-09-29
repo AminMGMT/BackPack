@@ -86,6 +86,10 @@ func post(t *testing.T, s *server, form string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/api/nodes", strings.NewReader(form))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Signed in, as the operator on the fleet page is: adding a server and
+	// changing its credentials are admin actions (nodeActionScope).
+	r.RemoteAddr = "192.0.2.10:1"
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sessions.create("192.0.2.10")})
 	w := httptest.NewRecorder()
 	s.handleNodes(w, r)
 	return w

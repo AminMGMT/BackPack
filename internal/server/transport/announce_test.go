@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"net"
 	"testing"
@@ -53,10 +54,11 @@ func connPair(t *testing.T, host string) (client, server net.Conn) {
 
 func newTestTransport(token string) (*TcpTransport, *tcpGen) {
 	s := &TcpTransport{
-		config: &TcpConfig{Token: token},
-		logger: quietLogger(),
+		config:    &TcpConfig{Token: token},
+		lifecycle: lifecycle{logger: quietLogger()},
 	}
 	g := &tcpGen{
+		ctx:              context.Background(),
 		tunnelChannel:    make(chan net.Conn, 4),
 		handshakeChannel: make(chan controlCandidate, 1),
 	}

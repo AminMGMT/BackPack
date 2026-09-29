@@ -60,20 +60,30 @@ fi
 
 if [[ $EUID -ne 0 ]]; then err "Please run as root (sudo)."; exit 1; fi
 
-# This script takes no arguments.
+# One thing may follow the script: a setup link to apply once Backpack is in.
+#
+#   bash <(curl -fsSL …/install.sh) link apply 'backpack://…'
+#
+# That is the line the Iran server prints for a kharej that does not run
+# Backpack yet: install, then build the tunnel the link describes, with nothing
+# asked. A leading "backpack" is accepted too, since the line is often written
+# as the command it runs. Anything else is refused, as before.
 #
 # It used to accept `node --panel <host:port> --key <setup-key>`, which
 # installed Backpack and then enrolled the machine with a panel. A panel reaches
 # a managed server over its own SSH now, so there is nothing to enrol: the
 # operator adds the server from the panel and never touches this machine again.
-#
-# Run from a panel over SSH it has no terminal, which is already the quiet path
-# below — it installs and says how to open the menu instead of opening one.
-if [[ $# -gt 0 ]]; then
-  err "Unknown argument: $1"
-  err "This script takes no arguments. Run it to install Backpack."
-  err "To have a panel manage this server, add it from the panel; nothing is needed here."
-  exit 2
+BP_ARGS=("$@")
+if [[ ${#BP_ARGS[@]} -gt 0 && "${BP_ARGS[0]}" == "backpack" ]]; then
+  BP_ARGS=("${BP_ARGS[@]:1}")
+fi
+if [[ ${#BP_ARGS[@]} -gt 0 ]]; then
+  if [[ "${BP_ARGS[0]}" != "link" || "${BP_ARGS[1]:-}" != "apply" || ${#BP_ARGS[@]} -lt 3 ]]; then
+    err "Unknown argument: ${BP_ARGS[0]}"
+    err "This script takes no arguments, or a setup link to apply after installing:"
+    err "  bash <(curl -fsSL …/install.sh) link apply 'backpack://…'"
+    exit 2
+  fi
 fi
 
 # Which release asset this machine can run.
@@ -407,6 +417,14 @@ echo -e "${WHITE}Done!${NC}"
 # (curl ... | bash) has no tty on stdin, so it just prints the instruction. The
 # script already runs as root, so the binary is launched directly. `exec`
 # replaces this shell so the menu owns the terminal cleanly.
+# A setup link given on the command line is applied now, instead of opening the
+# menu: the binary builds the tunnel, starts it, and says whether it connected.
+if [[ ${#BP_ARGS[@]} -gt 0 ]]; then
+  echo
+  info "Setting up the tunnel from the setup link..."
+  exec "$BIN_PATH" "${BP_ARGS[@]}"
+fi
+
 if [ -t 0 ]; then
   echo -e "Starting the menu... ${GRAY}(next time, just run ${NC}${RED}sudo backpack${GRAY})${NC}"
   echo

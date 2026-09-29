@@ -22,15 +22,15 @@ func updateMenu() {
 	for {
 		tui.Clear()
 		tui.Title("Update Backpack")
-		tui.Warn("Current version: " + app.Version)
-		tui.Warn("Release channel : " + manage.ChannelLabel())
+		tui.Warn("Version : " + app.Version)
+		tui.Warn("Channel : " + manage.ChannelLabel())
 		fmt.Println()
 
-		idx := tui.ChooseOpt("Choose:", []tui.Option{
-			{Title: "Check for updates", Desc: "install the latest release — safely, with automatic rollback"},
-			{Title: "Install from a downloaded file", Desc: localUpdateDesc()},
-			{Title: "Restore points", Desc: "go back to a previous version if something went wrong"},
-			{Title: "Release channel", Desc: "stable releases only, or also test pre-releases"},
+		idx := tui.ChooseOpt("Update", []tui.Option{
+			{Title: "Check For Updates", Desc: "with automatic rollback"},
+			{Title: "Install From A File", Desc: localUpdateDesc()},
+			{Title: "Restore Points", Desc: "go back to a previous version"},
+			{Title: "Release Channel", Desc: "stable, or also pre-releases"},
 		})
 		switch idx {
 		case 0:
@@ -67,20 +67,18 @@ func localUpdateDesc() string {
 // only where the file came from.
 func runLocalUpdate() {
 	tui.Clear()
-	tui.Title("Install from a downloaded file")
+	tui.Title("Install From A File")
 	fmt.Println()
 
 	u, ok := manage.FindLocalUpdate()
 	if !ok {
 		tui.Error("No " + manage.LocalAssetName() + " found.")
 		fmt.Println()
-		tui.Info("Download it from the releases page on any machine that can reach")
-		tui.Info("GitHub, copy it to this server, and choose this again:")
+		tui.Info("Download It From GitHub Releases, Copy It Here, And Try Again:")
 		fmt.Println()
 		fmt.Printf("  %sscp %s root@this-server:/root/%s\n\n", tui.Gray, manage.LocalAssetName(), tui.Reset)
 		tui.Info("Looked in: " + strings.Join(manage.LocalUpdateSearchedIn(), ", "))
-		tui.Info("The name has to be exactly that — it says which architecture the")
-		tui.Info("binary inside is built for, and this server runs " + runtime.GOARCH + ".")
+		tui.Info("Exact Name Required — This Server Is " + runtime.GOARCH + ".")
 		tui.PressEnter()
 		return
 	}
@@ -107,13 +105,12 @@ func runLocalUpdate() {
 	// reasonable thing to want — a binary that was corrupted, a rollback being
 	// undone — and going backwards is sometimes the whole point.
 	if u.Version != "" && u.Version == app.Version {
-		tui.Warn("That is the version already running. Installing it again is fine.")
+		tui.Warn("Same Version As Running — Reinstalling Is Fine.")
 	}
 
-	tui.Info("A restore point is taken first. If a tunnel does not come back, the")
-	tui.Info("update rolls itself back on its own.")
+	tui.Info("A Restore Point Is Taken First; A Failed Update Rolls Back.")
 	fmt.Println()
-	if !tui.Confirm("Install it?", true) {
+	if !tui.Confirm("Install It", true) {
 		return
 	}
 
@@ -131,18 +128,15 @@ func runLocalUpdate() {
 // channelMenu picks between stable releases and pre-releases.
 func channelMenu() {
 	tui.Clear()
-	tui.Title("Release channel")
+	tui.Title("Release Channel")
 	fmt.Println()
-	tui.Info("Current: " + manage.ChannelLabel())
+	tui.Info("Now: " + manage.ChannelLabel())
 	fmt.Println()
-	tui.Warn("Stable installs finished releases only. Beta also installs")
-	tui.Warn("pre-releases, so you can try a new version on one server before")
-	tui.Warn("it reaches everyone — useful for testing, riskier for a server")
-	tui.Warn("people depend on.")
+	tui.Warn("Beta Also Installs Pre-Releases — Riskier For A Busy Server.")
 	fmt.Println()
 
 	opts, values := manage.ChannelOptions()
-	idx := tui.ChooseOpt("Choose a channel:", opts)
+	idx := tui.ChooseOpt("Channel", opts)
 	if idx < 0 {
 		return
 	}
@@ -151,7 +145,7 @@ func channelMenu() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Release channel set to " + manage.ChannelLabel() + ".")
+	tui.Success("Channel: " + manage.ChannelLabel() + ".")
 	tui.PressEnter()
 }
 
@@ -159,9 +153,9 @@ func channelMenu() {
 // first and the update rolls itself back if the services do not come back up.
 func runUpdate() {
 	tui.Clear()
-	tui.Title("Check for updates")
+	tui.Title("Check For Updates")
 	fmt.Println()
-	tui.Info("Checking GitHub releases (direct, then through the tunnel relay)...")
+	tui.Info("Checking GitHub...")
 
 	available, summary, err := manage.CheckUpdate()
 	if err != nil {
@@ -186,10 +180,9 @@ func runUpdate() {
 
 	tui.Warn(summary)
 	fmt.Println()
-	tui.Info("A restore point is saved first. If anything fails to come back up,")
-	tui.Info("Backpack puts the previous version back automatically.")
+	tui.Info("A Restore Point Is Taken First; A Failed Update Rolls Back.")
 	fmt.Println()
-	if !tui.Confirm("Download and install the update now", true) {
+	if !tui.Confirm("Install The Update", true) {
 		return
 	}
 	fmt.Println()
@@ -208,7 +201,7 @@ func runUpdate() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Backpack updated successfully.")
+	tui.Success("Updated.")
 	tui.PressEnter()
 	reopen()
 }
@@ -225,17 +218,14 @@ func offerRelay(reason error) bool {
 	if len(options) == 0 {
 		tui.Error(reason.Error())
 		fmt.Println()
-		tui.Warn("No tunnel is online either, so there is no way out from here.")
-		tui.Info("Install offline instead: download the release on a machine that can")
-		tui.Info("reach GitHub and copy it across — see the README.")
+		tui.Warn("No Tunnel Is Online Either — Use Install From A File.")
 		tui.PressEnter()
 		return false
 	}
 
 	tui.Error(reason.Error())
 	fmt.Println()
-	tui.Info("This server cannot reach GitHub directly. One of its tunnels can:")
-	tui.Info("the far end fetches the release and passes it back.")
+	tui.Info("GitHub Is Unreachable — Fetch Through A Tunnel:")
 	fmt.Println()
 
 	opts := make([]tui.Option, len(options))
@@ -246,7 +236,7 @@ func offerRelay(reason error) bool {
 		}
 		opts[i] = tui.Option{Title: o.Name, Desc: desc}
 	}
-	idx := tui.ChooseOpt("Fetch the update through which tunnel?", opts)
+	idx := tui.ChooseOpt("Through Tunnel", opts)
 	if idx < 0 || idx >= len(options) {
 		return false
 	}
@@ -254,9 +244,8 @@ func offerRelay(reason error) bool {
 	chosen := options[idx]
 	if !chosen.Ready {
 		fmt.Println()
-		tui.Warn("Opening the relay port restarts " + chosen.Name + ". Traffic on it stops")
-		tui.Warn("for a moment and comes back on its own.")
-		if !tui.Confirm("Go ahead", true) {
+		tui.Warn("This Restarts " + chosen.Name + " For A Moment.")
+		if !tui.Confirm("Go Ahead", true) {
 			return false
 		}
 	}
@@ -270,13 +259,13 @@ func offerRelay(reason error) bool {
 // restorePointMenu lists saved restore points and can roll back to one.
 func restorePointMenu() {
 	tui.Clear()
-	tui.Title("Restore points")
-	tui.Warn("Saved automatically before every update — binary plus all configs.")
+	tui.Title("Restore Points")
+	tui.Warn("Taken Before Every Update (Binary And Configs).")
 	fmt.Println()
 
 	points := manage.ListSnapshots()
 	if len(points) == 0 {
-		tui.Info("No restore points yet — one is created the first time you update.")
+		tui.Info("None Yet.")
 		tui.PressEnter()
 		return
 	}
@@ -289,16 +278,15 @@ func restorePointMenu() {
 		}
 		opts[i] = tui.Option{Title: p.Meta.Stamp, Desc: desc}
 	}
-	idx := tui.ChooseOpt("Roll back to which restore point:", opts)
+	idx := tui.ChooseOpt("Roll Back To", opts)
 	if idx < 0 {
 		return
 	}
 
 	chosen := points[idx]
 	fmt.Println()
-	tui.Warn("This puts back the binary and ALL configs from " + chosen.Meta.Stamp + ",")
-	tui.Warn("then restarts the panel and every tunnel.")
-	if !tui.Confirm("Roll back now", false) {
+	tui.Warn("Restores The Binary And All Configs From " + chosen.Meta.Stamp + ", Then Restarts Everything.")
+	if !tui.Confirm("Roll Back", false) {
 		return
 	}
 	fmt.Println()
@@ -307,7 +295,7 @@ func restorePointMenu() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Rolled back to " + chosen.Meta.Version + " successfully.")
+	tui.Success("Rolled Back To " + chosen.Meta.Version + ".")
 	tui.PressEnter()
 	reopen()
 }
@@ -320,9 +308,9 @@ func restorePointMenu() {
 // tunnel has already been restarted on the new binary by then; this puts the
 // menu on it too.
 func reopen() {
-	tui.Info("Opening the new version...")
+	tui.Info("Opening The New Version...")
 	if err := execSelf(); err != nil {
-		tui.Warn("Could not reopen by itself (" + err.Error() + ") — exit and run sudo backpack again.")
+		tui.Warn("Could Not Reopen (" + err.Error() + ") — Run sudo backpack Again.")
 		tui.PressEnter()
 	}
 }
@@ -336,9 +324,9 @@ var execSelf = func() error {
 // diagnoseRelay walks the relay chain and reports the first broken hop.
 func diagnoseRelay() {
 	tui.Clear()
-	tui.Title("Relay diagnosis")
+	tui.Title("Relay Diagnosis")
 	fmt.Println()
-	tui.Warn("Checking each hop between this server and Telegram...")
+	tui.Warn("Checking Each Hop To Telegram...")
 	fmt.Println()
 
 	steps := telegram.DiagnoseRelay()
@@ -356,9 +344,9 @@ func diagnoseRelay() {
 
 	fmt.Println()
 	if len(steps) > 0 && steps[len(steps)-1].OK {
-		tui.Success("Every hop is working — the bot should be able to send.")
+		tui.Success("Every Hop Works.")
 	} else {
-		tui.Warn("The first ✗ above is where it breaks. Everything below it was not reached.")
+		tui.Warn("The First ✗ Is Where It Breaks.")
 	}
 	tui.PressEnter()
 }

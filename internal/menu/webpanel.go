@@ -19,7 +19,7 @@ import (
 func panelHeader(cfg webui.Config) {
 	tui.Rule()
 	if webui.Running() {
-		fmt.Printf("  %sStatus%s      %s● running%s\n", tui.Gray, tui.Reset, tui.Bold+tui.White, tui.Reset)
+		fmt.Printf("  %sStatus%s      %s● Running%s\n", tui.Gray, tui.Reset, tui.Bold+tui.White, tui.Reset)
 		host := cachedServerIP()
 		if cfg.TLSDomain != "" {
 			host = cfg.TLSDomain
@@ -30,9 +30,9 @@ func panelHeader(cfg webui.Config) {
 		// place it can be read without being findable by anybody else.
 		fmt.Printf("  %sWeb Panel%s   %s%s%s\n", tui.Gray, tui.Reset,
 			tui.Bold+tui.White, cfg.URL(host), tui.Reset)
-		fmt.Printf("  %sLogin code%s  %s%s%s\n", tui.Gray, tui.Reset, tui.Bold+tui.Red, cfg.Password, tui.Reset)
+		fmt.Printf("  %sLogin Code%s  %s%s%s\n", tui.Gray, tui.Reset, tui.Bold+tui.Red, cfg.Password, tui.Reset)
 	} else {
-		fmt.Printf("  %sStatus%s      %s○ stopped%s %s(use Restart panel to start it)%s\n",
+		fmt.Printf("  %sStatus%s      %s○ Stopped%s %s(Restart Panel Starts It)%s\n",
 			tui.Gray, tui.Reset, tui.Red, tui.Reset, tui.Gray, tui.Reset)
 	}
 	tui.Rule()
@@ -43,21 +43,20 @@ func webPanelMenu() {
 	for {
 		tui.Clear()
 		tui.Title("Web Panel")
-		tui.Warn("Monitoring-only dashboard — recommended on the IRAN server.")
 		fmt.Println()
 		cfg := webui.Load()
 		panelHeader(cfg)
 		fmt.Println()
 
-		idx := tui.ChooseOpt("Choose:", []tui.Option{
-			{Title: "Change panel port", Desc: fmt.Sprintf("current: %d", cfg.Port)},
-			{Title: "Regenerate login code", Desc: "new random 8-digit code"},
-			{Title: "Set a custom password", Desc: "replace the login code with your own"},
-			{Title: "Panel path", Desc: panelPathDesc(cfg)},
+		idx := tui.ChooseOpt("Web Panel", []tui.Option{
+			{Title: "Panel Port", Desc: fmt.Sprintf("now %d", cfg.Port)},
+			{Title: "New Login Code", Desc: "random 8 digits"},
+			{Title: "Custom Password", Desc: "instead of the login code"},
+			{Title: "Panel Path", Desc: panelPathDesc(cfg)},
 			{Title: "Certificate", Desc: panelCertDesc(cfg)},
-			{Title: "Two-factor sign-in", Desc: twoFactorDesc()},
-			{Title: "Restart panel", Desc: "also starts it when stopped"},
-			{Title: "Stop panel", Desc: "disable the web UI"},
+			{Title: "Two-Factor Sign-In", Desc: twoFactorDesc()},
+			{Title: "Restart Panel", Desc: "starts it when stopped"},
+			{Title: "Stop Panel", Desc: "disable the web UI"},
 		})
 		switch idx {
 		case 0:
@@ -67,7 +66,7 @@ func webPanelMenu() {
 			if err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else {
-				tui.Success("New login code generated: " + c.Password)
+				tui.Success("New Login Code: " + c.Password)
 			}
 			tui.PressEnter()
 		case 2:
@@ -84,14 +83,14 @@ func webPanelMenu() {
 			} else if err := manage.RestartService(app.WebUIService); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else {
-				tui.Success("Web panel restarted.")
+				tui.Success("Panel Restarted.")
 			}
 			tui.PressEnter()
 		case 7:
 			if err := webui.Disable(); err != nil {
 				tui.Error("Failed: " + err.Error())
 			} else {
-				tui.Success("Web panel stopped.")
+				tui.Success("Panel Stopped.")
 			}
 			tui.PressEnter()
 		default:
@@ -117,9 +116,7 @@ func panelPathDesc(cfg webui.Config) string {
 // how, without editing JSON on a server.
 func panelPathMenu(cfg webui.Config) {
 	tui.Clear()
-	tui.Title("Panel path")
-	tui.Info("The panel answers under this path and nowhere else. Every other " +
-		"address on this port is a 404 that says nothing about a panel being here.")
+	tui.Title("Panel Path")
 	fmt.Println()
 
 	host := cachedServerIP()
@@ -129,23 +126,23 @@ func panelPathMenu(cfg webui.Config) {
 	fmt.Printf("  %sAddress%s  %s%s%s\n\n", tui.Gray, tui.Reset,
 		tui.Bold+tui.White, cfg.URL(host), tui.Reset)
 
-	switch tui.ChooseOpt("Choose:", []tui.Option{
-		{Title: "Keep it", Desc: "nothing changes"},
-		{Title: "Generate a new one", Desc: "the current address stops working"},
-		{Title: "Set my own", Desc: "letters, digits, - and _"},
-		{Title: "Serve at the root", Desc: "no path — the panel is found by any scan"},
+	switch tui.ChooseOpt("Panel Path", []tui.Option{
+		{Title: "Keep It", Desc: ""},
+		{Title: "New Random Path", Desc: "the old address stops working"},
+		{Title: "My Own Path", Desc: "letters, digits, - and _"},
+		{Title: "No Path", Desc: "found by any scan"},
 	}) {
 	case 1:
 		c, err := webui.RegenerateBasePath()
 		if err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
-			tui.Success("The panel is now at " + c.URL(host))
-			tui.Warn("The old address no longer works. Write this one down.")
+			tui.Success("Panel: " + c.URL(host))
+			tui.Warn("The Old Address No Longer Works.")
 		}
 		tui.PressEnter()
 	case 2:
-		p := strings.TrimSpace(tui.Prompt("Path segment: "))
+		p := strings.TrimSpace(tui.Prompt("Path: "))
 		if p == "" {
 			return
 		}
@@ -153,18 +150,18 @@ func panelPathMenu(cfg webui.Config) {
 		if err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
-			tui.Success("The panel is now at " + c.URL(host))
+			tui.Success("Panel: " + c.URL(host))
 		}
 		tui.PressEnter()
 	case 3:
-		if !tui.Confirm("Serve the panel at the root, where any scan of this port finds it?", false) {
+		if !tui.Confirm("Serve Without A Path (Found By Any Scan)", false) {
 			return
 		}
 		c, err := webui.SetBasePath("/")
 		if err != nil {
 			tui.Error("Failed: " + err.Error())
 		} else {
-			tui.Success("The panel is now at " + c.URL(host))
+			tui.Success("Panel: " + c.URL(host))
 		}
 		tui.PressEnter()
 	}
@@ -196,16 +193,16 @@ func panelCertDesc(cfg webui.Config) string {
 // Switching changes the address people have bookmarked, so it says so.
 func panelCertMenu(cfg webui.Config) {
 	tui.Clear()
-	tui.Title("Panel certificate")
+	tui.Title("Panel Certificate")
 	fmt.Println()
-	tui.Info("Currently: " + panelCertDesc(cfg))
+	tui.Info("Now: " + panelCertDesc(cfg))
 	fmt.Println()
 
-	idx := tui.ChooseOpt("How should the panel be served?", []tui.Option{
-		{Title: "Plain HTTP", Desc: "no certificate — the default"},
-		{Title: "HTTPS, self-signed", Desc: "works on a bare IP; the browser warns once"},
-		{Title: "HTTPS, Let's Encrypt", Desc: "trusted certificate — needs a domain and port 80"},
-		{Title: "HTTPS, my own certificate", Desc: "one you already have — from certbot or anywhere"},
+	idx := tui.ChooseOpt("Serve The Panel Over", []tui.Option{
+		{Title: "Plain HTTP", Desc: "default"},
+		{Title: "HTTPS Self-Signed", Desc: "works on an IP; the browser warns once"},
+		{Title: "HTTPS Let's Encrypt", Desc: "needs a domain and port 80"},
+		{Title: "HTTPS My Own Certificate", Desc: "PEM files you have"},
 	})
 
 	// Every choice but the last forgets a brought certificate.
@@ -219,36 +216,25 @@ func panelCertMenu(cfg webui.Config) {
 	case 1:
 		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail = true, "", ""
 	case 2:
-		fmt.Println()
-		tui.Warn("The domain must already point at this server, and port 80 must be")
-		tui.Warn("reachable — Let's Encrypt uses it to verify the name is yours.")
-		fmt.Println()
-		domain := strings.TrimSpace(tui.PromptDefault("Domain (e.g. panel.example.com)", cfg.TLSDomain))
+		domain := strings.TrimSpace(tui.PromptDefault("Domain Pointing Here (Port 80 Open)", cfg.TLSDomain))
 		if domain == "" {
-			tui.Warn("No domain given — nothing changed.")
+			tui.Warn("No Domain — Nothing Changed.")
 			tui.PressEnter()
 			return
 		}
-		email := strings.TrimSpace(tui.PromptDefault("Email for expiry warnings (optional)", cfg.TLSEmail))
+		email := strings.TrimSpace(tui.PromptDefault("Email For Expiry Warnings (Optional)", cfg.TLSEmail))
 		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail = true, domain, email
 	case 3:
-		fmt.Println()
-		tui.Info("Two PEM files: the certificate with its chain, and its private key.")
-		tui.Info("From certbot they are, for example:")
-		tui.Info("  /etc/letsencrypt/live/panel.example.com/fullchain.pem")
-		tui.Info("  /etc/letsencrypt/live/panel.example.com/privkey.pem")
-		tui.Info("A renewal is picked up on its own — no restart needed.")
-		fmt.Println()
-		certFile := strings.TrimSpace(tui.PromptDefault("Certificate file", cfg.TLSCertFile))
-		keyFile := strings.TrimSpace(tui.PromptDefault("Private key file", cfg.TLSKeyFile))
+		certFile := strings.TrimSpace(tui.PromptDefault("Certificate File (fullchain.pem)", cfg.TLSCertFile))
+		keyFile := strings.TrimSpace(tui.PromptDefault("Key File (privkey.pem)", cfg.TLSKeyFile))
 		names, notAfter, err := webui.CheckOwnCert(certFile, keyFile)
 		if err != nil {
 			tui.Error(err.Error())
-			tui.Warn("Nothing changed.")
+			tui.Warn("Nothing Changed.")
 			tui.PressEnter()
 			return
 		}
-		tui.Success(fmt.Sprintf("Certificate for %s, valid until %s.",
+		tui.Success(fmt.Sprintf("Certificate For %s, Valid Until %s.",
 			strings.Join(names, ", "), notAfter.Format("2006-01-02")))
 		cfg.HTTPS, cfg.TLSDomain, cfg.TLSEmail, cfg.TLSSelfHost = true, "", "", ""
 		cfg.TLSCertFile, cfg.TLSKeyFile = certFile, keyFile
@@ -268,14 +254,14 @@ func panelCertMenu(cfg webui.Config) {
 	}
 
 	fmt.Println()
-	tui.Success("Saved. The panel is now on " + panelCertDesc(cfg) + ".")
+	tui.Success("Saved: " + panelCertDesc(cfg) + ".")
 	host := cachedServerIP()
 	if cfg.TLSDomain != "" {
 		host = cfg.TLSDomain
 	}
-	tui.Warn(fmt.Sprintf("The address changed — use %s", cfg.URL(host)))
+	tui.Warn(fmt.Sprintf("New Address: %s", cfg.URL(host)))
 	if cfg.HTTPS && cfg.TLSDomain != "" {
-		tui.Warn("The first request takes a few seconds while the certificate is issued.")
+		tui.Warn("The First Request Takes A Few Seconds.")
 	}
 	tui.PressEnter()
 }
@@ -284,17 +270,17 @@ func panelCertMenu(cfg webui.Config) {
 func changePanelPort() {
 	fmt.Println()
 	cur := webui.Load().Port
-	p := tui.PromptInt("New panel port", cur)
+	p := tui.PromptInt("Panel Port", cur)
 	if p == cur {
 		return
 	}
 	if p < 1 || p > 65535 {
-		tui.Error("Invalid port — must be between 1 and 65535.")
+		tui.Error("Invalid port (1-65535).")
 		tui.PressEnter()
 		return
 	}
 	if manage.PortInUse(strconv.Itoa(p)) {
-		tui.Error(fmt.Sprintf("Port %d is already in use on this machine.", p))
+		tui.Error(fmt.Sprintf("Port %d is already in use.", p))
 		tui.PressEnter()
 		return
 	}
@@ -303,20 +289,20 @@ func changePanelPort() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success(fmt.Sprintf("Panel moved to port %d — the panel was restarted.", p))
+	tui.Success(fmt.Sprintf("Panel Port: %d — Restarted.", p))
 	tui.PressEnter()
 }
 
 // setCustomPassword prompts for a custom web-panel password and applies it.
 func setCustomPassword() {
 	fmt.Println()
-	pw := tui.Prompt("New password (4–128 chars, letters/digits/symbols): ")
+	pw := tui.Prompt("New Password (4-128 Chars): ")
 	if len(pw) < 4 || len(pw) > 128 {
-		tui.Error("Password must be between 4 and 128 characters.")
+		tui.Error("4 to 128 characters.")
 		tui.PressEnter()
 		return
 	}
-	confirm := tui.Prompt("Repeat the password: ")
+	confirm := tui.Prompt("Repeat Password: ")
 	if pw != confirm {
 		tui.Error("Passwords do not match.")
 		tui.PressEnter()
@@ -327,7 +313,7 @@ func setCustomPassword() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Password updated.")
+	tui.Success("Password Saved.")
 	tui.PressEnter()
 }
 
@@ -349,33 +335,26 @@ func twoFactorDesc() string {
 // own the machine.
 func twoFactorMenu() {
 	tui.Clear()
-	tui.Title("Two-factor sign-in")
+	tui.Title("Two-Factor Sign-In")
 	fmt.Println()
 
 	if !webui.TwoFactorEnabled() {
-		tui.Info("Two-factor is off. The panel password is the whole login.")
-		fmt.Println()
-		tui.Warn("Turn it on from the panel itself — Settings → Security. It has to")
-		tui.Warn("show you a secret to scan and a set of recovery codes to keep, and")
-		tui.Warn("a terminal is the wrong place to read either of them from.")
+		tui.Info("Off — Turn It On In The Panel: Settings → Security.")
 		tui.PressEnter()
 		return
 	}
 
-	tui.Info("Two-factor is on. " + twoFactorDesc() + ".")
+	tui.Info("On — " + twoFactorDesc() + ".")
 	fmt.Println()
-	tui.Warn("This screen exists for one situation: the phone is gone and so are")
-	tui.Warn("the recovery codes. Turning it off here needs no password, because")
-	tui.Warn("anyone who can run this can already read the file the secret is in.")
-	fmt.Println()
+	tui.Warn("For A Lost Phone And Lost Recovery Codes.")
 
-	if !tui.Confirm("Turn two-factor off", false) {
+	if !tui.Confirm("Turn Two-Factor Off", false) {
 		return
 	}
 	if err := webui.DisableTwoFactor(); err != nil {
 		tui.Error("Failed: " + err.Error())
 	} else {
-		tui.Success("Two-factor is off. The panel password is the whole login again.")
+		tui.Success("Two-Factor Off.")
 	}
 	tui.PressEnter()
 }

@@ -69,18 +69,25 @@ func SetupServer() {
 	} else if !localAddrExists(bind.Host) {
 		// A warning, not a refusal: a floating address or one that arrives
 		// with a later interface is a real setup. See localAddrExists.
-		tui.Warn(bind.Host + " is not on any interface here yet — the tunnel fails to bind until it is.")
+		tui.Warn(bind.Host + " Is Not On This Server Yet — The Tunnel Cannot Bind Until It Is.")
 	}
 	s.BindAddr = bind.Addr(ipv6)
 	if host == "" && bind.HasHost() {
 		host = bind.Host
+	}
+	backups := askLinkBackupHosts()
+	if host == "" {
+		// This server's address could not be found (no public address on an
+		// interface, and the lookup services out of reach — common from Iran),
+		// and none was typed. The link is still made; the kharej asks for it.
+		tui.Warn("No Address — The Kharej Will Be Asked For It.")
 	}
 
 	// A bare 443 is Iran's 443 to the kharej's own 127.0.0.1:443. Elsewhere:
 	// 443=127.0.0.1:2096; several backends: 443=127.0.0.1:2096|127.0.0.1:2097.
 	s.Ports = parsePorts(tui.Prompt("Forwarded Ports (e.g. 443, 8080=127.0.0.1:2096): "))
 	if len(s.Ports) == 0 {
-		tui.Error("No valid ports entered.")
+		tui.Error("No valid ports.")
 		tui.PressEnter()
 		return
 	}
@@ -128,17 +135,23 @@ func SetupServer() {
 		applyManualTuning(&s)
 	}
 
-	link := pendingReverseLink(s, host)
+	restartHours, restartMinute := askScheduledRestart()
+
+	extras := linkExtras{hosts: backups, restartHours: restartHours, restartMinute: restartMinute}
+	link := pendingReverseLink(s, host, extras)
 	summariseReverse(s, host, link)
+	if restartHours > 0 {
+		tui.Info("Scheduled Restart: " + scheduleLabel(restartHours, restartMinute))
+	}
 	if !tui.Confirm("Create This Tunnel", true) {
 		return
 	}
 	if !finishSetup(s) {
 		return
 	}
+	applyLinkExtras(s.Name, extras)
 	if link != "" {
-		tui.Info("Paste the setup link above on the kharej server. It is shown again under")
-		tui.Info("Manage Tunnels → this tunnel → Setup Link.")
+		tui.Info("Also Under Manage Tunnels → This Tunnel → Setup Link.")
 	}
 	tui.PressEnter()
 }
@@ -156,8 +169,8 @@ func SetupClient() {
 	}
 
 	switch tui.ChooseOpt("How Do You Want To Set Up This Side?", []tui.Option{
-		{Title: "Setup Link", Desc: "recommended — paste the link the Iran server printed; everything is filled in"},
-		{Title: "Manual", Desc: "type the Iran address, the port and the token yourself"},
+		{Title: "Setup Link", Desc: "recommended — paste the Iran server's link"},
+		{Title: "Manual", Desc: "type the address, port and token"},
 	}) {
 	case 0:
 		setupClientFromLink(transport)
@@ -172,7 +185,7 @@ func SetupClient() {
 	remoteHost := strings.Trim(strings.TrimSpace(tui.Prompt("Iran IP Or Domain: ")), "[]")
 	remotePort := strings.TrimSpace(tui.Prompt("Tunnel Port: "))
 	if remoteHost == "" || !validPort(remotePort) {
-		tui.Error("Invalid server address or port.")
+		tui.Error("Invalid address or port.")
 		tui.PressEnter()
 		return
 	}
@@ -189,8 +202,7 @@ func SetupClient() {
 	// port, and the Iran server is where it was made.
 	s.Token = strings.TrimSpace(tui.Prompt("Security Token (From The Iran Server): "))
 	if s.Token == "" {
-		tui.Error("Set up the Iran server first: it makes the token, and a setup link")
-		tui.Error("that fills in this whole side for you.")
+		tui.Error("Set up the Iran server first — its setup link fills this side in.")
 		tui.PressEnter()
 		return
 	}
@@ -249,7 +261,7 @@ func askConnectionOptions(s *TunnelSpec, remotePort string) {
 					break
 				}
 				if _, err := net.InterfaceByName(raw); err != nil {
-					tui.Error(fmt.Sprintf("no such interface: %v", err))
+					tui.Error(fmt.Sprintf("No such interface: %v", err))
 					continue
 				}
 				s.Interface = raw
@@ -288,7 +300,7 @@ func askConnectionOptions(s *TunnelSpec, remotePort string) {
 // link: the token, the port, the transport and every paired setting come
 // from it, and only a name is asked.
 func setupClientFromLink(chosen string) {
-	link, err := DecodeShareLink(tui.Prompt("Setup Link: "))
+	link, err := DecodeShareLink(FindSetupLink(tui.Prompt("Setup Link: ")))
 	if err != nil {
 		tui.Error(err.Error())
 		tui.PressEnter()
@@ -332,7 +344,8 @@ func setupClientFromLink(chosen string) {
 		return
 	}
 	if finishSetup(s) {
-		tui.Info("It comes up as soon as it reaches the Iran server.")
+		scheduleFromLink(s.Name, link)
+		tui.Info("Comes Up When It Reaches The Iran Server.")
 		tui.PressEnter()
 	}
 }
@@ -367,18 +380,37 @@ func reverseClientFromLink(link ShareLink, host string) TunnelSpec {
 	if link.Tr == "kcp" {
 		s.KCPDataShards, s.KCPParityShards = link.FECData, link.FECParity
 	}
+	// The Iran server's other addresses are this side's backups from the day
+	// it is made, tried in turn when the main one stops answering.
+	for _, h := range link.Hosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(h); err != nil {
+			h = net.JoinHostPort(strings.Trim(h, "[]"), link.Port)
+		}
+		s.FallbackAddrs = append(s.FallbackAddrs, h)
+	}
+	if len(s.FallbackAddrs) > 0 {
+		s.HealthFailover = true
+	}
+	// The carrier chain is paired: the kharej sweeps the list the Iran side
+	// holds, in the same order.
+	s.FallbackTransports = append([]string(nil), link.Fallbacks...)
+	s.FallbackDwell = link.Dwell
 	return s
 }
 
 // pendingReverseLink is the setup link the Iran tunnel will have once it is
 // written, built from the config about to be written, with the address the
 // kharej dials. Empty when it cannot be built; the link is then under Manage.
-func pendingReverseLink(s TunnelSpec, host string) string {
+func pendingReverseLink(s TunnelSpec, host string, extras linkExtras) string {
 	var c config.Config
 	if _, err := toml.Decode(s.Render(), &c); err != nil {
 		return ""
 	}
-	link, err := shareLinkOf(s.Name, host, c)
+	link, err := shareLinkWith(s.Name, host, c, extras)
 	if err != nil {
 		return ""
 	}
@@ -453,9 +485,7 @@ func summariseReverse(s TunnelSpec, host, link string) {
 	row("Tuning", presetLabel(s.Preset))
 	row("Config File", app.ConfigPath(s.Name))
 	if link != "" {
-		fmt.Println()
-		tui.Info("Setup Link (Setup Kharej → Reverse → The Same Transport → Setup Link) :")
-		fmt.Println(tui.Color(tui.Bold+tui.White, link))
+		printLinkBlock(link, "sudo backpack → Setup Kharej → Reverse → Setup Link")
 	}
 	tui.Rule()
 	fmt.Println()
@@ -543,12 +573,12 @@ func finishSetup(s TunnelSpec) bool {
 		fmt.Println()
 		tui.Error(why)
 		fmt.Println()
-		tui.Info("Nothing was written. Run setup again with a different port.")
+		tui.Info("Nothing Written — Run Setup Again With Another Port.")
 		tui.PressEnter()
 		return false
 	}
 
-	tui.Info("Applying system network optimizations...")
+	tui.Info("Applying Network Optimizations...")
 	optimize.ApplyQuiet(ReservedPorts())
 
 	service, err := s.Save()
@@ -560,9 +590,9 @@ func finishSetup(s TunnelSpec) bool {
 
 	fmt.Println()
 	if IsActive(service) {
-		tui.Success(fmt.Sprintf("Tunnel %q is up and running (%s).", s.Name, service))
+		tui.Success(fmt.Sprintf("Tunnel %q Is Running (%s).", s.Name, service))
 	} else {
-		tui.Warn(fmt.Sprintf("Tunnel %q created but not active yet — check logs.", s.Name))
+		tui.Warn(fmt.Sprintf("Tunnel %q Created But Not Active — Check Its Log.", s.Name))
 	}
 	return true
 }

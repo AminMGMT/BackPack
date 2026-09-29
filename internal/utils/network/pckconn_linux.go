@@ -107,6 +107,9 @@ type pckConn struct {
 	tsStart time.Time
 
 	guard *pckGuard
+	// tunnelID is pckTunnelID of the token: which tunnel's source range the
+	// port came from, so closing the last carrier gives the range up.
+	tunnelID string
 
 	// holdsPort is set on the client side, where the source port is claimed out
 	// of the tunnel's range and has to be handed back on Close. The server's
@@ -120,6 +123,10 @@ type pckConn struct {
 	peers map[pckPeerKey]*pckPeer
 
 	closed atomic.Bool
+
+	// queueDrops counts segments the local transmit queue had no room for;
+	// see writeFailed.
+	queueDrops atomic.Uint64
 }
 
 // The frame buffer pool both ReadFrom and WriteTo draw from lives in
@@ -204,6 +211,8 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 		tsBase:  rand.Uint32(),
 		tsStart: time.Now(),
 		peers:   make(map[pckPeerKey]*pckPeer),
+
+		tunnelID: pckTunnelID(carrier.Token),
 	}
 	// The server is addressed on the tunnel port and answers from it. A client
 	// sends from an ephemeral port of its own, as any connecting host would —
@@ -221,6 +230,13 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	// what it always was. It also keeps the TCP sequence numbers of one flow
 	// consistent, instead of N carriers each advancing their own on one 4-tuple.
 	guardLo, guardHi := listenPort, listenPort
+	// The rule sets v1.8.4 and earlier wrote for this tunnel, untagged, so an
+	// upgrade clears whatever such a build left behind.
+	legacyBase := legacyPckClientPortBase(carrier.Token)
+	legacy := [][][]string{pckRules("", listenPort, listenPort)}
+	if !server {
+		legacy = [][][]string{pckRules("", legacyBase, legacyBase+pckPortSpan-1)}
+	}
 	if server {
 		c.local = listenPort
 	} else {
@@ -238,7 +254,7 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	// the range leaks one on each failed dial and eventually fills.
 	release := func() {
 		if c.holdsPort {
-			releasePckClientPort(c.local)
+			releasePckClientPort(c.tunnelID, c.local)
 			c.holdsPort = false
 		}
 	}
@@ -254,7 +270,7 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	}
 	// One rule set covers the whole range and is shared by every carrier in this
 	// process, so a pool of sixteen does not install sixteen sets of rules.
-	c.guard = installPckGuard(guardLo, guardHi)
+	c.guard = installPckGuard(pckTunnelID(carrier.Token), legacy, guardLo, guardHi)
 	return c, nil
 }
 
@@ -521,7 +537,7 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 
 	if c.txFile != nil {
 		if err := c.sendFrame(frame); err != nil {
-			return 0, err
+			return c.writeFailed(len(p), err)
 		}
 		return len(p), nil
 	}
@@ -543,10 +559,36 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 		Dst:      dst.IP.To4(),
 	}
 	if err := c.txRaw.WriteTo(h, tcp, nil); err != nil {
-		return 0, err
+		return c.writeFailed(len(p), err)
 	}
 	return len(p), nil
 }
+
+// writeFailed decides what a failed send means to the tunnel above.
+//
+// A full transmit queue is a lost packet, not a broken socket. A packet or raw
+// socket reports it — ENOBUFS when the qdisc had no room — where a UDP socket
+// says nothing and drops the datagram, and KCP, which sits on this, treats any
+// error from WriteTo as the end of the session: it closes it for good and
+// discards the rest of what it was sending. So a pck tunnel pushed hard enough
+// to fill its own queue once stopped carrying anything and never came back,
+// while the same tunnel over UDP recovered on its own. Found by the Connection
+// Test: echoes passed, a 1 MB transfer both ways stalled at two thirds, and
+// the kharej had logged "no buffer space available".
+//
+// So it is reported the way UDP would have it: sent. KCP retransmits the
+// segment as it does any lost on the path. Every other error is returned.
+func (c *pckConn) writeFailed(n int, err error) (int, error) {
+	if errors.Is(err, unix.ENOBUFS) || errors.Is(err, unix.EAGAIN) {
+		c.queueDrops.Add(1)
+		return n, nil
+	}
+	return 0, err
+}
+
+// QueueDrops is how many segments were dropped because the local transmit
+// queue was full.
+func (c *pckConn) QueueDrops() uint64 { return c.queueDrops.Load() }
 
 // sendFrame writes a finished Ethernet frame to the packet socket, taking the
 // descriptor from the runtime so it cannot be closed underneath the syscall.
@@ -641,7 +683,7 @@ func (c *pckConn) Close() error {
 	}
 	c.guard.remove()
 	if c.holdsPort {
-		releasePckClientPort(c.local)
+		releasePckClientPort(c.tunnelID, c.local)
 	}
 	if c.rx != nil {
 		_ = c.rx.Close()

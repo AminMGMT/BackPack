@@ -7,6 +7,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/backpack/backpack/internal/utils/acceptloop"
+	"github.com/sirupsen/logrus"
 )
 
 // What happens when a port cannot be bound.
@@ -106,7 +109,9 @@ func portOf(addr string) string {
 // is measured in milliseconds: that one paces a loop that is spinning, this one
 // waits for another process to let go.
 type listenBackoff struct {
-	delay time.Duration
+	// Named, not embedded: the accept loop's Fail and OK run a millisecond
+	// schedule, and must not be callable on a backoff measured in seconds.
+	b acceptloop.Backoff
 }
 
 const (
@@ -118,20 +123,24 @@ const (
 // waiting so the caller can stop rather than bind a port for a tunnel that is
 // going away.
 func (b *listenBackoff) wait(ctx context.Context) bool {
-	if b.delay == 0 {
-		b.delay = listenRetryFirst
-	} else if b.delay < listenRetryMax {
-		b.delay *= 2
-		if b.delay > listenRetryMax {
-			b.delay = listenRetryMax
+	return b.b.Wait(ctx, listenRetryFirst, listenRetryMax)
+}
+
+// bindTunnelPort binds the tunnel's own port, waiting on the listen backoff and
+// trying again for as long as it is taken; ok is false only when ctx ended
+// first. Every transport binds its tunnel port this way — see listenBackoff for
+// why a taken tunnel port is waited for rather than skipped or fatal.
+func bindTunnelPort[T any](ctx context.Context, log *logrus.Logger, addr string, bind func() (T, error)) (T, bool) {
+	var backoff listenBackoff
+	for {
+		l, err := bind()
+		if err == nil {
+			return l, true
 		}
-	}
-	t := time.NewTimer(b.delay)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
+		log.Error(bindFailure("tunnel port", addr, err))
+		if !backoff.wait(ctx) {
+			var zero T
+			return zero, false
+		}
 	}
 }

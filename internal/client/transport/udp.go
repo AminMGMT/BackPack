@@ -2,31 +2,23 @@ package transport
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
-	"github.com/backpack/backpack/internal/web"
 	"github.com/sirupsen/logrus"
 )
 
 type UdpTransport struct {
-	// The status shown in the panel. Behind a lock because the run being
-	// replaced and the run replacing it both write it. See tunnelStatus.
-	status          tunnelStatus
-	config          *UdpConfig
-	parentctx       context.Context
-	state           clientState
-	logger          *logrus.Logger
-	restartMutex    sync.Mutex
-	poolConnections int32
-	loadConnections int32
-	controlFlow     chan struct{}
+	// The generations of this transport and what outlives them: see
+	// lifecycle.go.
+	lifecycle
+
+	config *UdpConfig
 }
 type UdpConfig struct {
 	RemoteAddr string
@@ -50,22 +42,12 @@ type UdpConfig struct {
 }
 
 func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
-	// Create a derived context from the parent context
-	ctx, cancel := context.WithCancel(parentCtx)
-
 	// Initialize the TcpTransport struct
 	client := &UdpTransport{
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		config: config,
 	}
 
-	// Seed the first generation through the same path a restart uses, so
-	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, client.status.get, logger))
+	client.firstGeneration(parentCtx, logger, usageSpec{webPort: config.WebPort, snifferLog: config.SnifferLog, sniffer: config.Sniffer})
 	return client
 }
 
@@ -80,63 +62,7 @@ func (c *UdpTransport) Start() {
 }
 
 func (c *UdpTransport) Restart() {
-	if !c.restartMutex.TryLock() {
-		c.logger.Warn("client is already restarting")
-		return
-	}
-	defer c.restartMutex.Unlock()
-
-	c.logger.Info("restarting client...")
-
-	// for removing timeout logs
-	level := c.logger.GetLevel()
-	c.logger.SetLevel(logrus.FatalLevel)
-
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
-
-	// The whole tunnel may have been shut down while this restart was waiting —
-	// on a reload, or on the process going down. Rebuilding the run from a
-	// parent context that is already finished would bind the listeners again
-	// only to close them, and on a reload that means fighting the run that is
-	// replacing this one for its own ports. Nothing here is worth starting.
-	if c.parentctx.Err() != nil {
-		// The level was turned down to hide the timeouts a teardown produces;
-		// leaving it there would silence the shutdown itself.
-		c.logger.SetLevel(level)
-		// Abandoning is not a reason to keep claiming a peer. See the same
-		// branch in internal/server/transport — this end publishes the status
-		// the panel reads and the "connected" flag the watchdog reads, and both
-		// used to survive a restart that gave up.
-		c.status.set("")
-		metrics.ClearPeer()
-		c.logger.Debug("restart abandoned: the tunnel is shutting down")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(c.parentctx)
-
-	// Publish the whole new generation at once: a reader must never see
-	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.status.get, c.logger))
-	c.status.set("")
-	atomic.StoreInt32(&c.poolConnections, 0)
-	atomic.StoreInt32(&c.loadConnections, 0)
-	// The peer belongs to the generation that just ended.
-	metrics.ClearPeer()
-	drain(c.controlFlow)
-
-	// set the log level again
-	c.logger.SetLevel(level)
-
-	go c.Start()
-
+	c.restart(nil, nil, c.Start)
 }
 
 func (c *UdpTransport) channelDialer() {
@@ -205,7 +131,7 @@ func (c *UdpTransport) channelDialer() {
 				c.status.set("Connected (UDP)")
 
 				go c.poolMaintainer()
-				go c.channelHandler()
+				go c.control().run()
 
 				return
 
@@ -234,129 +160,9 @@ func (c *UdpTransport) poolMaintainer() {
 	}.maintain()
 }
 
-func (c *UdpTransport) channelHandler() {
-	// See beatClock: learns how often the server really heartbeats.
-	beats := newBeatClock(time.Now())
-
-	msgChan := make(chan byte, 1000)
-
-	// The generation this handler belongs to, captured once.
-	//
-	// Everything below used to ask c.state.Cancel() != nil before deciding a
-	// failure was worth restarting for. That is always true: the constructor
-	// sets a cancel function before any of this can run, and Reset sets another
-	// on every restart. So the guard was open in every case it was written to
-	// close, and each goroutine dying during a teardown queued another restart
-	// of a tunnel that was already on its way down. The server transports were
-	// corrected to ask their generation's context instead; the client ones were
-	// not.
-	//
-	// Captured rather than read through c.state each time, for the same reason
-	// the server holds its context in the generation: Restart publishes a new
-	// one while these goroutines are still winding down, and a goroutine that
-	// went on to watch the new context would never see its own run end.
-	ctx := c.state.Ctx()
-
-	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// The worst case of the three: this control channel had no
-				// deadline at all, and the datagram transports have no
-				// keepalive story to fall back on, so a read on a tunnel whose
-				// peer had gone blocked until the process was restarted. The
-				// server heartbeats, so silence past the deadline is the peer
-				// being gone. See controlDeadline; UdpConfig carries no
-				// keepalive period, so this takes the fallback.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(beats.deadline(0))); err != nil {
-					if ctx.Err() == nil {
-						c.logger.Errorf("failed to set control channel deadline: %v", err)
-						go c.Restart()
-					}
-					return
-				}
-				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
-				if err != nil {
-					if hint := beats.explain(err, 0); hint != "" && ctx.Err() == nil {
-						c.logger.Warn(hint)
-					}
-					if ctx.Err() == nil {
-						c.logger.Error("failed to read from control channel. ", err)
-						go c.Restart()
-					}
-					return
-				}
-				if msg == utils.SG_HB {
-					beats.beat(time.Now())
-				}
-				msgChan <- msg
-			}
-		}
-	}()
-
-	// Main loop to listen for context cancellation or received messages
-	for {
-		select {
-		case <-ctx.Done():
-			_ = utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_Closed, controlWriteTimeout)
-			return
-
-		case msg := <-msgChan:
-			switch msg {
-			case utils.SG_Chan:
-				atomic.AddInt32(&c.loadConnections, 1)
-
-				select {
-				case <-c.controlFlow: // Do nothing
-
-				default:
-					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
-				}
-
-			case utils.SG_HB:
-				c.logger.Debug("heartbeat signal received successfully")
-
-			case utils.SG_Closed:
-				c.logger.Warn("control channel has been closed by the server")
-				go c.Restart()
-				return
-
-			case utils.SG_RTT:
-				err := utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_RTT, controlWriteTimeout)
-				if err != nil {
-					c.logger.Error("failed to send RTT signal, restarting client: ", err)
-					go c.Restart()
-					return
-				}
-
-			default:
-				c.logger.Errorf("unexpected response from channel: %v.", msg)
-				go c.Restart()
-				return
-			}
-		}
-	}
-}
-
-// applyBuffers sizes a datagram socket to the configured SO_RCVBUF/SO_SNDBUF. A
-// zero value leaves the kernel default in place. Best effort: a socket that
-// refuses the size — usually because net.core.rmem_max is lower — still works,
-// it just has less headroom against a burst.
-func (c *UdpTransport) applyBuffers(conn *net.UDPConn) {
-	if c.config.SO_RCVBUF > 0 {
-		if err := conn.SetReadBuffer(c.config.SO_RCVBUF); err != nil {
-			c.logger.Warnf("failed to set UDP read buffer to %d: %v", c.config.SO_RCVBUF, err)
-		}
-	}
-	if c.config.SO_SNDBUF > 0 {
-		if err := conn.SetWriteBuffer(c.config.SO_SNDBUF); err != nil {
-			c.logger.Warnf("failed to set UDP write buffer to %d: %v", c.config.SO_SNDBUF, err)
-		}
-	}
+// control is this generation's control loop. See controlLoop.
+func (c *UdpTransport) control() controlLoop {
+	return c.lifecycle.control(controlwire.Net(c.state.Conn()), 0, c.tunnelDialer, c.Restart)
 }
 
 func (c *UdpTransport) tunnelDialer() {
@@ -540,4 +346,10 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 
 		c.logger.Debugf("forwarded %d bytes from %s to %s", n, srcConn.LocalAddr().String(), dstConn.RemoteAddr().String())
 	}
+}
+
+// applyBuffers sizes a datagram socket to the configured SO_RCVBUF/SO_SNDBUF;
+// see network.SizeUDPBuffers.
+func (c *UdpTransport) applyBuffers(conn *net.UDPConn) {
+	network.SizeUDPBuffers(conn, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.logger.Warnf)
 }

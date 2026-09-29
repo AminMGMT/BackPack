@@ -19,7 +19,8 @@ You keep the copyright on what you write. There is no CLA.
 
 ## The bar
 
-CI enforces all of this, so run it before you push:
+CI enforces all of this, so run it before you push — `make check` runs the
+first five in one go:
 
 ```
 gofmt -l .                      # must print nothing
@@ -54,6 +55,12 @@ test's name should tell you what capability exists.
 this codebase actually produces: a feature wired on one side only. Three unwired
 entry points were found by hand before the last of those existed.
 
+`TestEveryPanelCallReachesAHandlerThatReadsWhatItSends` is the panel's version:
+it runs `panel/js/api.js` under node, records every request, and holds each one
+against the route it reaches and the fields that handler reads. A new export in
+`api.js` needs a sample call in `internal/webui/paneltest/apicalls.mjs`, with
+the arguments its view really passes.
+
 ## Things to know before you touch them
 
 - **Both ends must match.** Dozens of settings are paired, and a mismatch
@@ -78,8 +85,9 @@ entry points were found by hand before the last of those existed.
 - New behaviour comes with a test at a public seam. Not a test of the function
   you wrote — a test of the thing a user can now do.
 - Structural changes go in one sub-package or one transport at a time, never as
-  one sweep. `internal/manage` is being split that way on purpose; see
-  `internal/manage/core/doc.go` for why the seam was cut where it was.
+  one sweep. `internal/manage` was split that way on purpose; see
+  `internal/manage/core/doc.go` for the layers and why each seam was cut where
+  it was.
 
 ## Reporting a security issue
 

@@ -74,7 +74,7 @@ jobs:
           go test ./... -coverpkg=./... -coverprofile=coverage.out -timeout 20m
           total="$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9.]+')"
           echo "total coverage: ${total}%"
-          floor=45
+          floor=50
           awk -v t="$total" -v f="$floor" 'BEGIN {
             if (t+0 < f+0) {
               printf "coverage %.1f%% is below the floor of %d%%\n", t, f
@@ -111,6 +111,13 @@ jobs:
           check internal/node           40 "the fleet RPC and the staged rollout"
           check internal/metrics        60 "what every other component reads to decide anything"
           check internal/menu           25 "the screens an operator actually meets this product through"
+          check internal/server/transport 85 "the Iran side of every reverse transport: lifecycle, forwarder, control loop"
+          check internal/client/transport 83 "the kharej side of every reverse transport"
+          check internal/controlwire    95 "the control channel's wire, shared by both ends"
+          check internal/utils/acceptloop 90 "accept backoff and the pre-authentication gate (ADR 0004)"
+          check internal/manage/tunnelspec 70 "a tunnel's configuration: render, load, apply with revert"
+          check internal/manage/host    60 "this machine's addresses, ports and certificates"
+          check internal/manage/health  40 "tunnel health, the watchdog and the Health Check"
 
   audit:
     name: Vulnerabilities and static analysis

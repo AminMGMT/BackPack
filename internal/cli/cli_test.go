@@ -2,12 +2,14 @@ package cli
 
 import (
 	"encoding/json"
-	"github.com/backpack/backpack/internal/metrics"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/backpack/backpack/internal/metrics"
 )
 
 // The whole point of Run returning a Result rather than printing is that this
@@ -327,5 +329,43 @@ func writeSnapshot(t *testing.T, dir, name string, s metrics.Snapshot) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, name+".metrics.json"), data, 0o644); err != nil {
 		t.Fatalf("writing: %v", err)
+	}
+}
+
+// check asks the engine too, so "would this start?" has the engine's answer —
+// and a file that does not parse is said once, not twice.
+func TestCheckCarriesTheEnginesVerdict(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.toml")
+	write(t, good, `[server]
+bind_addr = "0.0.0.0:8443"
+token = "a-long-enough-token-for-a-test"
+ports = ["443=127.0.0.1:2096"]
+`)
+	broken := filepath.Join(dir, "broken.toml")
+	write(t, broken, "[server\n")
+
+	var asked []string
+	EngineCheck = func(path string) error {
+		asked = append(asked, path)
+		return errors.New("the pck transport needs a packet socket")
+	}
+	defer func() { EngineCheck = nil }()
+
+	r := Run([]string{"check", "-c", good})
+	if r.Code == CodeOK || !strings.Contains(r.Err, "the engine would refuse") || !strings.Contains(r.Err, "packet socket") {
+		t.Fatalf("the engine's refusal was not reported: %d %s%s", r.Code, r.Out, r.Err)
+	}
+	asked = nil
+	if r := Run([]string{"check", "-c", broken}); r.Code == CodeOK {
+		t.Fatal("an unparsable file passed")
+	}
+	if len(asked) != 0 {
+		t.Fatal("the engine was asked about a file that does not parse")
+	}
+
+	EngineCheck = func(string) error { return nil }
+	if r := Run([]string{"check", "-c", good}); r.Code != CodeOK || !strings.Contains(r.Out, "the engine would start it") {
+		t.Fatalf("an accepted file was reported as %d: %s%s", r.Code, r.Out, r.Err)
 	}
 }

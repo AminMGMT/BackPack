@@ -3,8 +3,11 @@ package network
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	mrand "math/rand/v2"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -47,24 +50,62 @@ var (
 	pckPortsInUse = map[uint16]bool{}
 )
 
-// pckClientPortBase derives the bottom of the client's source-port range from
-// the tunnel token.
+// pckClientPortBase is the bottom of the client's source-port range for the
+// tunnel with this token.
 //
-// Deriving the range rather than picking it at random is what keeps the
-// kernel-suppression rules to one set for the tunnel's life. The rules are
-// written against the port range, so a range that changed on every reconnect
-// would leave a new set behind each time — and on a flaky link, where reconnects
-// are the whole point of this transport, they would accumulate until something
-// noticed. It also means a middlebox watching the pair sees the same flows
-// resume rather than a new set appear.
+// It is drawn at random when the tunnel opens its first carrier, and kept for as
+// long as any of its carriers is open, so a pool shares one range and one set of
+// kernel-suppression rules. Once the last carrier closes the range is given up,
+// and the next open draws a new one.
 //
-// What is NOT derived is which port within the range a given carrier takes: see
-// newPckConn for why they must differ.
+// It used to be derived from the token, so that a restart would find its old
+// rules identical and replace them rather than pile up. That made every restart
+// send the same flow — the same source port to the same destination — and that
+// is what a middlebox that has stopped passing a flow keeps on dropping.
+// Reported on v1.8.4: "a direct pck tunnel stops after about 24 hours, and I
+// have to delete it and make it again; auto reset is on both servers." The
+// restarts brought back the blocked flow; only a new tunnel, with a new token
+// and so a new port, got out. Leftover rules are now found by the tunnel's tag
+// instead (see pckTunnelID and sweepTunnelRules), so nothing depends on the
+// port staying put.
 func pckClientPortBase(token string) uint16 {
+	pckPortMu.Lock()
+	defer pckPortMu.Unlock()
+	id := pckTunnelID(token)
+	if b, ok := pckClientBases[id]; ok {
+		return b
+	}
+	for {
+		// Into the ephemeral range, which is where a connecting host's port
+		// comes from and so where one is expected to be; the span is kept
+		// inside it. Two tunnels in one process never share a range.
+		b := uint16(32768 + mrand.IntN(28000-pckPortSpan))
+		clash := false
+		for _, other := range pckClientBases {
+			if b < other+pckPortSpan && other < b+pckPortSpan {
+				clash = true
+			}
+		}
+		if !clash {
+			pckClientBases[id] = b
+			return b
+		}
+	}
+}
+
+// pckClientBases is each tunnel's current range, by pckTunnelID.
+var pckClientBases = map[string]uint16{}
+
+// pckTunnelID names a tunnel in its firewall rules without naming its token.
+func pckTunnelID(token string) string {
 	sum := sha256.Sum256([]byte("backpack-pck-v1:" + token))
-	// Into the ephemeral range, which is where a connecting host's port comes
-	// from and so where one is expected to be. The span is subtracted so the top
-	// of the range cannot run past the end of it.
+	return hex.EncodeToString(sum[:4])
+}
+
+// legacyPckClientPortBase is the range v1.8.4 and earlier derived from the
+// token, still needed once: to clear the rules such a build left behind.
+func legacyPckClientPortBase(token string) uint16 {
+	sum := sha256.Sum256([]byte("backpack-pck-v1:" + token))
 	return 32768 + binary.BigEndian.Uint16(sum[:2])%(28000-pckPortSpan)
 }
 
@@ -89,11 +130,22 @@ func nextPckClientPort(base uint16) (uint16, error) {
 	return 0, fmt.Errorf("pck: all %d source ports from %d are in use", pckPortSpan, base)
 }
 
-// releasePckClientPort gives a port back when its carrier closes.
-func releasePckClientPort(port uint16) {
+// releasePckClientPort gives a port back when its carrier closes, and the
+// tunnel's range with it once no carrier of the tunnel holds one.
+func releasePckClientPort(id string, port uint16) {
 	pckPortMu.Lock()
 	defer pckPortMu.Unlock()
 	delete(pckPortsInUse, port)
+	base, ok := pckClientBases[id]
+	if !ok {
+		return
+	}
+	for p := base; p < base+pckPortSpan; p++ {
+		if pckPortsInUse[p] {
+			return
+		}
+	}
+	delete(pckClientBases, id)
 }
 
 // portSpec renders a port or a port range in the spelling iptables expects.
@@ -107,11 +159,17 @@ func portSpec(lo, hi uint16) string {
 }
 
 // pckRules is the rule set the guard installs, each entry being the table
-// followed by the rule body. They are tagged with a comment naming the ports, so
-// a rule left behind by a crash is identifiable and removable by hand.
-func pckRules(lo, hi uint16) [][]string {
+// followed by the rule body. They are tagged with a comment naming the tunnel
+// (id, from pckTunnelID) and the ports, so a rule left behind by a crash is
+// found by the tunnel's tag whatever ports it was for, and is readable by hand.
+// An empty id is the untagged spelling v1.8.4 and earlier wrote.
+func pckRules(id string, lo, hi uint16) [][]string {
 	p := portSpec(lo, hi)
-	tag := []string{"-m", "comment", "--comment", fmt.Sprintf("backpack-pck-%s", p)}
+	comment := "backpack-pck-" + p
+	if id != "" {
+		comment = pckRulePrefix(id) + p
+	}
+	tag := []string{"-m", "comment", "--comment", comment}
 
 	rule := func(table string, body ...string) []string {
 		return append([]string{table}, append(body, tag...)...)
@@ -127,4 +185,30 @@ func pckRules(lo, hi uint16) [][]string {
 		rule("raw", "PREROUTING", "-p", "tcp", "--dport", p, "-j", "NOTRACK"),
 		rule("raw", "OUTPUT", "-p", "tcp", "--sport", p, "-j", "NOTRACK"),
 	}
+}
+
+// pckRulePrefix is how every rule of one tunnel's comment begins.
+func pckRulePrefix(id string) string { return "backpack-pck-" + id + "-" }
+
+// tunnelRuleDeletions turns `iptables -S` output into the delete commands for
+// the rules whose comment starts with prefix. Our comments carry no spaces, so
+// the listing splits on whitespace exactly as it was written.
+func tunnelRuleDeletions(listing, prefix string) [][]string {
+	var out [][]string
+	for _, line := range strings.Split(listing, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != "-A" {
+			continue
+		}
+		mine := false
+		for i := 0; i+1 < len(f); i++ {
+			if f[i] == "--comment" && strings.HasPrefix(strings.Trim(f[i+1], `"`), prefix) {
+				mine = true
+			}
+		}
+		if mine {
+			out = append(out, append([]string{"-D"}, f[1:]...))
+		}
+	}
+	return out
 }

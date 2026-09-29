@@ -9,6 +9,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage/core"
+	"github.com/backpack/backpack/internal/manage/tunnelspec"
 )
 
 // Which tunnels have their other end on a managed server.
@@ -55,9 +56,7 @@ var pairMu sync.Mutex
 
 func loadPairs() pairFile {
 	var f pairFile
-	if data, err := os.ReadFile(NodePairPath); err == nil {
-		json.Unmarshal(data, &f)
-	}
+	app.WarnState(app.LoadState(NodePairPath, &f))
 	if f.Pairs == nil {
 		f.Pairs = map[string]Pair{}
 	}
@@ -172,4 +171,12 @@ func TunnelsOnNode(node string) []string {
 // there; what goes is only the record that the two were a pair.
 func init() {
 	core.OnDelete(func(name string) { _ = ForgetNodePair(name) })
+	// A renamed tunnel keeps its pairing, and its history of configurations.
+	core.OnRename(func(oldName, newName string) {
+		if p, ok := PairFor(oldName); ok {
+			_ = ForgetNodePair(oldName)
+			_ = NoteNodePair(newName, p.Node, p.PeerName)
+		}
+		tunnelspec.RenameHistory(oldName, newName)
+	})
 }

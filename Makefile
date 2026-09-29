@@ -2,7 +2,7 @@ BIN      := backpack
 BIN_PATH := /usr/local/bin/backpack
 LDFLAGS  := -s -w
 
-.PHONY: all build install uninstall clean tidy run vendor release-linux release version sbom reproducible
+.PHONY: all build install uninstall clean tidy run vendor release-linux release version sbom reproducible check
 
 all: build
 
@@ -107,6 +107,16 @@ uninstall:
 
 run: build
 	sudo ./$(BIN)
+
+# check runs what CI runs, before a push: formatting, vet, staticcheck, the
+# tests, and the tests again under the race detector. staticcheck is skipped
+# with a note when it is not installed.
+check:
+	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "not gofmt'd:"; echo "$$unformatted"; exit 1; fi
+	go vet ./...
+	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed: go install honnef.co/go/tools/cmd/staticcheck@latest"; fi
+	go test ./... -timeout 20m
+	go test ./... -race -timeout 20m
 
 clean:
 	rm -f $(BIN)

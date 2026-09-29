@@ -125,8 +125,8 @@ func (r *udpRelay) forward(dst string, data, header []byte) {
 
 	if f == nil {
 		raddr, err := net.ResolveUDPAddr("udp", dst)
-		if err != nil {
-			return
+		if err != nil || !Target(raddr.IP) {
+			return // unresolvable, or refused: see policy.go
 		}
 		out, err := net.DialUDP("udp", nil, raddr)
 		if err != nil {

@@ -109,9 +109,9 @@ func TestEveryScreenDrawsAndComesBack(t *testing.T) {
 		{"update", updateMenu, []string{"Update"}},
 		{"auto refresh", autoRefreshMenu, []string{"Refresh"}},
 		{"built-in proxy", builtinProxyMenu, []string{"Proxy"}},
-		{"release channel", channelMenu, []string{"Release channel", "Stable", "Beta"}},
+		{"release channel", channelMenu, []string{"Release Channel", "Stable", "Beta"}},
 		{"uninstall", uninstallMenu, []string{"Uninstall"}},
-		{"restore points", restorePointMenu, []string{"Restore points"}},
+		{"restore points", restorePointMenu, []string{"Restore Points"}},
 		// optimizeMenu is deliberately not here. It opens with a confirmation
 		// whose default is yes, so any input that is not a refusal applies
 		// sysctls to the machine running the test.
@@ -158,6 +158,9 @@ func TestABadChoiceIsRefusedAndTheScreenStays(t *testing.T) {
 // pinning: every entry numbered, in order, with nothing missing in the middle.
 func TestTheMainMenuNumbersEveryEntry(t *testing.T) {
 	out := plain(drive(t, "", printMenu))
+	if i0, i1 := strings.Index(out, " 0) Connection Test"), strings.Index(out, " 1) Setup Iran"); i0 < 0 || i1 < 0 || i0 > i1 {
+		t.Errorf("Connection Test is not entry 0, above Setup Iran; the menu drew:\n%s", out)
+	}
 	for i := 1; i <= 8; i++ {
 		if !strings.Contains(out, itoa(i)+")") {
 			t.Errorf("the main menu has no entry %d; it drew:\n%s", i, out)
@@ -229,7 +232,7 @@ func TestAnUpdateReopensTheMenuOnTheNewBinary(t *testing.T) {
 	}
 
 	execSelf = func() error { return errors.New("permission denied") }
-	if out := drive(t, "\n", reopen); !strings.Contains(out, "run sudo backpack again") {
+	if out := drive(t, "\n", reopen); !strings.Contains(out, "Run sudo backpack Again") {
 		t.Fatalf("a failed reopen does not say what to do:\n%s", out)
 	}
 
@@ -237,8 +240,8 @@ func TestAnUpdateReopensTheMenuOnTheNewBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, after := range []string{`tui.Success("Done.")`, `tui.Success("Backpack updated successfully.")`,
-		`tui.Success("Rolled back to "`} {
+	for _, after := range []string{`tui.Success("Done.")`, `tui.Success("Updated.")`,
+		`tui.Success("Rolled Back To "`} {
 		body := string(src)
 		i := strings.Index(body, after)
 		if i < 0 || !strings.Contains(body[i:i+200], "reopen()") {

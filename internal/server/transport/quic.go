@@ -2,13 +2,12 @@ package transport
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"runtime"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
@@ -29,9 +28,22 @@ type quicGen struct {
 	localChannel   chan LocalTCPConn
 	reqNewConnChan chan struct{}
 	usageMonitor   *web.Usage
-	// bye is said once the client has been told this run is ending. See
-	// farewell.
-	bye *farewell
+	// bye is said once the seated client has been told this run is ending;
+	// each client gets its own. See farewell.
+	bye atomic.Pointer[farewell]
+	// seat holds the client this generation serves; see clientSeat.
+	seat clientSeat
+	// client is the QUIC connection the seated client's control stream came
+	// on. It carries all of that client's streams, so a data stream from any
+	// other connection belongs to a client that is not seated.
+	client atomic.Pointer[quic.Conn]
+}
+
+// quicClaim is a control stream that has proved the token, with the
+// connection it came on.
+type quicClaim struct {
+	ctrl net.Conn
+	conn *quic.Conn
 }
 
 // QuicTransport is the server side of the QUIC transport. One QUIC connection
@@ -40,25 +52,16 @@ type quicGen struct {
 // congestion control and loss recovery, so there is no smux, no FEC and no
 // hand-tuning here — the protocol does what KCP needed a stack of settings for.
 type QuicTransport struct {
-	// The listeners this transport is holding right now. Start waits on it, so
-	// "Start returned" means "the ports are free". See listeners.go.
-	listeners listenerSet
+	// The generations of this transport and what outlives them: see
+	// lifecycle.go.
+	lifecycle
 
-	// The status shown in the panel. Behind a lock because the run being
-	// replaced and the run replacing it both write it. See tunnelStatus.
-	status       tunnelStatus
 	config       *QuicConfig
 	quicSettings network.QUICSettings
-	parentctx    context.Context
-	// The current run. Replaced by Restart while the previous run's
-	// goroutines are still reading it, so it lives behind a lock.
-	run    runState
-	logger *logrus.Logger
 	// The run's channels and its usage monitor are deliberately not fields:
 	// they belong to one generation, and a field outlives the generation that
 	// made it. See Start.
 	controlChannel netControl
-	restartMutex   sync.Mutex
 	limits         *limiter
 }
 
@@ -102,19 +105,20 @@ func quicIdleTimeout(keepAlive time.Duration) time.Duration {
 }
 
 func NewQuicServer(parentCtx context.Context, config *QuicConfig, logger *logrus.Logger) *QuicTransport {
-	ctx, cancel := context.WithCancel(parentCtx)
-
 	server := &QuicTransport{
 		config:       config,
 		quicSettings: config.settings(),
-		parentctx:    parentCtx,
-		logger:       logger,
-		limits:       newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
+		lifecycle: lifecycle{
+			parentctx: parentCtx,
+			logger:    logger,
+			usage:     usageSpec{webPort: config.WebPort, snifferLog: config.SnifferLog, sniffer: config.Sniffer},
+		},
+		limits: newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
 	// The first run is installed the same way every later one is, so there is
 	// only one path that ever writes it.
-	server.run.set(ctx, cancel)
+	server.firstGeneration()
 
 	return server
 }
@@ -133,25 +137,13 @@ func NewQuicServer(parentCtx context.Context, config *QuicConfig, logger *logrus
 // these were still reachable. Building the generation here leaves nothing
 // behind to pin.
 func (s *QuicTransport) Start() {
-	ctx := s.run.context()
-	s.start(&quicGen{
-		ctx:            ctx,
-		tunnelChannel:  make(chan net.Conn, s.config.ChannelSize),
-		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
-		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
-		usageMonitor: web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx,
-			s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
-		bye: newFarewell(),
-	})
+	s.start(s.newGen(s.run.context()))
 }
 
 // start runs one generation of the transport. Everything it needs is in g:
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *QuicTransport) start(g *quicGen) {
-	// Whatever is still queued when this generation ends gives its slot back.
-	go drainOnEnd(g.ctx, g.localChannel, s.limits)
-
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
@@ -161,122 +153,69 @@ func (s *QuicTransport) start(g *quicGen) {
 	// control stream onto it, and channelHandshake below takes it. Keeping it off
 	// the struct means a goroutine from an old run can never hand its control
 	// stream to the run that replaced it.
-	handshake := make(chan net.Conn)
+	handshake := make(chan quicClaim)
 
 	go s.tunnelListener(g, handshake)
 
 	// Block until the control stream arrives (or the run ends).
+	var first quicClaim
 	select {
 	case <-g.ctx.Done():
 		return
-	case conn := <-handshake:
-		s.controlChannel.Set(conn)
-		metrics.ReportPeer(conn.RemoteAddr().String())
-		s.logger.Info("control channel successfully established.")
+	case first = <-handshake:
 	}
+	s.seatClient(g, first)
+	s.serveGeneration(s.forwarder(g), func() { s.handleLoop(g) })
+}
 
-	s.status.set("Connected (QUIC)")
+// seatClient makes claim this generation's client, in place of whoever was.
+func (s *QuicTransport) seatClient(g *quicGen, claim quicClaim) {
+	g.seat.sit(g.ctx,
+		func() { s.vacate(g) },
+		func() {
+			g.bye.Store(newFarewell())
+			g.client.Store(claim.conn)
+			s.controlChannel.Set(claim.ctrl)
+			s.seated(claim.ctrl.RemoteAddr().String())
+			s.status.set("Connected (QUIC)")
+			s.logger.Info("control channel successfully established.")
+		},
+		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+}
 
-	numCPU := runtime.NumCPU()
-	if numCPU > 4 {
-		numCPU = 4 // Max allowed handler is 4
+// vacate empties the seat: the client's connection is closed with a word to
+// the peer — over QUIC a silent close is no close at all — and the data
+// streams it opened that wait in the pool are dropped. The listener and the
+// forwarded ports stay up for the next client.
+func (s *QuicTransport) vacate(g *quicGen) {
+	s.controlChannel.Close()
+	s.controlChannel.Clear()
+	if old := g.client.Swap(nil); old != nil {
+		_ = old.CloseWithError(0, "replaced by a newer connection from the client")
 	}
-
-	go s.parsePortMappings(g)
-	go s.channelHandler(g)
-
-	s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
-	for i := 0; i < numCPU; i++ {
-		go s.handleLoop(g)
-	}
+	drainTunnelConns(g.tunnelChannel)
+	s.status.set("Disconnected (QUIC)")
+	metrics.ClearPeer()
 }
 
 func (s *QuicTransport) Restart() {
-	if !s.restartMutex.TryLock() {
-		s.logger.Warn("server restart already in progress, skipping restart attempt")
-		return
-	}
-	defer s.restartMutex.Unlock()
+	s.restart(s.controlChannel.Close, func(ctx context.Context) {
+		s.controlChannel.Clear()
+		go s.start(s.newGen(ctx))
+	})
+}
 
-	s.logger.Info("restarting server...")
-	s.run.stop()
-
-	// for removing timeout logs
-	level := s.logger.GetLevel()
-	s.logger.SetLevel(logrus.FatalLevel)
-
-	if s.controlChannel.IsSet() {
-		s.controlChannel.Close()
-	}
-
-	// Wait for the listeners rather than guessing at how long they take.
-	//
-	// This was a flat two-second sleep, and the comment next to it said what it
-	// was for: the run being replaced still holds the ports, and binding them
-	// again before it lets go fails. A sleep is a guess — usually long enough,
-	// never a guarantee, and silently wrong on a loaded machine, which is
-	// exactly when a restart is most likely to be happening.
-	//
-	// listenerSet answers the question instead of approximating it. It is also
-	// faster in the ordinary case: a listener closes in microseconds, so this
-	// returns at once rather than always costing two seconds.
-	s.listeners.wait(s.parentctx)
-
-	// The whole tunnel may have been shut down while this restart was waiting —
-	// on a reload, or on the process going down. Rebuilding from a finished
-	// parent context would bind the listener only to close it again.
-	if s.parentctx.Err() != nil {
-		// The level was turned down to hide the timeouts a teardown produces;
-		// leaving it there would silence the shutdown itself.
-		s.logger.SetLevel(level)
-		// Abandoning is not a reason to keep claiming a peer.
-		//
-		// This branch used to return before the two lines below, which sit on
-		// the path that carries on — so a restart that gave up left the status
-		// reading "Connected" and left the peer published in the metrics
-		// snapshot. The process usually exits straight afterwards and the
-		// snapshot goes stale, which is why this was invisible; with a
-		// transport fallback chain it is not, because the chain cancels a
-		// candidate's context and the *process keeps running*. The snapshot
-		// then carries a fresh timestamp and a connected peer for a tunnel that
-		// is mid-rotation with nothing connected at all, and the watchdog
-		// reads that and calls it healthy.
-		//
-		// The run is over. Whatever ended it, there is no peer.
-		s.status.set("")
-		metrics.ClearPeer()
-		s.logger.Debug("restart abandoned: the tunnel is shutting down")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(s.parentctx)
-	s.run.set(ctx, cancel)
-
-	// The next run's state, built here and handed straight to start(). It used
-	// to be written onto the transport for start() to read back, which is a
-	// value published by one goroutine and read by another with nothing
-	// ordering them — the same shape as the ctx/cancel race the detector caught
-	// on kcp.go, and present on every one of these fields. Passing it removes
-	// the shared field rather than locking it.
+// newGen builds one generation's channels, usage monitor and farewell.
+func (s *QuicTransport) newGen(ctx context.Context) *quicGen {
 	g := &quicGen{
 		ctx:            ctx,
 		tunnelChannel:  make(chan net.Conn, s.config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
-		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
-		bye:            newFarewell(),
+		usageMonitor:   s.usageMonitor(ctx),
 	}
-
-	// Re-initialise the per-run state.
-	s.controlChannel.Clear()
-	// The peer is gone until a new control channel arrives; a stale address would
-	// be shown as if it were current.
-	metrics.ClearPeer()
-	s.status.set("")
-
-	s.logger.SetLevel(level)
-
-	go s.start(g)
+	g.bye.Store(newFarewell())
+	return g
 }
 
 // quicFarewellFlush is how long a goodbye is given to leave before what carries
@@ -290,25 +229,18 @@ const quicFarewellFlush = 150 * time.Millisecond
 // The re-adopt decision lives on the control stream instead of here, because a
 // connection has proved nothing until its control stream passes the token — a
 // peer that has not is not a reason to disturb the running tunnel.
-func (s *QuicTransport) tunnelListener(g *quicGen, handshake chan<- net.Conn) {
+func (s *QuicTransport) tunnelListener(g *quicGen, handshake chan<- quicClaim) {
 	// Counted while this goroutine holds a listener, so Start can wait for the
 	// port rather than sleeping and hoping. See listeners.go.
 	s.listeners.hold()
 	defer s.listeners.release()
 
 	// The tunnel's own port: retried rather than fatal. See bindfail.go.
-	var backoff listenBackoff
-	var listener *network.QUICListener
-	for {
-		var err error
-		listener, err = network.QUICListen(s.config.BindAddr, s.quicSettings)
-		if err == nil {
-			break
-		}
-		s.logger.Error(bindFailure("tunnel port", s.config.BindAddr, err))
-		if !backoff.wait(g.ctx) {
-			return
-		}
+	listener, ok := bindTunnelPort(g.ctx, s.logger, s.config.BindAddr, func() (*network.QUICListener, error) {
+		return network.QUICListen(s.config.BindAddr, s.quicSettings)
+	})
+	if !ok {
+		return
 	}
 
 	s.logger.Infof("server started successfully, listening on address: %s (QUIC)", listener.Addr().String())
@@ -336,10 +268,10 @@ func (s *QuicTransport) tunnelListener(g *quicGen, handshake chan<- net.Conn) {
 	// cancelled, so the listener was gone before the goodbye had begun.
 	goodbye := func() {
 		// First the client's own goodbye, SG_Closed on the control stream,
-		// which channelHandler writes. It is the one the client acts on by
+		// which the control loop writes (controlLoop.farewell). It is the one the client acts on by
 		// itself; CONNECTION_CLOSE below is the second chance.
 		if s.controlChannel.IsSet() {
-			g.bye.wait(farewellWait)
+			g.bye.Load().wait(farewellWait)
 		}
 		connsMu.Lock()
 		told := len(conns) > 0
@@ -378,14 +310,68 @@ func (s *QuicTransport) tunnelListener(g *quicGen, handshake chan<- net.Conn) {
 
 // handleConn accepts the streams of one QUIC connection and files each as the
 // control stream or a data stream.
-func (s *QuicTransport) handleConn(g *quicGen, conn *quic.Conn, handshake chan<- net.Conn) {
+//
+// QUIC's own handshake proves nothing about the tunnel token, so a connection
+// is a stranger until one of its streams has presented it. Until then it may
+// have only unauthenticatedStreams streams waiting on their announcement, and
+// one that opens more than that before proving anything is closed. Without the
+// bound, each stream held a goroutine for up to controlClaimTimeout, and QUIC
+// lets a peer open 65,536 of them per connection.
+func (s *QuicTransport) handleConn(g *quicGen, conn *quic.Conn, handshake chan<- quicClaim) {
+	gate := &quicGate{pending: make(chan struct{}, unauthenticatedStreams)}
 	for {
 		stream, err := conn.AcceptStream(g.ctx)
 		if err != nil {
 			s.logger.Debugf("quic connection from %s closed: %v", conn.RemoteAddr(), err)
 			return
 		}
-		go s.acceptStream(g, conn, stream, handshake)
+		reserved, ok := gate.admit()
+		if !ok {
+			s.logger.Warnf("closing the QUIC connection from %s: it opened more than %d streams "+
+				"before presenting the tunnel token", conn.RemoteAddr(), unauthenticatedStreams)
+			_ = conn.CloseWithError(0, "unauthenticated")
+			return
+		}
+		go s.acceptStream(g, conn, stream, handshake, gate, reserved)
+	}
+}
+
+// unauthenticatedStreams is how many streams a QUIC connection may have waiting
+// on their announcement before it has presented the tunnel token once. A
+// genuine client opens one — its control stream — and waits for the answer.
+const unauthenticatedStreams = 8
+
+// quicGate is one QUIC connection's standing: whether it has presented the
+// token yet, and the streams it has waiting until it does.
+type quicGate struct {
+	authed  atomic.Bool
+	pending chan struct{}
+}
+
+// admit reserves a place for one more stream's announcement on a connection
+// that has not authenticated, and reports false when it has none left. An
+// authenticated connection needs no place: reserved is false.
+func (q *quicGate) admit() (reserved, ok bool) {
+	if q.authed.Load() {
+		return false, true
+	}
+	select {
+	case q.pending <- struct{}{}:
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// settled gives the stream's place back once its announcement has been judged,
+// and records whether it proved the token. Called exactly once per admitted
+// stream; after the connection is authenticated there is nothing to give back.
+func (q *quicGate) settled(authenticated bool, reserved bool) {
+	if authenticated {
+		q.authed.Store(true)
+	}
+	if reserved {
+		<-q.pending
 	}
 }
 
@@ -394,8 +380,19 @@ func (s *QuicTransport) handleConn(g *quicGen, conn *quic.Conn, handshake chan<-
 // The decision is made from the signal the peer sends, never from whether a
 // control channel exists — a data stream that races in before the control
 // stream is established just waits its turn on the channel.
-func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.Stream, handshake chan<- net.Conn) {
+func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.Stream, handshake chan<- quicClaim, gate *quicGate, reserved bool) {
 	wrapped := network.NewQUICStreamConn(stream, conn)
+	// The stream's place among the connection's unauthenticated ones, if it
+	// took one (see handleConn), is given back once its announcement has been
+	// judged.
+	judged := false
+	judge := func(ok bool) {
+		if !judged {
+			judged = true
+			gate.settled(ok, reserved)
+		}
+	}
+	defer judge(false)
 
 	if err := stream.SetReadDeadline(time.Now().Add(controlClaimTimeout)); err != nil {
 		stream.Close()
@@ -424,6 +421,7 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 		refuseControl(wrapped, utils.RefusedBadToken)
 		return
 	}
+	judge(true)
 
 	switch signal {
 	case utils.SG_Chan:
@@ -446,21 +444,18 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 			return
 		}
 
-		// A control claim while one is already established means the client
-		// restarted on its own and re-dialed, while this run never noticed
-		// because the old connection has not idled out yet. Now that the token
-		// has proved the claim genuine, adopt the new client by rebuilding the
-		// run — the listener it is retrying against comes back up as part of that
-		// restart. The same fix the udp and kcp transports carry.
-		if s.controlChannel.IsSet() {
-			s.logger.Warn("a new control channel claim arrived; restarting to adopt the new client")
-			stream.Close()
-			go s.Restart()
+		// A claim while the generation is serving is a client that re-dialed,
+		// often before this side noticed its old connection was dead: it takes
+		// the seat in place, and the ports and their users stay up. It used to
+		// rebuild the whole run. See clientSeat.
+		if g.seat.serving() {
+			s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
+			s.seatClient(g, quicClaim{ctrl: wrapped, conn: conn})
 			return
 		}
 
 		select {
-		case handshake <- wrapped:
+		case handshake <- quicClaim{ctrl: wrapped, conn: conn}:
 		default:
 			s.logger.Warnf("control channel handshake already in progress, discarding duplicate")
 			stream.Close()
@@ -470,6 +465,12 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 		// A data stream is useless without a control channel to drive it.
 		if !s.controlChannel.IsSet() {
 			s.logger.Debugf("data stream from %s arrived before a control channel, discarding", conn.RemoteAddr())
+			stream.Close()
+			return
+		}
+		// Only the seated client's connection carries its data streams.
+		if c := g.client.Load(); c != nil && c != conn {
+			s.logger.Debugf("data stream from %s on a connection that is no longer the client's, discarding", conn.RemoteAddr())
 			stream.Close()
 			return
 		}
@@ -486,198 +487,18 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 	}
 }
 
-func (s *QuicTransport) channelHandler(g *quicGen) {
-	// Every way out releases the listener, including the ones that never say
-	// goodbye. See farewell.
-	defer g.bye.said()
-
-	ticker := newLivenessTicker(s.config.Heartbeat)
-	defer ticker.Stop()
-
-	messageChan := make(chan byte, 1)
-
-	go func() {
-		for {
-			select {
-			case <-g.ctx.Done():
-				return
-			default:
-				message, err := utils.ReceiveBinaryByte(s.controlChannel.Get())
-				if err != nil {
-					// A generation that has already been cancelled must not ask for a
-					// restart. It used to test s.cancel != nil, which the constructor
-					// makes true before this code can run — so the guard was always
-					// open, and every goroutine dying during a teardown queued another
-					// restart of a tunnel that was on its way down. Asking the
-					// generation's own context is both the real question and a read
-					// nobody else writes: Restart replaces s.cancel while these
-					// goroutines are still running, which is the data race the CI
-					// detector caught on this line.
-					if g.ctx.Err() == nil {
-						s.logger.Error("failed to read from channel connection. ", err)
-						go s.Restart()
-					}
-					return
-				}
-				messageChan <- message
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-g.ctx.Done():
-			// The listener holds the connection open until this has left.
-			if utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Closed, controlWriteTimeout) == nil {
-				time.Sleep(quicFarewellFlush)
-			}
-			return
-
-		case <-g.reqNewConnChan:
-			if err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_Chan, controlWriteTimeout); err != nil {
-				s.logger.Error("failed to send request new connection signal. ", err)
-				go s.Restart()
-				return
-			}
-
-		case <-ticker.C:
-			if err := utils.SendBinaryByteWithin(s.controlChannel.Get(), utils.SG_HB, controlWriteTimeout); err != nil {
-				s.logger.Error("failed to send heartbeat signal")
-				go s.Restart()
-				return
-			}
-			s.logger.Trace("heartbeat signal sent successfully")
-
-		case message, ok := <-messageChan:
-			if !ok {
-				s.logger.Error("channel closed, likely due to an error in the control channel read")
-				return
-			}
-			if message == utils.SG_Closed {
-				s.logger.Warn("control channel has been closed by the client")
-				go s.Restart()
-				return
-			}
-		}
-	}
-}
-
-func (s *QuicTransport) parsePortMappings(g *quicGen) {
-	for _, portMapping := range s.config.Ports {
-		parts := strings.Split(portMapping, "=")
-		// One unreadable mapping is one mapping, not a reason to end the
-		// process. See the same passage in tcp.go.
-		if len(parts) > 2 {
-			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
-			continue
-		}
-
-		// The left-hand side may name a local address as well as a port or a
-		// range, so one machine can serve different exposed ports on different
-		// local IPs. See expandListenSpec.
-		listens, err := expandListenSpec(parts[0])
-		if err != nil {
-			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
-			continue
-		}
-
-		var remoteAddr string
-		if len(parts) == 2 {
-			remoteAddr = strings.TrimSpace(parts[1])
-		}
-
-		for _, l := range listens {
-			// A mapping that named no destination forwards each port to itself.
-			target := remoteAddr
-			if target == "" {
-				target = l.port
-			}
-			go s.localListener(g, l.addr, target)
-			if len(listens) > 1 {
-				time.Sleep(1 * time.Millisecond) // for wide port ranges
-			}
-		}
-	}
-}
-
-func (s *QuicTransport) localListener(g *quicGen, localAddr string, remoteAddr string) {
-	// Counted while this goroutine holds a listener, so Start can wait for the
-	// port rather than sleeping and hoping. See listeners.go.
-	s.listeners.hold()
-	defer s.listeners.release()
-
-	listener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		// One forwarded port, not the tunnel. See bindfail.go.
-		s.logger.Error(bindFailure("forwarded port", localAddr, err))
-		return
-	}
-
-	defer listener.Close()
-
-	s.logger.Infof("listener started successfully, listening on address: %s", listener.Addr().String())
-
-	go s.acceptLocalConn(g, listener, remoteAddr)
-	// The same forwarded port, carrying datagrams. A flow is handed over as a
-	// net.Conn, so from here down it is paired with a tunnel connection, piped,
-	// counted and torn down by exactly the code that does it for TCP.
-	if s.config.AcceptUDP {
-		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
-	}
-
-	<-g.ctx.Done()
-}
-
-func (s *QuicTransport) acceptLocalConn(g *quicGen, listener net.Listener, remoteAddr string) {
-	var backoff acceptBackoff
-	for {
-		select {
-		case <-g.ctx.Done():
-			return
-
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
-				// One of these runs per forwarded port, so an instant retry on a
-				// broken listener would pin a core per port. See acceptBackoff.
-				if !backoff.Fail(g.ctx) {
-					return
-				}
-				continue
-			}
-			backoff.OK()
-
-			tcpConn, ok := conn.(*net.TCPConn)
-			if !ok {
-				s.logger.Warnf("discarded non-TCP connection from %s", conn.RemoteAddr().String())
-				conn.Close()
-				continue
-			}
-
-			// Local hops are short and latency-sensitive, so Nagle stays off.
-			if err := tcpConn.SetNoDelay(true); err != nil {
-				s.logger.Warnf("failed to set TCP_NODELAY for %s: %v", tcpConn.RemoteAddr().String(), err)
-			}
-
-			// Enforce the tunnel's limits before the connection costs anything.
-			if !s.limits.acquire() {
-				s.logger.Warnf("connection limit reached, refusing %s", conn.RemoteAddr())
-				conn.Close()
-				continue
-			}
-			conn = s.limits.wrap(g.ctx, conn)
-
-			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
-				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
-			default: // channel is full, discard the connection
-				s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", tcpConn.RemoteAddr().String())
-				s.limits.release()
-				conn.Close()
-			}
-		}
+// control is this generation's control loop, bound to the control channel
+// the generation was started with. See controlLoop.
+func (s *QuicTransport) control(g *quicGen, ctx context.Context, lost func()) controlLoop {
+	return controlLoop{
+		ctx:           ctx,
+		link:          controlwire.Net(s.controlChannel.Get()),
+		beat:          s.config.Heartbeat,
+		requests:      g.reqNewConnChan,
+		log:           s.logger,
+		restart:       lost,
+		farewellFlush: quicFarewellFlush,
+		bye:           g.bye.Load(),
 	}
 }
 
@@ -725,5 +546,15 @@ func (s *QuicTransport) handleLoop(g *quicGen) {
 				},
 			}.run()
 		}
+	}
+}
+
+// forwarder is this transport's forwarded ports for one generation.
+func (s *QuicTransport) forwarder(g *quicGen) portForwarder {
+	return portForwarder{
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
+		tune:   alwaysNodelay(s.logger),
+		queued: nil,
 	}
 }

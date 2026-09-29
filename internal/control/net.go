@@ -38,7 +38,7 @@ const (
 	probeSamples = 5
 )
 
-// netHealth is one measurement of the path to one server.
+// NetHealth is one measurement of the path to one server.
 //
 // Measured is the field that matters. ICMP is blocked outright on plenty of
 // hosts and inside plenty of containers, and ping cannot tell that from a
@@ -82,7 +82,7 @@ func (p *Net) Health(name string) NetHealth {
 	return p.seen[name]
 }
 
-// start begins measuring, once per process. Starting twice would double the
+// Start begins measuring, once per process. Starting twice would double the
 // probe rate for no extra information.
 //
 // The context is what stops it. The loop was `for range t.C` with nothing else

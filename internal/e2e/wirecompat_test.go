@@ -61,6 +61,12 @@ func TestThePreviousReleaseStillTalksToThisOne(t *testing.T) {
 	// the other. An old server with a new client is the shape an operator gets
 	// when they update the machine they can reach first; the reverse is what
 	// they get when they update the other one.
+	//
+	// And every transport, not only tcp. What changes between releases is
+	// rarely the part tcp exercises: v1.8.5 alone added a server proof to the
+	// wss upgrade, a bound on the streams a quic connection may hold before it
+	// proves the token, and concurrent judging of udp control claims — each an
+	// assertion, until now, that an older peer does not notice.
 	for _, tc := range []struct {
 		name           string
 		server, client string
@@ -68,18 +74,27 @@ func TestThePreviousReleaseStillTalksToThisOne(t *testing.T) {
 		{"old server, new client", prev, current},
 		{"new server, old client", current, prev},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			runCrossVersionPair(t, tc.server, tc.client)
-		})
+		for _, transport := range allReverseTransports {
+			t.Run(tc.name+"/"+transport, func(t *testing.T) {
+				t.Parallel()
+				runCrossVersionPair(t, tc.server, tc.client, transport)
+			})
+		}
 	}
 }
 
 // runCrossVersionPair starts one end from each binary and moves bytes through
 // the forwarded port.
-func runCrossVersionPair(t *testing.T, serverBin, clientBin string) {
+func runCrossVersionPair(t *testing.T, serverBin, clientBin, transport string) {
 	t.Helper()
 
-	backend := startEchoBackend(t)
+	// udp forwards a datagram port, so it is checked with a datagram.
+	backendAddr := ""
+	if transport == "udp" {
+		backendAddr = startUDPEchoBackend(t)
+	} else {
+		backendAddr = startEchoBackend(t).addr
+	}
 	tunnelPort := freePort(t)
 	entryPort := freePort(t)
 	token := "wire-compat-token-0123456789abcd"
@@ -88,21 +103,21 @@ func runCrossVersionPair(t *testing.T, serverBin, clientBin string) {
 	serverCfg := filepath.Join(dir, "srv.toml")
 	writeFile(t, serverCfg, fmt.Sprintf(`[server]
 bind_addr = "127.0.0.1:%d"
-transport = "tcp"
+transport = "%s"
 token = "%s"
 ports = ["%d=%s"]
 log_level = "error"
 skip_optz = true
-`, tunnelPort, token, entryPort, backend.addr))
+`, tunnelPort, transport, token, entryPort, backendAddr))
 
 	clientCfg := filepath.Join(dir, "cli.toml")
 	writeFile(t, clientCfg, fmt.Sprintf(`[client]
 remote_addr = "127.0.0.1:%d"
-transport = "tcp"
+transport = "%s"
 token = "%s"
 log_level = "error"
 skip_optz = true
-`, tunnelPort, token))
+`, tunnelPort, transport, token))
 
 	startEngine(t, serverBin, serverCfg)
 	// The server binds before the client dials; without this the client's first
@@ -112,10 +127,69 @@ skip_optz = true
 	startEngine(t, clientBin, clientCfg)
 
 	entry := net.JoinHostPort("127.0.0.1", fmt.Sprint(entryPort))
+	if transport == "udp" {
+		deadline := time.Now().Add(25 * time.Second)
+		for {
+			err := udpRoundTrip(entry, []byte("wire-compat-datagram"))
+			if err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("a udp tunnel between these two versions never carried a datagram: %v\n"+
+					"server %s\nclient %s", err, serverBin, clientBin)
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
 	if err := awaitEcho(entry, 25*time.Second); err != nil {
 		t.Fatalf("a tunnel between these two versions never carried traffic: %v\n"+
 			"server %s\nclient %s", err, serverBin, clientBin)
 	}
+	// One echo proves the tunnel came up. Many at once is what makes the pool
+	// refill and the mux open streams side by side — where a bound on what a
+	// peer may hold before it proves the token would bite an older client.
+	if err := concurrentEchoes(entry, 32, 64<<10); err != nil {
+		t.Fatalf("a tunnel between these two versions came up but failed under load: %v\n"+
+			"server %s\nclient %s", err, serverBin, clientBin)
+	}
+}
+
+// concurrentEchoes sends n payloads of size bytes through addr at once and
+// requires each back intact.
+func concurrentEchoes(addr string, n, size int) error {
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			payload := make([]byte, size)
+			for j := range payload {
+				payload[j] = byte(i + j)
+			}
+			conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
+			go func() { _, _ = conn.Write(payload) }()
+			got := make([]byte, size)
+			if _, err := readFull(conn, got); err != nil {
+				errs <- fmt.Errorf("echo %d: %w", i, err)
+				return
+			}
+			if string(got) != string(payload) {
+				errs <- fmt.Errorf("echo %d came back different", i)
+				return
+			}
+			errs <- nil
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // startEngine runs one binary in engine mode and stops it when the test ends.

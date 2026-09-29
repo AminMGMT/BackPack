@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,8 @@ func sampleLink() ShareLink {
 		FECData: 10, FECParity: 3, Paths: 4,
 		Profile: "icmp", Uplink: "icmp", Downlink: "udp",
 		SrcIPs: "8.8.4.4, 1.1.1.1", Stealth: true, ICMPReply: true,
+		Hosts:        []string{"iran.example.com", "198.51.100.7:8443"},
+		RestartHours: 6, RestartMinute: 17,
 	}
 }
 
@@ -38,7 +41,7 @@ func TestShareLinkRoundTripsEverySetting(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	want.V = 1 // set by Encode
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the link did not survive the trip:\n got %+v\nwant %+v", got, want)
 	}
 }
@@ -50,7 +53,7 @@ func TestShareLinkIsRecognisableAndCompact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(s, "backpack://1.") {
+	if !strings.HasPrefix(s, "backpack://2.") {
 		t.Errorf("the link does not announce its scheme and version: %q", s[:min(20, len(s))])
 	}
 	// A fully loaded spoof tunnel is the biggest this gets. If it grows past a

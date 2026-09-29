@@ -5,6 +5,7 @@ package network
 import (
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -61,7 +62,14 @@ func guardKey(lo, hi uint16) string {
 // Best effort throughout: a machine without iptables still runs the tunnel, and
 // the carrier says so at startup rather than failing. What it must not do is
 // report success for a rule that was refused, which is why each is checked.
-func installPckGuard(lo, hi uint16) *pckGuard {
+//
+// id tags the rules with the tunnel they belong to (pckTunnelID), and legacy is
+// the rule sets an older build would have written for it. Before anything is
+// added, every rule carrying the tunnel's tag and every legacy copy is removed:
+// they were left by a run of this tunnel that did not exit cleanly, and since a
+// client's ports are no longer the same from one run to the next, only the tag
+// can find them.
+func installPckGuard(id string, legacy [][][]string, lo, hi uint16) *pckGuard {
 	guardMu.Lock()
 	defer guardMu.Unlock()
 
@@ -71,10 +79,18 @@ func installPckGuard(lo, hi uint16) *pckGuard {
 		return sh.g
 	}
 
-	g := &pckGuard{lo: lo, hi: hi, rules: pckRules(lo, hi)}
+	g := &pckGuard{lo: lo, hi: hi, rules: pckRules(id, lo, hi)}
 	if _, err := exec.LookPath("iptables"); err != nil {
 		guardShared[key] = &sharedGuard{g: g, ref: 1}
 		return g
+	}
+	if !tunnelGuardInUse(id) {
+		sweepTunnelRules(id)
+	}
+	for _, set := range legacy {
+		for _, r := range set {
+			sweepPckRule(r[0], r[1:])
+		}
 	}
 	for _, r := range g.rules {
 		table, body := r[0], r[1:]
@@ -112,6 +128,46 @@ func sweepPckRule(table string, body []string) {
 	for i := 0; i < 1024; i++ {
 		if err := exec.Command("iptables", args...).Run(); err != nil {
 			return // no more copies, which is the ordinary first-start case
+		}
+	}
+}
+
+// tunnelGuardInUse reports whether this process already holds rules for the
+// tunnel — a server's range and a client's are never both live, but a client
+// whose old range is still closing must not have its rules swept from under it.
+func tunnelGuardInUse(id string) bool {
+	prefix := pckRulePrefix(id)
+	for _, sh := range guardShared {
+		for _, r := range sh.g.rules {
+			if ruleComment(r) != "" && strings.HasPrefix(ruleComment(r), prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ruleComment is the comment a rule is tagged with.
+func ruleComment(r []string) string {
+	for i := 0; i+1 < len(r); i++ {
+		if r[i] == "--comment" {
+			return r[i+1]
+		}
+	}
+	return ""
+}
+
+// sweepTunnelRules deletes every rule in the tables the guard writes to whose
+// comment carries this tunnel's tag.
+func sweepTunnelRules(id string) {
+	prefix := pckRulePrefix(id)
+	for _, table := range []string{"filter", "raw"} {
+		out, err := exec.Command("iptables", "-t", table, "-S").Output()
+		if err != nil {
+			continue
+		}
+		for _, del := range tunnelRuleDeletions(string(out), prefix) {
+			_ = exec.Command("iptables", append([]string{"-t", table}, del...)...).Run()
 		}
 	}
 }

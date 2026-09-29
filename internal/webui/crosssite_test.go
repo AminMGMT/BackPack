@@ -41,8 +41,10 @@ func TestACrossSiteWriteIsRefused(t *testing.T) {
 
 // The panel's own requests are unaffected, and so is anything that is not a
 // browser — a script, a peer panel holding the remote access token, curl.
+// ("same-site" is a sibling origin, and is refused: see
+// TestAChangeFromASiblingSiteIsRefused.)
 func TestThePanelsOwnWritesAndNonBrowserCallersGetThrough(t *testing.T) {
-	for _, site := range []string{"same-origin", "same-site", "none", ""} {
+	for _, site := range []string{"same-origin", "none", ""} {
 		reached := false
 		h := withPanelSecurity(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			reached = true

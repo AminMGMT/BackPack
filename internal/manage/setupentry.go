@@ -69,18 +69,16 @@ const (
 func askDirection(machine string) tunnelDirection {
 	tui.Clear()
 	tui.Title("Setup " + machine)
-	tui.Warn("Both directions expose the same ports on Iran and keep the real")
-	tui.Warn("service on kharej. What changes is which machine reaches out first.")
 	fmt.Println()
 
-	switch tui.ChooseOpt("Which direction should the tunnel be built in?", []tui.Option{
+	switch tui.ChooseOpt("Direction", []tui.Option{
 		{
 			Title: "Reverse",
-			Desc:  "kharej dials Iran — the usual choice, and what to try first",
+			Desc:  "kharej dials Iran — try this first",
 		},
 		{
 			Title: "Direct",
-			Desc:  "Iran dials kharej — use it when an inbound connection to Iran does not get through",
+			Desc:  "Iran dials kharej — when inbound to Iran is blocked",
 		},
 	}) {
 	case 0:
@@ -96,7 +94,6 @@ func askDirection(machine string) tunnelDirection {
 func setupDirectFor(side directSide) {
 	tui.Clear()
 	tui.Title("Direct Tunnel — " + sideName(side))
-	tui.Warn("The Iran server dials out to kharej, instead of waiting to be dialled.")
 	fmt.Println()
 
 	// Straight to how it travels. There is no kind to choose any more: a direct

@@ -19,12 +19,11 @@ import (
 func TunnelMetrics() {
 	tui.Clear()
 	tui.Title("Tunnel Metrics")
-	tui.Warn("Measured from the traffic each tunnel actually carried.")
 	fmt.Println()
 
 	tunnels := List()
 	if len(tunnels) == 0 {
-		tui.Warn("No tunnels configured yet.")
+		tui.Warn("No Tunnels Yet.")
 		tui.PressEnter()
 		return
 	}
@@ -35,9 +34,9 @@ func TunnelMetrics() {
 		if err != nil {
 			tui.Info(tui.Color(tui.Bold+tui.White, t.Name))
 			if IsActive(t.Service) {
-				tui.Warn("  no readings yet — a tunnel writes its first one within 30 seconds of starting")
+				tui.Warn("  No Readings Yet (Within 30s Of Starting)")
 			} else {
-				tui.Warn("  not running")
+				tui.Warn("  Not Running")
 			}
 			fmt.Println()
 			continue
@@ -47,7 +46,7 @@ func TunnelMetrics() {
 	}
 
 	if shown == 0 {
-		tui.Warn("Nothing has been recorded yet. Start a tunnel and come back in a minute.")
+		tui.Warn("Nothing Recorded Yet.")
 	}
 	tui.PressEnter()
 }
@@ -58,8 +57,8 @@ func printSnapshot(t Tunnel, s metrics.Snapshot) {
 		tui.Color(tui.Gray, fmt.Sprintf("  %s / %s", s.Role, transportLabel(s.Transport))))
 
 	age := time.Since(s.Taken).Round(time.Second)
-	tui.Warn(fmt.Sprintf("  recorded %s ago, tunnel up for %s", age, s.Uptime))
-	tui.Info(fmt.Sprintf("  Traffic       : %s in, %s out",
+	tui.Warn(fmt.Sprintf("  Recorded %s Ago, Up %s", age, s.Uptime))
+	tui.Info(fmt.Sprintf("  Traffic       : %s In, %s Out",
 		sysstat.HumanBytes(s.BytesIn), sysstat.HumanBytes(s.BytesOut)))
 
 	if s.KCP == nil {
@@ -68,7 +67,7 @@ func printSnapshot(t Tunnel, s metrics.Snapshot) {
 	}
 
 	k := s.KCP
-	tui.Info(fmt.Sprintf("  Packets       : %d in, %d out", k.PacketsIn, k.PacketsOut))
+	tui.Info(fmt.Sprintf("  Packets       : %d In, %d Out", k.PacketsIn, k.PacketsOut))
 
 	lossLine := fmt.Sprintf("  Link quality  : %.2f%% of packets needed repair", k.LossPercent())
 	switch {
@@ -79,20 +78,20 @@ func printSnapshot(t Tunnel, s metrics.Snapshot) {
 	default:
 		tui.Info(lossLine)
 	}
-	tui.Warn(fmt.Sprintf("      resent %d, lost %d, duplicated %d",
+	tui.Warn(fmt.Sprintf("      Resent %d, Lost %d, Duplicated %d",
 		k.Retransmitted, k.Lost, k.Duplicated))
 
 	// The headline number: packets rebuilt from parity never had to be waited
 	// for, which is the entire reason to run KCP instead of TCP Mux.
 	if k.FECRecovered > 0 {
-		tui.Success(fmt.Sprintf("  Error correct.: %d packets rebuilt from parity — repaired without a retransmit",
+		tui.Success(fmt.Sprintf("  FEC           : %d Packets Rebuilt",
 			k.FECRecovered))
 		if k.FECErrors > 0 {
-			tui.Warn(fmt.Sprintf("      %d parity groups were too damaged to rebuild", k.FECErrors))
+			tui.Warn(fmt.Sprintf("      %d Groups Too Damaged", k.FECErrors))
 		}
 	} else if k.PacketsIn > 0 {
-		tui.Info("  Error correct.: nothing needed rebuilding — this link is clean")
-		tui.Warn("      on a link this good, TCP Mux would be faster and lighter on CPU")
+		tui.Info("  FEC           : Nothing Rebuilt — Clean Link")
+		tui.Warn("      TCP Mux Would Be Lighter Here")
 	}
 	fmt.Println()
 }

@@ -21,9 +21,8 @@ import (
 // seconds and re-dials — into a refusal it can do nothing about, for as long as
 // the stale socket survives.
 //
-// The udp, kcp, quic and websocket transports already adopt such a claim by
-// rebuilding the run. tcp and tcpmux refused it. These pin the two that were
-// left out.
+// Every transport now seats such a claim in place (see clientSeat); these pin
+// it for the stream transports.
 
 // pipePair returns the two ends of an in-memory connection. Nothing here needs
 // a real address, and a pipe fails its next read the moment it is closed, which
@@ -69,38 +68,53 @@ func closedSoon(t *testing.T, conn net.Conn) bool {
 // adoptTestTransport builds a tcp transport whose parent context has already
 // finished.
 //
-// The adopting path asks for a Restart, and a Restart on a finished parent
-// abandons itself rather than binding listeners — which is what a unit test
-// wants. newTestTransport cannot be used here: it leaves parentctx nil, and
-// Restart reaches parentctx.Err(), which panics on a nil context inside a
-// goroutine and takes the test binary with it.
+// Nothing here should restart the run, and a Restart on a finished parent
+// abandons itself rather than binding listeners, so a stray one is harmless.
+// newTestTransport cannot be used here: it leaves parentctx nil, and Restart
+// reaches parentctx.Err(), which panics on a nil context inside a goroutine
+// and takes the test binary with it.
 func adoptTestTransport(token string) (*TcpTransport, *tcpGen, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	s := &TcpTransport{
 		config:    &TcpConfig{Token: token, ChannelSize: 1},
-		parentctx: ctx,
-		logger:    quietLogger(),
+		lifecycle: lifecycle{parentctx: ctx, logger: quietLogger()},
 	}
 	s.run.set(ctx, func() {})
 
-	return s, &tcpGen{ctx: ctx, handshakeChannel: make(chan controlCandidate, 1)}, ctx
+	// The generation itself is live: a claim reaching a generation that has
+	// ended is a different path (see
+	// TestAClaimThatReachesAnEndedGenerationIsClosedNotAnswered).
+	return s, &tcpGen{ctx: context.Background(), handshakeChannel: make(chan controlCandidate, 1)}, ctx
 }
 
-// A second claim carrying the right token adopts the tunnel rather than being
-// refused.
-func TestTcpAdoptsANewControlClaimRatherThanRefusingIt(t *testing.T) {
+// A second claim carrying the right token is seated in place: it becomes the
+// control channel, the stale one is closed, the stale client's pool is dropped
+// — and the generation, with its tunnel port and forwarded ports, goes on.
+//
+// It used to rebuild the whole run instead, which closed and re-bound every
+// port and cut every user on each re-dial. Reported on v1.8.4 as reverse
+// tunnels flapping on servers with an unsteady path.
+func TestTcpAdoptsANewControlClaimInPlace(t *testing.T) {
 	const token = "a-token-both-ends-share"
 	s, g, _ := adoptTestTransport(token)
+	genCtx, endGen := context.WithCancel(context.Background())
+	defer endGen()
+	g.ctx = genCtx
+	g.reqNewConnChan = make(chan struct{})
+	g.tunnelChannel = make(chan net.Conn, 4)
+	s.config.Heartbeat = time.Hour
 
-	// A control channel is already established — the stale one.
-	stale, _ := pipePair(t)
-	s.controlChannel.Set(stale)
+	// The client seated first — the one whose path has since died.
+	stale, staleFar := pipePair(t)
+	drain(staleFar)
+	s.seatClient(g, controlCandidate{conn: stale, nonce: "old-nonce"})
+	oldPool, _ := pipePair(t)
+	g.tunnelChannel <- oldPool
 
 	srv, cli := pipePair(t)
 	drain(cli)
-
 	done := make(chan struct{})
 	go func() {
 		s.admitControlChannel(g, srv, announcement{signal: utils.SG_Chan, payload: token})
@@ -112,12 +126,56 @@ func TestTcpAdoptsANewControlClaimRatherThanRefusingIt(t *testing.T) {
 		t.Fatal("admitControlChannel did not return")
 	}
 
-	if len(g.handshakeChannel) != 0 {
-		t.Error("the new claim was published as this run's control channel; it has to " +
-			"rebuild the run instead, or two channels exist at once")
+	if s.controlChannel.Get() != srv {
+		t.Fatal("the new claim did not become the control channel")
 	}
-	if !closedSoon(t, srv) {
-		t.Error("the adopting path left the claim's connection open")
+	if s.poolNonce.Get() == "old-nonce" {
+		t.Error("the old client's pool nonce was kept; its pool connections would still be accepted")
+	}
+	if !closedSoon(t, staleFar) {
+		t.Error("the stale control channel was left open")
+	}
+	if len(g.tunnelChannel) != 0 {
+		t.Error("the stale client's pool connections were kept for the new client")
+	}
+	if genCtx.Err() != nil || len(g.handshakeChannel) != 0 {
+		t.Error("adopting the claim ended or re-handshook the generation; it must go on as it was")
+	}
+}
+
+// A control channel that fails empties the seat and leaves the generation
+// running, and the next claim is seated the same way.
+func TestALostControlChannelKeepsTheGenerationAndSeatsTheNextClient(t *testing.T) {
+	const token = "a-token-both-ends-share"
+	s, g, _ := adoptTestTransport(token)
+	genCtx, endGen := context.WithCancel(context.Background())
+	defer endGen()
+	g.ctx = genCtx
+	g.reqNewConnChan = make(chan struct{})
+	g.tunnelChannel = make(chan net.Conn, 4)
+	s.config.Heartbeat = time.Hour
+
+	first, firstFar := pipePair(t)
+	drain(firstFar)
+	s.seatClient(g, controlCandidate{conn: first, nonce: "n1"})
+	firstFar.Close() // the path dies
+
+	deadline := time.Now().Add(3 * time.Second)
+	for s.controlChannel.IsSet() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.controlChannel.IsSet() {
+		t.Fatal("a failed control channel was kept")
+	}
+	if genCtx.Err() != nil {
+		t.Fatal("a failed control channel ended the generation")
+	}
+
+	srv, cli := pipePair(t)
+	drain(cli)
+	s.admitControlChannel(g, srv, announcement{signal: utils.SG_Chan, payload: token})
+	if s.controlChannel.Get() != srv {
+		t.Fatal("the next claim after a lost channel was not seated")
 	}
 }
 
@@ -168,7 +226,7 @@ func TestTheTokenIsCheckedBeforeTheTunnelIsDisturbed(t *testing.T) {
 			body := withoutComments(funcSourceOf(t, readTransportSource(t, f), ") admitControlChannel("))
 
 			tok := strings.Index(body, "tokenMatches(")
-			adopt := strings.Index(body, "s.controlChannel.IsSet()")
+			adopt := strings.Index(body, "g.seat.serving()")
 			if tok < 0 {
 				t.Fatal("admitControlChannel no longer checks the token")
 			}
@@ -230,4 +288,58 @@ func funcSourceOf(t *testing.T, src, marker string) string {
 		t.Fatalf("%q is never closed; this guard needs updating", marker)
 	}
 	return rest[:j]
+}
+
+// A claim that reaches a generation after it has ended is closed, not answered.
+//
+// The generation's listener is still accepting in the moment between a
+// restart cancelling it and the socket closing, and each accepted connection
+// is admitted in a goroutine of its own. A claim admitted there was answered
+// and filed in the ended generation's handshake queue, which nothing would
+// ever read: the client, told it was connected, sat on a channel nobody held
+// until its keepalive ran out — twenty seconds in the churn test that found
+// it, where the next client arrived just as the last one left.
+func TestAClaimThatReachesAnEndedGenerationIsClosedNotAnswered(t *testing.T) {
+	const token = "a-token-both-ends-share"
+	for name, admit := range map[string]func(*testing.T, net.Conn, context.Context){
+		"tcp": func(t *testing.T, c net.Conn, ctx context.Context) {
+			s, _, _ := adoptTestTransport(token)
+			g := &tcpGen{ctx: ctx, handshakeChannel: make(chan controlCandidate, 1)}
+			s.admitControlChannel(g, c, announcement{signal: utils.SG_Chan, payload: token})
+			if len(g.handshakeChannel) != 0 {
+				t.Error("tcp: the claim was filed in an ended generation")
+			}
+		},
+		"tcpmux": func(t *testing.T, c net.Conn, ctx context.Context) {
+			s := &TcpMuxTransport{
+				config:    &TcpMuxConfig{Token: token, ChannelSize: 1},
+				lifecycle: lifecycle{parentctx: ctx, logger: quietLogger()},
+			}
+			s.run.set(ctx, func() {})
+			g := &tcpMuxGen{ctx: ctx, handshakeChannel: make(chan controlCandidate, 1)}
+			s.admitControlChannel(g, c, announcement{signal: utils.SG_Chan, payload: token})
+			if len(g.handshakeChannel) != 0 {
+				t.Error("tcpmux: the claim was filed in an ended generation")
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ended, cancel := context.WithCancel(context.Background())
+			cancel()
+			srv, cli := pipePair(t)
+			answered := make(chan bool, 1)
+			go func() {
+				_ = cli.SetReadDeadline(time.Now().Add(2 * time.Second))
+				n, _ := cli.Read(make([]byte, 64))
+				answered <- n > 0
+			}()
+			admit(t, srv, ended)
+			if <-answered {
+				t.Fatal("an ended generation answered a control claim")
+			}
+			if !closedSoon(t, srv) {
+				t.Fatal("the claim's connection was left open")
+			}
+		})
+	}
 }

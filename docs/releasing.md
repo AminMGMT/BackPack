@@ -22,13 +22,25 @@ written down, so a release made in a hurry is the same release.
 - [ ] The full suite is green, with `-race`, and so are `staticcheck` and
       `govulncheck`.
 - [ ] The compatibility job passed: the previous release talks to this one in
-      both directions.
+      both directions, over every reverse transport and under concurrent load.
+- [ ] The l3 carriers ran on a real TUN, on a machine that allows unprivileged
+      user namespaces (CI does not), with the previous release at one end:
+      ```
+      git worktree add --detach /tmp/prev <previous tag>
+      (cd /tmp/prev && go build -o /tmp/backpack-prev .)
+      BP_L3_LIVE=1 BACKPACK_PREV_BINARY=/tmp/backpack-prev \
+        go test ./internal/e2e -run TestL3CarriersOverARealTUN -count=1 -v
+      ```
+      Every carrier, a listener killed and restarted, a lossy path, and udp,
+      quic and pck across versions both ways. On Ubuntu this needs
+      `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` first; it
+      resets on reboot.
 
 ## Tagging
 
 ```
-git tag -a v1.8.4 -m "v1.8.4"
-git push origin v1.8.4
+git tag -a v1.8.5 -m "v1.8.5"
+git push origin v1.8.5
 ```
 
 The release workflow builds every architecture, writes `SHA256SUMS`, signs it
@@ -139,4 +151,4 @@ during the incident.
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

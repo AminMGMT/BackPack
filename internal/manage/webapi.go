@@ -53,25 +53,11 @@ func TransportFamilies() []TransportFamily {
 	return out
 }
 
-// PresetOption is one performance profile for the panel's preset menu.
-type PresetOption struct {
-	Label string `json:"label"`
-	Desc  string `json:"desc"`
-	Value string `json:"value"`
-	// KCPOnly marks a profile that only applies to the udp+kcp+fec transport,
-	// so a panel rendering the full list can hide or disable it elsewhere.
-	KCPOnly bool `json:"kcpOnly,omitempty"`
-}
-
 // Presets returns the performance profiles in menu order. It lists every one,
 // including those that only apply to some transports; KCPOnly says which
 // entries a transport would drop, so the panel filters them client-side.
 func Presets() []PresetOption {
-	out := make([]PresetOption, len(presetOptions))
-	for i, o := range presetOptions {
-		out[i] = PresetOption{Label: o.label, Desc: o.desc, Value: o.value, KCPOnly: o.kcpOnly}
-	}
-	return out
+	return append([]PresetOption(nil), presetOptions...)
 }
 
 // NewToken returns a fresh 64-character tunnel token — the same suggestion the
@@ -620,186 +606,248 @@ func EditTunnelSettings(name string, e TunnelEdit) error {
 	if err != nil {
 		return err
 	}
-	changed := false
 	// What the form was filled with, so only what the operator changed on it
 	// is applied. See changedFrom.
 	shown := tuneOf(s)
 
-	if t := strings.ToLower(strings.TrimSpace(e.Transport)); t != "" && t != s.Transport {
-		if err := switchTransport(&s, t); err != nil {
+	// In this order, which is load-bearing: the transport first, because it
+	// decides what the rest may be; the preset before the manual knobs, so a
+	// form that changes both ends up with the preset as the baseline and the
+	// edits on top — the order the CLI uses; and the advanced drawers after the
+	// port has settled, so a backup address written without one inherits the
+	// port the tunnel is being left on.
+	changed := false
+	for _, step := range []func(*TunnelSpec) (bool, error){
+		e.editTransport,
+		func(s *TunnelSpec) (bool, error) { return e.editTuning(s, shown) },
+		e.editCertificate,
+		e.editTunnelPort,
+		e.editServerAddr,
+		e.editPorts,
+		e.editAdvanced,
+		e.editProxyProtocol,
+	} {
+		c, err := step(&s)
+		if err != nil {
 			return err
 		}
-		// Settings that belonged to the old carrier are dropped rather than left
-		// in the file for nothing to read — an edge IP on a KCP tunnel or a
-		// forged source on a websocket one is a setting that looks live and is
-		// not, which is the hardest kind to debug.
-		clearForTransport(&s)
-		changed = true
+		changed = changed || c
 	}
+	if !changed {
+		return fmt.Errorf("nothing to change")
+	}
+	return applySpec(s)
+}
 
-	// The preset is re-applied before the manual knobs, so a form that changes
-	// both ends up with the preset as the baseline and the edits on top — the
-	// order the CLI uses.
-	if e.Tune != nil {
-		t := e.Tune.changedFrom(shown)
-		e.Tune = &t
+// Each edit step below applies one part of a TunnelEdit to the spec and
+// reports whether it changed anything.
+
+// editTransport switches the transport and drops what belonged to the old one.
+func (e TunnelEdit) editTransport(s *TunnelSpec) (bool, error) {
+	t := strings.ToLower(strings.TrimSpace(e.Transport))
+	if t == "" || t == s.Transport {
+		return false, nil
 	}
+	if err := switchTransport(s, t); err != nil {
+		return false, err
+	}
+	// Settings that belonged to the old carrier are dropped rather than left in
+	// the file for nothing to read — an edge IP on a KCP tunnel or a forged
+	// source on a websocket one is a setting that looks live and is not, which
+	// is the hardest kind to debug.
+	clearForTransport(s)
+	return true, nil
+}
+
+// editTuning applies the preset, then whichever manual knobs the operator
+// changed on the form (compared against shown, what the form was filled with).
+func (e TunnelEdit) editTuning(s *TunnelSpec, shown FineTune) (bool, error) {
+	changed := false
 	if p := strings.TrimSpace(e.Preset); p != "" && p != s.Preset {
 		if !validPreset(p) {
-			return fmt.Errorf("unknown preset %q", p)
+			return false, fmt.Errorf("unknown preset %q", p)
 		}
 		// Refused rather than quietly applied: on a transport whose congestion
 		// control belongs to the kernel, every knob this profile changes would be
 		// written to the config and ignored, which looks like a setting that took.
 		if !presetSuitsTransport(p, string(s.Transport)) {
-			return fmt.Errorf("the %s preset applies to the udp+kcp+fec transport only, not %q",
+			return false, fmt.Errorf("the %s preset applies to the udp+kcp+fec transport only, not %q",
 				presetLabel(p), s.Transport)
 		}
-		ApplyPreset(&s, p)
+		ApplyPreset(s, p)
 		changed = true
 	}
-	if e.Tune != nil && len(e.Tune.sent) > 0 {
-		e.Tune.apply(&s)
-		changed = true
-	}
-
-	// The certificate, on the same terms as the CLI's Edit screen: only a
-	// server on a TLS transport has one, and the self-signed pair stays on disk
-	// either way because it is what the config still points at when Let's
-	// Encrypt has nothing to offer yet.
-	if e.ACMEDomain != nil || e.ACMEEmail != nil {
-		domain := s.ACMEDomain
-		if e.ACMEDomain != nil {
-			domain = strings.ToLower(strings.TrimSpace(*e.ACMEDomain))
-		}
-		email := s.ACMEEmail
-		if e.ACMEEmail != nil {
-			email = strings.TrimSpace(*e.ACMEEmail)
-		}
-		if domain != "" {
-			if s.Role != "server" {
-				return fmt.Errorf("the certificate is a server-side setting — the client does not present one")
-			}
-			if !needsTLS(s.Transport) {
-				return fmt.Errorf("transport %s does not use TLS, so it presents no certificate", s.Transport)
-			}
-			if net.ParseIP(domain) != nil {
-				return fmt.Errorf("Let's Encrypt cannot issue a certificate for an IP address — use a domain name")
-			}
-		}
-		if domain != s.ACMEDomain || email != s.ACMEEmail {
-			s.ACMEDomain, s.ACMEEmail = domain, email
-			if needsTLS(s.Transport) && s.Role == "server" && (s.TLSCert == "" || !fileExists(s.TLSCert)) {
-				cert, key, err := EnsureSelfSignedCert(s.Name, domain)
-				if err != nil {
-					return fmt.Errorf("could not prepare the self-signed certificate: %w", err)
-				}
-				s.TLSCert, s.TLSKey = cert, key
-			}
+	if e.Tune != nil {
+		if t := e.Tune.changedFrom(shown); len(t.sent) > 0 {
+			t.apply(s)
 			changed = true
 		}
 	}
+	return changed, nil
+}
 
-	if spec := strings.TrimSpace(e.TunnelPort); spec != "" {
-		bind, err := parseTunnelBind(spec)
+// editCertificate works on the same terms as the CLI's Edit screen: only a
+// server on a TLS transport has one, and the self-signed pair stays on disk
+// either way because it is what the config still points at when Let's Encrypt
+// has nothing to offer yet.
+func (e TunnelEdit) editCertificate(s *TunnelSpec) (bool, error) {
+	if e.ACMEDomain == nil && e.ACMEEmail == nil {
+		return false, nil
+	}
+	domain := s.ACMEDomain
+	if e.ACMEDomain != nil {
+		domain = strings.ToLower(strings.TrimSpace(*e.ACMEDomain))
+	}
+	email := s.ACMEEmail
+	if e.ACMEEmail != nil {
+		email = strings.TrimSpace(*e.ACMEEmail)
+	}
+	if domain != "" {
+		if s.Role != "server" {
+			return false, fmt.Errorf("the certificate is a server-side setting — the client does not present one")
+		}
+		if !needsTLS(s.Transport) {
+			return false, fmt.Errorf("transport %s does not use TLS, so it presents no certificate", s.Transport)
+		}
+		if net.ParseIP(domain) != nil {
+			return false, fmt.Errorf("Let's Encrypt cannot issue a certificate for an IP address — use a domain name")
+		}
+	}
+	if domain == s.ACMEDomain && email == s.ACMEEmail {
+		return false, nil
+	}
+	s.ACMEDomain, s.ACMEEmail = domain, email
+	if needsTLS(s.Transport) && s.Role == "server" && (s.TLSCert == "" || !fileExists(s.TLSCert)) {
+		cert, key, err := EnsureSelfSignedCert(s.Name, domain)
 		if err != nil {
-			return fmt.Errorf("the tunnel port is not valid: %w", err)
+			return false, fmt.Errorf("could not prepare the self-signed certificate: %w", err)
 		}
-		if s.Role == "server" {
-			// An address pins the tunnel to it; a bare port keeps whatever
-			// this tunnel already binds. Widening a pinned tunnel back to
-			// every interface is therefore said explicitly: 0.0.0.0:443.
-			want := net.JoinHostPort(addrHost(s.BindAddr, "0.0.0.0"), bind.Port)
-			if bind.HasHost() {
-				want = bind.Addr(false)
-			}
-			if want != s.BindAddr {
-				s.BindAddr = want
-				changed = true
-			}
-		} else {
-			if bind.HasHost() {
-				return fmt.Errorf("a client binds nothing — its tunnel port is the port on the " +
-					"server, so it takes a port alone. Change where it dials with the server address instead")
-			}
-			if addrPort(s.RemoteAddr) != bind.Port {
-				s.RemoteAddr = net.JoinHostPort(addrHost(s.RemoteAddr, ""), bind.Port)
-				changed = true
-			}
-		}
+		s.TLSCert, s.TLSKey = cert, key
 	}
+	return true, nil
+}
 
-	if host := strings.Trim(strings.TrimSpace(e.ServerAddr), "[]"); host != "" {
-		if s.Role != "client" {
-			return fmt.Errorf("the server address can only be changed on client tunnels")
-		}
-		p := addrPort(s.RemoteAddr)
-		if !validPort(p) {
-			return fmt.Errorf("this tunnel has no valid server port")
-		}
-		if addr := net.JoinHostPort(host, p); addr != s.RemoteAddr {
-			s.RemoteAddr = addr
-			changed = true
-		}
+// editTunnelPort moves the tunnel port: where a server binds, or the port a
+// client dials on the server.
+func (e TunnelEdit) editTunnelPort(s *TunnelSpec) (bool, error) {
+	spec := strings.TrimSpace(e.TunnelPort)
+	if spec == "" {
+		return false, nil
 	}
+	bind, err := parseTunnelBind(spec)
+	if err != nil {
+		return false, fmt.Errorf("the tunnel port is not valid: %w", err)
+	}
+	if s.Role == "server" {
+		// An address pins the tunnel to it; a bare port keeps whatever this
+		// tunnel already binds. Widening a pinned tunnel back to every
+		// interface is therefore said explicitly: 0.0.0.0:443.
+		want := net.JoinHostPort(addrHost(s.BindAddr, "0.0.0.0"), bind.Port)
+		if bind.HasHost() {
+			want = bind.Addr(false)
+		}
+		if want == s.BindAddr {
+			return false, nil
+		}
+		s.BindAddr = want
+		return true, nil
+	}
+	if bind.HasHost() {
+		return false, fmt.Errorf("a client binds nothing — its tunnel port is the port on the " +
+			"server, so it takes a port alone. Change where it dials with the server address instead")
+	}
+	if addrPort(s.RemoteAddr) == bind.Port {
+		return false, nil
+	}
+	s.RemoteAddr = net.JoinHostPort(addrHost(s.RemoteAddr, ""), bind.Port)
+	return true, nil
+}
 
-	if raw := strings.TrimSpace(e.Ports); raw != "" {
-		if s.Role != "server" {
-			return fmt.Errorf("forwarded ports exist only on server tunnels")
-		}
-		var clean []string
-		for _, p := range parsePorts(raw) {
-			if !isBotRelayPort(p, s.Token) {
-				clean = append(clean, p)
-			}
-		}
-		if len(clean) == 0 {
-			return fmt.Errorf("at least one forwarded port is required")
-		}
-		if err := validatePortSpecs(clean); err != nil {
-			return err
-		}
-		// Keep the hidden Telegram/SOCKS relay mapping the operator never sees.
-		for _, p := range s.Ports {
-			if isBotRelayPort(p, s.Token) {
-				clean = append(clean, p)
-			}
-		}
-		s.Ports = clean
-		changed = true
+// editServerAddr changes where a client dials, keeping its port.
+func (e TunnelEdit) editServerAddr(s *TunnelSpec) (bool, error) {
+	host := strings.Trim(strings.TrimSpace(e.ServerAddr), "[]")
+	if host == "" {
+		return false, nil
 	}
+	if s.Role != "client" {
+		return false, fmt.Errorf("the server address can only be changed on client tunnels")
+	}
+	p := addrPort(s.RemoteAddr)
+	if !validPort(p) {
+		return false, fmt.Errorf("this tunnel has no valid server port")
+	}
+	addr := net.JoinHostPort(host, p)
+	if addr == s.RemoteAddr {
+		return false, nil
+	}
+	s.RemoteAddr = addr
+	return true, nil
+}
 
-	// The advanced drawers come last, after the port has settled: a backup
-	// address written without one inherits the port the tunnel is being left on,
-	// not the port it had when the form was opened.
-	if e.Pck != nil || e.Conn != nil || e.Limits != nil {
-		port := addrPort(s.BindAddr)
-		if s.Role == "client" {
-			port = addrPort(s.RemoteAddr)
-		}
-		if err := applyAdvanced(&s, e.Pck, e.Conn, e.Limits, port); err != nil {
-			return err
-		}
-		changed = true
+// editPorts replaces a server's forwarded ports, keeping the hidden relay
+// mapping the operator never sees.
+func (e TunnelEdit) editPorts(s *TunnelSpec) (bool, error) {
+	raw := strings.TrimSpace(e.Ports)
+	if raw == "" {
+		return false, nil
 	}
+	if s.Role != "server" {
+		return false, fmt.Errorf("forwarded ports exist only on server tunnels")
+	}
+	var clean []string
+	for _, p := range parsePorts(raw) {
+		if !isBotRelayPort(p, s.Token) {
+			clean = append(clean, p)
+		}
+	}
+	if len(clean) == 0 {
+		return false, fmt.Errorf("at least one forwarded port is required")
+	}
+	if err := validatePortSpecs(clean); err != nil {
+		return false, err
+	}
+	// Keep the hidden Telegram/SOCKS relay mapping the operator never sees.
+	for _, p := range s.Ports {
+		if isBotRelayPort(p, s.Token) {
+			clean = append(clean, p)
+		}
+	}
+	s.Ports = clean
+	return true, nil
+}
 
-	if e.ProxyProtocol != nil {
-		if s.Role != "server" {
-			return fmt.Errorf("the PROXY protocol header is added by the server side")
-		}
-		if *e.ProxyProtocol && !supportsProxyProtocol(s.Transport) {
-			return fmt.Errorf("the %s transport has nowhere to put a PROXY protocol header", s.Transport)
-		}
-		if s.ProxyProtocol != *e.ProxyProtocol {
-			s.ProxyProtocol = *e.ProxyProtocol
-			changed = true
-		}
+// editAdvanced applies the advanced drawers: pck, connection and limits.
+func (e TunnelEdit) editAdvanced(s *TunnelSpec) (bool, error) {
+	if e.Pck == nil && e.Conn == nil && e.Limits == nil {
+		return false, nil
 	}
+	port := addrPort(s.BindAddr)
+	if s.Role == "client" {
+		port = addrPort(s.RemoteAddr)
+	}
+	if err := applyAdvanced(s, e.Pck, e.Conn, e.Limits, port); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
-	if !changed {
-		return fmt.Errorf("nothing to change")
+// editProxyProtocol turns the PROXY protocol header on or off, where the
+// transport can carry one.
+func (e TunnelEdit) editProxyProtocol(s *TunnelSpec) (bool, error) {
+	if e.ProxyProtocol == nil {
+		return false, nil
 	}
-	return applySpec(s)
+	if s.Role != "server" {
+		return false, fmt.Errorf("the PROXY protocol header is added by the server side")
+	}
+	if *e.ProxyProtocol && !supportsProxyProtocol(s.Transport) {
+		return false, fmt.Errorf("the %s transport has nowhere to put a PROXY protocol header", s.Transport)
+	}
+	if s.ProxyProtocol == *e.ProxyProtocol {
+		return false, nil
+	}
+	s.ProxyProtocol = *e.ProxyProtocol
+	return true, nil
 }
 
 // TunnelSettings is a tunnel's current editable state, for filling the panel's
@@ -875,6 +923,12 @@ func TunnelSettingsOf(name string) (TunnelSettings, error) {
 
 // Start, Stop and Restart drive one tunnel's service by tunnel name, so a
 // caller never has to know how a service name is built.
-func Start(name string) error   { return StartService(app.ServiceName(name)) }
-func Stop(name string) error    { return StopService(app.ServiceName(name)) }
+
+// Start starts the named tunnel's service.
+func Start(name string) error { return StartService(app.ServiceName(name)) }
+
+// Stop stops the named tunnel's service.
+func Stop(name string) error { return StopService(app.ServiceName(name)) }
+
+// Restart restarts the named tunnel's service.
 func Restart(name string) error { return RestartService(app.ServiceName(name)) }

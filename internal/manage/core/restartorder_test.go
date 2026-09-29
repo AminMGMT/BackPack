@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,26 @@ func recordSystemctl(t *testing.T) *[]string {
 	old := runSystemctl
 	runSystemctl = func(args ...string) (string, error) {
 		calls = append(calls, strings.Join(args, " "))
+		// Every unit this product installs is present and enabled, unless a
+		// test says otherwise.
+		switch args[0] {
+		case "is-enabled":
+			return "enabled", nil
+		case "is-active":
+			return "active", nil
+		}
 		return "", nil
 	}
 	oldRestart, oldUpdate := restartMonitor, updateMonitorUnit
 	restartMonitor = func() error { calls = append(calls, "restart "+app.MonitorService); return nil }
 	updateMonitorUnit = func() error { return nil }
-	t.Cleanup(func() { runSystemctl, restartMonitor, updateMonitorUnit = old, oldRestart, oldUpdate })
+	// Unit answers are cached process-wide; a test must neither see another's
+	// nor leave its own behind.
+	unitCache.Forget()
+	t.Cleanup(func() {
+		runSystemctl, restartMonitor, updateMonitorUnit = old, oldRestart, oldUpdate
+		unitCache.Forget()
+	})
 	return &calls
 }
 
@@ -80,7 +95,7 @@ func TestTheCallersOwnUnitIsLeftForLast(t *testing.T) {
 	}
 }
 
-// From an SSH session nothing hosts the caller, so everything restarts in line.
+// From the monitor, the monitor is what hosts the caller, so its restart waits.
 func TestFromTheMonitorTheMonitorIsLeftForLast(t *testing.T) {
 	calls := recordSystemctl(t)
 	t.Cleanup(func() { deferred.take() })
@@ -97,6 +112,7 @@ func TestFromTheMonitorTheMonitorIsLeftForLast(t *testing.T) {
 	}
 }
 
+// From an SSH session nothing hosts the caller, so everything restarts in line.
 func TestFromASessionEverythingRestartsInLine(t *testing.T) {
 	calls := recordSystemctl(t)
 	fakeCgroup(t, "0::/user.slice/user-0.slice/session-3.scope\n")
@@ -109,6 +125,40 @@ func TestFromASessionEverythingRestartsInLine(t *testing.T) {
 	for _, unit := range []string{app.MonitorService, app.WebUIService} {
 		if !strings.Contains(joined, "restart "+unit) {
 			t.Fatalf("%s was not restarted: %v", unit, *calls)
+		}
+	}
+}
+
+// The panel is optional. On a machine without its unit there is nothing to
+// restart, and an update must not warn that restarting it failed.
+func TestAMachineWithoutThePanelIsNotWarnedAboutIt(t *testing.T) {
+	calls := recordSystemctl(t)
+	fakeCgroup(t, "0::/user.slice/user-0.slice/session-3.scope\n")
+	inner := runSystemctl
+	runSystemctl = func(args ...string) (string, error) {
+		if len(args) == 2 && args[1] == app.WebUIService {
+			*calls = append(*calls, strings.Join(args, " "))
+			switch args[0] {
+			case "is-enabled", "is-active":
+				return "", errors.New("Unit backpack-webui.service could not be found.")
+			case "restart":
+				return "", errors.New("Unit backpack-webui.service not found.")
+			}
+		}
+		return inner(args...)
+	}
+	unitCache.Forget()
+
+	var warnings []string
+	RestartForNewBinary(func(s string) { warnings = append(warnings, s) })
+	for _, c := range *calls {
+		if c == "restart "+app.WebUIService {
+			t.Fatal("a panel that is not installed was restarted")
+		}
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "web panel") {
+			t.Fatalf("warned about a panel that is not installed: %q", w)
 		}
 	}
 }

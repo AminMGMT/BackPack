@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/utils"
 )
 
@@ -93,7 +94,7 @@ func TestAHealthyControlWriteIsNotDisturbed(t *testing.T) {
 	defer conn.Close()
 
 	for i := 0; i < 3; i++ {
-		if err := utils.SendBinaryByteWithin(conn, utils.SG_HB, controlWriteTimeout); err != nil {
+		if err := utils.SendBinaryByteWithin(conn, utils.SG_HB, controlwire.WriteTimeout); err != nil {
 			t.Fatalf("a healthy control channel refused a heartbeat: %v", err)
 		}
 	}
@@ -111,7 +112,7 @@ func TestAHealthyControlWriteIsNotDisturbed(t *testing.T) {
 	// And the deadline is cleared afterwards, so a later write on the same
 	// connection is not refused by a deadline that has since passed.
 	time.Sleep(50 * time.Millisecond)
-	if err := utils.SendBinaryByteWithin(conn, utils.SG_HB, controlWriteTimeout); err != nil {
+	if err := utils.SendBinaryByteWithin(conn, utils.SG_HB, controlwire.WriteTimeout); err != nil {
 		t.Errorf("a leftover deadline broke the next write: %v", err)
 	}
 }
@@ -119,7 +120,7 @@ func TestAHealthyControlWriteIsNotDisturbed(t *testing.T) {
 // The bound is applied by every transport that holds a control channel, not
 // just the one the report came in on.
 func TestEveryTransportBoundsItsControlWrites(t *testing.T) {
-	for _, f := range []string{"tcp.go", "tcpmux.go", "quic.go", "kcp.go", "udp.go"} {
+	for _, f := range []string{"tcp.go", "tcpmux.go", "quic.go", "kcp.go", "udp.go", "udp_control.go", "udp_flows.go", "controlloop.go"} {
 		src := readTransportSource(t, f)
 		if strings.Contains(src, "utils.SendBinaryByte(s.controlChannel.Get()") {
 			t.Errorf("%s still writes to its control channel with no bound — the "+

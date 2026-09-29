@@ -14,8 +14,7 @@ import (
 func ExitHealth() {
 	tui.Clear()
 	tui.Title("Exit Health")
-	tui.Warn("Scores every configured server address by latency, jitter and loss")
-	tui.Warn("(score = rtt + 2·jitter + 20·loss%, lower is better) and ranks them.")
+	tui.Warn("Ranks Every Iran Address By Latency, Jitter And Loss.")
 	fmt.Println()
 
 	// Only tunnels with a backup address have anything to compare.
@@ -26,9 +25,7 @@ func ExitHealth() {
 		}
 	}
 	if len(cands) == 0 {
-		tui.Info("No client tunnel has backup addresses to compare.")
-		tui.Warn("Add fallback server addresses when creating or editing a tunnel to")
-		tui.Warn("use multi-exit failover.")
+		tui.Info("No Tunnel Has Backup Addresses — Add Them Under Edit.")
 		tui.PressEnter()
 		return
 	}
@@ -41,7 +38,7 @@ func ExitHealth() {
 		for i, t := range cands {
 			opts[i] = tui.Option{Title: t.Name, Desc: t.Addr + " — " + transportLabel(t.Transport)}
 		}
-		idx := tui.ChooseOpt("Which tunnel's exits should be scored?", opts)
+		idx := tui.ChooseOpt("Tunnel", opts)
 		if idx < 0 {
 			return
 		}
@@ -57,11 +54,11 @@ func ExitHealth() {
 	addrs := append([]string{spec.RemoteAddr}, spec.FallbackAddrs...)
 
 	fmt.Println()
-	tui.Info(fmt.Sprintf("Measuring %d exits — a few seconds...", len(addrs)))
+	tui.Info(fmt.Sprintf("Measuring %d Exits...", len(addrs)))
 	fmt.Println()
 	scores := network.ScoreEndpoints(addrs, 10)
 
-	tui.Title("Ranked best first")
+	tui.Title("Best First")
 	fmt.Println()
 	tui.Info(fmt.Sprintf("  %-24s %8s %8s %7s %8s", "EXIT", "RTT", "JITTER", "LOSS", "SCORE"))
 	for _, s := range scores {
@@ -82,24 +79,23 @@ func ExitHealth() {
 		}
 	}
 	fmt.Println()
-	tui.Warn("Scoring pings each address, so an exit that filters ICMP shows as")
-	tui.Warn("\"no reply\" even when the tunnel through it is fine.")
+	tui.Warn("An Exit That Drops Ping Shows \"no reply\" Even When It Works.")
 	fmt.Println()
 
 	best := scores[0]
 	if !best.Reachable || best.Addr == spec.RemoteAddr {
 		if best.Addr == spec.RemoteAddr && best.Reachable {
-			tui.Success("The current primary is already the healthiest exit — nothing to change.")
+			tui.Success("The Primary Is Already The Best.")
 		}
 		if spec.HealthFailover {
-			tui.Info("Automatic failover is on, so traffic already tracks the best exit on its own.")
+			tui.Info("Automatic Failover Is On.")
 		}
 		tui.PressEnter()
 		return
 	}
 
-	tui.Info(fmt.Sprintf("Healthiest exit: %s (score %.0f), currently a backup.", best.Addr, best.Score))
-	if !tui.Confirm("Pin "+best.Addr+" as the primary exit", false) {
+	tui.Info(fmt.Sprintf("Best: %s (Score %.0f), Now A Backup.", best.Addr, best.Score))
+	if !tui.Confirm("Make "+best.Addr+" The Primary", false) {
 		tui.PressEnter()
 		return
 	}
@@ -108,9 +104,9 @@ func ExitHealth() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Pinned " + best.Addr + " as the primary and restarted the tunnel.")
+	tui.Success(best.Addr + " Is The Primary — Restarted.")
 	if !spec.HealthFailover {
-		tui.Info("Tip: turn on automatic failover so this tracks the best exit for you.")
+		tui.Info("Tip: Turn On Automatic Failover.")
 	}
 	fmt.Println()
 	tui.PressEnter()

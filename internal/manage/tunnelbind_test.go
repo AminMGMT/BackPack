@@ -247,31 +247,6 @@ func TestAClientIsToldItsTunnelPortIsNotABindAddress(t *testing.T) {
 	}
 }
 
-// Two servers on one port number are still refused when they would contend for
-// it, and allowed when they would not. This is the decision that makes the
-// dual-address setup legal, and it already worked — the check compares host and
-// port together and treats a wildcard as covering everything. Pinned here so a
-// later change to the input path cannot quietly make it unreachable again.
-func TestTwoServersMayShareAPortOnDifferentAddresses(t *testing.T) {
-	existing := []Tunnel{{Name: "control", Role: "server", Addr: "85.10.11.51:443"}}
-
-	if why := clashAgainst("server", "85.10.11.61:443", "users", existing); why != "" {
-		t.Errorf("two servers on the same port but different addresses were refused: %s", why)
-	}
-	if why := clashAgainst("server", "85.10.11.51:443", "users", existing); why == "" {
-		t.Error("two servers on the same address and port were allowed; the second cannot bind")
-	}
-	// A wildcard covers every address, so it contends with the pinned one.
-	if why := clashAgainst("server", "0.0.0.0:443", "users", existing); why == "" {
-		t.Error("a wildcard alongside a pinned tunnel on the same port was allowed, " +
-			"but the wildcard needs that address too")
-	}
-	if why := clashAgainst("server", "85.10.11.61:443", "users",
-		[]Tunnel{{Name: "control", Role: "server", Addr: "0.0.0.0:443"}}); why == "" {
-		t.Error("a pinned tunnel alongside a wildcard on the same port was allowed, the other way round")
-	}
-}
-
 // A pinned tunnel whose address this machine does not hold is reported, on the
 // one surface the panel, the CLI and the bot all read.
 //

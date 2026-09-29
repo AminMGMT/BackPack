@@ -38,9 +38,10 @@ type AuthFunc func(user, pass string) bool
 // Serve runs a SOCKS5 CONNECT server on addr until ctx is cancelled.
 //
 // When auth is non-nil, every connection must authenticate with a
-// username/password it accepts. When auth is nil, no-auth is offered — used
-// for a proxy bound to loopback and reached only through an already
-// token-authenticated tunnel, where a second SOCKS password is redundant.
+// username/password it accepts. When auth is nil, no-auth is offered — which
+// is open to anyone who can reach the port, and a port forwarded through a
+// tunnel is reachable by anyone who can reach the Iran server. Either way
+// destinations are limited by Target (policy.go).
 func Serve(ctx context.Context, addr string, auth AuthFunc) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -127,7 +128,7 @@ func handle(conn net.Conn, auth AuthFunc) {
 	switch head[1] {
 	case cmdConn:
 		target := net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(portBuf))))
-		remote, err := net.DialTimeout("tcp", target, 15*time.Second)
+		remote, err := DialTarget("tcp", target, 15*time.Second)
 		if err != nil {
 			reply(conn, 0x05)
 			return

@@ -2,34 +2,24 @@ package transport
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
-	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
-	"github.com/backpack/backpack/internal/web"
 
 	"github.com/sirupsen/logrus"
 )
 
 type TcpTransport struct {
-	// The status shown in the panel. Behind a lock because the run being
-	// replaced and the run replacing it both write it. See tunnelStatus.
-	status          tunnelStatus
-	config          *TcpConfig
-	parentctx       context.Context
-	state           clientState
-	logger          *logrus.Logger
-	restartMutex    sync.Mutex
-	poolConnections int32
-	loadConnections int32
-	controlFlow     chan struct{}
+	// The generations of this transport and what outlives them: see
+	// lifecycle.go.
+	lifecycle
+
+	config *TcpConfig
 	// poolNonce is what the server issued for this run; every pool connection
 	// presents it so the server need not judge them by source address. Empty
 	// against a server too old to issue one.
@@ -80,22 +70,12 @@ func (c *TcpTransport) wrapStealth(conn net.Conn) (net.Conn, error) {
 }
 
 func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
-	// Create a derived context from the parent context
-	ctx, cancel := context.WithCancel(parentCtx)
-
 	// Initialize the TcpTransport struct
 	client := &TcpTransport{
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		config: config,
 	}
 
-	// Seed the first generation through the same path a restart uses, so
-	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, client.status.get, logger))
+	client.firstGeneration(parentCtx, logger, usageSpec{webPort: config.WebPort, snifferLog: config.SnifferLog, sniffer: config.Sniffer})
 	return client
 }
 
@@ -109,73 +89,17 @@ func (c *TcpTransport) Start() {
 	go c.channelDialer()
 }
 func (c *TcpTransport) Restart() {
-	if !c.restartMutex.TryLock() {
-		c.logger.Warn("client is already restarting")
-		return
-	}
-	defer c.restartMutex.Unlock()
-
-	c.logger.Info("restarting client...")
-
-	// for removing timeout logs
-	level := c.logger.GetLevel()
-	c.logger.SetLevel(logrus.FatalLevel)
-
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
-
-	// The whole tunnel may have been shut down while this restart was waiting —
-	// on a reload, or on the process going down. Rebuilding the run from a
-	// parent context that is already finished would bind the listeners again
-	// only to close them, and on a reload that means fighting the run that is
-	// replacing this one for its own ports. Nothing here is worth starting.
-	if c.parentctx.Err() != nil {
-		// The level was turned down to hide the timeouts a teardown produces;
-		// leaving it there would silence the shutdown itself.
-		c.logger.SetLevel(level)
-		// Abandoning is not a reason to keep claiming a peer. See the same
-		// branch in internal/server/transport — this end publishes the status
-		// the panel reads and the "connected" flag the watchdog reads, and both
-		// used to survive a restart that gave up.
-		c.status.set("")
-		metrics.ClearPeer()
-		c.logger.Debug("restart abandoned: the tunnel is shutting down")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(c.parentctx)
-
-	// Publish the whole new generation at once: a reader must never see
-	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.status.get, c.logger))
-	c.status.set("")
-	// The next control channel issues its own nonce; carrying this one over
-	// would have the pool announcing a value the server has already forgotten.
-	c.poolNonce.Clear()
-	// Ask for the current handshake again. A fallback decided during the
-	// outage that caused this restart was a guess about the server drawn from
-	// a broken path, and carrying it forward costs the nonce for nothing.
-	c.legacyServer.reset()
-	atomic.StoreInt32(&c.poolConnections, 0)
-	atomic.StoreInt32(&c.loadConnections, 0)
-	// The published pool figures belong to the run that just ended. Left
-	// behind, the panel would keep showing the size and throughput of a
-	// connection that is gone until the new run's first tick replaced them.
-	metrics.ClearPool()
-	// The peer belongs to the generation that just ended.
-	metrics.ClearPeer()
-	drain(c.controlFlow)
-
-	// set the log level again
-	c.logger.SetLevel(level)
-
-	go c.Start()
+	c.restart(nil, func() {
+		// The next control channel issues its own nonce; carrying this one
+		// over would have the pool announcing a value the server has already
+		// forgotten.
+		c.poolNonce.Clear()
+		// Ask for the current handshake again. A fallback decided during the
+		// outage that caused this restart was a guess about the server drawn
+		// from a broken path, and carrying it forward costs the nonce for
+		// nothing.
+		c.legacyServer.reset()
+	}, c.Start)
 }
 
 func (c *TcpTransport) channelDialer() {
@@ -298,7 +222,7 @@ func (c *TcpTransport) channelDialer() {
 
 				c.status.set("Connected (TCP)")
 				go c.poolMaintainer()
-				go c.channelHandler()
+				go c.control().run()
 
 				return
 
@@ -327,110 +251,9 @@ func (c *TcpTransport) poolMaintainer() {
 	}.maintain()
 }
 
-func (c *TcpTransport) channelHandler() {
-	// See beatClock: learns how often the server really heartbeats.
-	beats := newBeatClock(time.Now())
-
-	msgChan := make(chan byte, 1000)
-
-	// The generation this handler belongs to, captured once.
-	//
-	// Everything below used to ask c.state.Cancel() != nil before deciding a
-	// failure was worth restarting for. That is always true: the constructor
-	// sets a cancel function before any of this can run, and Reset sets another
-	// on every restart. So the guard was open in every case it was written to
-	// close, and each goroutine dying during a teardown queued another restart
-	// of a tunnel that was already on its way down. The server transports were
-	// corrected to ask their generation's context instead; the client ones were
-	// not.
-	//
-	// Captured rather than read through c.state each time, for the same reason
-	// the server holds its context in the generation: Restart publishes a new
-	// one while these goroutines are still winding down, and a goroutine that
-	// went on to watch the new context would never see its own run end.
-	ctx := c.state.Ctx()
-
-	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// A control channel that has gone quiet has to be noticed
-				// here, because nothing else notices it in time: TCP takes
-				// eleven minutes to give up on the default keepalive_period,
-				// and the watchdog sees an ESTABLISHED socket for every
-				// second of it. See controlDeadline.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(beats.deadline(c.config.KeepAlive))); err != nil {
-					if ctx.Err() == nil {
-						c.logger.Errorf("failed to set control channel deadline: %v", err)
-						go c.Restart()
-					}
-					return
-				}
-				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
-				if err != nil {
-					if hint := beats.explain(err, c.config.KeepAlive); hint != "" && ctx.Err() == nil {
-						c.logger.Warn(hint)
-					}
-					if ctx.Err() == nil {
-						c.logger.Error("failed to read from control channel. ", err)
-						go c.Restart()
-					}
-					return
-				}
-				if msg == utils.SG_HB {
-					beats.beat(time.Now())
-				}
-				msgChan <- msg
-			}
-		}
-	}()
-
-	// Main loop to listen for context cancellation or received messages
-	for {
-		select {
-		case <-ctx.Done():
-			_ = utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_Closed, controlWriteTimeout)
-			return
-
-		case msg := <-msgChan:
-			switch msg {
-			case utils.SG_Chan:
-				atomic.AddInt32(&c.loadConnections, 1)
-
-				select {
-				case <-c.controlFlow: // Do nothing
-
-				default:
-					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
-				}
-
-			case utils.SG_HB:
-				c.logger.Debug("heartbeat signal received successfully")
-
-			case utils.SG_Closed:
-				c.logger.Warn("control channel has been closed by the server")
-				go c.Restart()
-				return
-
-			case utils.SG_RTT:
-				err := utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_RTT, controlWriteTimeout)
-				if err != nil {
-					c.logger.Error("failed to send RTT signal, restarting client: ", err)
-					go c.Restart()
-					return
-				}
-
-			default:
-				c.logger.Errorf("unexpected response from channel: %v.", msg)
-				go c.Restart()
-				return
-			}
-		}
-	}
+// control is this generation's control loop. See controlLoop.
+func (c *TcpTransport) control() controlLoop {
+	return c.lifecycle.control(controlwire.Net(c.state.Conn()), c.config.KeepAlive, c.tunnelDialer, c.Restart)
 }
 
 // Dialing to the tunnel server, chained functions, without retry
@@ -498,7 +321,7 @@ func (c *TcpTransport) tunnelDialer() {
 	switch transport {
 	case utils.SG_TCP:
 		// Dial local server using the received address
-		c.localDialer(tcpConn, resolvedAddr, port)
+		c.relay(tcpConn, resolvedAddr, port, c.backend())
 
 	default:
 		c.logger.Error("undefined transport. close the connection.")
@@ -506,33 +329,15 @@ func (c *TcpTransport) tunnelDialer() {
 	}
 }
 
-func (c *TcpTransport) localDialer(tcpConn net.Conn, resolvedAddr string, port int) {
-	// Pick a healthy backend when several are configured; a single backend is
-	// returned unchanged, so ordinary tunnels are untouched.
-	resolvedAddr = backends.pick(resolvedAddr)
-	var sendBuf, recvBuf int
-
-	if strings.Contains(resolvedAddr, "127.0.0.1") {
-		// Use 32 KB for localhost
-		sendBuf = 32 * 1024
-		recvBuf = 32 * 1024
-	} else {
-		// Use your custom buffer sizes
-		sendBuf = c.config.SO_SNDBUF
-		recvBuf = c.config.SO_RCVBUF
+// backend is how this transport's users reach the local service. See
+// backend.go.
+func (c *TcpTransport) backend() backendOpts {
+	return backendOpts{
+		dialTimeout: c.config.DialTimeOut,
+		keepAlive:   c.config.KeepAlive,
+		rcvBuf:      c.config.SO_RCVBUF,
+		sndBuf:      c.config.SO_SNDBUF,
+		mss:         c.config.MSS,
+		sniffer:     c.config.Sniffer,
 	}
-
-	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
-	if err != nil {
-		localDial.Report(c.logger, resolvedAddr, err)
-		tcpConn.Close()
-		return
-	}
-
-	// The last hop worked, so any run of failures recorded for the panel
-	// ends here. See localdial.go.
-	ReportLocalDialOK()
-	c.logger.Debugf("connected to local address %s successfully", resolvedAddr)
-
-	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(tcpConn), localConnection, c.logger, c.state.Usage(), port, c.config.Sniffer)
 }

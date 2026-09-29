@@ -61,9 +61,11 @@ func TestEveryPairingLoopTimesOutAndCleansUpOnShutdown(t *testing.T) {
 	// The transports whose pairing loop blocks on a tunnel connection. The mux
 	// ones are not here on purpose: they open a stream on the session they
 	// already hold, so nothing is ever parked waiting.
-	for _, name := range []string{"tcp", "ws", "quic", "udp"} {
+	// Where each one's pairing loop lives: udp keeps its flows in a file of
+	// their own.
+	for name, file := range map[string]string{"tcp": "tcp.go", "ws": "ws.go", "quic": "quic.go", "udp": "udp_flows.go"} {
 		t.Run(name, func(t *testing.T) {
-			src := readTransportSource(t, name+".go")
+			src := readTransportSource(t, file)
 			if strings.Contains(src, "pairing[") && strings.Contains(src, "}.run()") {
 				// It uses the shared state machine, which is where the timer,
 				// the teardown and the slot release now live — and which has

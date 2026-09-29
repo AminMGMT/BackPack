@@ -89,6 +89,21 @@ func crossSiteNavigation(r *http.Request) bool {
 	return r.Header.Get("Sec-Fetch-Site") == "cross-site"
 }
 
+// notFromThisOrigin reports whether a browser says a request came from
+// anywhere but this panel's own origin: another site, or a sibling of this one
+// on the same registrable domain ("same-site"). A sibling is a different
+// origin — a blog on another subdomain, say — and the session cookie's
+// SameSite=Lax does send the cookie on its POSTs, so it is refused with the
+// rest. "same-origin", "none" and no header at all are let through, as for
+// crossSiteNavigation.
+func notFromThisOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "cross-site", "same-site":
+		return true
+	}
+	return false
+}
+
 // withPanelSecurity adds the response headers the panel was serving without.
 //
 // The panel drives tunnels — it creates them, edits them and restarts them —
@@ -114,7 +129,7 @@ func withPanelSecurity(next http.Handler) http.Handler {
 		// because refusing those would break every caller that is not a browser
 		// to guard against one only a browser can perform.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			r.Method != http.MethodOptions && crossSiteNavigation(r) {
+			r.Method != http.MethodOptions && notFromThisOrigin(r) {
 			http.Error(w, "cross-site request refused", http.StatusForbidden)
 			return
 		}

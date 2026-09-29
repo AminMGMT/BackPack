@@ -8,8 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/tunnel/bridge"
 	"github.com/backpack/backpack/internal/tunnel/limits"
 	"github.com/backpack/backpack/internal/tunnel/portmap"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/sirupsen/logrus"
 )
 
@@ -282,7 +284,7 @@ func (e *Edge) handle(ctx context.Context, local net.Conn, m portmap.Mapping) {
 	e.stats.active.Add(1)
 	defer e.stats.active.Add(-1)
 
-	pipe(ctx, local, stream)
+	bridge.Join(ctx, local, stream)
 }
 
 // openFor opens a stream to one of a mapping's backends.
@@ -375,7 +377,7 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 			continue
 		}
 		flow.touch()
-		if err := writeDatagram(flow.stream, buf[:n]); err != nil {
+		if err := network.WriteDatagram(flow.stream, buf[:n]); err != nil {
 			e.log.Debugf("direct: forwarding a datagram for %s: %v", client, err)
 			flow.stream.Close()
 		}
@@ -438,7 +440,7 @@ func (e *Edge) pumpUDPReplies(flows *sync.Map, key string, flow *udpFlow, local 
 
 	buf := make([]byte, maxDatagram)
 	for {
-		n, err := readDatagram(flow.stream, buf)
+		n, err := network.ReadDatagram(flow.stream, buf)
 		if err != nil {
 			return
 		}

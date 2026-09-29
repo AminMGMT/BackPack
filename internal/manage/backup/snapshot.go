@@ -32,8 +32,6 @@ type Snapshot struct {
 	Meta SnapshotMeta
 }
 
-// snapshotRoot is where snapshots live (next to the backups, under the
-// standard install directory).
 // Root is where the update snapshots live. Exported because the diagnostics
 // list it among the directories this product owns.
 func Root() string { return app.InstallDir + "/snapshots" }

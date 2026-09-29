@@ -35,9 +35,9 @@ func TestMonitorUnitContents(t *testing.T) {
 // TestMonitorFlagIsParsed guards the link between the unit and the binary. The
 // unit passes --monitor; main.go has to define that exact flag.
 func TestMonitorFlagIsParsed(t *testing.T) {
-	src, err := os.ReadFile("../../main.go")
+	src, err := os.ReadFile("../../../main.go")
 	if err != nil {
-		t.Skipf("cannot read main.go: %v", err)
+		t.Fatalf("cannot read main.go: %v", err)
 	}
 	if !strings.Contains(string(src), `flag.Bool("monitor"`) {
 		t.Error(`main.go does not define a "monitor" flag, so the service would fall through to the interactive menu`)
@@ -65,23 +65,25 @@ func TestMonitorServiceNameIsDistinct(t *testing.T) {
 // that appears to succeed while the monitor goes on running the previous
 // version's code until the machine reboots. The update path must restart it.
 func TestUpdateRestartsTheMonitor(t *testing.T) {
-	src, err := os.ReadFile("update.go")
+	src, err := os.ReadFile("../update.go")
 	if err != nil {
-		t.Skipf("cannot read update.go: %v", err)
+		t.Fatalf("cannot read update.go: %v", err)
 	}
-	if !strings.Contains(string(src), "RestartMonitorService()") {
-		t.Error("ApplyUpdate does not restart the monitor, so it would keep running the old binary")
+	// The restart goes through RestartForNewBinary, which restarts the monitor
+	// in its place in the order; restartorder_test.go holds that it does.
+	if !strings.Contains(string(src), "RestartForNewBinary(") {
+		t.Error("ApplyUpdate does not restart the services on the new binary, so the monitor would keep running the old one")
 	}
 }
 
 // A rollback replaces the binary too, so the same reasoning applies there.
 func TestRollbackRestartsTheMonitor(t *testing.T) {
-	src, err := os.ReadFile("snapshot.go")
+	src, err := os.ReadFile("../backup/snapshot.go")
 	if err != nil {
-		t.Skipf("cannot read snapshot.go: %v", err)
+		t.Fatalf("cannot read snapshot.go: %v", err)
 	}
-	if !strings.Contains(string(src), "RestartMonitorService()") {
-		t.Error("a rollback does not restart the monitor, leaving it on the version that failed")
+	if !strings.Contains(string(src), "RestartForNewBinary(") {
+		t.Error("a rollback does not restart the services on the restored binary, leaving the monitor on the version that failed")
 	}
 }
 
@@ -89,9 +91,9 @@ func TestRollbackRestartsTheMonitor(t *testing.T) {
 // a new version whose monitor crashes on startup is scored healthy and kept,
 // and the machine silently loses its watchdog and alerts.
 func TestUpdateHealthCheckCoversTheMonitor(t *testing.T) {
-	src, err := os.ReadFile("update.go")
+	src, err := os.ReadFile("../update.go")
 	if err != nil {
-		t.Skipf("cannot read update.go: %v", err)
+		t.Fatalf("cannot read update.go: %v", err)
 	}
 	body := string(src)
 	i := strings.Index(body, "func unhealthyAfterUpdate")
@@ -107,9 +109,9 @@ func TestUpdateHealthCheckCoversTheMonitor(t *testing.T) {
 // the panel must not start the watchdog, the bot or the alerts, or stopping the
 // monitor service would not actually stop anything.
 func TestPanelDoesNotRunMonitorJobs(t *testing.T) {
-	src, err := os.ReadFile("../webui/server.go")
+	src, err := os.ReadFile("../../webui/server.go")
 	if err != nil {
-		t.Skipf("cannot read the panel source: %v", err)
+		t.Fatalf("cannot read the panel source: %v", err)
 	}
 	body := string(src)
 	for _, call := range []string{"RunWatchdog", "RunBot", "RunAlerts"} {
@@ -125,9 +127,9 @@ func TestPanelDoesNotRunMonitorJobs(t *testing.T) {
 // changes nothing. They also carry on writing their old traffic totals over the
 // restored ones.
 func TestRestoreRestartsTunnels(t *testing.T) {
-	src, err := os.ReadFile("backup.go")
+	src, err := os.ReadFile("../backup/backup.go")
 	if err != nil {
-		t.Skipf("cannot read backup.go: %v", err)
+		t.Fatalf("cannot read backup.go: %v", err)
 	}
 	body := string(src)
 

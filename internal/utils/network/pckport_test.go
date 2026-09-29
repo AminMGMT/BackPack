@@ -1,6 +1,9 @@
 package network
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The bug this guards against cost the pck transport every tunnel it ever
 // carried, and it was invisible from this side of the wire.
@@ -66,25 +69,101 @@ func TestPckClientPortBaseLeavesRoomForTheSpan(t *testing.T) {
 	}
 }
 
-// The same token must keep giving the same range across restarts, or every
-// reconnect would leave a fresh set of firewall rules behind.
-func TestPckClientPortBaseIsStableForAToken(t *testing.T) {
+// While a tunnel has a carrier open, every carrier it opens takes its port from
+// the same range — one set of firewall rules for the pool.
+func TestPckClientPortBaseIsStableWhileTheTunnelIsOpen(t *testing.T) {
+	resetPckPorts()
+	defer resetPckPorts()
 	const token = "stable-token-aaaaaaaaaaaaaaaaaaa"
 	first := pckClientPortBase(token)
+	held, err := nextPckClientPort(first)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 8; i++ {
 		if got := pckClientPortBase(token); got != first {
-			t.Fatalf("base moved between calls: %d then %d", first, got)
+			t.Fatalf("base moved while a carrier held a port: %d then %d", first, got)
 		}
 	}
-	if other := pckClientPortBase("a-different-token-bbbbbbbbbbbbbb"); other == first {
-		t.Fatal("two different tokens produced the same port range")
+	other := pckClientPortBase("a-different-token-bbbbbbbbbbbbbb")
+	if other < first+pckPortSpan && first < other+pckPortSpan {
+		t.Fatalf("two tunnels were given overlapping ranges: %d and %d", first, other)
+	}
+	releasePckClientPort(pckTunnelID(token), held)
+}
+
+// Reported on v1.8.4: a direct pck tunnel stopped after about a day, restarts
+// did not bring it back, and deleting it and making it again did. The source
+// port came from the token, so every restart sent the very flow the path had
+// stopped passing. Once a tunnel's carriers have all closed — a restart, or a
+// reopen after the handshakes stop being answered — the next one must not come
+// back on the same ports.
+func TestAReopenedTunnelSendsFromNewPorts(t *testing.T) {
+	resetPckPorts()
+	defer resetPckPorts()
+	const token = "blocked-flow-token-ccccccccccccc"
+	id := pckTunnelID(token)
+
+	moved := 0
+	for run := 0; run < 20; run++ {
+		base := pckClientPortBase(token)
+		port, err := nextPckClientPort(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releasePckClientPort(id, port) // the tunnel's only carrier closes
+		if pckClientPortBase(token) != base {
+			moved++
+		}
+	}
+	if moved < 19 {
+		t.Fatalf("a reopened tunnel came back on the same range %d times in 20", 20-moved)
+	}
+	if legacy := legacyPckClientPortBase(token); legacy < 32768 || int(legacy)+pckPortSpan-1 > 65535 {
+		t.Fatalf("the legacy range %d is not where v1.8.4 put it", legacy)
+	}
+}
+
+// The tag names the tunnel without naming its token.
+func TestPckRulesAreTaggedByTunnelNotByToken(t *testing.T) {
+	const token = "secret-token-dddddddddddddddddddd"
+	id := pckTunnelID(token)
+	for _, r := range pckRules(id, 40000, 40127) {
+		c := ""
+		for i := range r {
+			if r[i] == "--comment" {
+				c = r[i+1]
+			}
+		}
+		if !strings.HasPrefix(c, pckRulePrefix(id)) || strings.Contains(c, token) {
+			t.Errorf("rule comment %q", c)
+		}
+	}
+}
+
+// A crashed run's rules are found by the tunnel's tag whatever ports they were
+// written for, and nothing of another tunnel's is touched.
+func TestLeftoverRulesAreFoundByTheTunnelTag(t *testing.T) {
+	listing := `-P OUTPUT ACCEPT
+-A OUTPUT -p tcp -m tcp --sport 41000:41127 --tcp-flags RST RST -m comment --comment backpack-pck-aabbccdd-41000:41127 -j DROP
+-A OUTPUT -p tcp -m tcp --sport 50000:50127 --tcp-flags RST RST -m comment --comment backpack-pck-11223344-50000:50127 -j DROP
+-A OUTPUT -p tcp -m tcp --sport 42000:42127 -m comment --comment "backpack-pck-aabbccdd-42000:42127" -j NOTRACK
+-A INPUT -p tcp --dport 22 -j ACCEPT`
+	got := tunnelRuleDeletions(listing, pckRulePrefix("aabbccdd"))
+	if len(got) != 2 {
+		t.Fatalf("found %d rules to delete, want the tunnel's 2: %v", len(got), got)
+	}
+	for _, d := range got {
+		if d[0] != "-D" || d[1] != "OUTPUT" {
+			t.Errorf("not a delete of the listed rule: %v", d)
+		}
 	}
 }
 
 // The firewall rules must be written against the whole range, not one port, or
 // the carriers above the first would send RSTs the guard does not catch.
 func TestPckRulesCoverTheWholeRange(t *testing.T) {
-	rules := pckRules(40000, 40127)
+	rules := pckRules("aabbccdd", 40000, 40127)
 	if len(rules) == 0 {
 		t.Fatal("no rules produced")
 	}

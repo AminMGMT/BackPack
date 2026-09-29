@@ -2,13 +2,15 @@ package direct
 
 import (
 	"context"
-	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/tunnel/bridge"
+	"github.com/backpack/backpack/internal/utils/acceptloop"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/sirupsen/logrus"
 	"github.com/xtaci/smux"
 )
@@ -36,6 +38,11 @@ type Origin struct {
 
 	addrMu sync.RWMutex
 	addr   net.Addr
+
+	// preauth bounds the connections still in their handshake: each is a
+	// goroutine waiting up to handshakeTimeout for anyone who can reach the
+	// port. See acceptloop.Gate.
+	preauth acceptloop.Gate
 
 	stats struct {
 		sessions atomic.Int64
@@ -116,18 +123,27 @@ func (o *Origin) Run(ctx context.Context) error {
 		// connects and then says nothing costs one goroutine and never delays
 		// the connections behind it — which matters on a public address, where
 		// scanners find an open port within hours.
+		leave, ok := o.preauth.Admit(conn, o.log.Debugf)
+		if !ok {
+			o.stats.rejected.Add(1)
+			continue
+		}
 		sessions.Add(1)
 		go func() {
 			defer sessions.Done()
-			o.admit(ctx, conn)
+			o.admit(ctx, conn, leave)
 		}()
 	}
 }
 
 // admit takes one accepted connection through the handshake and, if it passes,
 // serves the streams opened on it.
-func (o *Origin) admit(ctx context.Context, conn net.Conn) {
+func (o *Origin) admit(ctx context.Context, conn net.Conn, leave func()) {
 	session, err := acceptSession(conn, &o.cfg)
+	leave() // judged: from here it is a session, or nothing
+	if err == nil {
+		o.preauth.Prove(conn.RemoteAddr())
+	}
 	if err != nil {
 		// Nothing is sent back. A peer without the token learns only that
 		// something accepted a TCP connection and then closed it.
@@ -223,7 +239,7 @@ func (o *Origin) serveStream(ctx context.Context, stream *smux.Stream) {
 		relayDatagrams(ctx, counted, backend)
 		return
 	}
-	pipe(ctx, counted, backend)
+	bridge.Join(ctx, counted, backend)
 }
 
 // dialBackend reaches the service a stream named.
@@ -255,7 +271,7 @@ func relayDatagrams(ctx context.Context, stream net.Conn, backend net.Conn) {
 		defer func() { done <- struct{}{} }()
 		buf := make([]byte, maxDatagram)
 		for {
-			n, err := readDatagram(stream, buf)
+			n, err := network.ReadDatagram(stream, buf)
 			if err != nil {
 				return
 			}
@@ -277,7 +293,7 @@ func relayDatagrams(ctx context.Context, stream net.Conn, backend net.Conn) {
 			if err != nil {
 				return
 			}
-			if err := writeDatagram(stream, buf[:n]); err != nil {
+			if err := network.WriteDatagram(stream, buf[:n]); err != nil {
 				return
 			}
 		}
@@ -290,30 +306,4 @@ func relayDatagrams(ctx context.Context, stream net.Conn, backend net.Conn) {
 	stream.Close()
 	backend.Close()
 	<-done
-}
-
-// pipe copies in both directions until either side is done, then closes both.
-//
-// Each direction half-closes what it was writing to when its source ends, so a
-// peer that has finished sending gets an orderly end rather than waiting for
-// the other direction to time out.
-func pipe(ctx context.Context, a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	copyOne := func(dst, src net.Conn) {
-		defer func() { done <- struct{}{} }()
-		_, _ = io.Copy(dst, src)
-		if tcp, ok := dst.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
-		}
-	}
-	go copyOne(a, b)
-	go copyOne(b, a)
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
-	a.Close()
-	b.Close()
-	<-done // the second copy cannot outlive the closes above
 }

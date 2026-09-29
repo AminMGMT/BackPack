@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net"
@@ -63,9 +64,16 @@ func Load() Config {
 		c.Alerts = DefaultAlerts()
 		return c
 	}
-	if json.Unmarshal(data, &c) != nil {
-		c.Alerts = DefaultAlerts()
-		return c
+	if err := json.Unmarshal(data, &c); err != nil {
+		// Kept out of reach of the next save: the bot token and the admin list
+		// are in it. A value of the wrong type leaves the rest readable, and
+		// the bot keeps running on it; a file that does not parse at all
+		// starts again from the defaults. See app.LoadState.
+		app.WarnState(app.Unreadable(app.TelegramConfig, data, err))
+		var te *json.UnmarshalTypeError
+		if !errors.As(err, &te) {
+			return Config{Alerts: DefaultAlerts()}
+		}
 	}
 
 	var probe struct {
@@ -609,7 +617,7 @@ func getUpdates(c Config, offset int64) ([]tgUpdate, error) {
 	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?timeout=30&offset=%d", c.Token, offset)
 	resp, err := client.Get(endpoint)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(redactToken(err.Error(), c.Token))
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -803,7 +811,7 @@ func sendDocument(c Config, filename, caption string, data []byte) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return errors.New(redactToken(err.Error(), c.Token))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

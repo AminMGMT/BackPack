@@ -28,9 +28,6 @@ import (
 // that name. The tunnel carries an already-encrypted stream and cannot read it,
 // which is not something a SOCKS proxy could be said to guarantee.
 
-// TelegramHost is where the bot API lives.
-const TelegramHost = "api.telegram.org:443"
-
 // telegramBindAddr keeps the forward on loopback.
 //
 // A mapping written as a bare port number binds every interface, which would
@@ -42,14 +39,6 @@ const TelegramHost = "api.telegram.org:443"
 // in seconds. The bot runs on this host and dials 127.0.0.1, so there is no
 // reason for the listener to be reachable from anywhere else.
 const telegramBindAddr = "127.0.0.1"
-
-// telegramPortSuffix marks the mapping that carries the bot.
-var telegramPortSuffix = "=" + TelegramHost
-
-// isTelegramPort reports whether a mapping is the hidden Telegram forward.
-func isTelegramPort(p string) bool {
-	return strings.HasSuffix(strings.TrimSpace(p), telegramPortSuffix)
-}
 
 // telegramMappingPort reads the local port out of a Telegram mapping.
 //

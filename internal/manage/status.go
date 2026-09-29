@@ -15,7 +15,7 @@ import (
 func StatusLive() {
 	tunnels := List()
 	if len(tunnels) == 0 {
-		tui.Warn("No tunnels configured yet.")
+		tui.Warn("No Tunnels Yet.")
 		tui.PressEnter()
 		return
 	}

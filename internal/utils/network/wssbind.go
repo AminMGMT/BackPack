@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"sync"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -76,4 +78,71 @@ func WSSServerProof(cs *tls.ConnectionState, token string) (string, error) {
 		return "", err
 	}
 	return WSSBindingProof(ekm, token), nil
+}
+
+// The server's side of the binding.
+//
+// The proof above lets the server know the client. Nothing let the client know
+// the server: whatever terminated the TLS on the path could answer the upgrade
+// itself, token or no token, and then tell the client which addresses to dial
+// for every connection it carried. So the server now answers each upgrade with
+// a proof of its own, in a response header — HMAC(token, "server" || keying
+// material), domain-separated so it can never be the client's proof reflected
+// back — and the client checks it.
+//
+// A header, because an older client ignores headers it does not know: the
+// server can be upgraded first, as the QUIC binding already asks. An older
+// server sends none, and a new client cannot tell that from something on the
+// path that stripped it — so it accepts a missing answer from a server it has
+// never had one from, and refuses one from a server that has answered before
+// (in this process). That closes the path for every tunnel whose server is up
+// to date, from its first successful connection on.
+
+// WSSServerProofHeader carries the server's answer on the upgrade response.
+const WSSServerProofHeader = "X-Backpack-Proof"
+
+// wssServerAnswer is the server's proof for a session's keying material.
+func wssServerAnswer(ekm []byte, token string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte("server"))
+	mac.Write(ekm)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// WSSServerAnswer is the value the server puts in WSSServerProofHeader.
+func WSSServerAnswer(cs *tls.ConnectionState, token string) (string, error) {
+	if cs == nil {
+		return "", errNoTLSState
+	}
+	ekm, err := cs.ExportKeyingMaterial(WSSBindingLabel, nil, wssBindingLength)
+	if err != nil {
+		return "", err
+	}
+	return wssServerAnswer(ekm, token), nil
+}
+
+// wssAnswered remembers the servers that have proved themselves, by address.
+var wssAnswered sync.Map
+
+// errWSSServerUnproven is a server that did not prove it holds the token.
+var errWSSServerUnproven = errors.New("wss: the server did not prove it holds the tunnel token — " +
+	"something on the path is terminating the TLS, or the token differs")
+
+// checkWSSServer judges the server's answer to an upgrade: a wrong one is
+// refused, a missing one is refused from a server that has answered before, and
+// a right one is remembered.
+func checkWSSServer(ekm []byte, token, server, answer string) error {
+	if answer == "" {
+		if _, before := wssAnswered.Load(server); before {
+			return fmt.Errorf("%w: it answered before in this run and this time it did not — "+
+				"or the server was rolled back to a build that does not answer (restart this "+
+				"client to accept an older server again)", errWSSServerUnproven)
+		}
+		return nil // an older server; see above
+	}
+	if !hmac.Equal([]byte(answer), []byte(wssServerAnswer(ekm, token))) {
+		return errWSSServerUnproven
+	}
+	wssAnswered.Store(server, struct{}{})
+	return nil
 }

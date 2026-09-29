@@ -43,9 +43,9 @@ func TestReminderShowsTheToken(t *testing.T) {
 			t.Fatalf("the %s reminder did not print the token:\n%s", side, out)
 		}
 		// And it must say which machine to go to next.
-		want := "KHAREJ"
+		want := "Kharej"
 		if side == sideKharej {
-			want = "IRAN"
+			want = "Iran"
 		}
 		if !strings.Contains(out, want) {
 			t.Fatalf("the %s reminder did not name the next machine:\n%s", side, out)
@@ -66,7 +66,7 @@ func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
 		Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 		Preset: PresetBalance,
 	}
-	link := pendingShareLink(cfg)
+	link := pendingShareLink(cfg, linkExtras{})
 	if !strings.HasPrefix(link, shareScheme) {
 		t.Fatalf("no setup link could be built before the tunnel exists: %q", link)
 	}
@@ -75,7 +75,9 @@ func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
 	for _, want := range []string{
 		"Direct PCK", "bp0", "10.10.0.1/30", "10.10.0.2",
 		"203.0.113.9:9000", "3233", "GRE Key", "42", "Balance",
-		"Setup Link (Setup Kharej → Direct → The Same Carrier → Setup Link)", link,
+		"Setup Link (sudo backpack → Setup Kharej → Direct → Setup Link):",
+		"Install BackPack And Set Up This Tunnel (Kharej Without BackPack, As Root):",
+		"install.sh) link apply 'backpack://", link,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the layer-3 summary is missing %q:\n%s", want, out)

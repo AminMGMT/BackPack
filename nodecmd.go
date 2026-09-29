@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/backpack/backpack/internal/node"
 )
@@ -27,10 +29,11 @@ import (
 
 const nodeUsage = `backpack node — the panel-managed side of this server
 
-  backpack node exec <request>
-        Perform one operation and print the answer. Both are JSON, base64
-        encoded. This is what a Backpack panel runs over SSH; there is no
-        reason to type it.
+  backpack node exec -
+        Read one request from stdin, perform it and print the answer. Both
+        are JSON, base64 encoded. This is what a Backpack panel runs over
+        SSH; there is no reason to type it. (A request given as the argument
+        instead of - is still read, for an older panel.)
 
 Nothing needs to be set up here. A panel manages this server by logging in
 over SSH, so adding it to a fleet is done entirely from the panel.
@@ -54,10 +57,12 @@ func runNode(args []string) {
 
 // nodeExec performs one operation for a panel reaching this server over SSH.
 //
-// The request arrives as an argument rather than on stdin because the panel
-// gets to this through a shell, and a shell handed one opaque word has fewer
-// ways to go wrong than one handed a redirect as well. Base64 for the same
-// reason: nothing in it can be read as shell syntax, whatever the request holds.
+// The request arrives on stdin when the argument is "-". It used to arrive as
+// the argument itself, and a request that sets up a tunnel carries the
+// tunnel's token — which, as an argument, any unprivileged user on this machine
+// could read from the process list for as long as the command ran. The
+// argument form is still read, for a panel older than this build. Base64
+// either way: nothing in it can be read as shell syntax, whatever it holds.
 //
 // The answer always goes to stdout, including a refusal — the panel reads a
 // Response either way, and a command that failed with nothing on stdout would
@@ -66,10 +71,19 @@ func runNode(args []string) {
 // non-zero one means this command failed, not that the operation did.
 func nodeExec(args []string) {
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "node exec takes one base64 request")
+		fmt.Fprintln(os.Stderr, "node exec takes one base64 request, or - to read it from stdin")
 		os.Exit(2)
 	}
-	raw, err := base64.StdEncoding.DecodeString(args[0])
+	encoded := args[0]
+	if encoded == "-" {
+		in, err := io.ReadAll(io.LimitReader(os.Stdin, 16<<20))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "could not read the request:", err)
+			os.Exit(2)
+		}
+		encoded = strings.TrimSpace(string(in))
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "the request is not valid base64:", err)
 		os.Exit(2)

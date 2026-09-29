@@ -30,7 +30,16 @@ given at the bottom of this page.
 
 "Encrypted handshake" means the tunnel's own credential is protected on the
 wire. On the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) the token is sent
-as-is, so use one of the encrypted transports on an untrusted path.
+as-is, so use one of the encrypted transports on an untrusted path. It is not
+only the token: something on such a path can also stand in for the Iran server,
+and the Iran server is what tells the kharej side which address to dial for each
+connection — so the kharej machine would dial wherever it was told. TCP +
+Stealth, QUIC and the token-keyed transports (UDP + KCP + FEC, TCP + PCK, xDi)
+authenticate the server as well as the client: nothing without the token can
+complete their handshake or produce a packet the client accepts. WSS does too
+once the Iran server is up to date (see WSS below), except with Simple Token
+Auth, where a trusted TLS-terminating proxy in front (NGINX, usually) stands in
+for the server and neither end's proof is used.
 
 QUIC binds the credential to its TLS session, as WSS does. The client does
 not verify the server's certificate — the tunnel trusts its token — so it does
@@ -190,7 +199,12 @@ Two things make these more than "WS with TLS":
   bearer token readable by anything that terminates the TLS on the path. So the
   token is not sent: each side derives keying material from the TLS session and
   the client proves it holds the token with an HMAC over that material. A man in
-  the middle has a different session and cannot replay it.
+  the middle has a different session and cannot replay it. The server proves
+  itself back the same way, in the upgrade response, and the client refuses a
+  wrong answer — and a missing one from a server that has answered it since the
+  client process started. An older server sends no answer, so a new client
+  still reaches it; upgrade the Iran server to close the gap. (With Simple
+  Token Auth neither proof applies.)
 - **Decoy site.** Anything that is not a genuine tunnel connection — a browser,
   a scanner, a probe with the wrong token — is answered by a stock **nginx**:
   the "Welcome to nginx!" page at `/`, a normal `404` everywhere else, with the
@@ -246,4 +260,4 @@ UDP را می‌بندد ولی ICMP را نه) و *IP Spoofing* که مبدأ �
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

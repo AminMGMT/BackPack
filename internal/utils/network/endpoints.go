@@ -33,6 +33,33 @@ type Endpoints struct {
 	// picks one exit on purpose, where spread deliberately uses all of them.
 	steer     atomic.Bool
 	preferred atomic.Int64
+
+	// reach, when set, is asked about an endpoint that answers ping before
+	// steering will count it as reachable: whether the tunnel port itself
+	// takes a connection. See SetReachProbe.
+	reach atomic.Pointer[func(addr string) bool]
+}
+
+// SetReachProbe sets how steering checks the tunnel port behind an endpoint
+// that answers ping, or clears it with nil.
+//
+// Ping alone was the whole check, and a host answers ping while its tunnel port
+// is closed, filtered or taken by something else — on the routes these tunnels
+// run over, ICMP is the one thing that nearly always gets through. Steering
+// kept the pool on such an address: the control channel had raced to a backup
+// that worked, and every data connection went on dialling the one that did not.
+// The transport running now says how its port can be asked: a TCP one by
+// connecting to it; a datagram one cannot be asked without speaking its
+// protocol, and keeps the ping.
+func (e *Endpoints) SetReachProbe(probe func(addr string) bool) {
+	if e == nil {
+		return
+	}
+	if probe == nil {
+		e.reach.Store(nil)
+		return
+	}
+	e.reach.Store(&probe)
 }
 
 // NewEndpoints builds the list from a primary address plus optional fallbacks,
@@ -211,11 +238,25 @@ const RaceStagger = 300 * time.Millisecond
 // connections, the pool, the next reconnect — should go to the same one rather
 // than starting again from the primary.
 //
-// A no-op under health steering. That scorer measures every endpoint on a timer
-// and concentrates traffic on the best one on purpose; letting a single
-// successful dial override it would replace a measurement with an accident.
+// Under health steering it moves the steered exit too. It used to leave it
+// alone, on the reasoning that one dial should not override a measurement —
+// but the race is a measurement, of the one thing ping cannot see: whether the
+// tunnel port answers. An address that lost it did not carry the tunnel, and
+// leaving the pool on it meant a control channel up on the backup and every
+// data connection failing against the primary. The scorer can still move away
+// again later, on its own evidence.
 func (e *Endpoints) Prefer(addr string) {
-	if e == nil || addr == "" || len(e.list) < 2 || e.steer.Load() {
+	if e == nil || addr == "" || len(e.list) < 2 {
+		return
+	}
+	if e.steer.Load() {
+		for i, a := range e.list {
+			if a == addr {
+				e.preferred.Store(int64(i))
+				e.idx.Store(int64(i))
+				return
+			}
+		}
 		return
 	}
 	for i, a := range e.list {

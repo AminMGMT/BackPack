@@ -1,9 +1,13 @@
 package transport
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // A connection slot taken on accept has to be given back on every path out.
@@ -69,18 +73,57 @@ func TestEveryPairingTimeoutFreesItsConnectionSlot(t *testing.T) {
 	}
 }
 
-// Every one of these transports must still take a slot, or the release above is
-// balancing nothing.
-func TestEveryTransportStillTakesASlotOnAccept(t *testing.T) {
+// The slot the pairing paths release is taken on accept, in the forwarder every
+// stream transport shares: a connection past the cap is refused before it is
+// queued, and one that is queued asks for a way through.
+func TestTheForwarderTakesASlotOnAccept(t *testing.T) {
+	port := freeAddr(t)
+	f, stop := newTestForwarder(t, []string{port}, 1, quietLogger())
+	defer stop()
+	asked := 0
+	f.queued = func() { asked++ }
+	f.run()
+
+	first := dialRetry(t, port)
+	defer first.Close()
+	eventually(t, 3*time.Second, func() bool { return len(f.queue) == 1 }, "the first connection was not queued")
+
+	second := dialRetry(t, port)
+	defer second.Close()
+	_ = second.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := second.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a connection past the cap was served")
+	}
+	if len(f.queue) != 1 || f.limits.active.Load() != 1 || asked != 1 {
+		t.Fatalf("queue %d, slots %d, requests %d — want 1 each", len(f.queue), f.limits.active.Load(), asked)
+	}
+}
+
+// Every stream transport serves its forwarded ports through that forwarder.
+func TestEveryStreamTransportUsesTheSharedForwarder(t *testing.T) {
 	for _, name := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic"} {
 		src, err := os.ReadFile(name + ".go")
 		if err != nil {
 			t.Fatalf("%s.go: %v", name, err)
 		}
-		if !strings.Contains(string(src), "s.limits.acquire()") {
-			t.Errorf("%s.go no longer enforces the connection limit on accept", name)
+		// s.serveGeneration starts the forwarder with the rest of the
+		// generation; see lifecycle.serveGeneration.
+		if !strings.Contains(string(src), "s.serveGeneration(s.forwarder(g),") {
+			t.Errorf("%s.go no longer serves its ports through portForwarder", name)
 		}
 	}
+}
+
+// testForwarder builds a forwarder for a test, with a cap when max > 0.
+func newTestForwarder(t *testing.T, ports []string, max int, log *logrus.Logger) (portForwarder, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	var listeners listenerSet
+	f := portForwarder{
+		ctx: ctx, ports: ports, queue: make(chan LocalTCPConn, 8),
+		limits: newLimiter(Limits{MaxConnections: max}), listeners: &listeners, log: log,
+	}
+	return f, func() { cancel(); listeners.wait(context.Background()) }
 }
 
 // timeoutBranch returns the body of the pairing-timeout branch: from the line

@@ -79,6 +79,14 @@ func openPck(cfg Config) (DatagramCarrier, net.Addr, error) {
 		overhead:   network.PckOverhead(),
 		name:       "pck",
 	}
+	// Which interface, source port, next hop and RST guard the carrier ended
+	// up with — the reverse transport logs it and this did not, so a direct
+	// pck tunnel's operator could not see the source port its flow uses, which
+	// is the thing that changes when it is reopened after the path stopped
+	// passing it (see flowStuckAfter).
+	if d, ok := conn.(interface{ PckDiag() string }); ok {
+		base.note = d.PckDiag()
+	}
 	if br, ok := conn.(pckBatchReader); ok {
 		return &pckCarrier{obfuscatedCarrier: base, br: br}, peer, nil
 	}

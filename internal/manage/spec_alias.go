@@ -28,8 +28,6 @@ var (
 	// Addresses and ports.
 	addrHost          = spec.AddrHost
 	addrPort          = spec.AddrPort
-	isWildcardBind    = spec.IsWildcardBind
-	quote             = spec.Quote
 	validPort         = spec.ValidPort
 	parsePorts        = spec.ParsePorts
 	validatePortSpecs = spec.ValidatePortSpecs
@@ -43,3 +41,7 @@ var (
 // ValidateConfigFile reports what is wrong with a tunnel configuration on disk,
 // without starting anything. See spec.ValidateConfigFile.
 func ValidateConfigFile(path string) []string { return spec.ValidateConfigFile(path) }
+
+// ConfigUnparsable opens the problem ValidateConfigFile reports for a file that
+// does not parse.
+const ConfigUnparsable = spec.Unparsable

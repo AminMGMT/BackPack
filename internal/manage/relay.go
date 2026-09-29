@@ -39,12 +39,19 @@ func EnsureSocksPort(name string) (int, error) {
 
 	peerPort := app.SocksPortForToken(spec.Token)
 	exposed := randomHighPort()
-	spec.Ports = append(spec.Ports, fmt.Sprintf("%d=127.0.0.1:%d", exposed, peerPort))
+	before := spec.Ports
+	spec.Ports = append(append([]string(nil), before...), fmt.Sprintf("%d=127.0.0.1:%d", exposed, peerPort))
 	if _, err := spec.Save(); err != nil {
 		return 0, err
 	}
 	// Restart so the new forwarded port takes effect.
-	RestartService(app.ServiceName(name))
+	if err := RestartService(app.ServiceName(name)); err != nil {
+		// Taken back out: a mapping left in the file would be found by the next
+		// call and reported as a working relay on a port nothing listens on.
+		spec.Ports = before
+		_, _ = spec.Save()
+		return 0, fmt.Errorf("could not restart tunnel %q to add the relay port: %w", name, err)
+	}
 	return exposed, nil
 }
 

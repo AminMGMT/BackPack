@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils/network"
 )
 
@@ -180,4 +181,20 @@ func TestEveryClientTransportIsCoveredByTheRestartTable(t *testing.T) {
 		}
 	}
 	_ = net.IPv4zero
+}
+
+// Every transport forgets the pool figures of the run that ended. The udp and
+// ws engines' own copies of Restart never did, so the panel kept showing the
+// size and throughput of a connection that was gone until the next run's first
+// tick. The restart is shared now; this holds every engine to it.
+func TestARestartForgetsThePoolOfTheRunThatEnded(t *testing.T) {
+	for name, tr := range eachClientTransport(t, context.Background()) {
+		t.Run(name, func(t *testing.T) {
+			metrics.ReportPool(3, 4, 4, 10)
+			tr.Restart()
+			if live, _, _, _ := metrics.PoolState(); live != 0 {
+				t.Fatalf("after a restart the panel still shows a pool of %d", live)
+			}
+		})
+	}
 }

@@ -103,7 +103,7 @@ func TestTheListenBackoffGrowsAndIsCapped(t *testing.T) {
 	var delays []time.Duration
 	for i := 0; i < 8; i++ {
 		b.wait(ctx)
-		delays = append(delays, b.delay)
+		delays = append(delays, b.b.Delay())
 	}
 	if delays[0] != listenRetryFirst {
 		t.Fatalf("first delay = %v, want %v", delays[0], listenRetryFirst)

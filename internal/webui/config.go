@@ -5,7 +5,9 @@ package webui
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
 	"os"
 	"strings"
@@ -58,6 +60,16 @@ type Config struct {
 	// keep from anybody who can read it, which is why that file is 0600 and why
 	// a backup of it is treated as a credential. See totp.go.
 	TOTPSecret string `json:"totp_secret,omitempty"`
+
+	// Stopped records that the operator stopped the panel (Web Panel → Stop
+	// panel), so nothing starts it again behind their back.
+	//
+	// Every run of the menu used to start the panel on its way in, and stopping
+	// it left no record beyond the missing unit — so the next `sudo backpack`
+	// wrote the unit and started it again. Reported against v1.8.4 as "I turn
+	// the web panel off by hand, and every time I run the script it turns it
+	// back on". Only an explicit start (Restart panel) clears it.
+	Stopped bool `json:"stopped,omitempty"`
 
 	// RecoveryHashes are the SHA-256 hashes of the single-use codes issued with
 	// the secret. Hashed because the codes are the way back in when the phone
@@ -146,9 +158,10 @@ func configPath() string {
 // Load reads the saved config, filling defaults for missing fields.
 func Load() Config {
 	var c Config
-	if data, err := os.ReadFile(configPath()); err == nil {
-		json.Unmarshal(data, &c)
-	}
+	// Unreadable means set aside, not overwritten: the password, the second
+	// factor and the access tokens are in it. EnsurePassword then starts a
+	// fresh one — closed, with a new password — rather than an open panel.
+	app.WarnState(app.LoadState(configPath(), &c))
 	if c.Port == 0 {
 		c.Port = app.WebUIPort
 	}
@@ -336,12 +349,91 @@ func SetPort(port int) (Config, error) {
 
 // EnsureRunning makes sure a password exists and the web-panel systemd service
 // is installed and running. Safe to call repeatedly (idempotent).
+//
+// It is the explicit start — Restart panel, a restore of a panel that was
+// running — so it also clears a stop the operator made earlier. The menu's own
+// start on every run is StartUnlessStopped.
 func EnsureRunning() (Config, error) {
 	c, err := EnsurePassword()
 	if err != nil {
 		return c, err
 	}
-	unit := fmt.Sprintf(`[Unit]
+	if c.Stopped {
+		c.Stopped = false
+		if err := Save(c); err != nil {
+			return c, err
+		}
+	}
+	return c, installAndStart(panelUnit())
+}
+
+// StartUnlessStopped is what the menu does each time it opens: it brings the
+// panel up — a new install gets one without being asked — unless the operator
+// stopped it. started reports whether it did.
+func StartUnlessStopped() (c Config, started bool, err error) {
+	if StoppedByOperator() {
+		return Load(), false, nil
+	}
+	c, err = EnsureRunning()
+	return c, err == nil, err
+}
+
+// StoppedByOperator reports whether the panel was stopped on purpose.
+//
+// Before Stopped existed, stopping the panel removed its unit and wrote nothing
+// else, so a panel stopped under v1.8.4 or earlier is recognised by that: its
+// config exists — it was set up once — and its unit does not. A new install has
+// neither, and gets a panel.
+func StoppedByOperator() bool {
+	if Load().Stopped {
+		return true
+	}
+	_, cfgErr := os.Stat(configPath())
+	_, unitErr := os.Stat(panelUnitPath())
+	return cfgErr == nil && errors.Is(unitErr, fs.ErrNotExist)
+}
+
+// Disable stops and removes the web-panel service, and records that the
+// operator wanted it stopped so the next run of the menu leaves it that way.
+func Disable() error {
+	c := Load()
+	if !c.Stopped {
+		c.Stopped = true
+		if err := Save(c); err != nil {
+			return err
+		}
+	}
+	return removeUnit()
+}
+
+// panelUnitPath is where the panel's unit file lives; a variable so a test can
+// point it at a temporary directory.
+var panelUnitPath = func() string { return app.ServiceDir + "/" + app.WebUIService }
+
+// installAndStart writes the unit and starts the service, and removeUnit stops
+// and removes it. Variables so a test can record what would have been done to
+// systemd instead of doing it.
+var installAndStart = func(unit string) error {
+	if err := os.WriteFile(panelUnitPath(), []byte(unit), 0644); err != nil {
+		return err
+	}
+	if err := manage.DaemonReload(); err != nil {
+		return err
+	}
+	return manage.StartService(app.WebUIService)
+}
+
+var removeUnit = func() error {
+	if manage.IsActive(app.WebUIService) || manage.IsEnabled(app.WebUIService) {
+		manage.DisableService(app.WebUIService)
+	}
+	os.Remove(panelUnitPath())
+	return manage.DaemonReload()
+}
+
+// panelUnit is the panel's systemd unit.
+func panelUnit() string {
+	return fmt.Sprintf(`[Unit]
 Description=Backpack Web Panel
 After=network.target
 
@@ -361,24 +453,6 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 `, app.BinPath)
-
-	path := app.ServiceDir + "/" + app.WebUIService
-	if err := os.WriteFile(path, []byte(unit), 0644); err != nil {
-		return c, err
-	}
-	if err := manage.DaemonReload(); err != nil {
-		return c, err
-	}
-	return c, manage.StartService(app.WebUIService)
-}
-
-// Disable stops and removes the web-panel service.
-func Disable() error {
-	if manage.IsActive(app.WebUIService) || manage.IsEnabled(app.WebUIService) {
-		manage.DisableService(app.WebUIService)
-	}
-	os.Remove(app.ServiceDir + "/" + app.WebUIService)
-	return manage.DaemonReload()
 }
 
 // Running reports whether the web-panel service is active.

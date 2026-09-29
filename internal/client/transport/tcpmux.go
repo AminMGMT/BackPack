@@ -2,40 +2,30 @@ package transport
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
-	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
-	"github.com/backpack/backpack/internal/web"
 
 	"github.com/sirupsen/logrus"
 	"github.com/xtaci/smux"
 )
 
 type TcpMuxTransport struct {
-	// The status shown in the panel. Behind a lock because the run being
-	// replaced and the run replacing it both write it. See tunnelStatus.
-	status tunnelStatus
+	// The generations of this transport and what outlives them: see
+	// lifecycle.go.
+	lifecycle
+
 	config *TcpMuxConfig
 	// muxV1/muxV2 are both built up front so that adopting the server's
 	// version costs nothing per session; muxVersion is the one in force.
-	muxV1           *smux.Config
-	muxV2           *smux.Config
-	muxVersion      atomic.Int32
-	parentctx       context.Context
-	state           clientState
-	logger          *logrus.Logger
-	restartMutex    sync.Mutex
-	poolConnections int32
-	loadConnections int32
-	controlFlow     chan struct{}
+	muxV1      *smux.Config
+	muxV2      *smux.Config
+	muxVersion atomic.Int32
 	// poolNonce is what the server issued for this run; every pool connection
 	// presents it so the server need not judge them by source address. Empty
 	// against a server too old to issue one.
@@ -77,9 +67,6 @@ type TcpMuxConfig struct {
 }
 
 func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
-	// Create a derived context from the parent context
-	ctx, cancel := context.WithCancel(parentCtx)
-
 	// Initialize the TcpTransport struct
 	muxSettings := network.MuxSettings{
 		MaxFrameSize:     config.MaxFrameSize,
@@ -87,19 +74,12 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 		MaxStreamBuffer:  config.MaxStreamBuffer,
 	}
 	client := &TcpMuxTransport{
-		muxV1:           network.SmuxConfig(1, muxSettings),
-		muxV2:           network.SmuxConfig(2, muxSettings),
-		config:          config,
-		parentctx:       parentCtx,
-		logger:          logger,
-		poolConnections: 0,
-		loadConnections: 0,
-		controlFlow:     make(chan struct{}, 100),
+		muxV1:  network.SmuxConfig(1, muxSettings),
+		muxV2:  network.SmuxConfig(2, muxSettings),
+		config: config,
 	}
 
-	// Seed the first generation through the same path a restart uses, so
-	// there is only one way this state is ever published.
-	client.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", config.WebPort), ctx, config.SnifferLog, config.Sniffer, client.status.get, logger))
+	client.firstGeneration(parentCtx, logger, usageSpec{webPort: config.WebPort, snifferLog: config.SnifferLog, sniffer: config.Sniffer})
 	return client
 }
 
@@ -114,75 +94,13 @@ func (c *TcpMuxTransport) Start() {
 }
 
 func (c *TcpMuxTransport) Restart() {
-	if !c.restartMutex.TryLock() {
-		c.logger.Warn("client is already restarting")
-		return
-	}
-	defer c.restartMutex.Unlock()
-
-	c.logger.Info("restarting client...")
-
-	// for removing timeout logs
-	level := c.logger.GetLevel()
-	c.logger.SetLevel(logrus.FatalLevel)
-
-	if c.state.Cancel() != nil {
-		c.state.Cancel()()
-	}
-
-	// close control channel connection
-	c.state.CloseConn()
-
-	time.Sleep(2 * time.Second)
-
-	// The whole tunnel may have been shut down while this restart was waiting —
-	// on a reload, or on the process going down. Rebuilding the run from a
-	// parent context that is already finished would bind the listeners again
-	// only to close them, and on a reload that means fighting the run that is
-	// replacing this one for its own ports. Nothing here is worth starting.
-	if c.parentctx.Err() != nil {
-		// The level was turned down to hide the timeouts a teardown produces;
-		// leaving it there would silence the shutdown itself.
-		c.logger.SetLevel(level)
-		// Abandoning is not a reason to keep claiming a peer. See the same
-		// branch in internal/server/transport — this end publishes the status
-		// the panel reads and the "connected" flag the watchdog reads, and both
-		// used to survive a restart that gave up.
-		c.status.set("")
-		metrics.ClearPeer()
-		c.logger.Debug("restart abandoned: the tunnel is shutting down")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(c.parentctx)
-
-	// Publish the whole new generation at once: a reader must never see
-	// the new context paired with the old monitor, or vice versa.
-	c.state.Reset(ctx, cancel, web.NewDataStore(fmt.Sprintf(":%v", c.config.WebPort), ctx, c.config.SnifferLog, c.config.Sniffer, c.status.get, c.logger))
-	c.status.set("")
-	// The next control channel issues its own nonce; carrying this one over
-	// would have the pool announcing a value the server has already forgotten.
-	c.poolNonce.Clear()
-	// Ask for the current handshake again. A fallback decided during the
-	// outage that caused this restart was a guess about the server drawn from
-	// a broken path, and carrying it forward costs the nonce for nothing.
-	c.legacyServer.reset()
-	c.muxVersion.Store(0)
-	atomic.StoreInt32(&c.poolConnections, 0)
-	atomic.StoreInt32(&c.loadConnections, 0)
-	// The published pool figures belong to the run that just ended. Left
-	// behind, the panel would keep showing the size and throughput of a
-	// connection that is gone until the new run's first tick replaced them.
-	metrics.ClearPool()
-	// The peer belongs to the generation that just ended.
-	metrics.ClearPeer()
-	drain(c.controlFlow)
-
-	// set the log level again
-	c.logger.SetLevel(level)
-
-	go c.Start()
-
+	c.restart(nil, func() {
+		// See TcpTransport.Restart: a fresh nonce and a fresh handshake, and
+		// the mux version is negotiated again with it.
+		c.poolNonce.Clear()
+		c.legacyServer.reset()
+		c.muxVersion.Store(0)
+	}, c.Start)
 }
 
 func (c *TcpMuxTransport) channelDialer() {
@@ -277,7 +195,7 @@ func (c *TcpMuxTransport) channelDialer() {
 				c.status.set("Connected (TCPMux)")
 
 				go c.poolMaintainer()
-				go c.channelHandler()
+				go c.control().run()
 
 				return
 			} else {
@@ -306,103 +224,9 @@ func (c *TcpMuxTransport) poolMaintainer() {
 	}.maintain()
 }
 
-func (c *TcpMuxTransport) channelHandler() {
-	// See beatClock: learns how often the server really heartbeats.
-	beats := newBeatClock(time.Now())
-
-	msgChan := make(chan byte, 1000)
-
-	// The generation this handler belongs to, captured once.
-	//
-	// Everything below used to ask c.state.Cancel() != nil before deciding a
-	// failure was worth restarting for. That is always true: the constructor
-	// sets a cancel function before any of this can run, and Reset sets another
-	// on every restart. So the guard was open in every case it was written to
-	// close, and each goroutine dying during a teardown queued another restart
-	// of a tunnel that was already on its way down. The server transports were
-	// corrected to ask their generation's context instead; the client ones were
-	// not.
-	//
-	// Captured rather than read through c.state each time, for the same reason
-	// the server holds its context in the generation: Restart publishes a new
-	// one while these goroutines are still winding down, and a goroutine that
-	// went on to watch the new context would never see its own run end.
-	ctx := c.state.Ctx()
-
-	// Goroutine to handle the blocking ReceiveBinaryString
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// A control channel that has gone quiet has to be noticed
-				// here, because nothing else notices it in time: TCP takes
-				// eleven minutes to give up on the default keepalive_period,
-				// and the watchdog sees an ESTABLISHED socket for every
-				// second of it. See controlDeadline.
-				if err := c.state.Conn().SetReadDeadline(time.Now().Add(beats.deadline(c.config.KeepAlive))); err != nil {
-					if ctx.Err() == nil {
-						c.logger.Errorf("failed to set control channel deadline: %v", err)
-						go c.Restart()
-					}
-					return
-				}
-				msg, err := utils.ReceiveBinaryByte(c.state.Conn())
-				if err != nil {
-					if hint := beats.explain(err, c.config.KeepAlive); hint != "" && ctx.Err() == nil {
-						c.logger.Warn(hint)
-					}
-					if ctx.Err() == nil {
-						c.logger.Error("failed to read from control channel. ", err)
-						go c.Restart()
-					}
-					return
-				}
-				if msg == utils.SG_HB {
-					beats.beat(time.Now())
-				}
-				msgChan <- msg
-			}
-		}
-	}()
-
-	// Main loop to listen for context cancellation or received messages
-	for {
-		select {
-		case <-ctx.Done():
-			_ = utils.SendBinaryByteWithin(c.state.Conn(), utils.SG_Closed, controlWriteTimeout)
-			return
-
-		case msg := <-msgChan:
-			switch msg {
-			case utils.SG_Chan:
-				atomic.AddInt32(&c.loadConnections, 1)
-
-				select {
-				case <-c.controlFlow: // Do nothing
-
-				default:
-					c.logger.Debug("channel signal received, initiating tunnel dialer")
-					go c.tunnelDialer()
-				}
-
-			case utils.SG_HB:
-				c.logger.Debug("heartbeat signal received successfully")
-
-			case utils.SG_Closed:
-				c.logger.Warn("control channel has been closed by the server")
-				go c.Restart()
-				return
-
-			default:
-				c.logger.Errorf("unexpected response from channel: %v.", msg)
-				go c.Restart()
-				return
-			}
-
-		}
-	}
+// control is this generation's control loop. See controlLoop.
+func (c *TcpMuxTransport) control() controlLoop {
+	return c.lifecycle.control(controlwire.Net(c.state.Conn()), c.config.KeepAlive, c.tunnelDialer, c.Restart)
 }
 
 func (c *TcpMuxTransport) tunnelDialer() {
@@ -445,74 +269,7 @@ func (c *TcpMuxTransport) handleSession(tunnelConn net.Conn) {
 		return
 	}
 
-	for {
-		select {
-		case <-c.state.Ctx().Done():
-			return
-		default:
-			stream, err := session.AcceptStream()
-			if err != nil {
-				c.logger.Trace("session is closed: ", err)
-				session.Close()
-				return
-			}
-
-			remoteAddr, err := utils.ReceiveBinaryString(stream)
-			if err != nil {
-				c.logger.Errorf("unable to get port from stream connection %s: %v", tunnelConn.RemoteAddr().String(), err)
-				stream.Close()
-				continue
-			}
-
-			go c.localDialer(stream, remoteAddr)
-		}
-	}
-}
-
-// dialUDP forwards a target marked as UDP, reporting whether it took the flow.
-func (c *TcpMuxTransport) dialUDP(stream net.Conn, remoteAddr string) bool {
-	return dialForwardedUDP(stream, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer)
-}
-
-func (c *TcpMuxTransport) localDialer(stream *smux.Stream, remoteAddr string) {
-	if c.dialUDP(stream, remoteAddr) {
-		return
-	}
-	// Extract the port from the received address
-	port, resolvedAddr, err := network.ResolveRemoteAddr(remoteAddr)
-	if err != nil {
-		c.logger.Infof("failed to resolve remote port: %v", err)
-		stream.Close()
-		return
-	}
-	// Pick a healthy backend when several are configured (single = unchanged).
-	resolvedAddr = backends.pick(resolvedAddr)
-
-	var sendBuf, recvBuf int
-
-	if strings.Contains(resolvedAddr, "127.0.0.1") {
-		// Use 32 KB for localhost
-		sendBuf = 32 * 1024
-		recvBuf = 32 * 1024
-	} else {
-		// Use your custom buffer sizes
-		sendBuf = c.config.SO_SNDBUF
-		recvBuf = c.config.SO_RCVBUF
-	}
-
-	localConnection, err := network.TcpDialer(c.state.Ctx(), resolvedAddr, c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
-	if err != nil {
-		localDial.Report(c.logger, resolvedAddr, err)
-		stream.Close()
-		return
-	}
-
-	// The last hop worked, so any run of failures recorded for the panel
-	// ends here. See localdial.go.
-	ReportLocalDialOK()
-	c.logger.Debugf("connected to local address %s successfully", remoteAddr)
-
-	handlers.TCPConnectionHandler(c.state.Ctx(), false, metrics.CountedConn(stream), localConnection, c.logger, c.state.Usage(), int(port), c.config.Sniffer)
+	c.serveSession(session, tunnelConn.RemoteAddr(), c.backend())
 }
 
 // setMuxVersion adopts the version the server settled on. A legacy server sends
@@ -536,4 +293,17 @@ func (c *TcpMuxTransport) smuxCfg() *smux.Config {
 		return c.muxV2
 	}
 	return c.muxV1
+}
+
+// backend is how this transport's users reach the local service. See
+// backend.go.
+func (c *TcpMuxTransport) backend() backendOpts {
+	return backendOpts{
+		dialTimeout: c.config.DialTimeOut,
+		keepAlive:   c.config.KeepAlive,
+		rcvBuf:      c.config.SO_RCVBUF,
+		sndBuf:      c.config.SO_SNDBUF,
+		mss:         c.config.MSS,
+		sniffer:     c.config.Sniffer,
+	}
 }

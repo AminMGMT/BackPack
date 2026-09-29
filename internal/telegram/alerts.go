@@ -32,7 +32,8 @@ import (
 // Every alert has a matching recovery message, because "CPU is at 94%" is only
 // actionable if you also learn when it stopped.
 
-// Alert thresholds and behaviour. Zero for a threshold disables that check.
+// AlertConfig is the alert thresholds and behaviour. Zero for a threshold
+// disables that check.
 type AlertConfig struct {
 	Enabled bool `json:"enabled"`
 

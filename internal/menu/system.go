@@ -21,13 +21,13 @@ func autoRefreshMenu() {
 	tui.Clear()
 	tui.Title("Auto Refresh Schedule")
 	fmt.Println()
-	tui.Info(fmt.Sprintf("Current interval: %s", refreshLabel()))
+	tui.Info(fmt.Sprintf("Now: %s", refreshLabel()))
 	fmt.Println()
-	hours := tui.PromptInt("Auto refresh interval in hours (0 to disable)", schedule.AutoRefreshHours())
+	hours := tui.PromptInt("Restart Every (Hours, 0 = Off)", schedule.AutoRefreshHours())
 	if err := schedule.SetAutoRefresh(hours); err != nil {
-		tui.Error("Failed to update schedule: " + err.Error())
+		tui.Error("Failed: " + err.Error())
 	} else if hours <= 0 {
-		tui.Success("Auto refresh disabled.")
+		tui.Success("Auto Refresh Off.")
 	} else {
 		// What the crontab will actually do, which is not always what was
 		// typed: cron cannot say "every 36 hours", so anything above a day is
@@ -35,9 +35,9 @@ func autoRefreshMenu() {
 		// would be repeating it back rather than confirming it.
 		eff := schedule.EffectiveHours(hours)
 		if eff != hours {
-			tui.Info(fmt.Sprintf("cron schedules whole days above 24 hours, so %d becomes %d.", hours, eff))
+			tui.Info(fmt.Sprintf("Above 24 Hours It Is Whole Days: %d → %d.", hours, eff))
 		}
-		tui.Success(fmt.Sprintf("All tunnels will restart every %d hour(s).", eff))
+		tui.Success(fmt.Sprintf("All Tunnels Restart Every %d Hour(s).", eff))
 	}
 	tui.PressEnter()
 }
@@ -45,15 +45,15 @@ func autoRefreshMenu() {
 // optimizeMenu is main-menu item 6.
 func optimizeMenu() {
 	tui.Clear()
-	tui.Title("Optimize — kernel & network tuning (BBR, buffers, limits)")
+	tui.Title("Optimize — BBR, Buffers, Limits")
 	fmt.Println()
-	if !tui.Confirm("Apply system-wide network optimizations now", true) {
+	if !tui.Confirm("Apply Network Optimizations", true) {
 		return
 	}
 	fmt.Println()
 	optimize.Apply(func(line string) { tui.Info("• " + line) }, manage.ReservedPorts())
 	fmt.Println()
-	tui.Warn("A reboot is recommended for file-limit changes to fully apply.")
+	tui.Warn("Reboot To Fully Apply File Limits.")
 	tui.PressEnter()
 }
 
@@ -62,9 +62,8 @@ func uninstallMenu() {
 	tui.Clear()
 	tui.Title("Uninstall Backpack")
 	fmt.Println()
-	tui.Warn("This removes EVERYTHING: all tunnels, services, schedules, configs,")
-	tui.Warn("the backpack binary, AND the " + app.InstallDir + " folder (incl. backups).")
-	if !tui.Confirm("Are you absolutely sure", false) {
+	tui.Warn("Removes Everything: Tunnels, Configs, The Binary And " + app.InstallDir + " (Backups Too).")
+	if !tui.Confirm("Are You Sure", false) {
 		return
 	}
 
@@ -83,15 +82,15 @@ func uninstallMenu() {
 	_ = telegram.Disable()
 	os.RemoveAll(app.ConfigDir)
 	if err := os.Remove(app.BinPath); err != nil {
-		tui.Warn("Could not remove binary at " + app.BinPath + " — remove it manually.")
+		tui.Warn("Could Not Remove " + app.BinPath + " — Remove It By Hand.")
 	}
 	if repo != "" && repo != "/" && repo != os.Getenv("HOME") {
 		if err := os.RemoveAll(repo); err != nil {
-			tui.Warn("Could not remove folder " + repo + " — remove it manually.")
+			tui.Warn("Could Not Remove " + repo + " — Remove It By Hand.")
 		} else {
-			tui.Info("Removed folder: " + repo)
+			tui.Info("Removed: " + repo)
 		}
 	}
-	tui.Success("Backpack has been completely uninstalled. Goodbye!")
+	tui.Success("Uninstalled. Goodbye!")
 	os.Exit(0)
 }

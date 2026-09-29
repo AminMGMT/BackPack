@@ -169,10 +169,11 @@ func listenWebSocket(cfg *Config, log *logrus.Logger) (*wsListener, error) {
 		raw := conn.NetConn()
 		select {
 		case l.accepted <- raw:
-			// Handed to the session loop, which now owns it. The handler must
-			// not return until then, because returning is what would let the
-			// http server close the hijacked connection.
-			<-l.closed
+			// Handed to the session loop, which now owns it. The handler
+			// returns: the connection was hijacked by the upgrade, and the
+			// HTTP server does nothing more with a hijacked connection. It
+			// used to wait here for the listener to close, which kept one
+			// goroutine for every session the origin ever served.
 		case <-l.closed:
 			raw.Close()
 		}

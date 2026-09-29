@@ -3,13 +3,13 @@ package l3
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/tunnel/bridge"
 	"github.com/backpack/backpack/internal/tunnel/limits"
 	"github.com/backpack/backpack/internal/tunnel/portmap"
 	"github.com/sirupsen/logrus"
@@ -147,7 +147,6 @@ func (f *Forwarder) Stats() ForwardStats {
 	}
 }
 
-// Run serves every mapping until ctx ends.
 // Ready is closed once every listener has finished trying to bind. It says
 // the sockets are no longer on their way, not that they all came up: a bind
 // that failed is reported by Run and logged, and closing here regardless is
@@ -162,6 +161,7 @@ func (f *Forwarder) Stats() ForwardStats {
 // binding yet.
 func (f *Forwarder) Ready() <-chan struct{} { return f.ready }
 
+// Run serves every mapping until ctx ends.
 func (f *Forwarder) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	var firstErr error
@@ -276,7 +276,7 @@ func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Map
 	f.noteBackend(m, nil)
 	f.stats.accepted.Add(1)
 
-	pipe(ctx, local, backend)
+	bridge.Join(ctx, local, backend)
 }
 
 // noteBackend reports what the forwarded port is actually doing, which is the
@@ -340,32 +340,6 @@ func (f *Forwarder) noteBackend(m portmap.Mapping, err error) {
 	}
 	f.log.Warnf("l3: %s still not answering — %d connections to %s refused so far",
 		strings.Join(m.Targets, ", "), st.failures, m.Listen)
-}
-
-// pipe copies in both directions until either side is done, then closes both.
-//
-// Each direction closes the connection it was writing to when its source ends,
-// so a peer that has finished sending gets an orderly end rather than waiting
-// for the other direction's timeout.
-func pipe(ctx context.Context, a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	copyOne := func(dst, src net.Conn) {
-		defer func() { done <- struct{}{} }()
-		_, _ = io.Copy(dst, src)
-		if tcp, ok := dst.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
-		}
-	}
-	go copyOne(a, b)
-	go copyOne(b, a)
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
-	a.Close()
-	b.Close()
-	<-done // the second copy cannot outlive the closes above
 }
 
 // ---------------------------------------------------------------- udp

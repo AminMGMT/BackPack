@@ -2,6 +2,7 @@ package manage
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -26,7 +27,7 @@ func editDirectMenu(t Tunnel) {
 	for {
 		cfg, err := LoadTunnelConfig(t.Name)
 		if err != nil {
-			tui.Error("Cannot read the tunnel config: " + err.Error())
+			tui.Error("Cannot read the config: " + err.Error())
 			tui.PressEnter()
 			return
 		}
@@ -53,8 +54,8 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 	d := cfg.Direct
 	iran := d.ResolvedRole() == "edge"
 
-	tui.Info("Kind         : direct tunnel, forwarded ports")
-	tui.Info("This machine : " + directRole(d.ResolvedRole()))
+	tui.Info("Kind         : Direct, Forwarded Ports")
+	tui.Info("This Server  : " + directRole(d.ResolvedRole()))
 	tui.Info("Transport    : " + orDefault(d.Transport, "tcp"))
 	if iran {
 		tui.Info("Dials        : " + d.Addr)
@@ -63,10 +64,9 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		tui.Info("Tuning       : " + presetLabel(d.Preset) + fmt.Sprintf(", %d session(s)", max(d.Sessions, 1)))
 		tui.Info("Limits       : " + limitsLabel(d.MaxConnections, d.BandwidthMbps))
 	} else {
-		tui.Info("Listens on   : " + d.Addr)
+		tui.Info("Listens On   : " + d.Addr)
 		fmt.Println()
-		tui.Warn("The kharej side holds no port list — what is forwarded is set on")
-		tui.Warn("the Iran server, so there is nothing to change here.")
+		tui.Warn("Ports Are Set On The Iran Server.")
 	}
 	fmt.Println()
 
@@ -75,19 +75,20 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		return false
 	}
 
-	switch tui.ChooseOpt("Change what?", []tui.Option{
-		{Title: "Forwarded ports", Desc: "the ports exposed on this machine"},
-		{Title: "UDP forwarding", Desc: "carry UDP as well as TCP — currently " + onOff(d.AcceptUDP)},
-		{Title: "Limits", Desc: "connections and bandwidth — currently " + limitsLabel(d.MaxConnections, d.BandwidthMbps)},
-		{Title: "Performance tuning", Desc: "currently " + presetLabel(d.Preset)},
-		{Title: "TCP segment cap", Desc: "for a path that stalls on full-sized packets — currently " + directMSSLabel(d.MSS)},
-		{Title: "Show the token", Desc: "reveal it, to copy to the other machine"},
+	switch tui.ChooseOpt("Edit", []tui.Option{
+		{Title: "Forwarded Ports", Desc: ""},
+		{Title: "UDP Forwarding", Desc: "now " + onOff(d.AcceptUDP)},
+		{Title: "Limits", Desc: "now " + limitsLabel(d.MaxConnections, d.BandwidthMbps)},
+		{Title: "Preset", Desc: "now " + presetLabel(d.Preset)},
+		{Title: "TCP MSS Clamp", Desc: "now " + directMSSLabel(d.MSS)},
+		{Title: "Show Token", Desc: ""},
+		{Title: "Kharej Address", Desc: "now " + d.Addr},
 	}) {
 	case 0:
-		raw := tui.Prompt("Ports (comma separated, e.g. 443,8080=80): ")
+		raw := tui.Prompt("Forwarded Ports (e.g. 443,8080=80): ")
 		ports := parsePorts(raw)
 		if len(ports) == 0 {
-			tui.Error("No valid ports entered.")
+			tui.Error("No valid ports.")
 			tui.PressEnter()
 			return true
 		}
@@ -100,11 +101,11 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		showForwardTargets(ports, d.AcceptUDP)
 		saveDirect(t, d)
 	case 1:
-		d.AcceptUDP = tui.Confirm("Carry UDP as well as TCP", d.AcceptUDP)
+		d.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP", d.AcceptUDP)
 		saveDirect(t, d)
 	case 2:
-		d.MaxConnections = tui.PromptInt("Maximum simultaneous connections (0 = unlimited)", d.MaxConnections)
-		d.BandwidthMbps = tui.PromptInt("Maximum bandwidth in Mbit/s (0 = unlimited)", d.BandwidthMbps)
+		d.MaxConnections = tui.PromptInt("Max Connections (0 = No Limit)", d.MaxConnections)
+		d.BandwidthMbps = tui.PromptInt("Bandwidth Mbit/s (0 = No Limit)", d.BandwidthMbps)
 		saveDirect(t, d)
 	case 3:
 		p := chooseDirectPreset()
@@ -118,17 +119,10 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		saveDirect(t, d)
 	case 4:
 		fmt.Println()
-		tui.Info("Some paths carry less than a full-sized packet and drop the")
-		tui.Info("oversized ones without an ICMP reply. Nothing on either machine")
-		tui.Info("learns: the handshake and the keepalives are small enough to")
-		tui.Info("arrive, so the tunnel comes up and stays up while every real")
-		tui.Info("transfer stalls on the first full segment.")
-		fmt.Println()
-		tui.Warn("Set this on BOTH machines — each end clamps only what it sends.")
-		tui.Info("1360 is a safe first try. 0 hands the decision back to the kernel.")
-		mss := tui.PromptInt("TCP segment cap in bytes (0 = let the kernel decide)", d.MSS)
+		tui.Warn("Same Value On Both Servers; 1360 Is A Safe First Try.")
+		mss := tui.PromptInt("TCP MSS Clamp (0 = Auto)", d.MSS)
 		if mss != 0 && (mss < minMSS || mss > maxMSS) {
-			tui.Error(fmt.Sprintf("A segment cap must be between %d and %d bytes, or 0.", minMSS, maxMSS))
+			tui.Error(fmt.Sprintf("Between %d and %d, or 0.", minMSS, maxMSS))
 			tui.PressEnter()
 			return true
 		}
@@ -136,9 +130,16 @@ func editDirectPorts(t Tunnel, cfg config.Config) bool {
 		saveDirect(t, d)
 	case 5:
 		fmt.Println()
-		tui.Info("Token (must match the other machine exactly):")
+		tui.Info("Token (Copy Exactly):")
 		fmt.Println("  " + tui.Color(tui.Bold+tui.White, d.Token))
 		tui.PressEnter()
+	case 6:
+		addr, ok := askPeerAddress("Kharej", d.Addr)
+		if !ok {
+			return true
+		}
+		d.Addr = addr
+		saveDirect(t, d)
 	default:
 		return false
 	}
@@ -159,8 +160,8 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 	l := cfg.L3
 	iran := !strings.EqualFold(strings.TrimSpace(l.Mode), "listen")
 
-	tui.Info("Kind         : full IP tunnel (layer 3)")
-	tui.Info("This machine : " + l3Role(l.Mode))
+	tui.Info("Kind         : Direct (Layer 3)")
+	tui.Info("This Server  : " + l3Role(l.Mode))
 	tui.Info("Carrier      : " + orDefault(l.Carrier, "udp"))
 	tui.Info("Wrapping     : " + l3EncapLabel(l))
 	tui.Info("Address      : " + l.Addr)
@@ -174,9 +175,9 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 	fmt.Println()
 
 	options := []tui.Option{
-		{Title: "MTU", Desc: "lower it if large transfers stall — currently " + fmt.Sprint(l.MTU)},
-		{Title: "TCP segment cap", Desc: "currently " + mssClampLabel(l.MSSClamp, l.MTU)},
-		{Title: "Show the token", Desc: "reveal it, to copy to the other machine"},
+		{Title: "MTU", Desc: "now " + fmt.Sprint(l.MTU)},
+		{Title: "TCP MSS Clamp", Desc: "now " + mssClampLabel(l.MSSClamp, l.MTU)},
+		{Title: "Show Token", Desc: ""},
 	}
 	// The carrier's own screen, for the one carrier that has settings worth
 	// changing after the fact. It goes last on both sides, which is what keeps
@@ -185,24 +186,58 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 	if strings.EqualFold(strings.TrimSpace(l.Carrier), "spoof") {
 		options = append(options, tui.Option{
 			Title: "IP Spoofing",
-			Desc:  "the forged source, the packet profile, Stealth — currently " + spoofCarrierSummary(l.SpoofConfig),
+			Desc:  "now " + spoofCarrierSummary(l.SpoofConfig),
 		})
 	}
 	if iran {
 		options = append([]tui.Option{
-			{Title: "Forwarded ports", Desc: "optional ports carried over the tunnel"},
-			{Title: "UDP forwarding", Desc: "carry UDP as well as TCP — currently " + onOff(l.AcceptUDP)},
+			{Title: "Forwarded Ports", Desc: ""},
+			{Title: "UDP Forwarding", Desc: "now " + onOff(l.AcceptUDP)},
 		}, options...)
 	}
+	// Where the other machine is, when this side has to be told: the Iran side
+	// dials the kharej, and a spoof kharej cannot learn the Iran server's real
+	// address from packets whose source is forged. Last in the list, after
+	// l3EditAction's range, and handled before it.
+	peer := -1
+	switch {
+	case iran:
+		peer = len(options)
+		options = append(options, tui.Option{Title: "Kharej Address", Desc: "now " + l.Addr})
+	case strings.EqualFold(strings.TrimSpace(l.Carrier), "spoof"):
+		peer = len(options)
+		options = append(options, tui.Option{Title: "Iran Real IP",
+			Desc: "now " + orDefault(l.SpoofPeerIP, "not set")})
+	}
 
-	choice, ok := l3EditAction(tui.ChooseOpt("Change what?", options), iran)
+	chosen := tui.ChooseOpt("Edit", options)
+	if chosen >= 0 && chosen == peer {
+		if iran {
+			addr, ok := askPeerAddress("Kharej", l.Addr)
+			if !ok {
+				return true
+			}
+			movePeer(&l, addr)
+		} else {
+			ip := strings.TrimSpace(tui.PromptDefault("Iran Real IPv4", l.SpoofPeerIP))
+			if net.ParseIP(ip) == nil || net.ParseIP(ip).To4() == nil {
+				tui.Error("Not an IPv4 address.")
+				tui.PressEnter()
+				return true
+			}
+			l.SpoofPeerIP = ip
+		}
+		saveL3(t, l)
+		return true
+	}
+	choice, ok := l3EditAction(chosen, iran)
 	if !ok {
 		return false
 	}
 
 	switch choice {
 	case 0:
-		raw := tui.Prompt("Ports (comma separated, blank to remove them all): ")
+		raw := tui.Prompt("Forwarded Ports (Blank = None): ")
 		if strings.TrimSpace(raw) == "" {
 			l.Ports = nil
 		} else {
@@ -216,24 +251,19 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		}
 		saveL3(t, l)
 	case 1:
-		l.AcceptUDP = tui.Confirm("Carry UDP as well as TCP", l.AcceptUDP)
+		l.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP", l.AcceptUDP)
 		saveL3(t, l)
 	case 2:
 		fmt.Println()
-		tui.Warn("A tunnel whose packets are slightly too big does not fail loudly:")
-		tui.Warn("small things work and downloads stall. Lower it if that happens.")
-		l.MTU = tui.PromptInt("Tunnel MTU", l.MTU)
+		l.MTU = tui.PromptInt("Tunnel MTU (Lower It If Downloads Stall)", l.MTU)
 		saveL3(t, l)
 	case 3:
 		fmt.Println()
-		tui.Info("This caps the segment size of TCP crossing the tunnel, so both")
-		tui.Info("ends agree on something that fits before they send anything.")
-		tui.Info("0 derives it from the MTU, which is almost always right.")
-		l.MSSClamp = tui.PromptInt("TCP segment cap (0 = from the MTU, -1 = off)", l.MSSClamp)
+		l.MSSClamp = tui.PromptInt("TCP MSS Clamp (0 = From MTU, -1 = Off)", l.MSSClamp)
 		saveL3(t, l)
 	case 4:
 		fmt.Println()
-		tui.Info("Token (must match the other machine exactly):")
+		tui.Info("Token (Copy Exactly):")
 		fmt.Println("  " + tui.Color(tui.Bold+tui.White, l.Token))
 		tui.PressEnter()
 	case 5:
@@ -312,12 +342,12 @@ func saveDirect(t Tunnel, d config.DirectConfig) {
 		DialTimeout: d.DialTimeout, RetryInterval: d.RetryInterval,
 		MSS: d.MSS,
 	}
-	applyEdit(t, spec.render())
+	applyEdit(t, spec.Render())
 }
 
 // saveL3 writes a changed [l3] config back and restarts the tunnel.
 func saveL3(t Tunnel, l config.L3Config) {
-	applyEdit(t, l3SpecOf(t, l).render())
+	applyEdit(t, l3SpecOf(t, l).Render())
 }
 
 // l3SpecOf rebuilds the wizard's view of an existing layer-3 config, so an
@@ -365,7 +395,7 @@ func validateRendered(body string) error {
 func applyEdit(t Tunnel, body string) {
 	var check config.Config
 	if _, err := toml.Decode(body, &check); err != nil {
-		tui.Error("The edit produced a config that does not parse: " + err.Error())
+		tui.Error("The edit does not parse: " + err.Error())
 		tui.PressEnter()
 		return
 	}
@@ -376,11 +406,11 @@ func applyEdit(t Tunnel, body string) {
 	}
 	if err := RestartService(t.Service); err != nil {
 		tui.Error("Saved, but the restart failed: " + err.Error())
-		tui.Warn("Check the log with:  journalctl -u " + t.Service + " -n 50")
+		tui.Warn("Log: journalctl -u " + t.Service + " -n 50")
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Saved and restarted.")
+	tui.Success("Saved — Restarted.")
 	tui.PressEnter()
 }
 
@@ -426,14 +456,14 @@ func editL3Spoof(t Tunnel, l config.L3Config) bool {
 		there = "Iran"
 	}
 
-	stealth := "Turn Stealth on"
+	stealth := "Stealth: Turn On"
 	if spoofStealthOn(l.SpoofConfig) {
-		stealth = "Turn Stealth off"
+		stealth = "Stealth: Turn Off"
 	}
 
-	switch tui.ChooseOpt("IP Spoofing — change what?", []tui.Option{
-		{Title: stealth, Desc: "padding and header cosmetics — the " + there + " end must be set the same way"},
-		{Title: "Run the setup again", Desc: "the profile, the forged source, the interface — every question, from the top"},
+	switch tui.ChooseOpt("IP Spoofing", []tui.Option{
+		{Title: stealth, Desc: "the " + there + " end must match"},
+		{Title: "All Questions Again", Desc: "profile, forged source, interface"},
 	}) {
 	case 0:
 		if spoofStealthOn(l.SpoofConfig) {
@@ -442,8 +472,7 @@ func editL3Spoof(t Tunnel, l config.L3Config) bool {
 			applySpoofStealth(&l.SpoofConfig)
 		}
 		fmt.Println()
-		tui.Warn("Set the " + there + " end the same way, or the tunnel will come up and")
-		tui.Warn("carry nothing: padding and the TLS header change what goes on the wire.")
+		tui.Warn("Set The " + titleWord(there) + " End The Same Way.")
 		tui.PressEnter()
 		saveL3(t, l)
 		return true
@@ -454,4 +483,60 @@ func editL3Spoof(t Tunnel, l config.L3Config) bool {
 		return true
 	}
 	return false
+}
+
+// askPeerAddress asks for the other machine's new address. A host alone keeps
+// the port the tunnel already uses; host:port changes both. Reported on v1.8.4:
+// when the kharej's IP changed, the Edit screen had nowhere to say so, and the
+// tunnel had to be deleted and made again.
+func askPeerAddress(side, current string) (string, bool) {
+	fmt.Println()
+	tui.Info("IP Or Domain Keeps The Port; IP:Port Changes Both.")
+	raw := tui.PromptDefault("New "+side+" IP Or Domain", addrHost(current, ""))
+	addr, err := withPeerHost(current, raw)
+	if err != nil {
+		tui.Error(err.Error())
+		tui.PressEnter()
+		return "", false
+	}
+	return addr, true
+}
+
+// withPeerHost is the address current becomes when the operator types in.
+func withPeerHost(current, in string) (string, error) {
+	in = strings.TrimSpace(in)
+	if in == "" {
+		return "", fmt.Errorf("an address is required")
+	}
+	host, port := in, addrPort(current)
+	if h, p, err := net.SplitHostPort(in); err == nil {
+		if !validPort(p) {
+			return "", fmt.Errorf("%q is not a port", p)
+		}
+		host, port = h, p
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || strings.ContainsAny(host, " /") {
+		return "", fmt.Errorf("%q is not an IP or a domain", in)
+	}
+	if port == "" {
+		return "", fmt.Errorf("give the port too, as IP:port — the tunnel has none recorded")
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+// movePeer points an Iran-side l3 tunnel at a new kharej address. A spoof
+// carrier also records the kharej's real address, and when that was the old
+// host it moves with it — otherwise the forged packets would go on being sent
+// to the address the kharej just left.
+func movePeer(l *config.L3Config, addr string) {
+	old := addrHost(l.Addr, "")
+	l.Addr = addr
+	if old != "" && l.SpoofPeerIP == old {
+		// A domain is left to the default, which is this very address.
+		l.SpoofPeerIP = ""
+		if ip := net.ParseIP(addrHost(addr, "")); ip != nil {
+			l.SpoofPeerIP = ip.String()
+		}
+	}
 }

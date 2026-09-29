@@ -315,7 +315,7 @@ func directBody(n NewDirectTunnel) (name, body string, err error) {
 
 // directBodyFromSpec is directBody for a spec already built.
 func directBodyFromSpec(spec l3Spec) (name, body string, err error) {
-	body = spec.render()
+	body = spec.Render()
 	// Parsed before it is written. A config that does not decode would leave a
 	// tunnel that cannot start and an operator with no idea why, and the cost
 	// of checking is one parse of a file we just built.
@@ -637,7 +637,7 @@ func EditDirectSettings(name string, e DirectEdit) error {
 		findL3Preset(strings.ToLower(strings.TrimSpace(*e.Preset))).apply(&spec)
 	}
 
-	body := spec.render()
+	body := spec.Render()
 	var check config.Config
 	if _, err := toml.Decode(body, &check); err != nil {
 		return fmt.Errorf("the edit produced a config that does not parse: %w", err)

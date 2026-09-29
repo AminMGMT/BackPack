@@ -223,11 +223,19 @@ constrain, because that is where somebody about to undo them will be looking:
   there is nothing for the compiler to win.
 - **The layer-3 handshake gains a freshness timestamp only at wire version 2**,
   because an old responder compares the initiator payload whole and would reject
-  a new dialler. The reasoning is in `internal/tunnel/l3/tunnel.go`, at
+  a new dialler. The reasoning is in `internal/tunnel/l3/tunnel_receive.go`, at
   `handleInit`.
 - **QUIC starts from a 1232-byte packet rather than quic-go's 1280**, because
   the default cannot cross a 1280-byte path at all. The measurement is at
   `network.QUICInitialPacketSize`.
+
+The decisions about the code's own structure are architecture decision
+records, in [adr/](adr/): how a reverse transport's generation is shared code
+([0001](adr/0001-reverse-transport-generations.md)), why `backpack check`
+asks the engine ([0002](adr/0002-one-answer-to-would-this-start.md)), how
+`internal/manage` is layered behind one name ([0003](adr/0003-manage-is-layered-behind-one-name.md)),
+what an unproven peer may hold ([0004](adr/0004-what-an-unproven-peer-may-hold.md)),
+and why a generation outlives its clients ([0005](adr/0005-a-generation-outlives-its-clients.md)).
 
 ---
 
@@ -263,4 +271,4 @@ roadmap است: چیزهایی که ساخته می‌شوند دیگر جالب
 
 ---
 
-*Last verified against Backpack v1.8.4.*
+*Last verified against Backpack v1.8.5.*

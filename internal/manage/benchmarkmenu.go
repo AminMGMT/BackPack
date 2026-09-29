@@ -13,15 +13,12 @@ import (
 func LinkTest() {
 	tui.Clear()
 	tui.Title("Link Test")
-	tui.Warn("Measures latency, jitter and packet loss to the other server, then")
-	tui.Warn("recommends the transport that suits what it finds.")
+	tui.Warn("Latency, Jitter And Loss To The Other Server, And A Transport For It.")
 	fmt.Println()
 
 	clients := clientTunnels()
 	if len(clients) == 0 {
-		tui.Info("No client tunnels found on this server.")
-		tui.Warn("Run this on the abroad (kharej) side — it is the side that dials")
-		tui.Warn("out, so it is the side that can measure the link.")
+		tui.Info("No Kharej-Side Tunnels Here — Run This On The Kharej.")
 		tui.PressEnter()
 		return
 	}
@@ -34,7 +31,7 @@ func LinkTest() {
 		for i, t := range clients {
 			opts[i] = tui.Option{Title: t.Name, Desc: t.Addr + " — " + transportLabel(t.Transport)}
 		}
-		idx := tui.ChooseOpt("Which tunnel's link should be tested?", opts)
+		idx := tui.ChooseOpt("Tunnel To Test", opts)
 		if idx < 0 {
 			return
 		}
@@ -52,7 +49,7 @@ func LinkTest() {
 	}
 
 	fmt.Println()
-	tui.Info("Testing the link to " + target.Addr + " — this takes about 10 seconds...")
+	tui.Info("Testing " + target.Addr + " (About 10s)...")
 	fmt.Println()
 
 	q := ProbePath(target.Addr)
@@ -65,19 +62,17 @@ func LinkTest() {
 		return
 	}
 
-	tui.Info(fmt.Sprintf("  Target        : %s", q.Target))
-	tui.Info(fmt.Sprintf("  Probes        : %d sent, %d answered", q.Sent, q.Received))
+	tui.Info(fmt.Sprintf("  Target  : %s", q.Target))
+	tui.Info(fmt.Sprintf("  Probes  : %d Sent, %d Answered", q.Sent, q.Received))
 	if q.Received == 0 {
-		tui.Error("  Result        : nothing answered at all")
+		tui.Error("  Result  : Nothing Answered")
 		fmt.Println()
-		tui.Warn("The server is either down, listening on a different port, or the")
-		tui.Warn("port is blocked by a firewall. Check those before reading anything")
-		tui.Warn("into the numbers.")
+		tui.Warn("Server Down, Wrong Port, Or Firewall.")
 		fmt.Println()
 	} else {
-		tui.Info(fmt.Sprintf("  Latency       : %s average  (best %s, worst %s)",
+		tui.Info(fmt.Sprintf("  Latency : %s Avg (Best %s, Worst %s)",
 			shortDur(q.Avg), shortDur(q.Min), shortDur(q.Max)))
-		tui.Info(fmt.Sprintf("  Jitter        : ±%s", shortDur(q.Jitter)))
+		tui.Info(fmt.Sprintf("  Jitter  : ±%s", shortDur(q.Jitter)))
 		lossLine := fmt.Sprintf("  Packet loss   : %.0f%%", q.LossPercent())
 		if q.LossPercent() >= 2 {
 			tui.Error(lossLine)
@@ -89,8 +84,7 @@ func LinkTest() {
 
 	// Be explicit about what this test does not tell you, so nobody reads a
 	// speed conclusion into a latency measurement.
-	tui.Warn("This measures the quality of the link, not its speed. For real")
-	tui.Warn("throughput numbers run iperf3 between the two servers.")
+	tui.Warn("Quality, Not Speed — For Speed Use Connection Test.")
 	fmt.Println()
 
 	// Liveness timers first: they apply whatever transport is in use, so this
@@ -108,7 +102,7 @@ func LinkTest() {
 	}
 	if rec.FEC.Set() {
 		tui.Success(fmt.Sprintf("  ▸ FEC %s — %s", rec.FEC.Ratio(), rec.FEC.Why))
-		tui.Warn("    Set the SAME ratio on both ends, or the link will not come up.")
+		tui.Warn("    Same Ratio On Both Ends.")
 	}
 	for _, c := range rec.Caveats {
 		tui.Warn("  ! " + c)
@@ -124,11 +118,10 @@ func LinkTest() {
 		return
 	}
 
-	tui.Warn("Switching transport only works if the OTHER side switches too —")
-	tui.Warn("until it does, the tunnel cannot reconnect.")
+	tui.Warn("The Other Side Must Switch Too.")
 	fmt.Println()
-	if !tui.Confirm(fmt.Sprintf("Switch %q to %s now", target.Name, rec.Label), false) {
-		tui.Info("Left unchanged.")
+	if !tui.Confirm(fmt.Sprintf("Switch To %s", rec.Label), false) {
+		tui.Info("Unchanged.")
 		tui.PressEnter()
 		return
 	}
@@ -138,12 +131,12 @@ func LinkTest() {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Switched to " + rec.Label + ".")
+	tui.Success("Switched To " + rec.Label + ".")
 	// A fresh KCP tunnel starts on its preset's FEC; nudge it to the ratio the
 	// measurement actually calls for so the switch lands fully tuned.
 	if rec.FEC.Set() {
 		if err := SetFEC(target.Name, rec.FEC); err == nil {
-			tui.Success("Applied FEC " + rec.FEC.Ratio() + ".")
+			tui.Success("FEC " + rec.FEC.Ratio() + " Applied.")
 		}
 	}
 	tui.Warn("Now switch the server side to " + rec.Label + " as well" +
@@ -168,14 +161,14 @@ func offerFEC(t Tunnel, plan FECPlan) {
 		return // already tuned for this loss
 	}
 
-	tui.Title("Error correction")
+	tui.Title("Error Correction")
 	fmt.Println()
 	tui.Info(fmt.Sprintf("  Now       : FEC %d:%d", spec.KCPDataShards, spec.KCPParityShards))
 	tui.Info(fmt.Sprintf("  Suggested : FEC %s", plan.Ratio()))
 	tui.Warn("  " + plan.Why)
 	fmt.Println()
 
-	if !tui.Confirm("Apply FEC "+plan.Ratio()+" to "+t.Name, false) {
+	if !tui.Confirm("Apply FEC "+plan.Ratio(), false) {
 		return
 	}
 	if err := SetFEC(t.Name, plan); err != nil {
@@ -183,8 +176,8 @@ func offerFEC(t Tunnel, plan FECPlan) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("FEC applied and the tunnel restarted.")
-	tui.Warn("Set the same ratio " + plan.Ratio() + " on the OTHER side, or the link will not come up.")
+	tui.Success("FEC Applied — Restarted.")
+	tui.Warn("Set " + plan.Ratio() + " On The Other Side Too.")
 	fmt.Println()
 }
 
@@ -196,38 +189,29 @@ func reportDatagramLink(t Tunnel) {
 	tui.Info("  Target    : " + t.Addr)
 	tui.Info("  Transport : " + transportLabel(t.Transport))
 	fmt.Println()
-	tui.Warn("This tunnel runs over UDP, and a UDP port cannot be tested by opening")
-	tui.Warn("a connection to it the way a TCP port can — a working port and a")
-	tui.Warn("blocked one look exactly the same from here. So there is no honest")
-	tui.Warn("latency or loss number to give you for this tunnel.")
+	tui.Warn("A UDP Port Cannot Be Probed From Here — Use Connection Test.")
 	fmt.Println()
 
 	h := TunnelHealth(t)
-	tui.Title("What is actually known")
+	tui.Title("Status")
 	fmt.Println()
 	switch h.State {
 	case "online":
-		tui.Success("  The tunnel is up and carrying traffic.")
+		tui.Success("  Up And Carrying Traffic.")
 		tui.Info("  " + h.Detail)
 		fmt.Println()
-		tui.Info("Since it works, there is nothing here to fix. If you want real")
-		tui.Info("numbers for this link, run iperf3 between the two servers.")
+
 	case "offline":
-		tui.Error("  The service is running but the tunnel is not connected.")
+		tui.Error("  Running But Not Connected.")
 		tui.Info("  " + h.Detail)
 		fmt.Println()
-		tui.Warn("Check, in this order:")
-		tui.Warn("  1. the other side is running and uses the SAME transport and preset")
-		tui.Warn("  2. UDP " + addrPort(t.Addr) + " is open on the server firewall")
-		tui.Warn("     (ufw allow " + addrPort(t.Addr) + "/udp — note the /udp, TCP is not enough)")
-		tui.Warn("  3. the token matches on both sides")
+		tui.Warn("Check: Same Transport/Preset/Token, And ufw allow " + addrPort(t.Addr) + "/udp On The Iran Side.")
 	default:
-		tui.Error("  The tunnel service is not running.")
+		tui.Error("  Service Not Running.")
 		tui.Info("  " + h.Detail)
 	}
 	fmt.Println()
-	tui.Warn("To compare transports, run this test on a TCP-based tunnel — or")
-	tui.Warn("temporarily switch this one to TCP Mux and test that.")
+
 	tui.PressEnter()
 }
 
@@ -243,20 +227,20 @@ func offerKeepAlive(t Tunnel, q PathQuality) {
 		return // already tuned for this link
 	}
 
-	tui.Title("Liveness timers")
+	tui.Title("Liveness Timers")
 	fmt.Println()
-	tui.Info(fmt.Sprintf("  Now       : keepalive %ds, heartbeat %ds", spec.KeepAlive, spec.Heartbeat))
-	tui.Info(fmt.Sprintf("  Suggested : keepalive %ds, heartbeat %ds", plan.KeepAlive, plan.Heartbeat))
+	tui.Info(fmt.Sprintf("  Now       : Keepalive %ds, Heartbeat %ds", spec.KeepAlive, spec.Heartbeat))
+	tui.Info(fmt.Sprintf("  Suggested : Keepalive %ds, Heartbeat %ds", plan.KeepAlive, plan.Heartbeat))
 	tui.Warn("  " + plan.Why)
 	fmt.Println()
 	if plan.Heartbeat < spec.Heartbeat {
-		tui.Info("Tighter timers notice a dropped tunnel sooner on a link this steady.")
+		tui.Info("Tighter: Notices A Drop Sooner.")
 	} else {
-		tui.Info("Looser timers stop a slow-but-alive peer from being declared dead.")
+		tui.Info("Looser: A Slow Peer Is Not Declared Dead.")
 	}
 	fmt.Println()
 
-	if !tui.Confirm("Apply these timers to "+t.Name, false) {
+	if !tui.Confirm("Apply These Timers", false) {
 		return
 	}
 	if err := SetKeepAlive(t.Name, plan); err != nil {
@@ -264,8 +248,8 @@ func offerKeepAlive(t Tunnel, q PathQuality) {
 		tui.PressEnter()
 		return
 	}
-	tui.Success("Timers applied and the tunnel restarted.")
-	tui.Warn("Set the same values on the OTHER side so both agree.")
+	tui.Success("Timers Applied — Restarted.")
+	tui.Warn("Set The Same On The Other Side.")
 	fmt.Println()
 }
 

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -31,27 +31,23 @@ type wsGen struct {
 	localChannel   chan LocalTCPConn
 	reqNewConnChan chan struct{}
 	usageMonitor   *web.Usage
+	// seat holds the client this generation serves, and serving starts what
+	// outlives any one client — once, whichever claim comes first. See
+	// clientSeat.
+	seat    clientSeat
+	serving sync.Once
 }
 
 type WsTransport struct {
-	// The listeners this transport is holding right now. Start waits on it, so
-	// "Start returned" means "the ports are free". See listeners.go.
-	listeners listenerSet
+	// The generations of this transport and what outlives them: see
+	// lifecycle.go.
+	lifecycle
 
-	// The status shown in the panel. Behind a lock because the run being
-	// replaced and the run replacing it both write it. See tunnelStatus.
-	status    tunnelStatus
-	config    *WsConfig
-	parentctx context.Context
-	// The current run. Replaced by Restart while the previous run's
-	// goroutines are still reading it, so it lives behind a lock.
-	run    runState
-	logger *logrus.Logger
+	config *WsConfig
 	// The run's channels and its usage monitor are deliberately not fields:
 	// they belong to one generation, and a field outlives the generation that
 	// made it. See Start.
 	controlChannel wsControl
-	restartMutex   sync.Mutex
 	limits         *limiter
 }
 
@@ -86,20 +82,20 @@ type WsConfig struct {
 }
 
 func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
-	// Create a derived context from the parent context
-	ctx, cancel := context.WithCancel(parentCtx)
-
 	// Initialize the TcpTransport struct
 	server := &WsTransport{
-		config:    config,
-		parentctx: parentCtx,
-		logger:    logger,
-		limits:    newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
+		config: config,
+		lifecycle: lifecycle{
+			parentctx: parentCtx,
+			logger:    logger,
+			usage:     usageSpec{webPort: config.WebPort, snifferLog: config.SnifferLog, sniffer: config.Sniffer},
+		},
+		limits: newLimiter(Limits{MaxConnections: config.MaxConnections, BandwidthMbps: config.BandwidthMbps}),
 	}
 
 	// The first run is installed the same way every later one is, so there is
 	// only one path that ever writes it.
-	server.run.set(ctx, cancel)
+	server.firstGeneration()
 
 	return server
 }
@@ -118,24 +114,13 @@ func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 // these were still reachable. Building the generation here leaves nothing
 // behind to pin.
 func (s *WsTransport) Start() {
-	ctx := s.run.context()
-	s.start(&wsGen{
-		ctx:            ctx,
-		tunnelChannel:  make(chan TunnelChannel, s.config.ChannelSize),
-		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
-		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
-		usageMonitor: web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx,
-			s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
-	})
+	s.start(s.newGen(s.run.context()))
 }
 
 // start runs one generation of the transport. Everything it needs is in g:
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *WsTransport) start(g *wsGen) {
-	// Whatever is still queued when this generation ends gives its slot back.
-	go drainOnEnd(g.ctx, g.localChannel, s.limits)
-
 	// for  webui
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
@@ -147,181 +132,69 @@ func (s *WsTransport) start(g *wsGen) {
 
 }
 func (s *WsTransport) Restart() {
-	if !s.restartMutex.TryLock() {
-		s.logger.Warn("server restart already in progress, skipping restart attempt")
-		return
-	}
-	defer s.restartMutex.Unlock()
+	s.restart(s.controlChannel.Close, func(ctx context.Context) {
+		s.controlChannel.Clear()
+		go s.start(s.newGen(ctx))
+	})
+}
 
-	s.logger.Info("restarting server...")
-
-	level := s.logger.GetLevel()
-	s.logger.SetLevel(logrus.FatalLevel)
-
-	s.run.stop()
-
-	// Close control channel connection
-	if s.controlChannel.IsSet() {
-		s.controlChannel.Close()
-	}
-
-	// Wait for the listeners rather than guessing at how long they take.
-	//
-	// This was a flat two-second sleep, and the comment next to it said what it
-	// was for: the run being replaced still holds the ports, and binding them
-	// again before it lets go fails. A sleep is a guess — usually long enough,
-	// never a guarantee, and silently wrong on a loaded machine, which is
-	// exactly when a restart is most likely to be happening.
-	//
-	// listenerSet answers the question instead of approximating it. It is also
-	// faster in the ordinary case: a listener closes in microseconds, so this
-	// returns at once rather than always costing two seconds.
-	s.listeners.wait(s.parentctx)
-
-	// The whole tunnel may have been shut down while this restart was waiting —
-	// on a reload, or on the process going down. Rebuilding the run from a
-	// parent context that is already finished would bind the listeners again
-	// only to close them, and on a reload that means fighting the run that is
-	// replacing this one for its own ports. Nothing here is worth starting.
-	if s.parentctx.Err() != nil {
-		// The level was turned down to hide the timeouts a teardown produces;
-		// leaving it there would silence the shutdown itself.
-		s.logger.SetLevel(level)
-		// Abandoning is not a reason to keep claiming a peer.
-		//
-		// This branch used to return before the two lines below, which sit on
-		// the path that carries on — so a restart that gave up left the status
-		// reading "Connected" and left the peer published in the metrics
-		// snapshot. The process usually exits straight afterwards and the
-		// snapshot goes stale, which is why this was invisible; with a
-		// transport fallback chain it is not, because the chain cancels a
-		// candidate's context and the *process keeps running*. The snapshot
-		// then carries a fresh timestamp and a connected peer for a tunnel that
-		// is mid-rotation with nothing connected at all, and the watchdog
-		// reads that and calls it healthy.
-		//
-		// The run is over. Whatever ended it, there is no peer.
-		s.status.set("")
-		metrics.ClearPeer()
-		s.logger.Debug("restart abandoned: the tunnel is shutting down")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(s.parentctx)
-	s.run.set(ctx, cancel)
-
-	// The next run's state, built here and handed straight to start(). It used
-	// to be written onto the transport for start() to read back, which is a
-	// value published by one goroutine and read by another with nothing
-	// ordering them — the same shape as the ctx/cancel race the detector caught
-	// on kcp.go, and present on every one of these fields. Passing it removes
-	// the shared field rather than locking it.
-	g := &wsGen{
+// newGen builds one generation's channels and usage monitor.
+func (s *WsTransport) newGen(ctx context.Context) *wsGen {
+	return &wsGen{
 		ctx:            ctx,
 		tunnelChannel:  make(chan TunnelChannel, s.config.ChannelSize),
 		localChannel:   make(chan LocalTCPConn, s.config.ChannelSize),
 		reqNewConnChan: make(chan struct{}, s.config.ChannelSize),
-		usageMonitor:   web.NewDataStore(fmt.Sprintf(":%v", s.config.WebPort), ctx, s.config.SnifferLog, s.config.Sniffer, s.status.get, s.logger),
+		usageMonitor:   s.usageMonitor(ctx),
 	}
-
-	// Re-initialize variables
-	s.controlChannel.Clear()
-	metrics.ClearPeer()
-	s.status.set("")
-
-	// set the log level again
-	s.logger.SetLevel(level)
-
-	go s.start(g)
 }
 
-func (s *WsTransport) channelHandler(g *wsGen) {
-	ticker := newLivenessTicker(s.config.Heartbeat)
-	defer ticker.Stop()
+// control is this generation's control loop, bound to the control channel
+// the generation was started with. See controlLoop.
+func (s *WsTransport) control(g *wsGen, ctx context.Context, lost func()) controlLoop {
+	return controlLoop{
+		ctx:      ctx,
+		link:     controlwire.WS(s.controlChannel.Get()),
+		beat:     s.config.Heartbeat,
+		requests: g.reqNewConnChan,
+		log:      s.logger,
+		restart:  lost,
+	}
+}
 
-	// Channel to receive the message or error
-	messageChan := make(chan byte, 10)
+// seatClient makes conn this generation's client, in place of whoever was.
+func (s *WsTransport) seatClient(g *wsGen, conn *websocket.Conn) {
+	g.seat.sit(g.ctx,
+		func() { s.vacate(g) },
+		func() {
+			s.controlChannel.Set(conn)
+			// See metrics.Snapshot.Connected: the watchdog asks the engine, not
+			// the socket table.
+			s.seated(conn.RemoteAddr().String())
+			s.status.set(fmt.Sprintf("Connected (%s)", s.config.Mode))
+			s.logger.Info("control channel established successfully")
+		},
+		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+}
 
-	// Separate goroutine to continuously listen for messages
-	go func() {
-		for {
-			select {
-			case <-g.ctx.Done():
-				return
-
-			default:
-				messageType, msg, err := s.controlChannel.Get().ReadMessage()
-				// Exit if there's an error
-				if err != nil {
-					// A generation that has already been cancelled must not ask for a
-					// restart. It used to test s.cancel != nil, which the constructor
-					// makes true before this code can run — so the guard was always
-					// open, and every goroutine dying during a teardown queued another
-					// restart of a tunnel that was on its way down. Asking the
-					// generation's own context is both the real question and a read
-					// nobody else writes: Restart replaces s.cancel while these
-					// goroutines are still running, which is the data race the CI
-					// detector caught on this line.
-					if g.ctx.Err() == nil {
-						s.logger.Error("failed to read from channel connection. ", err)
-						go s.Restart()
-					}
-					return
-				}
-				signal, ok := utils.WebSocketSignal(messageType, msg)
-				if !ok {
-					s.logger.Warnf("ignoring a malformed control frame (type %d, %d bytes)", messageType, len(msg))
-					continue
-				}
-				messageChan <- signal
-			}
-		}
-	}()
-
-	for {
+// vacate empties the seat: the client's channel is closed and forgotten, and
+// the tunnel connections it opened that wait in the pool are dropped. The
+// listener and the forwarded ports stay up for the next client.
+func (s *WsTransport) vacate(g *wsGen) {
+	s.controlChannel.Close()
+	s.controlChannel.Clear()
+	for drained := false; !drained; {
 		select {
-		case <-g.ctx.Done():
-			_ = writeControl(s.controlChannel.Get(), []byte{utils.SG_Closed})
-			return
-		case <-g.reqNewConnChan:
-			err := writeControl(s.controlChannel.Get(), []byte{utils.SG_Chan})
-			if err != nil {
-				s.logger.Error("failed to send request new connection signal. ", err)
-				go s.Restart()
-				return
-			}
-
-		case <-ticker.C:
-			err := writeControl(s.controlChannel.Get(), []byte{utils.SG_HB})
-			if err != nil {
-				s.logger.Errorf("failed to send heartbeat signal. Error: %v.", err)
-				go s.Restart()
-				return
-			}
-			s.logger.Debug("heartbeat signal sent successfully")
-
-		case msg, ok := <-messageChan:
-			if !ok {
-				s.logger.Error("channel closed, likely due to an error in WebSocket read")
-				return
-			}
-			switch msg {
-			case utils.SG_HB:
-				s.logger.Trace("heartbeat signal received successfully")
-
-			case utils.SG_Closed:
-				s.logger.Warn("control channel has been closed by the client")
-				s.Restart()
-				return
-
-			default:
-				s.logger.Errorf("unexpected response from channel: %v", msg)
-				go s.Restart()
-				return
-			}
-
+		case c := <-g.tunnelChannel:
+			// Its keepalive stops with it rather than at its next beat.
+			close(c.ping)
+			c.conn.Close()
+		default:
+			drained = true
 		}
 	}
+	s.status.set(fmt.Sprintf("Disconnected (%s)", s.config.Mode))
+	metrics.ClearPeer()
 }
 
 func (s *WsTransport) tunnelListener(g *wsGen) {
@@ -332,8 +205,9 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 
 	addr := s.config.BindAddr
 	upgrader := websocket.Upgrader{
-		ReadBufferSize:   16 * 1024,
-		WriteBufferSize:  16 * 1024,
+		ReadBufferSize:   wsReadBufferSize,
+		WriteBufferSize:  wsWriteBufferSize,
+		WriteBufferPool:  wsWriteBuffers,
 		HandshakeTimeout: 45 * time.Second,
 		CheckOrigin: func(r *http.Request) bool {
 			return true
@@ -363,42 +237,26 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 				return
 			}
 
-			conn, err := upgrader.Upgrade(w, r, nil)
+			conn, err := upgrader.Upgrade(w, r, serverProof(r, s.config.Token, s.config.SimpleAuth))
 			if err != nil {
 				s.logger.Errorf("failed to upgrade connection from %s: %v", r.RemoteAddr, err)
 				return
 			}
 
 			if r.URL.Path == "/channel" {
-				if s.controlChannel.IsSet() {
-					s.logger.Warn("new control channel requested.")
-					s.controlChannel.Close()
-					conn.Close()
-					go s.Restart()
+				if endedClaim(g.ctx, conn) {
 					return
 				}
-				s.controlChannel.Set(conn)
-				// See metrics.Snapshot.Connected: the watchdog asks the engine, not
-				// the socket table.
-				metrics.ReportPeer(conn.RemoteAddr().String())
-
-				s.logger.Info("control channel established successfully")
-
-				numCPU := runtime.NumCPU()
-				if numCPU > 4 {
-					numCPU = 4 // Max allowed handler is 4
+				// A claim while a client is seated is that client re-dialing,
+				// often before this side noticed its old channel was dead: it
+				// takes the seat in place, and the ports and their users stay
+				// up. It used to close both and rebuild the whole run. See
+				// clientSeat.
+				if g.seat.serving() {
+					s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
 				}
-
-				go s.channelHandler(g)
-				go s.parsePortMappings(g)
-
-				s.logger.Infof("starting %d handle loops on each CPU thread", numCPU)
-
-				for i := 0; i < numCPU; i++ {
-					go s.handleLoop(g)
-				}
-
-				s.status.set(fmt.Sprintf("Connected (%s)", s.config.Mode))
+				s.seatClient(g, conn)
+				g.serving.Do(func() { s.serveGeneration(s.forwarder(g), func() { s.handleLoop(g) }) })
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
 				wsConn := TunnelChannel{
@@ -425,26 +283,12 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 	// path that drops full-sized packets stayed broken after the operator had
 	// applied the fix the diagnostics asked for.
 	// The tunnel's own port: retried rather than fatal. See bindfail.go.
-	var backoff listenBackoff
-	var ln net.Listener
-	for {
-		var err error
-		ln, err = network.ListenWithBuffers(
-			"tcp",
-			addr,
-			0, // the websocket transports have never pinned the socket buffers
-			0,
-			s.config.MSS,
-			s.config.KeepAlive,
-			!s.config.Nodelay,
-		)
-		if err == nil {
-			break
-		}
-		s.logger.Error(bindFailure("tunnel port", addr, err))
-		if !backoff.wait(g.ctx) {
-			return
-		}
+	ln, ok := bindTunnelPort(g.ctx, s.logger, addr, func() (net.Listener, error) {
+		// The websocket transports have never pinned the socket buffers.
+		return network.ListenWithBuffers("tcp", addr, 0, 0, s.config.MSS, s.config.KeepAlive, !s.config.Nodelay)
+	})
+	if !ok {
+		return
 	}
 
 	if s.config.Mode == config.WS {
@@ -505,153 +349,6 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 		s.controlChannel.Close()
 	}
 
-}
-
-func (s *WsTransport) parsePortMappings(g *wsGen) {
-	for _, portMapping := range s.config.Ports {
-		parts := strings.Split(portMapping, "=")
-		// One unreadable mapping is one mapping, not a reason to end the
-		// process. See the same passage in tcp.go.
-		if len(parts) > 2 {
-			s.logger.Errorf("ignoring the port mapping %q: it has more than one '='", portMapping)
-			continue
-		}
-
-		// The left-hand side may name a local address as well as a port or a
-		// range, so one machine can serve different exposed ports on different
-		// local IPs. See expandListenSpec.
-		listens, err := expandListenSpec(parts[0])
-		if err != nil {
-			s.logger.Errorf("ignoring the port mapping %q: %v", portMapping, err)
-			continue
-		}
-
-		var remoteAddr string
-		if len(parts) == 2 {
-			remoteAddr = strings.TrimSpace(parts[1])
-		}
-
-		for _, l := range listens {
-			// A mapping that named no destination forwards each port to itself.
-			target := remoteAddr
-			if target == "" {
-				target = l.port
-			}
-			go s.localListener(g, l.addr, target)
-			if len(listens) > 1 {
-				time.Sleep(1 * time.Millisecond) // for wide port ranges
-			}
-		}
-	}
-}
-
-func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr string) {
-	// Counted while this goroutine holds a listener, so Start can wait for the
-	// port rather than sleeping and hoping. See listeners.go.
-	s.listeners.hold()
-	defer s.listeners.release()
-
-	portListener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		// One forwarded port, not the tunnel. See bindfail.go.
-		s.logger.Error(bindFailure("forwarded port", localAddr, err))
-		return
-	}
-
-	//close local listener after context cancellation
-	defer portListener.Close()
-
-	s.logger.Infof("listener started successfully, listening on address: %s", portListener.Addr().String())
-
-	go s.acceptLocalConn(g, portListener, remoteAddr)
-	// The same forwarded port, carrying datagrams. A flow is handed over as a
-	// net.Conn, so from here down it is paired with a tunnel connection, piped,
-	// counted and torn down by exactly the code that does it for TCP.
-	if s.config.AcceptUDP {
-		go startUDPForward(g.ctx, s.logger, localAddr, remoteAddr,
-			udpAdmitter(g.ctx, g.localChannel, g.reqNewConnChan, s.limits))
-	}
-
-	<-g.ctx.Done()
-}
-
-func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAddr string) {
-	var backoff acceptBackoff
-	for {
-		select {
-		case <-g.ctx.Done():
-			return
-
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr(), err)
-				// One of these runs per forwarded port, so an instant retry on a
-				// broken listener would pin a core per port. See acceptBackoff.
-				if !backoff.Fail(g.ctx) {
-					return
-				}
-				continue
-			}
-			backoff.OK()
-
-			// discard any non-tcp connection
-			tcpConn, ok := conn.(*net.TCPConn)
-			if !ok {
-				s.logger.Warnf("disarded non-TCP connection from %s", conn.RemoteAddr().String())
-				conn.Close()
-				continue
-			}
-
-			// trying to enable tcpnodelay
-			if !s.config.Nodelay {
-				if err := tcpConn.SetNoDelay(s.config.Nodelay); err != nil {
-					s.logger.Warnf("failed to set TCP_NODELAY for %s: %v", tcpConn.RemoteAddr().String(), err)
-				} else {
-					s.logger.Tracef("TCP_NODELAY disabled for %s", tcpConn.RemoteAddr().String())
-				}
-			}
-
-			// Set keep-alive settings
-			if err := tcpConn.SetKeepAlive(true); err != nil {
-				s.logger.Warnf("failed to enable TCP keep-alive for %s: %v", tcpConn.RemoteAddr().String(), err)
-			} else {
-				s.logger.Tracef("TCP keep-alive enabled for %s", tcpConn.RemoteAddr().String())
-			}
-			if err := tcpConn.SetKeepAlivePeriod(s.config.KeepAlive); err != nil {
-				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
-			}
-
-			// Enforce the tunnel's limits before the connection costs anything:
-			// a refused connection should be refused here, not after it has
-			// taken a slot in the pool.
-			if !s.limits.acquire() {
-				s.logger.Warnf("connection limit reached, refusing %s", conn.RemoteAddr())
-				conn.Close()
-				continue
-			}
-			conn = s.limits.wrap(g.ctx, conn)
-
-			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
-
-				select {
-				case g.reqNewConnChan <- struct{}{}:
-					// Successfully requested a new connection
-				default:
-					// The channel is full, do nothing
-					s.logger.Warn("channel is full, cannot request a new connection")
-				}
-
-				s.logger.Debugf("forwarded port: accepted a client from %s", tcpConn.RemoteAddr().String())
-
-			default: // channel is full, discard the connection
-				s.logger.Warnf("forwarded port %s: the queue is full, dropping a client from %s", listener.Addr().String(), tcpConn.RemoteAddr().String())
-				s.limits.release()
-				conn.Close()
-			}
-		}
-	}
 }
 
 func (s *WsTransport) handleLoop(g *wsGen) {
@@ -738,4 +435,20 @@ func (s *WsTransport) tlsSettings() network.TLSSettings {
 		// served from reads as a certificate rather than as a mistake.
 		SelfSignedHost: certHost(s.config.BindAddr),
 	}
+}
+
+// forwarder is this transport's forwarded ports for one generation.
+func (s *WsTransport) forwarder(g *wsGen) portForwarder {
+	return portForwarder{
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
+		tune:   s.tuneUserConn,
+		queued: requestAlways(g.reqNewConnChan, s.logger),
+	}
+}
+
+// tuneUserConn is the websocket transports' socket options for a user's
+// connection: nodelay as configured, and TCP keepalive with the tunnel's period.
+func (s *WsTransport) tuneUserConn(c *net.TCPConn) {
+	wsTune(c, s.config.Nodelay, s.config.KeepAlive, s.logger)
 }

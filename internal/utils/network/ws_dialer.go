@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/backpack/backpack/config"
@@ -98,6 +99,9 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 
 	var wsURL string
 	dialer := websocket.Dialer{}
+	// ekm is the TLS session's keying material on a bound wss dial, for
+	// checking the server's answer; nil otherwise.
+	var ekm []byte
 
 	// Handle edgeIP assignment
 	if edgeIP != "" {
@@ -129,6 +133,12 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 		dialer = websocket.Dialer{
 			EnableCompression: true,
 			HandshakeTimeout:  45 * time.Second, // default handshake timeout
+			// The relay hands the websocket up to 64 KiB at a time; gorilla's
+			// default 4 KiB buffers sent each of those as sixteen writes. See
+			// the server transport's wsWriteBufferSize.
+			ReadBufferSize:  wsReadBufferSize,
+			WriteBufferSize: wsWriteBufferSize,
+			WriteBufferPool: wsWriteBuffers,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialerVia(ctx, out, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, mss)
 				if err != nil {
@@ -188,6 +198,11 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 		if simpleAuth {
 			headers.Set("Authorization", "Bearer "+token)
 		} else {
+			cs := uconn.ConnectionState()
+			if ekm, err = cs.ExportKeyingMaterial(WSSBindingLabel, nil, wssBindingLength); err != nil {
+				uconn.Close()
+				return nil, fmt.Errorf("wss: could not bind the credential to the TLS session: %w", err)
+			}
 			proof, err := wssClientBinding(uconn, token)
 			if err != nil {
 				uconn.Close()
@@ -199,6 +214,12 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 		dialer = websocket.Dialer{
 			EnableCompression: true,
 			HandshakeTimeout:  45 * time.Second, // default handshake timeout
+			// The relay hands the websocket up to 64 KiB at a time; gorilla's
+			// default 4 KiB buffers sent each of those as sixteen writes. See
+			// the server transport's wsWriteBufferSize.
+			ReadBufferSize:  wsReadBufferSize,
+			WriteBufferSize: wsWriteBufferSize,
+			WriteBufferPool: wsWriteBuffers,
 			NetDialTLSContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 				return uconn, nil
 			},
@@ -206,9 +227,24 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 	}
 
 	// Dial to the WebSocket server
-	tunnelWSConn, _, err := dialer.Dial(wsURL, headers)
+	tunnelWSConn, resp, err := dialer.Dial(wsURL, headers)
 	if err != nil {
 		return nil, err
 	}
+	if ekm != nil {
+		if err := checkWSSServer(ekm, token, addr, resp.Header.Get(WSSServerProofHeader)); err != nil {
+			tunnelWSConn.Close()
+			return nil, err
+		}
+	}
 	return tunnelWSConn, nil
 }
+
+// The websocket buffers on the client side; see the server transport's
+// wsWriteBufferSize for why these sizes and why the write buffers are pooled.
+const (
+	wsReadBufferSize  = 16 * 1024
+	wsWriteBufferSize = 64 * 1024
+)
+
+var wsWriteBuffers = &sync.Pool{}

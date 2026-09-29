@@ -350,70 +350,70 @@ func Serve() error {
 // actually wired: the guard was tested on its own and the table was not, which
 // is how the endpoints that hand out access came to sit at the same scope as
 // the ones that restart a tunnel.
-func (srv *server) routes() *http.ServeMux {
+func (s *server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/login", srv.handleLogin)
-	mux.HandleFunc("/api/totp", srv.requireAdmin(srv.handleTOTP))
-	mux.HandleFunc("/logout", srv.handleLogout)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/api/totp", s.requireAdmin(s.handleTOTP))
+	mux.HandleFunc("/logout", s.handleLogout)
 	// The panel, and everything it loads. Registered at "/", so it is also
 	// the catch-all for anything no other route claims. See panel.go.
-	mux.HandleFunc("/", srv.requireAuth(srv.handlePanel))
+	mux.HandleFunc("/", s.requireAuth(s.handlePanel))
 	// Where the panel answered while there were two of them.
-	mux.HandleFunc(panelPrefix, srv.requireAuth(srv.handleOldPanelPath))
+	mux.HandleFunc(panelPrefix, s.requireAuth(s.handleOldPanelPath))
 	// The read-scoped endpoints, so a Prometheus scraper or a status page can
 	// watch with a read token and no browser session.
-	mux.HandleFunc("/api/stats", srv.requireReadAuth(srv.handleStats))
-	mux.HandleFunc("/api/tunnels", srv.requireReadAuth(srv.handleTunnels))
-	mux.HandleFunc("/metrics", srv.requireReadAuth(srv.handlePrometheus))
-	mux.HandleFunc("/api/logs", srv.requireAuth(srv.handleLogs))
+	mux.HandleFunc("/api/stats", s.requireReadAuth(s.handleStats))
+	mux.HandleFunc("/api/tunnels", s.requireReadAuth(s.handleTunnels))
+	mux.HandleFunc("/metrics", s.requireReadAuth(s.handlePrometheus))
+	mux.HandleFunc("/api/logs", s.requireAuth(s.handleLogs))
 	// Tunnel management — the CLI's setup wizard, edit screen and service
 	// actions, reachable from the browser.
-	mux.HandleFunc("/api/tunnel/options", srv.requireAuth(srv.handleTunnelOptions))
-	mux.HandleFunc("/api/tunnel/suggest", srv.requireAuth(srv.handleTunnelSuggest))
-	mux.HandleFunc("/api/tunnel/defaults", srv.requireAuth(srv.handleTunnelDefaults))
-	mux.HandleFunc("/api/tunnel/create", srv.requireAuth(srv.handleTunnelCreate))
+	mux.HandleFunc("/api/tunnel/options", s.requireAuth(s.handleTunnelOptions))
+	mux.HandleFunc("/api/tunnel/suggest", s.requireAuth(s.handleTunnelSuggest))
+	mux.HandleFunc("/api/tunnel/defaults", s.requireAuth(s.handleTunnelDefaults))
+	mux.HandleFunc("/api/tunnel/create", s.requireAuth(s.handleTunnelCreate))
 	// The direct half, on its own endpoints so the reverse ones are untouched.
-	mux.HandleFunc("/api/direct/options", srv.requireAuth(srv.handleDirectOptions))
-	mux.HandleFunc("/api/direct/defaults", srv.requireAuth(srv.handleDirectDefaults))
-	mux.HandleFunc("/api/direct/create", srv.requireAuth(srv.handleDirectCreate))
-	mux.HandleFunc("/api/tunnel/settings", srv.requireAuth(srv.handleTunnelSettings))
+	mux.HandleFunc("/api/direct/options", s.requireAuth(s.handleDirectOptions))
+	mux.HandleFunc("/api/direct/defaults", s.requireAuth(s.handleDirectDefaults))
+	mux.HandleFunc("/api/direct/create", s.requireAuth(s.handleDirectCreate))
+	mux.HandleFunc("/api/tunnel/settings", s.requireAuth(s.handleTunnelSettings))
 	// Handing a tunnel's paired settings to the other server, and taking them
 	// from it. See handleShareLink.
 	// Managed servers: the fleet, the login each one is reached with, and
 	// building both ends of a tunnel in a single submission. See
 	// handlers_nodes.go.
-	mux.HandleFunc("/api/nodes", srv.requireAuth(srv.handleNodes))
-	mux.HandleFunc("/api/fleet/drift", srv.requireReadAuth(srv.handleDrift))
-	mux.HandleFunc("/api/node/pair", srv.requireAuth(srv.handleNodePair))
+	mux.HandleFunc("/api/nodes", s.requireAuth(s.handleNodes))
+	mux.HandleFunc("/api/fleet/drift", s.requireReadAuth(s.handleDrift))
+	mux.HandleFunc("/api/node/pair", s.requireAuth(s.handleNodePair))
 	// Linking a tunnel that already exists to the server holding its other
 	// end. See handlers_adopt.go.
-	mux.HandleFunc("/api/tunnel/adopt", srv.requireAuth(srv.handleTunnelAdopt))
-	mux.HandleFunc("/api/tunnel/edit", srv.requireAuth(srv.handleTunnelEdit))
-	mux.HandleFunc("/api/tunnel/action", srv.requireAuth(srv.handleTunnelAction))
-	mux.HandleFunc("/api/password", srv.requireAdmin(srv.handlePassword))
-	mux.HandleFunc("/api/update", srv.requireAuth(srv.handleUpdate))
-	mux.HandleFunc("/api/update/status", srv.requireAuth(srv.handleUpdateStatus))
-	mux.HandleFunc("/api/panelport", srv.requireAdmin(srv.handlePanelPort))
-	mux.HandleFunc("/api/panelcert", srv.requireAdmin(srv.handlePanelCert))
-	mux.HandleFunc("/api/backup/export", srv.requireAdmin(srv.handleBackupExport))
-	mux.HandleFunc("/api/backup/import", srv.requireAdmin(srv.handleBackupImport))
-	mux.HandleFunc("/api/telegram", srv.requireAdmin(srv.handleTelegram))
-	mux.HandleFunc("/api/telegram/test", srv.requireAuth(srv.handleTelegramTest))
-	mux.HandleFunc("/api/relays", srv.requireAuth(srv.handleRelayOptions))
-	mux.HandleFunc("/api/health", srv.requireAuth(srv.handleHealth))
-	mux.HandleFunc("/api/alerts", srv.requireReadAuth(srv.handleAlerts))
-	mux.HandleFunc("/api/linktest", srv.requireAuth(srv.handleLinkTest))
-	mux.HandleFunc("/api/confhist", srv.requireAuth(srv.handleConfHistory))
-	mux.HandleFunc("/api/confhist/restore", srv.requireAuth(srv.handleConfRestore))
-	mux.HandleFunc("/api/restorepoints", srv.requireAuth(srv.handleRestorePoints))
+	mux.HandleFunc("/api/tunnel/adopt", s.requireAuth(s.handleTunnelAdopt))
+	mux.HandleFunc("/api/tunnel/edit", s.requireAuth(s.handleTunnelEdit))
+	mux.HandleFunc("/api/tunnel/action", s.requireAuth(s.handleTunnelAction))
+	mux.HandleFunc("/api/password", s.requireAdmin(s.handlePassword))
+	mux.HandleFunc("/api/update", s.requireAuth(s.handleUpdate))
+	mux.HandleFunc("/api/update/status", s.requireAuth(s.handleUpdateStatus))
+	mux.HandleFunc("/api/panelport", s.requireAdmin(s.handlePanelPort))
+	mux.HandleFunc("/api/panelcert", s.requireAdmin(s.handlePanelCert))
+	mux.HandleFunc("/api/backup/export", s.requireAdmin(s.handleBackupExport))
+	mux.HandleFunc("/api/backup/import", s.requireAdmin(s.handleBackupImport))
+	mux.HandleFunc("/api/telegram", s.requireAdmin(s.handleTelegram))
+	mux.HandleFunc("/api/telegram/test", s.requireAuth(s.handleTelegramTest))
+	mux.HandleFunc("/api/relays", s.requireAuth(s.handleRelayOptions))
+	mux.HandleFunc("/api/health", s.requireAuth(s.handleHealth))
+	mux.HandleFunc("/api/alerts", s.requireReadAuth(s.handleAlerts))
+	mux.HandleFunc("/api/linktest", s.requireAuth(s.handleLinkTest))
+	mux.HandleFunc("/api/confhist", s.requireAuth(s.handleConfHistory))
+	mux.HandleFunc("/api/confhist/restore", s.requireAuth(s.handleConfRestore))
+	mux.HandleFunc("/api/restorepoints", s.requireAuth(s.handleRestorePoints))
 	// Access control. Issuing a credential is guarded harder than using one:
 	// a write token must not be able to mint itself a better one. See access.go.
-	mux.HandleFunc("/api/tokens", srv.guard(ScopeAdmin, srv.handleTokens))
-	mux.HandleFunc("/api/audit", srv.guard(ScopeAdmin, srv.handleAudit))
-	mux.HandleFunc("/api/sessions", srv.requireAdmin(srv.handleSessions))
-	mux.HandleFunc("/api/autobackup", srv.requireAuth(srv.handleAutoBackup))
-	mux.HandleFunc("/api/history", srv.requireAuth(srv.handleHistory))
-	mux.HandleFunc("/api/channel", srv.requireAuth(srv.handleChannel))
+	mux.HandleFunc("/api/tokens", s.guard(ScopeAdmin, s.handleTokens))
+	mux.HandleFunc("/api/audit", s.guard(ScopeAdmin, s.handleAudit))
+	mux.HandleFunc("/api/sessions", s.requireAdmin(s.handleSessions))
+	mux.HandleFunc("/api/autobackup", s.requireAuth(s.handleAutoBackup))
+	mux.HandleFunc("/api/history", s.requireAuth(s.handleHistory))
+	mux.HandleFunc("/api/channel", s.requireAuth(s.handleChannel))
 	// The manifest, icons and service worker are what let the panel install as
 	// an app; the browser fetches them before any login, so they carry no data
 	// and no auth. The worker is required for an install offer and must be

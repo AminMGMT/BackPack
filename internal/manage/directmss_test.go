@@ -24,7 +24,7 @@ func TestADirectTunnelCanCapItsSegmentSize(t *testing.T) {
 		MSS:   1360,
 	}
 
-	out := spec.render()
+	out := spec.Render()
 	if !strings.Contains(out, "mss") {
 		t.Fatal("the rendered [direct] config carries no mss key, so the cap cannot " +
 			"reach the engine")
@@ -43,7 +43,7 @@ func TestTheSegmentCapIsAbsentWhenUnset(t *testing.T) {
 		Ports: []string{"443"},
 	}
 
-	for _, line := range strings.Split(spec.render(), "\n") {
+	for _, line := range strings.Split(spec.Render(), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "mss") {
 			t.Errorf("an unset cap was written out as %q", trimmed)
@@ -62,7 +62,7 @@ func TestAnEditKeepsAHandSetSegmentCap(t *testing.T) {
 		MSS:   1208,
 	}
 
-	if !strings.Contains(spec.render(), "1208") {
+	if !strings.Contains(spec.Render(), "1208") {
 		t.Fatal("re-rendering after an edit dropped the segment cap")
 	}
 }

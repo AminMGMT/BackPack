@@ -48,6 +48,7 @@ func main() {
 	// what to exit with rather than doing either — so the whole surface is
 	// testable without a process. This is the only part that needs one.
 	if len(os.Args) > 1 && cli.IsCommand(os.Args[1]) {
+		cli.EngineCheck = cmd.CheckConfigFile
 		r := cli.Run(os.Args[1:])
 		if r.Out != "" {
 			fmt.Print(r.Out)

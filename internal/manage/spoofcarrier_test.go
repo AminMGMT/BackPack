@@ -52,7 +52,7 @@ func TestSpoofCarrierRenderRoundTrip(t *testing.T) {
 		},
 	}
 
-	out := spec.render()
+	out := spec.Render()
 	if !strings.Contains(out, "[l3]") {
 		t.Fatalf("the carrier was not rendered into an [l3] table:\n%s", out)
 	}
@@ -87,7 +87,7 @@ func TestAnUnsetSpoofCarrierRendersNothing(t *testing.T) {
 		Addr: "203.0.113.9:9000", Token: "a-token-0123456789abcdefghijklmno",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2",
 	}
-	if out := spec.render(); strings.Contains(out, "spoof_") {
+	if out := spec.Render(); strings.Contains(out, "spoof_") {
 		t.Errorf("a tunnel with no forged source rendered spoof keys:\n%s", out)
 	}
 }

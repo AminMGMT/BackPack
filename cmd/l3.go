@@ -65,10 +65,11 @@ func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
 
 	// The engine's own counters, read once per snapshot. They survive the
 	// restart loop below because the tunnel object does.
-	startMetricsWithTraffic(ctx, configPath, "l3-"+tunnelCfg.Carrier, l3Role(tunnelCfg.Mode),
+	stopMetrics := startMetricsWithTraffic(ctx, configPath, "l3-"+tunnelCfg.Carrier, l3Role(tunnelCfg.Mode),
 		func() uint64 { return tunnel.Stats().BytesIn },
 		func() uint64 { return tunnel.Stats().BytesOut },
 	)
+	defer stopMetrics()
 
 	// The forwarder runs beside the tunnel rather than inside it, and outlives
 	// any number of tunnel restarts. A user's connection to a forwarded port

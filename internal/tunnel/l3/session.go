@@ -167,6 +167,15 @@ type session struct {
 	// carrying the same counter could both pass accept before either commits.
 	recvMu sync.Mutex
 	replay replayWindow
+
+	// adoptFresh is a handshake stamp older than the last one accepted, let
+	// through because the dialler's clock went back (freshJudge.stale), and
+	// taken as the new last only when this session is confirmed. Zero
+	// otherwise. adoptOver is the last stamp at the time it was let through.
+	// Written before the session is published and read under the tunnel's
+	// lock.
+	adoptFresh uint64
+	adoptOver  uint64
 }
 
 func newSession(id uint32, sendCS, recvCS *noise.CipherState) (*session, error) {

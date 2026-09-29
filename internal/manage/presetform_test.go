@@ -2,6 +2,7 @@ package manage
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -40,9 +41,9 @@ func TestAFormRefusesAPresetThisBuildDoesNotKnow(t *testing.T) {
 	}
 
 	// And the fallback itself stays, because a stored config must keep loading.
-	ps, err := os.ReadFile("preset.go")
+	ps, err := os.ReadFile(filepath.Join("tunnelspec", "preset.go"))
 	if err != nil {
-		t.Fatalf("cannot read preset.go: %v", err)
+		t.Fatalf("cannot read tunnelspec/preset.go: %v", err)
 	}
 	if !strings.Contains(string(ps), "preset = PresetTurbo") {
 		t.Error("ApplyPreset no longer has a fallback; a config naming a preset this " +

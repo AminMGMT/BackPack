@@ -25,7 +25,7 @@ func TestFECSurvivesARenderRoundTrip(t *testing.T) {
 		FECParity: 3,
 	}
 	var got config.Config
-	if _, err := toml.Decode(spec.render(), &got); err != nil {
+	if _, err := toml.Decode(spec.Render(), &got); err != nil {
 		t.Fatalf("the rendered config does not parse: %v", err)
 	}
 	if got.L3.FECData != 10 || got.L3.FECParity != 3 {
@@ -44,7 +44,7 @@ func TestAHalfSchemeIsNotRendered(t *testing.T) {
 			Token: "a-token-0123456789abcdefghijklmno", LocalIP: "10.20.0.1/30",
 			PeerIP: "10.20.0.2", Ports: []string{"443"}, FECParity: 3},
 	} {
-		if out := spec.render(); strings.Contains(out, "fec_") {
+		if out := spec.Render(); strings.Contains(out, "fec_") {
 			t.Errorf("a half-configured scheme was written out:\n%s", out)
 		}
 	}
@@ -58,7 +58,7 @@ func TestNoFECWritesNothing(t *testing.T) {
 		Addr: "203.0.113.9:9000", Token: "a-token-0123456789abcdefghijklmno",
 		LocalIP: "10.20.0.1/30", PeerIP: "10.20.0.2", Ports: []string{"443"},
 	}
-	if out := spec.render(); strings.Contains(out, "fec_") {
+	if out := spec.Render(); strings.Contains(out, "fec_") {
 		t.Errorf("a tunnel with no error correction rendered fec keys:\n%s", out)
 	}
 }
@@ -101,7 +101,7 @@ func TestPathsSurviveARenderRoundTrip(t *testing.T) {
 		Ports: []string{"443"}, Paths: 4,
 	}
 	var got config.Config
-	if _, err := toml.Decode(spec.render(), &got); err != nil {
+	if _, err := toml.Decode(spec.Render(), &got); err != nil {
 		t.Fatalf("the rendered config does not parse: %v", err)
 	}
 	if got.L3.Paths != 4 {
@@ -119,7 +119,7 @@ func TestASingleSocketWritesNoPathsKey(t *testing.T) {
 			LocalIP: "10.20.0.1/30", PeerIP: "10.20.0.2",
 			Ports: []string{"443"}, Paths: n,
 		}
-		if out := spec.render(); strings.Contains(out, "paths") {
+		if out := spec.Render(); strings.Contains(out, "paths") {
 			t.Errorf("paths=%d rendered a key:\n%s", n, out)
 		}
 	}

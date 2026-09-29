@@ -1,0 +1,857 @@
+package health
+
+import (
+	"fmt"
+	"math"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/backpack/backpack/internal/optimize"
+
+	"github.com/backpack/backpack/internal/manage/backup"
+	"github.com/backpack/backpack/internal/manage/core"
+	"github.com/backpack/backpack/internal/manage/host"
+	"github.com/backpack/backpack/internal/manage/tunnelspec"
+
+	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/utils/network"
+)
+
+// CheckLevel is how a diagnostic turned out.
+type CheckLevel int
+
+const (
+	CheckOK CheckLevel = iota
+	CheckWarn
+	CheckFail
+	CheckInfo
+)
+
+// Check is one diagnostic line: what was tested, how it went, and — when it
+// went badly — what the user should do about it.
+type Check struct {
+	Group  string // "System", "Web Panel", "Tunnel: name", ...
+	Name   string
+	Level  CheckLevel
+	Detail string // the measured value / what was found
+	Fix    string // actionable suggestion, empty when nothing to do
+}
+
+// Diagnose runs every health check and returns the results grouped in the order
+// they should be displayed. It never modifies anything.
+func Diagnose() []Check {
+	var out []Check
+	out = append(out, systemChecks()...)
+	out = append(out, panelChecks()...)
+	out = append(out, monitorChecks()...)
+	out = append(out, tunnelChecks()...)
+	return out
+}
+
+// CountByLevel summarises a check list.
+func CountByLevel(checks []Check) (ok, warn, fail int) {
+	for _, c := range checks {
+		switch c.Level {
+		case CheckOK:
+			ok++
+		case CheckWarn:
+			warn++
+		case CheckFail:
+			fail++
+		}
+	}
+	return
+}
+
+// --- system -----------------------------------------------------------------
+
+func systemChecks() []Check {
+	const g = "System"
+	var out []Check
+
+	out = append(out, Check{Group: g, Name: "Backpack version", Level: CheckInfo, Detail: app.Version})
+
+	// Binary present and executable.
+	if fi, err := os.Stat(app.BinPath); err == nil {
+		lvl, fix := CheckOK, ""
+		if fi.Mode().Perm()&0111 == 0 {
+			lvl, fix = CheckFail, "chmod +x "+app.BinPath
+		}
+		out = append(out, Check{Group: g, Name: "Binary", Level: lvl, Detail: app.BinPath, Fix: fix})
+	} else {
+		out = append(out, Check{Group: g, Name: "Binary", Level: CheckFail,
+			Detail: "missing at " + app.BinPath, Fix: "reinstall Backpack"})
+	}
+
+	// Running as root — everything here needs it.
+	if os.Geteuid() == 0 {
+		out = append(out, Check{Group: g, Name: "Root privileges", Level: CheckOK, Detail: "running as root"})
+	} else {
+		out = append(out, Check{Group: g, Name: "Root privileges", Level: CheckFail,
+			Detail: "not root", Fix: "run: sudo backpack"})
+	}
+
+	// systemd must be usable, otherwise nothing survives a reboot.
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		out = append(out, Check{Group: g, Name: "systemd", Level: CheckOK, Detail: "available"})
+	} else {
+		out = append(out, Check{Group: g, Name: "systemd", Level: CheckFail,
+			Detail: "systemctl not found", Fix: "Backpack needs systemd to manage services"})
+	}
+
+	if runtime.GOOS != "linux" {
+		out = append(out, Check{Group: g, Name: "Platform", Level: CheckWarn,
+			Detail: runtime.GOOS, Fix: "Backpack is designed for Linux servers"})
+		return out
+	}
+
+	// Kernel tuning: BBR + queue discipline + buffer ceilings.
+	if v := SysctlValue("net.ipv4.tcp_congestion_control"); v != "" {
+		if v == "bbr" {
+			out = append(out, Check{Group: g, Name: "Congestion control", Level: CheckOK, Detail: "bbr"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Congestion control", Level: CheckWarn,
+				Detail: v + " (bbr gives better throughput)",
+				Fix:    optimizeFix("net.ipv4.tcp_congestion_control", v, "run Optimize from the main menu")})
+		}
+	}
+	if v := SysctlValue("net.core.default_qdisc"); v != "" && v != "fq" {
+		out = append(out, Check{Group: g, Name: "Queue discipline", Level: CheckWarn,
+			Detail: v + " (fq pairs with bbr)",
+			Fix:    optimizeFix("net.core.default_qdisc", v, "run Optimize from the main menu")})
+	}
+	if v := SysctlValue("net.core.rmem_max"); v != "" {
+		n, _ := strconv.Atoi(v)
+		if n >= 16*1024*1024 {
+			out = append(out, Check{Group: g, Name: "Socket buffers", Level: CheckOK, Detail: humanSize(n) + " max"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Socket buffers", Level: CheckWarn,
+				Detail: humanSize(n) + " max — small for high-latency links",
+				Fix:    optimizeFix("net.core.rmem_max", v, "run Optimize from the main menu")})
+		}
+	}
+	if v := SysctlValue("net.ipv4.ip_forward"); v == "0" {
+		out = append(out, Check{Group: g, Name: "IP forwarding", Level: CheckWarn,
+			Detail: "disabled",
+			Fix:    optimizeFix("net.ipv4.ip_forward", v, "run Optimize (needed for some forwarding setups)")})
+	}
+
+	// The ephemeral port range decides whether the services on this machine can
+	// keep their own ports.
+	//
+	// Older versions of Optimize widened it to "1024 65535", which puts every
+	// service port inside the range the kernel hands out as the source port of
+	// outgoing connections — and a port held that way cannot be bound by the
+	// service that owns it. Updating does not rewrite the sysctl file, so a
+	// server set up before the fix still carries the wide range and has no way
+	// to know. This is what tells it.
+	if v := SysctlValue("net.ipv4.ip_local_port_range"); v != "" {
+		if lo, hi, wide := host.EphemeralRangeIsWide(v); wide {
+			out = append(out, Check{Group: g, Name: "Ephemeral port range", Level: CheckWarn,
+				Detail: fmt.Sprintf("%d-%d — services on ports in this range can lose them "+
+					"to an outgoing connection", lo, hi),
+				Fix: optimizeFix("net.ipv4.ip_local_port_range", v,
+					"run Optimize from the main menu — it restores 32768-60999")})
+		} else {
+			out = append(out, Check{Group: g, Name: "Ephemeral port range", Level: CheckOK,
+				Detail: fmt.Sprintf("%d-%d", lo, hi)})
+		}
+	}
+
+	// Open-file limit — tunnels with many connections need a high ceiling.
+	//
+	// The limit that matters is the one the tunnel processes run under, which
+	// is not the one this process has. Reading `ulimit -n` here reported the
+	// panel's own ceiling and told the operator to run Optimize and reboot —
+	// advice that could never change it, because Optimize writes
+	// /etc/security/limits.conf and that file applies to login sessions and not
+	// to systemd services. The check said 1024 before and 1024 after, for as
+	// many reboots as anybody cared to try.
+	if v, where := nofileForTunnels(); v > 0 {
+		if v >= 65536 {
+			out = append(out, Check{Group: g, Name: "Open file limit", Level: CheckOK,
+				Detail: strconv.Itoa(v) + " " + where})
+		} else {
+			out = append(out, Check{Group: g, Name: "Open file limit", Level: CheckWarn,
+				Detail: strconv.Itoa(v) + " " + where + " — low for many connections",
+				Fix:    "restart this tunnel — its unit has been brought up to date; the ceiling comes from the unit, not from Optimize"})
+		}
+	}
+
+	// Time sync matters for TLS validity.
+	out = append(out, Check{Group: g, Name: "System time", Level: CheckInfo,
+		Detail: time.Now().Format("2006-01-02 15:04:05 MST")})
+
+	return out
+}
+
+// --- monitor ----------------------------------------------------------------
+
+// monitorChecks reports on the service that runs the watchdog, the Telegram bot
+// and the alerts. This one matters more than it looks: when it is down nothing
+// visibly breaks, tunnels simply stop being restarted and alerts stop arriving,
+// and the only way to find that out is to be told here.
+func monitorChecks() []Check {
+	const g = "Monitor"
+	var out []Check
+
+	if !core.FileExists(app.ServiceDir + "/" + app.MonitorService) {
+		return append(out, Check{Group: g, Name: "Service", Level: CheckWarn,
+			Detail: "not installed — no watchdog and no alerts",
+			Fix:    "restart the CLI (sudo backpack); it installs the service on launch"})
+	}
+	if core.MonitorRunning() {
+		out = append(out, Check{Group: g, Name: "Service", Level: CheckOK,
+			Detail: "running — watchdog and alerts active"})
+		// Running is systemd's answer. Whether it is *doing* anything is a
+		// different question, and it is the one that matters: a monitor wedged
+		// on a job that never returns is a process systemd is perfectly happy
+		// with and a fleet with nothing watching it. See manage/heartbeat.go.
+		if silent, since := MonitorSilent(); silent {
+			out = append(out, Check{Group: g, Name: "Watchdog", Level: CheckFail,
+				Detail: fmt.Sprintf("the service is up but has not run a pass for %s — "+
+					"nothing is watching the tunnels", since.Round(time.Second)),
+				Fix: "systemctl restart " + app.MonitorService +
+					" (logs: journalctl -u " + app.MonitorService + " -n 50)"})
+		} else if at, ok := MonitorHeartbeat(); ok {
+			out = append(out, Check{Group: g, Name: "Watchdog", Level: CheckOK,
+				Detail: "last pass " + time.Since(at).Round(time.Second).String() + " ago"})
+		}
+		return out
+	}
+	return append(out, Check{Group: g, Name: "Service", Level: CheckFail,
+		Detail: "installed but not running — dropped tunnels will NOT be restarted",
+		Fix:    "systemctl restart " + app.MonitorService + " (logs: journalctl -u " + app.MonitorService + " -n 30)"})
+}
+
+// --- web panel --------------------------------------------------------------
+
+func panelChecks() []Check {
+	const g = "Web Panel"
+	var out []Check
+
+	unit := app.ServiceDir + "/" + app.WebUIService
+	if !core.FileExists(unit) {
+		out = append(out, Check{Group: g, Name: "Service", Level: CheckWarn,
+			Detail: "not installed", Fix: "open Web Panel in the menu to start it"})
+		return out
+	}
+	if core.IsActive(app.WebUIService) {
+		out = append(out, Check{Group: g, Name: "Service", Level: CheckOK, Detail: "running"})
+	} else {
+		out = append(out, Check{Group: g, Name: "Service", Level: CheckFail,
+			Detail: "installed but not running",
+			Fix:    "Web Panel → Restart panel, or check: journalctl -u " + app.WebUIService + " -n 30"})
+	}
+
+	port := panelPort()
+	if port > 0 {
+		if listening(port) {
+			out = append(out, Check{Group: g, Name: "Port", Level: CheckOK,
+				Detail: fmt.Sprintf("%d listening", port)})
+		} else {
+			out = append(out, Check{Group: g, Name: "Port", Level: CheckWarn,
+				Detail: fmt.Sprintf("%d not listening", port),
+				Fix:    "Web Panel → Restart panel"})
+		}
+		out = append(out, Check{Group: g, Name: "Firewall", Level: CheckInfo,
+			Detail: fmt.Sprintf("allow it if unreachable: ufw allow %d", port)})
+	}
+	return out
+}
+
+// panelPort reads the configured web-panel port without importing webui
+// (which would create an import cycle).
+func panelPort() int {
+	data, err := os.ReadFile(app.WebUIConfig)
+	if err != nil {
+		return app.WebUIPort
+	}
+	// Tiny hand-parse to stay dependency-free: look for "port": N.
+	s := string(data)
+	i := strings.Index(s, `"port"`)
+	if i < 0 {
+		return app.WebUIPort
+	}
+	rest := s[i+len(`"port"`):]
+	rest = strings.TrimLeft(rest, " \t:\r\n")
+	j := 0
+	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+		j++
+	}
+	if n, err := strconv.Atoi(rest[:j]); err == nil && n > 0 {
+		return n
+	}
+	return app.WebUIPort
+}
+
+// --- tunnels ----------------------------------------------------------------
+
+func tunnelChecks() []Check {
+	tunnels := core.List()
+	if len(tunnels) == 0 {
+		return []Check{{Group: "Tunnels", Name: "Configured tunnels", Level: CheckWarn,
+			Detail: "none", Fix: "create one with Setup Server / Setup Client"}}
+	}
+
+	pairs := establishedPairs()
+
+	// Each tunnel is probed at the same time as the others. Done one after
+	// another, a client tunnel whose server is down costs the full 4-second
+	// reachability timeout, and a handful of them added up past the web panel's
+	// 30-second write timeout — the request was cut off mid-response and the
+	// Health Check screen came up empty. Results are collected per index and
+	// concatenated afterwards, so the report reads in configured order however
+	// the probes finish.
+	per := make([][]Check, len(tunnels))
+	var wg sync.WaitGroup
+	for i, t := range tunnels {
+		wg.Add(1)
+		go func(i int, t core.Tunnel) {
+			defer wg.Done()
+			per[i] = tunnelChecksFor(t, pairs)
+		}(i, t)
+	}
+	wg.Wait()
+
+	var out []Check
+	for _, c := range per {
+		out = append(out, c...)
+	}
+	return out
+}
+
+// tunnelChecksFor is one tunnel's section of the report.
+func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
+	var out []Check
+	g := "Tunnel: " + t.Name
+	h := tunnelHealthWith(t, pairs)
+
+	// Service + real connectivity.
+	switch h.State {
+	case "online":
+		out = append(out, Check{Group: g, Name: "State", Level: CheckOK,
+			Detail: fmt.Sprintf("online (%s %s)", t.Role, t.Transport)})
+	case "offline":
+		fix := "check the other side is running and reachable"
+		if t.Role == "client" {
+			fix = "verify the server address/port and that the same token is set on both sides"
+		}
+		out = append(out, Check{Group: g, Name: "State", Level: CheckFail,
+			Detail: "service running but peer not connected", Fix: fix})
+	default:
+		out = append(out, Check{Group: g, Name: "State", Level: CheckWarn,
+			Detail: h.Detail, Fix: "start it from Manage → Manage Tunnels"})
+	}
+
+	// The two direct kinds keep their settings in their own tables, so LoadSpec
+	// — which reads [server] and [client] — cannot read one and says so by
+	// refusing it. Sent down that path, a perfectly healthy layer-3 tunnel was
+	// reported as "Config unreadable: not a client tunnel" and the operator was
+	// told to restore from a backup. Nothing was wrong with the file; the check
+	// was reading the wrong half of it.
+	if tunnelspec.IsDirectKind(t) {
+		return append(out, directChecks(g, t)...)
+	}
+
+	// Config parses and is complete.
+	spec, err := tunnelspec.Load(t.Name)
+	if err != nil {
+		out = append(out, Check{Group: g, Name: "Config", Level: CheckFail,
+			Detail: "unreadable: " + err.Error(), Fix: "restore from a backup"})
+		return out
+	}
+
+	if t.Role == "server" {
+		// The control port must actually be bound.
+		if p := addrPort(spec.BindAddr); p != "" {
+			if n, _ := strconv.Atoi(p); n > 0 {
+				// Asked about the address the tunnel actually binds, not the
+				// port on its own. A control port pinned to one of a
+				// multi-homed server's addresses shares its number with
+				// whatever holds the others, and probing ":443" there answers
+				// for the wrong socket in both directions.
+				where := spec.BindAddr
+				shown := p
+				if h := bindHostOf(spec.BindAddr); h != "" {
+					shown = net.JoinHostPort(h, p)
+				}
+				// UDP-based transports do not appear in the TCP listen
+				// table, so a "not listening" verdict would be wrong.
+				if addrListening(where) || isDatagram(spec.Transport) {
+					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK, Detail: shown + " listening"})
+				} else {
+					out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
+						Detail: shown + " not listening",
+						Fix:    "the service may have failed to bind — check its log"})
+				}
+			}
+			// A control port pinned to an address this machine does not hold.
+			//
+			// The CLI warns when the address is typed, and the engine's bind
+			// failure says it plainly — but neither reaches somebody who set
+			// the tunnel up from the panel, or whose address went away
+			// afterwards because an interface did not come back. This is the
+			// one surface all three of them share.
+			//
+			// A warning rather than a failure, for the same reason the wizard
+			// only warns: a floating address, a VIP keepalived has not claimed,
+			// or an interface that comes up later are all real, and
+			// net.ipv4.ip_nonlocal_bind exists so that binding one can be made
+			// to work.
+			if h := bindHostOf(spec.BindAddr); h != "" && !localAddrExists(h) {
+				out = append(out, Check{Group: g, Name: "Bind address", Level: CheckWarn,
+					Detail: h + " is not on any interface of this server",
+					Fix: "the tunnel binds that address alone and cannot start without it — " +
+						"check `ip -brief address`, or use a port on its own to listen on every interface"})
+			}
+		}
+		// Forwarded ports the users actually connect to.
+		vis := tunnelspec.VisiblePorts(spec.Ports, spec.Token)
+		if len(vis) == 0 {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
+				Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+				Detail: strings.Join(vis, ", ")})
+		}
+		if err := validatePortSpecs(vis); err != nil {
+			out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+				Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
+		}
+	} else {
+		// Client: can we actually reach the server's tunnel port over TCP?
+		host, port := addrHost(spec.RemoteAddr, ""), addrPort(spec.RemoteAddr)
+		out = append(out, Check{Group: g, Name: "Server address", Level: CheckInfo, Detail: spec.RemoteAddr})
+		switch {
+		case host == "" || port == "":
+			// Nothing to probe.
+		case isDatagram(spec.Transport):
+			// There is no connect step to test on UDP: a silent port and a
+			// working one look identical from outside. Say so plainly
+			// rather than reporting a failure that may not be real.
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckInfo,
+				Detail: "not testable on a UDP transport — trust the tunnel state above",
+				Fix:    "if it will not connect, check that UDP " + port + " is open on the server firewall"})
+		case reachable(host, port, 4*time.Second):
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckOK,
+				Detail: "TCP connect to " + spec.RemoteAddr + " works"})
+		default:
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckFail,
+				Detail: "cannot open TCP to " + spec.RemoteAddr,
+				Fix:    "check the server is up, the port matches, and the firewall allows it — or add a fallback address in Edit"})
+		}
+	}
+
+	// What the live tunnel is actually doing — the pool behind the control
+	// channel, what is crossing right now, and whether the path can carry a
+	// full-sized packet. Only worth measuring on a tunnel that is up; on one
+	// that is not, the checks above already say why. See diagnose_path.go.
+	if h.State == "online" {
+		out = append(out, pathChecks(g, t)...)
+	}
+
+	// TLS certificate validity for the transports that terminate TLS.
+	if t.Role == "server" && needsTLS(spec.Transport) {
+		out = append(out, certCheck(g, spec.TLSCert))
+	}
+
+	// Token sanity — a default/short token is a real security problem.
+	switch {
+	case spec.Token == "":
+		out = append(out, Check{Group: g, Name: "Token", Level: CheckFail,
+			Detail: "empty", Fix: "recreate the tunnel with a generated token"})
+	case len(spec.Token) < 16 || spec.Token == "backpack":
+		out = append(out, Check{Group: g, Name: "Token", Level: CheckWarn,
+			Detail: "weak or default", Fix: "recreate the tunnel to get a 64-char token"})
+	default:
+		out = append(out, Check{Group: g, Name: "Token", Level: CheckOK,
+			Detail: fmt.Sprintf("%d characters", len(spec.Token))})
+	}
+	return out
+}
+
+// certCheck validates a TLS certificate file and reports its expiry.
+func certCheck(group, path string) Check {
+	if path == "" {
+		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
+			Detail: "not configured", Fix: "switch the transport again to auto-generate one"}
+	}
+	notAfter, err := host.CertExpiry(path)
+	if err != nil {
+		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
+			Detail: err.Error(), Fix: "regenerate or point to a valid certificate"}
+	}
+	left := time.Until(notAfter)
+	switch {
+	case left <= 0:
+		return Check{Group: group, Name: "TLS certificate", Level: CheckFail,
+			Detail: "expired " + notAfter.Format("2006-01-02"),
+			Fix:    "regenerate it (switch the transport again) or renew your own"}
+	case left < 21*24*time.Hour:
+		return Check{Group: group, Name: "TLS certificate", Level: CheckWarn,
+			Detail: fmt.Sprintf("expires in %d days", int(left.Hours()/24)),
+			Fix:    "renew it soon"}
+	default:
+		return Check{Group: group, Name: "TLS certificate", Level: CheckOK,
+			Detail: "valid until " + notAfter.Format("2006-01-02")}
+	}
+}
+
+// --- helpers ----------------------------------------------------------------
+
+// SysctlValue reads a kernel parameter, or "" when unavailable.
+func SysctlValue(key string) string {
+	out, err := exec.Command("sysctl", "-n", key).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(string(out), "\t", " "))
+}
+
+// nofileForTunnels returns the open-file ceiling a tunnel runs under, and a
+// short phrase saying where the figure came from. It returns 0 when there is
+// nothing to read.
+//
+// A running tunnel is the ground truth, so it is asked first: /proc/<pid>/limits
+// is what the kernel is actually enforcing on that process, whatever the unit
+// file says and whatever has been edited since it started. With no tunnel
+// running the unit is asked instead, which answers the same question one step
+// earlier — what the next one to start will get.
+func nofileForTunnels() (int, string) {
+	for _, t := range core.List() {
+		service := app.ServiceName(t.Name)
+		if !core.IsActive(service) {
+			continue
+		}
+		pid := mainPID(service)
+		if pid <= 0 {
+			continue
+		}
+		if v := procNofile(pid); v > 0 {
+			return v, "on " + t.Name
+		}
+	}
+	if v := unitNofile(); v > 0 {
+		return v, "for a tunnel service"
+	}
+	return 0, ""
+}
+
+// mainPID returns a unit's main process, or 0.
+func mainPID(service string) int {
+	out, err := exec.Command("systemctl", "show", "-p", "MainPID", "--value", service).Output()
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return pid
+}
+
+// procNofile reads the soft open-file limit the kernel is enforcing on a
+// process. The soft limit is the one that bites: it is what a socket runs out
+// against, and raising it to the hard limit is something a process has to ask
+// for rather than something it has.
+func procNofile(pid int) int {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/limits", pid))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "Max open files") {
+			continue
+		}
+		f := strings.Fields(strings.TrimPrefix(line, "Max open files"))
+		if len(f) == 0 {
+			return 0
+		}
+		if f[0] == "unlimited" {
+			return math.MaxInt32
+		}
+		n, _ := strconv.Atoi(f[0])
+		return n
+	}
+	return 0
+}
+
+// unitNofile returns the limit the tunnel unit template asks for, as systemd
+// has parsed it. Asking systemd rather than reading the template back means the
+// answer accounts for a unit that was edited by hand or overridden by a drop-in.
+func unitNofile() int {
+	for _, t := range core.List() {
+		out, err := exec.Command("systemctl", "show", "-p", "LimitNOFILESoft",
+			"--value", app.ServiceName(t.Name)).Output()
+		if err != nil {
+			continue
+		}
+		if n, _ := strconv.Atoi(strings.TrimSpace(string(out))); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// listening reports whether anything is bound to a local TCP port.
+// ifaceMTU reads the MTU an interface actually has, falling back to the
+// configured figure when it cannot be read. The note says when the two differ,
+// because that difference is auto_mtu having done its job and is worth seeing.
+func ifaceMTU(iface string, configured int) (int, string) {
+	b, err := os.ReadFile("/sys/class/net/" + iface + "/mtu")
+	if err != nil {
+		return configured, ""
+	}
+	live, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || live <= 0 {
+		return configured, ""
+	}
+	if configured > 0 && live != configured {
+		return live, fmt.Sprintf(" (measured; the config asks for %d)", configured)
+	}
+	return live, ""
+}
+
+func listening(port int) bool {
+	return addrListening(fmt.Sprintf(":%d", port))
+}
+
+// addrListening reports whether something already holds a listen address.
+//
+// The test is the bind itself: if we cannot take it, somebody has it. That is
+// the whole check, and it is why the address matters — ":443" and
+// "85.10.11.51:443" are different sockets, and a server with two addresses can
+// have one taken and the other free.
+func addrListening(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return true
+	}
+	ln.Close()
+	return false
+}
+
+// reachable reports whether a TCP connection to host:port can be opened. This
+// deliberately uses TCP rather than ICMP: many networks drop ping entirely
+// while the tunnel port itself works fine.
+func reachable(host, port string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+func humanSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%d MB", n>>20)
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", n>>10)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// --- file locations ---------------------------------------------------------
+
+// Location is one file or directory Backpack owns, and whether it exists.
+type Location struct {
+	Label  string
+	Path   string
+	Exists bool
+	Note   string
+}
+
+// Locations lists every file and folder Backpack uses, so a user can see at a
+// glance what is installed and where things live.
+func Locations() []Location {
+	out := []Location{
+		{Label: "Binary", Path: app.BinPath},
+		{Label: "Install folder", Path: app.InstallDir},
+		{Label: "Backups", Path: app.BackupDir},
+		{Label: "Snapshots", Path: backup.Root()},
+		{Label: "Config folder", Path: app.ConfigDir},
+		{Label: "Web panel config", Path: app.WebUIConfig},
+		{Label: "Telegram config", Path: app.TelegramConfig},
+		{Label: "TLS certificates", Path: app.ConfigDir + "/certs"},
+		{Label: "Web panel service", Path: app.ServiceDir + "/" + app.WebUIService},
+		{Label: "Monitor service", Path: app.ServiceDir + "/" + app.MonitorService},
+	}
+	for i := range out {
+		out[i].Exists = core.FileExists(out[i].Path)
+	}
+	for _, t := range core.List() {
+		out = append(out,
+			Location{Label: "Tunnel config (" + t.Name + ")", Path: app.ConfigPath(t.Name),
+				Exists: core.FileExists(app.ConfigPath(t.Name))},
+			Location{Label: "Tunnel service (" + t.Name + ")", Path: app.ServiceDir + "/" + t.Service,
+				Exists: core.FileExists(app.ServiceDir + "/" + t.Service)},
+		)
+	}
+	return out
+}
+
+// directChecks are the per-tunnel checks for a direct or layer-3 tunnel.
+//
+// They ask what these tunnels actually have. A layer-3 tunnel has an interface
+// and a pair of addresses and no forwarded ports unless it was asked for some;
+// a direct tunnel has the ports on the Iran side and nothing to list on the
+// kharej side. Neither has a bind address to test for a listening socket,
+// which is the one thing the reverse checks spend most of their effort on.
+func directChecks(g string, t core.Tunnel) []Check {
+	var out []Check
+
+	cfg, err := core.LoadTunnelConfig(t.Name)
+	if err != nil {
+		return append(out, Check{Group: g, Name: "Config", Level: CheckFail,
+			Detail: "unreadable: " + err.Error(), Fix: "restore from a backup"})
+	}
+
+	if cfg.L3.Enabled() {
+		l := cfg.L3
+		out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
+			Detail: "layer-3 over " + core.OrDefault(l.Carrier, "udp") + ", " + tunnelspec.L3EncapLabel(l)})
+
+		// The interface is the tunnel. If it is not there, nothing else matters.
+		iface := core.OrDefault(l.Iface, "bp0")
+		if ifaceExists(iface) {
+			// The MTU the interface actually has, not the one the config asks
+			// for.
+			//
+			// auto_mtu is on by default and its whole job is to measure the
+			// path and move the interface away from the configured figure. So
+			// on a tunnel where it has done something — which is the tunnel
+			// where the number matters — this check was reporting a value that
+			// is no longer true, on the screen an operator opens precisely
+			// because large transfers are stalling.
+			mtu, note := ifaceMTU(iface, l.MTU)
+			out = append(out, Check{Group: g, Name: "Interface", Level: CheckOK,
+				Detail: iface + "  " + l.LocalIP + " -> " + l.PeerIP + ", mtu " + strconv.Itoa(mtu) + note})
+		} else {
+			out = append(out, Check{Group: g, Name: "Interface", Level: CheckFail,
+				Detail: iface + " does not exist",
+				Fix:    "a layer-3 tunnel needs root and the tun module — check its log"})
+		}
+
+		// The forged-source carrier is the one health check that catches a
+		// silent tunnel: reverse-path filtering drops every forged packet before
+		// the tunnel sees it, so the interface is up and the process is happy
+		// while nothing crosses. It is the most common cause, and the one with
+		// no other symptom. See network.EffectiveRPFilter.
+		if strings.EqualFold(strings.TrimSpace(l.Carrier), "spoof") {
+			out = append(out, rpFilterCheck(g, l))
+		}
+
+		if len(l.Ports) > 0 {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+				Detail: strings.Join(l.Ports, ", ")})
+			if err := validatePortSpecs(l.Ports); err != nil {
+				out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+					Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
+			}
+		}
+		return out
+	}
+
+	d := cfg.Direct
+	out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
+		Detail: "direct tunnel over " + core.OrDefault(d.Transport, "tcp")})
+
+	if tunnelspec.HoldsPorts(t) {
+		if len(d.Ports) == 0 {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
+				Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
+		} else {
+			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+				Detail: strings.Join(d.Ports, ", ")})
+			if err := validatePortSpecs(d.Ports); err != nil {
+				out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+					Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
+			}
+		}
+		out = append(out, Check{Group: g, Name: "Kharej server", Level: CheckInfo, Detail: d.Addr})
+		return out
+	}
+
+	// The kharej side listens, so its port must actually be bound — and unlike
+	// a layer-3 carrier, every direct transport is real TCP, so the listen
+	// table can answer.
+	if p := addrPort(d.Addr); p != "" {
+		if n, _ := strconv.Atoi(p); n > 0 {
+			if listening(n) {
+				out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK,
+					Detail: p + " listening"})
+			} else {
+				out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
+					Detail: p + " not listening",
+					Fix:    "the service may have failed to bind — check its log"})
+			}
+		}
+	}
+	out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckInfo,
+		Detail: "set on the Iran server — this side needs none"})
+	return out
+}
+
+// ifaceExists reports whether a network interface is present.
+func ifaceExists(name string) bool {
+	_, err := net.InterfaceByName(name)
+	return err == nil
+}
+
+// rpFilterCheck reports whether reverse-path filtering will drop this spoof
+// tunnel's forged packets. It reads the effective value — the max of conf.all
+// and the receiving interface — because that is what the kernel applies, and
+// names the exact sysctl to change when it is strict.
+func rpFilterCheck(g string, l config.L3Config) Check {
+	peer := l.SpoofPeerIP
+	if peer == "" && !strings.EqualFold(strings.TrimSpace(l.Mode), "listen") {
+		if host, _, err := net.SplitHostPort(l.Addr); err == nil {
+			peer = host
+		}
+	}
+	iface := l.SpoofInterface
+	if iface == "" {
+		iface = network.InterfaceTowardPeer(peer)
+	}
+	v, key := network.EffectiveRPFilter(iface)
+	switch v {
+	case 1:
+		fix := "sysctl -w net.ipv4.conf.all.rp_filter=2"
+		if iface != "" {
+			fix += " ; sysctl -w net.ipv4.conf." + iface + ".rp_filter=2"
+		}
+		return Check{Group: g, Name: "Reverse-path filter", Level: CheckFail,
+			Detail: key + "=1 — the kernel drops forged-source packets before the tunnel sees them",
+			Fix:    fix}
+	case 0, 2:
+		return Check{Group: g, Name: "Reverse-path filter", Level: CheckOK,
+			Detail: "relaxed (forged sources pass)"}
+	default:
+		// Unreadable — not Linux, or the file is absent. Say so rather than
+		// implying either answer.
+		return Check{Group: g, Name: "Reverse-path filter", Level: CheckInfo,
+			Detail: "could not read rp_filter; ensure it is 0 or 2 on the receiving host"}
+	}
+}
+
+// optimizeFix is what a system check tells the operator to do.
+//
+// It was "run Optimize" every time, including to somebody who just had — the
+// value was overwritten at boot by another file, or the kernel refused it — so
+// they ran it again and got the same warning, which is the loop users
+// reported. Once Optimize has run, the check says instead what stands in its
+// way. See optimize.WhyNot.
+func optimizeFix(key, live, otherwise string) string {
+	if why := optimize.WhyNot(key, live); why != "" {
+		return why
+	}
+	return otherwise
+}

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -118,3 +119,37 @@ const (
 	drainGrace = 3 * time.Second
 	drainSweep = 100 * time.Millisecond
 )
+
+// handshakeSweep closes whatever control claim is still queued when a
+// generation ends. A claim can be filed an instant before the end — past
+// admitControlChannel's check, before channelHandshake chose the end over it —
+// and would otherwise be a connection its client believes is established and
+// nobody on this side will ever read.
+func handshakeSweep(ctx context.Context, q chan controlCandidate) {
+	sweepAfterEnd(ctx, func() bool {
+		select {
+		case c := <-q:
+			c.conn.Close()
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// endedClaim closes a control claim that reached a generation which has
+// already ended, and reports whether it did. Such a claim is closed, not
+// answered: nothing will read this generation's handshake again, and a client
+// told it is connected would sit on a channel nobody holds until its keepalive
+// ran out. It dials again, and the next generation answers it. The listener is
+// still accepting in the instant between a restart cancelling the generation
+// and the socket closing, and each claim is admitted in a goroutine of its own,
+// which is how one gets here. See handshakeSweep for a claim filed a moment
+// before the end.
+func endedClaim(ctx context.Context, conn io.Closer) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	conn.Close()
+	return true
+}

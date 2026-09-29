@@ -125,14 +125,14 @@ func TestAHandshakeAnsweredOnceIsNotAnsweredAgain(t *testing.T) {
 	var s seenInits
 	now := time.Now()
 
-	if s.seen(0xAABBCCDD, now) {
+	if answer(&s, 0xAABBCCDD, now) {
 		t.Fatal("the first sighting of an identifier was reported as a repeat")
 	}
-	if !s.seen(0xAABBCCDD, now) {
+	if !answer(&s, 0xAABBCCDD, now) {
 		t.Error("the same identifier was accepted twice; a replay would be answered")
 	}
 	// A different one is a genuine new handshake and must still get through.
-	if s.seen(0x11223344, now) {
+	if answer(&s, 0x11223344, now) {
 		t.Error("a different identifier was refused as a replay")
 	}
 }
@@ -147,23 +147,33 @@ func TestTheHandshakeMemoryIsBounded(t *testing.T) {
 	// Past the count limit: the earliest is forgotten and would be accepted
 	// again, which is the deliberate limit of this approach.
 	for i := 0; i < initMemory+10; i++ {
-		s.seen(uint32(i+1), now)
+		answer(&s, uint32(i+1), now)
 	}
 	if len(s.ids) > initMemory {
 		t.Errorf("the memory holds %d entries, cap is %d", len(s.ids), initMemory)
 	}
-	if !s.seen(uint32(initMemory+10), now) {
+	if !answer(&s, uint32(initMemory+10), now) {
 		t.Error("the most recent identifier was forgotten")
 	}
 
 	// Past the time window: everything ages out, so a tunnel up for months does
 	// not carry a set that only grows.
 	var s2 seenInits
-	s2.seen(0x99999999, now)
+	answer(&s2, 0x99999999, now)
 	later := now.Add(initMemoryWindow + time.Minute)
-	if s2.seen(0x99999999, later) {
+	if answer(&s2, 0x99999999, later) {
 		t.Error("an identifier older than the window was still refused; the memory " +
 			"never forgets and a genuine handshake reusing an old identifier would " +
 			"be refused for ever")
 	}
+}
+
+// answer is what handleInit does with an identifier that authenticated: refuse
+// it if it is known, and remember it if it is not.
+func answer(s *seenInits, id uint32, now time.Time) bool {
+	if s.known(id, now) {
+		return true
+	}
+	s.record(id, now)
+	return false
 }

@@ -39,7 +39,7 @@ func TestTheReverseLinkBuildsTheMatchingKharej(t *testing.T) {
 				s.TLSCert, s.TLSKey = "/etc/backpack/c.pem", "/etc/backpack/k.pem"
 			}
 
-			raw := pendingReverseLink(s, "203.0.113.9")
+			raw := pendingReverseLink(s, "203.0.113.9", linkExtras{})
 			if !strings.HasPrefix(raw, shareScheme) {
 				t.Fatalf("no setup link before the tunnel exists: %q", raw)
 			}
@@ -75,7 +75,7 @@ func TestTheKharejFromAServerNamedLinkIsAClient(t *testing.T) {
 	s := TunnelSpec{Role: "server", Transport: "tcp", Name: "server-443", BindAddr: "0.0.0.0:443",
 		Token: "t", Ports: []string{"443"}}
 	ApplyPreset(&s, PresetTurbo)
-	link, err := DecodeShareLink(pendingReverseLink(s, "203.0.113.9"))
+	link, err := DecodeShareLink(pendingReverseLink(s, "203.0.113.9", linkExtras{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,14 @@ func TestTheReverseSummaryIsShortAndCarriesTheLink(t *testing.T) {
 		Token: "the-token", Ports: []string{"443", "8080=2096"}, AcceptUDP: true,
 	}
 	ApplyPreset(&s, PresetTurbo)
-	link := pendingReverseLink(s, "203.0.113.9")
+	link := pendingReverseLink(s, "203.0.113.9", linkExtras{})
 	out := capture(t, func() { summariseReverse(s, "203.0.113.9", link) })
 	for _, want := range []string{
 		"Reverse TCP", "0.0.0.0:443", "203.0.113.9:443", "443, 8080=2096  (TCP + UDP)",
 		"443 → 127.0.0.1:443", "8080 → 127.0.0.1:2096", "Turbo",
-		"Setup Link (Setup Kharej → Reverse → The Same Transport → Setup Link)", link,
+		"Setup Link (sudo backpack → Setup Kharej → Reverse → Setup Link):",
+		"Install BackPack And Set Up This Tunnel (Kharej Without BackPack, As Root):",
+		"install.sh) link apply 'backpack://", link,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the reverse summary is missing %q:\n%s", want, out)
@@ -245,7 +247,7 @@ func TestSetupFromALinkKeepsThePairedReverseSettings(t *testing.T) {
 			if tr == "kcp" {
 				srv.KCPDataShards, srv.KCPParityShards = 0, 0
 			}
-			link, err := DecodeShareLink(pendingReverseLink(srv, "203.0.113.9"))
+			link, err := DecodeShareLink(pendingReverseLink(srv, "203.0.113.9", linkExtras{}))
 			if err != nil {
 				t.Fatal(err)
 			}

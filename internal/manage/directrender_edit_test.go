@@ -31,7 +31,7 @@ func TestTokensSurviveBeingWritten(t *testing.T) {
 	} {
 		body := directSpec{
 			Side: sideKharej, Transport: "tcp", Addr: "0.0.0.0:8443", Token: token,
-		}.render()
+		}.Render()
 
 		var back config.Config
 		if _, err := toml.Decode(body, &back); err != nil {
@@ -48,7 +48,7 @@ func TestTokensSurviveBeingWritten(t *testing.T) {
 	body := l3Spec{
 		Side: sideIran, Carrier: "udp", Encap: "ipip", Addr: "1.2.3.4:9000",
 		Token: `l3\token`, Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
-	}.render()
+	}.Render()
 	var back config.Config
 	if _, err := toml.Decode(body, &back); err != nil {
 		t.Fatalf("the layer-3 renderer produced a config that does not parse: %v", err)
@@ -184,7 +184,7 @@ func TestEveryDirectPresetDisablesNagle(t *testing.T) {
 			Token: "t", Ports: []string{"443"}, Nodelay: spec.Nodelay,
 			Preset: p.Name, MuxFrameSize: p.MuxFrameSize,
 			MuxReceiveBuffer: p.MuxReceiveBuffer, MuxStreamBuffer: p.MuxStreamBuffer,
-		}.render()
+		}.Render()
 		if !strings.Contains(body, "nodelay") {
 			t.Errorf("preset %q does not write nodelay into the file", p.Name)
 		}
@@ -207,7 +207,7 @@ func renderL3For(l config.L3Config) string {
 		Ports: l.Ports, AcceptUDP: l.AcceptUDP,
 		MaxConnections: l.MaxConnections, BandwidthMbps: l.BandwidthMbps,
 		Spoof: l.SpoofConfig, Pck: l.PckConfig,
-	}.render()
+	}.Render()
 }
 
 func renderDirectFor(d config.DirectConfig) string {
@@ -227,7 +227,7 @@ func renderDirectFor(d config.DirectConfig) string {
 		TLSCertFile: d.TLSCertFile, TLSKeyFile: d.TLSKeyFile,
 		MuxVersion:  d.MuxVersion,
 		DialTimeout: d.DialTimeout, RetryInterval: d.RetryInterval,
-	}.render()
+	}.Render()
 }
 
 // compareL3 names the first field that differs, so a failure says which key was

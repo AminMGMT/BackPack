@@ -1,10 +1,19 @@
 package webui
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path"
+	"strings"
 	"sync"
+
+	"github.com/backpack/backpack/internal/app"
 )
 
 // The panel.
@@ -32,10 +41,9 @@ var panelFS embed.FS
 const panelPrefix = "/panel/"
 
 var (
-	panelOnce   sync.Once
-	panelRoot   fs.FS
-	panelIndex  []byte
-	panelServer http.Handler
+	panelOnce  sync.Once
+	panelRoot  fs.FS
+	panelIndex []byte
 )
 
 // loadPanel prepares the embedded panel once, on first use.
@@ -44,7 +52,6 @@ func loadPanel() {
 		panelRoot, _ = fs.Sub(panelFS, "panel")
 		raw, _ := fs.ReadFile(panelRoot, "index.html")
 		panelIndex = raw
-		panelServer = http.FileServerFS(panelRoot)
 	})
 }
 
@@ -66,8 +73,94 @@ func (s *server) handlePanel(w http.ResponseWriter, r *http.Request) {
 		// CSP is what lets it run. See withNonce in panelsecurity.go.
 		w.Write(withNonce(withBase(panelIndex, basePrefix()), r))
 	default:
-		panelServer.ServeHTTP(w, r)
+		servePanelAsset(w, r)
 	}
+}
+
+// Serving the panel's files.
+//
+// They used to go through http.FileServerFS, and an embedded file has no
+// modification time — so no Last-Modified and no ETag went out, a browser had
+// nothing to revalidate with, and every visit downloaded all 900 KB of the
+// panel again, uncompressed. From Iran, over the route a panel is usually
+// reached by, that was much of why the panel felt slow. Each file now carries
+// an ETag made of the version and its content, so a return visit costs one
+// small 304 per file, and the text files go gzipped to a browser that takes
+// it. Both are worked out once per file and kept.
+
+type panelAsset struct {
+	raw, gz []byte
+	etag    string
+	ctype   string
+}
+
+var (
+	assetMu sync.Mutex
+	assets  = map[string]*panelAsset{}
+)
+
+// assetFor is the prepared file at name, or nil when there is none.
+func assetFor(name string) *panelAsset {
+	assetMu.Lock()
+	defer assetMu.Unlock()
+	if a, ok := assets[name]; ok {
+		return a
+	}
+	raw, err := fs.ReadFile(panelRoot, name)
+	if err != nil {
+		assets[name] = nil
+		return nil
+	}
+	sum := sha256.Sum256(raw)
+	a := &panelAsset{
+		raw:   raw,
+		etag:  `"` + app.Version + "-" + hex.EncodeToString(sum[:8]) + `"`,
+		ctype: mime.TypeByExtension(path.Ext(name)),
+	}
+	if a.ctype == "" {
+		a.ctype = "application/octet-stream"
+	}
+	if strings.HasPrefix(a.ctype, "text/") || strings.Contains(a.ctype, "javascript") ||
+		strings.Contains(a.ctype, "json") || strings.Contains(a.ctype, "svg") {
+		var b bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
+		_, _ = zw.Write(raw)
+		_ = zw.Close()
+		if b.Len() < len(raw) {
+			a.gz = b.Bytes()
+		}
+	}
+	assets[name] = a
+	return a
+}
+
+func servePanelAsset(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+	a := assetFor(name)
+	if name == "" || a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("ETag", a.etag)
+	// Revalidated on every load — which with the ETag is a 304 — so an update
+	// is picked up at once and nothing stale is kept.
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Vary", "Accept-Encoding")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, a.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Type", a.ctype)
+	body := a.raw
+	if a.gz != nil && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		h.Set("Content-Encoding", "gzip")
+		body = a.gz
+	}
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(body)
 }
 
 // handleOldPanelPath keeps /panel/ bookmarks working.

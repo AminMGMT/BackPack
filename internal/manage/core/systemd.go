@@ -185,3 +185,18 @@ func FollowLog(service string) error {
 	signal.Stop(sig)
 	return err
 }
+
+// WaitServiceActive waits up to timeout for a service to report active,
+// polling briefly. Returns true as soon as it is up.
+func WaitServiceActive(service string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if IsActive(service) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}

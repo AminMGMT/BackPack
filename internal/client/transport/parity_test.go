@@ -46,6 +46,19 @@ func readEngine(t *testing.T, side, name string) string {
 	if err != nil {
 		t.Fatalf("reading the %s %s engine: %v", side, name, err)
 	}
+	// An engine may keep parts of itself in files of their own — the udp
+	// server's control port and flows are udp_control.go and udp_flows.go.
+	parts, _ := filepath.Glob(strings.TrimSuffix(path, ".go") + "_*.go")
+	for _, p := range parts {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		more, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("reading %s: %v", p, err)
+		}
+		b = append(append(b, '\n'), more...)
+	}
 	return string(b)
 }
 
@@ -97,7 +110,7 @@ func TestEveryClientEngineBoundsItsControlChannel(t *testing.T) {
 		src := readEngine(t, "client", name)
 		// beats.deadline is controlDeadline once it has learned the server's
 		// rhythm, and controlDeadline until then (see beatClock).
-		if !strings.Contains(src, "controlDeadline(") && !strings.Contains(src, "beats.deadline(") {
+		if !strings.Contains(src, "controlDeadline(") && !strings.Contains(src, "beats.deadline(") && !servesThroughSharedLoop(t, src) {
 			t.Errorf("the %s client never bounds its control channel read, so a tunnel "+
 				"whose peer has gone silently is noticed only when TCP gives up — or "+
 				"never, on a datagram carrier", name)
@@ -113,14 +126,41 @@ func TestEveryEngineReportsWhetherItIsConnected(t *testing.T) {
 	for _, side := range []string{"client", "server"} {
 		for _, name := range clientEngines {
 			src := readEngine(t, side, name)
-			if !strings.Contains(src, "metrics.ReportPeer(") {
+			// The server reports through lifecycle.seated, which every client
+			// taking the seat goes through (see clientSeat).
+			if !strings.Contains(src, "metrics.ReportPeer(") && !(side == "server" && strings.Contains(src, "s.seated(")) {
 				t.Errorf("the %s %s engine never reports its peer, so the watchdog has "+
 					"nothing to go on but the socket table", side, name)
 			}
-			if !strings.Contains(src, "metrics.ClearPeer(") {
+			// The peer is cleared on every restart by the shared lifecycle
+			// (lifecycle.go on each side); an engine that restarts through it
+			// inherits that.
+			if !strings.Contains(src, "metrics.ClearPeer(") && !restartsThroughLifecycle(t, side, src) {
 				t.Errorf("the %s %s engine never clears its peer, so a tunnel that has "+
 					"dropped keeps reporting the peer it used to have", side, name)
 			}
 		}
 	}
+}
+
+// restartsThroughLifecycle reports whether an engine's Restart delegates to its
+// side's shared lifecycle, and that lifecycle clears the peer.
+func restartsThroughLifecycle(t *testing.T, side, src string) bool {
+	t.Helper()
+	if !regexp.MustCompile(`(?m)^func \([a-z] \*\w+\) Restart\(\) \{\n\t[a-z]\.restart\(`).MatchString(src) {
+		return false
+	}
+	return strings.Contains(readEngine(t, side, "lifecycle"), "metrics.ClearPeer(")
+}
+
+// servesThroughSharedLoop reports whether an engine serves its control channel
+// with the shared controlLoop, and that loop bounds its reads by the beat clock.
+func servesThroughSharedLoop(t *testing.T, src string) bool {
+	t.Helper()
+	// Started as `go c.control().run()`, or — quic, which closes its
+	// connection after the loop — as a loop built by c.control() and run.
+	if !strings.Contains(src, "c.control()") || !strings.Contains(src, ".run()") {
+		return false
+	}
+	return strings.Contains(readEngine(t, "client", "controlloop"), "beats.deadline(")
 }

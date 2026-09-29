@@ -19,7 +19,7 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,40}$`)
 // ValidName reports whether a tunnel name is acceptable.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// errBadName is what the two config readers answer a name that could not have
+// ErrBadName is what the two config readers answer a name that could not have
 // been written by this program.
 //
 // app.ConfigPath is plain concatenation — ConfigDir + "/" + name + ".toml" —
@@ -53,8 +53,8 @@ func L3Role(mode string) string {
 	return "iran"
 }
 
-// checkName refuses a name that must not be turned into a path.
-// CheckName is checkName's exported half; see manage for the callers.
+// CheckName refuses a name that must not be turned into a path; see manage
+// for the callers.
 func CheckName(name string) error {
 	if !ValidName(name) {
 		return ErrBadName(name)

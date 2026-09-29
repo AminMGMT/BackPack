@@ -72,7 +72,7 @@ func (p *httpProxy) authorized(r *http.Request) bool {
 // handleConnect tunnels raw bytes to the requested host (HTTPS and anything
 // else over CONNECT): hijack the client socket, dial the target, pipe both.
 func (p *httpProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
-	dst, err := net.DialTimeout("tcp", r.Host, 15*time.Second)
+	dst, err := socks.DialTarget("tcp", r.Host, 15*time.Second)
 	if err != nil {
 		http.Error(w, "cannot reach destination", http.StatusBadGateway)
 		return
@@ -100,7 +100,7 @@ func (p *httpProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del("Proxy-Authorization")
 	r.Header.Del("Proxy-Connection")
 
-	resp, err := http.DefaultTransport.RoundTrip(r)
+	resp, err := forwardTransport.RoundTrip(r)
 	if err != nil {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
@@ -131,4 +131,17 @@ func pipe(a, b net.Conn) {
 	go cp(a, b)
 	go cp(b, a)
 	wg.Wait()
+}
+
+// forwardTransport forwards plain HTTP requests under the same destination
+// policy as CONNECT and SOCKS: see socks.Target.
+var forwardTransport = &http.Transport{
+	Proxy: nil,
+	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return socks.DialTarget(network, addr, 15*time.Second)
+	},
+	MaxIdleConns:          100,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: time.Second,
 }

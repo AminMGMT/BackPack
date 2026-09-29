@@ -200,9 +200,11 @@ function selectFamilyFor(root, opts, transport) {
   if (sel.childNodes[0]) sel.childNodes[0].textContent = fams[i].label;
 }
 
-async function wireControls(root) {
-  let opts = { families: [], presets: [] };
-  try { opts = await api.tunnelOptions(); } catch (e) { /* the menus stay empty */ }
+async function wireControls(root, given) {
+  let opts = given || { families: [], presets: [] };
+  if (!given) {
+    try { opts = await api.tunnelOptions(); } catch (e) { /* the menus stay empty */ }
+  }
   wireControls.opts = opts;
 
   root.querySelectorAll('.sww[data-name]').forEach(sw => {
@@ -315,6 +317,51 @@ function syncControls(root) {
   });
 }
 
+/* A direct tunnel has a form of its own.
+ *
+ * It used to be handed the reverse form: transport families, mux sizes and KCP
+ * windows a layer-3 tunnel does not have, filled from settings with none of
+ * those keys, and saved with every field at the top of the request — where the
+ * direct edit reads nothing, since its fields travel under "direct". Opening
+ * Edit on a direct tunnel showed the wrong dialog and could not save it. The
+ * reverse panes are replaced with the settings a direct tunnel really has, and
+ * the save goes where the server reads it. */
+const sw = (name, title, text) => `<div class="tg"><div class="tx"><b>${title}</b><span>${text}</span></div>` +
+  `<div class="sww" data-name="${name}"><i></i></div></div>`;
+const field = (name, label, hint = '') => `<div class="f"><label>${label}</label>` +
+  `<input name="${name}" type="text">${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+
+function directMarkup(set) {
+  const ports = !!set.holdsPorts;
+  return `<div class="pane" data-tab="Direct">` +
+    (ports ? field('ports', 'Forwarded ports', 'Comma separated. Blank leaves a plain TUN tunnel.') +
+      sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
+    `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo` +
+    `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div></div>` +
+    `<div class="two">${field('mtu', 'MTU')}` +
+    (set.carrier === 'udp' ? field('paths', 'Sockets', '1 is one socket; 2–8 spread it.') : '<div></div>') + `</div>` +
+    sw('autoMtu', 'Auto MTU', 'Measure the path and correct the MTU once up.') +
+    sw('fec', 'Error correction (FEC)', 'Spare packets repair loss. Both ends must match.') +
+    (set.carrier === 'spoof' ? sw('stealth', 'Stealth', 'Padding and header cosmetics. Both ends must match.') : '') +
+    (ports ? `<div class="two">${field('maxConnections', 'Max connections', '0 is no limit.')}` +
+      `${field('bandwidthMbps', 'Bandwidth (Mbit/s)', '0 is no limit.')}</div>` : '') +
+    `</div>`;
+}
+
+const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps']);
+
+function readDirect(root) {
+  const out = {};
+  root.querySelectorAll('.panes input[name]').forEach(n => {
+    const v = n.type === 'checkbox' ? n.checked
+            : DIRECT_NUMBERS.has(n.name) ? Number(n.value.trim())
+            : n.value;
+    if (typeof v === 'number' && Number.isNaN(v)) return;
+    out[n.name] = v;
+  });
+  return out;
+}
+
 export async function editView(ctx) {
   const name = ctx.params.name;
   /* A deep link arrives before the first poll, so the tunnel may not be in the
@@ -333,37 +380,51 @@ export async function editView(ctx) {
       if (sub && t) sub.textContent = kindLabel(t) + ' · ' + (t.addr || '');
 
       let settings = {};
+      let direct = false;
       try {
         settings = await api.tunnelSettings(name);
-        if (settings.kind === 'direct') settings = settings.direct || {};
+        if (settings.kind === 'direct') { settings = settings.direct || {}; direct = true; }
       } catch (e) { oops(e); }
-      /* The switches and the menus were drawings.
-       *
-       * Ten <div class="sww"> and four <div class="sel">, none of them a
-       * control and none of them named — so every boolean on this form and
-       * every choice on it went nowhere, and an edit that turned Accept UDP on
-       * saved a tunnel with Accept UDP unchanged. They carry data-name in the
-       * markup now, and each gets the hidden field it stands for, so fill() and
-       * read() see them like any other input.
-       */
-      await wireControls(root);
-      shapeForTransport(root, settings, t);
-      /* The tunnel port field shows the address as well when the control port
-         is pinned to one.
-       *
-       * tunnelPort stays the bare port in the API because adopt pairs the two
-       * ends of a tunnel by comparing it, and the far end cannot know which of
-       * this machine's addresses the port was bound to. The form is the one
-       * place the two belong back together: an operator who typed
-       * 85.10.11.51:443 has to see that on the next visit, or accepting the
-       * field unchanged would quietly widen the tunnel to every interface. */
-      fill(root, { ...settings, tunnelPort: bindValue(settings) });
-      /* The family is not a field, so fill() never touches it and the dialog
-         opened showing whichever one the preview happened to be drawn with —
-         WebSocket, on every tunnel, including a TCP one. It is derived: the
-         family is whichever one lists this tunnel's transport. */
-      selectFamilyFor(root, wireControls.opts, settings.transport);
-      syncControls(root);
+
+      if (direct) {
+        /* Only History stays in the tab row; the reverse tabs have no pane. */
+        root.querySelectorAll('.tabs > button:not(.hist)').forEach(b => { b.hidden = true; });
+        const panes = root.querySelector('.panes');
+        if (panes) panes.innerHTML = directMarkup(settings);
+        let dopts = { presets: [] };
+        try { dopts = await api.directOptions(); } catch (e) { /* the menu stays empty */ }
+        await wireControls(root, { families: [], presets: dopts.presets || [] });
+        fill(root, settings);
+        syncControls(root);
+      } else {
+        /* The switches and the menus were drawings.
+         *
+         * Ten <div class="sww"> and four <div class="sel">, none of them a
+         * control and none of them named — so every boolean on this form and
+         * every choice on it went nowhere, and an edit that turned Accept UDP on
+         * saved a tunnel with Accept UDP unchanged. They carry data-name in the
+         * markup now, and each gets the hidden field it stands for, so fill() and
+         * read() see them like any other input.
+         */
+        await wireControls(root);
+        shapeForTransport(root, settings, t);
+        /* The tunnel port field shows the address as well when the control port
+           is pinned to one.
+         *
+         * tunnelPort stays the bare port in the API because adopt pairs the two
+         * ends of a tunnel by comparing it, and the far end cannot know which of
+         * this machine's addresses the port was bound to. The form is the one
+         * place the two belong back together: an operator who typed
+         * 85.10.11.51:443 has to see that on the next visit, or accepting the
+         * field unchanged would quietly widen the tunnel to every interface. */
+        fill(root, { ...settings, tunnelPort: bindValue(settings) });
+        /* The family is not a field, so fill() never touches it and the dialog
+           opened showing whichever one the preview happened to be drawn with —
+           WebSocket, on every tunnel, including a TCP one. It is derived: the
+           family is whichever one lists this tunnel's transport. */
+        selectFamilyFor(root, wireControls.opts, settings.transport);
+        syncControls(root);
+      }
 
       /* Tabs and drawers are the preview's own handlers, rebound in screen.js. */
 
@@ -399,7 +460,7 @@ export async function editView(ctx) {
         });
       }
       save?.addEventListener('click', async () => {
-        const payload = { name, ...read(root) };
+        const payload = direct ? { name, direct: readDirect(root) } : { name, ...read(root) };
         save.disabled = true;
         try {
           const r = await api.tunnelEdit(payload);

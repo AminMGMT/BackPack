@@ -296,3 +296,51 @@ func TestAStaleStampIsRefusedWhileASessionIsUp(t *testing.T) {
 		h.session++
 	}
 }
+
+// A recorded handshake cannot walk the remembered stamp backwards.
+//
+// With no session up and a stale stamp refused for the grace, the listener
+// answers it, in case the dialler's clock really went back. It used to take
+// the stamp as its new last at once — so a replayed recording, answered and
+// never confirmed, left the door open to every older recording. The stamp is
+// taken now only when its session carries data, which a replay never can.
+func TestAReplayedStaleHandshakeDoesNotMoveTheStampBack(t *testing.T) {
+	defer func(g time.Duration) { clockStepGrace = g }(clockStepGrace)
+	clockStepGrace = 0
+
+	p := established(t, "gre", 0)
+	p.dialer.mu.Lock()
+	ts := p.dialer.freshClock.next(time.Now())
+	p.dialer.mu.Unlock()
+	old, err := beginHandshakeFresh(p.dialer.cfg.Token, 0, encapID(p.dialer.encap), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := old.datagram()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.dialer.negotiate(ctx); err != nil {
+		t.Fatalf("rekey: %v", err)
+	}
+	across(t, p.dialDev, p.listenDev, ipv4Packet(1))
+
+	p.listener.mu.Lock()
+	remembered := p.listener.fresh.last
+	// The tunnel has gone quiet: nothing left for a replay to displace.
+	p.listener.current, p.listener.previous, p.listener.pending = nil, nil, nil
+	p.listener.mu.Unlock()
+
+	from := &net.UDPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 4444}
+	h := parseHeaderT(t, recorded)
+	for range 2 { // once to start the grace, once past it
+		p.listener.handleInit(h, recorded[headerLen:], from)
+		h.session++
+	}
+
+	p.listener.mu.RLock()
+	now := p.listener.fresh.last
+	p.listener.mu.RUnlock()
+	if now != remembered {
+		t.Fatalf("a replayed handshake moved the remembered stamp from %d back to %d", remembered, now)
+	}
+}

@@ -46,8 +46,8 @@ func TestPresetsAreTheCLIPresets(t *testing.T) {
 		t.Fatalf("panel shows %d presets, there are %d", len(got), len(presetOptions))
 	}
 	for i, o := range presetOptions {
-		if got[i].Value != o.value || got[i].Label != o.label {
-			t.Errorf("preset %d: panel says %q/%q, want %q/%q", i, got[i].Value, got[i].Label, o.value, o.label)
+		if got[i].Value != o.Value || got[i].Label != o.Label {
+			t.Errorf("preset %d: panel says %q/%q, want %q/%q", i, got[i].Value, got[i].Label, o.Value, o.Label)
 		}
 		if !validPreset(got[i].Value) {
 			t.Errorf("the panel offers preset %q, which ApplyPreset does not know", got[i].Value)

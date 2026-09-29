@@ -86,7 +86,6 @@ func Get() Snapshot {
 	return s
 }
 
-// LoadString formats the three load averages the way uptime(1) does.
 // CPUPercentOver samples the processor across a real window.
 //
 // Get's figure is the instantaneous one — cpu.Percent with a zero interval,
@@ -116,6 +115,7 @@ func CPUPercentOver(d time.Duration) float64 {
 	return Round1(pct[0])
 }
 
+// LoadString formats the three load averages the way uptime(1) does.
 func (s Snapshot) LoadString() string {
 	return fmt.Sprintf("%.2f, %.2f, %.2f", s.Load1, s.Load5, s.Load15)
 }

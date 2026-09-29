@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// listenWithBuffers creates a TCP listener with specified SO_RCVBUF and SO_SNDBUF sizes.
+// ListenWithBuffers creates a TCP listener with specified SO_RCVBUF and SO_SNDBUF sizes.
 // It returns a net.Listener and an error if any.
 func ListenWithBuffers(network, address string, rcvBufSize, sndBufSize, mss int, keepAlivePeriod time.Duration, dis_nodelay bool) (net.Listener, error) {
 	// Options

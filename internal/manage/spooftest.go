@@ -26,14 +26,12 @@ func SpoofTest() {
 		tui.PressEnter()
 		return
 	}
-	tui.Warn("Finds which forged source IPs traverse the firewall between two nodes.")
-	tui.Warn("Run the RECEIVER on one node and the SENDER on the other, then swap to")
-	tui.Warn("map the other direction. Needs root (CAP_NET_RAW) on the sender.")
+	tui.Warn("Receiver On One Server, Sender On The Other; Swap For The Other Direction.")
 	fmt.Println()
 
 	switch tui.ChooseOpt("Role", []tui.Option{
-		{Title: "Receiver", Desc: "listen and tally which forged sources arrive (run this first)"},
-		{Title: "Sender", Desc: "emit probes from a list/range/CIDR of forged sources"},
+		{Title: "Receiver", Desc: "start this first"},
+		{Title: "Sender", Desc: "needs root"},
 	}) {
 	case 0:
 		spoofTestReceiver()
@@ -45,14 +43,14 @@ func SpoofTest() {
 }
 
 func spoofTestReceiver() {
-	token := tui.PromptDefault("Shared token (must match the sender)", "backpack")
-	port := tui.PromptInt("Listen UDP port", 45000)
-	attempts := tui.PromptInt("Probes the sender emits per IP", 5)
-	windowSec := tui.PromptInt("Capture window (seconds)", 30)
-	maxLoss := tui.PromptInt("Report IPs with loss%% at or below", 20)
-	outFile := strings.TrimSpace(tui.PromptDefault("Write passing IPs to file (optional)", ""))
+	token := tui.PromptDefault("Shared Token (Same On Both)", "backpack")
+	port := tui.PromptInt("UDP Port", 45000)
+	attempts := tui.PromptInt("Probes Per IP (Same On Both)", 5)
+	windowSec := tui.PromptInt("Listen For (Seconds)", 30)
+	maxLoss := tui.PromptInt("Pass At Loss % Or Below", 20)
+	outFile := strings.TrimSpace(tui.PromptDefault("Save Passing IPs To File (Optional)", ""))
 
-	tui.Info(fmt.Sprintf("Listening on udp/%d for %ds…", port, windowSec))
+	tui.Info(fmt.Sprintf("Listening On udp/%d For %ds…", port, windowSec))
 	results, err := spooftest.RunReceiver(spooftest.ReceiverConfig{
 		Token:    token,
 		Port:     uint16(port),
@@ -65,8 +63,7 @@ func spoofTestReceiver() {
 		return
 	}
 	if len(results) == 0 {
-		tui.Warn("No probes arrived. Check the sender ran, the token/port match, and")
-		tui.Warn("that this node's real IP is what the sender targeted.")
+		tui.Warn("Nothing Arrived — Check The Sender, Token, Port And Target IP.")
 		tui.PressEnter()
 		return
 	}
@@ -79,16 +76,16 @@ func spoofTestReceiver() {
 
 	passing := spooftest.Passing(results, float64(maxLoss))
 	fmt.Println()
-	tui.Success(fmt.Sprintf("%d IP(s) passed at ≤ %d%% loss.", len(passing), maxLoss))
+	tui.Success(fmt.Sprintf("%d IP(s) Passed At ≤ %d%% Loss.", len(passing), maxLoss))
 	if outFile != "" && len(passing) > 0 {
 		if err := writePassingIPs(outFile, passing); err != nil {
 			tui.Error("Could not write file: " + err.Error())
 		} else {
-			tui.Success("Wrote passing IPs to " + outFile)
+			tui.Success("Saved To " + outFile)
 		}
 	}
 	if len(passing) > 0 {
-		tui.Info("Use these as spoof_src_pool on the SENDER's end of the tunnel.")
+		tui.Info("Use These As The Forged Source On The Sender's Side.")
 	}
 	tui.PressEnter()
 }
@@ -99,25 +96,24 @@ func spoofTestSender() {
 		tui.PressEnter()
 		return
 	}
-	token := tui.PromptDefault("Shared token (must match the receiver)", "backpack")
+	token := tui.PromptDefault("Shared Token (Same On Both)", "backpack")
 
 	var target net.IP
 	for {
-		raw := strings.TrimSpace(tui.Prompt("Receiver node's REAL IPv4: "))
+		raw := strings.TrimSpace(tui.Prompt("Receiver Real IPv4: "))
 		if target = net.ParseIP(raw); target != nil && target.To4() != nil {
 			break
 		}
 		tui.Error("Enter a valid IPv4 address.")
 		tui.StopIfInputGone()
 	}
-	port := tui.PromptInt("Receiver's listen UDP port", 45000)
-	attempts := tui.PromptInt("Probes per candidate IP", 5)
+	port := tui.PromptInt("UDP Port", 45000)
+	attempts := tui.PromptInt("Probes Per IP (Same On Both)", 5)
 
-	tui.Info("Candidate forged sources: single, range or CIDR, comma-separated,")
-	tui.Info("or @file with one spec per line. e.g. 1.0.0.0/24,8.8.4.4,9.9.9.0-9.9.9.255")
+	tui.Info("IPs, Ranges Or CIDRs, Comma Separated, Or @file — e.g. 1.0.0.0/24,8.8.4.4")
 	var ips []net.IP
 	for {
-		spec := strings.TrimSpace(tui.Prompt("Candidate IPs: "))
+		spec := strings.TrimSpace(tui.Prompt("Forged Sources: "))
 		expanded, err := spooftest.ExpandList(spec)
 		if err != nil {
 			tui.Error(err.Error())
@@ -132,9 +128,9 @@ func spoofTestSender() {
 		ips = expanded
 		break
 	}
-	iface := strings.TrimSpace(tui.PromptDefault("Send interface (optional)", ""))
+	iface := strings.TrimSpace(tui.PromptDefault("Interface (Optional)", ""))
 
-	tui.Info(fmt.Sprintf("Sending %d probes to %d candidate IP(s)… start the receiver first.", attempts, len(ips)))
+	tui.Info(fmt.Sprintf("Sending %d Probes From %d IP(s)…", attempts, len(ips)))
 	err := spooftest.RunSender(spooftest.SenderConfig{
 		Iface:    iface,
 		Token:    token,
@@ -153,7 +149,7 @@ func spoofTestSender() {
 	if err != nil {
 		tui.Error(err.Error())
 	} else {
-		tui.Success("Done. Read the results on the receiver node.")
+		tui.Success("Done — Read The Results On The Receiver.")
 	}
 	tui.PressEnter()
 }

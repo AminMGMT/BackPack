@@ -81,6 +81,10 @@ func ValidatePortSpecs(ports []string) error {
 	return nil
 }
 
+// Unparsable opens the one problem ValidateConfigFile reports for a file that
+// does not parse, which is then the only problem it reports.
+const Unparsable = "the file does not parse"
+
 // ValidateConfigFile reports what is wrong with a tunnel configuration on disk,
 // without starting anything.
 //
@@ -106,7 +110,7 @@ func ValidateConfigFile(path string) []string {
 
 	var cfg config.Config
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return []string{"the file does not parse: " + err.Error()}
+		return []string{Unparsable + ": " + err.Error()}
 	}
 
 	kinds := 0

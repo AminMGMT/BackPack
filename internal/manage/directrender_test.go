@@ -53,7 +53,7 @@ func TestDirectIranRenderRoundTrips(t *testing.T) {
 		Addr: "203.0.113.9:8443", Token: "a-long-token",
 		Ports: []string{"443", "8080=80"}, AcceptUDP: true, Sessions: 4,
 	}
-	cfg := decode(t, spec.render())
+	cfg := decode(t, spec.Render())
 
 	if !cfg.Direct.Enabled() {
 		t.Fatal("the rendered config does not report a direct tunnel")
@@ -92,7 +92,7 @@ func TestDirectKharejRenderHasNoPorts(t *testing.T) {
 		Addr: "0.0.0.0:8443", Token: "a-long-token",
 		ACMEDomain: "tunnel.example.com", ACMEEmail: "you@example.com",
 	}
-	body := spec.render()
+	body := spec.Render()
 	cfg := decode(t, body)
 
 	if got := cfg.Direct.ResolvedRole(); got != "origin" {
@@ -116,7 +116,7 @@ func TestL3RenderRoundTrips(t *testing.T) {
 		Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1380,
 		Ports: []string{"443"}, AcceptUDP: true,
 	}
-	cfg := decode(t, spec.render())
+	cfg := decode(t, spec.Render())
 
 	if !cfg.L3.Enabled() {
 		t.Fatal("the rendered config does not report a layer-3 tunnel")
@@ -145,7 +145,7 @@ func TestL3KharejRendersListen(t *testing.T) {
 		Iface: "bp0", LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 		Spoof: config.SpoofConfig{SpoofPeerIP: "198.51.100.4"},
 	}
-	cfg := decode(t, spec.render())
+	cfg := decode(t, spec.Render())
 
 	if cfg.L3.Mode != "listen" {
 		t.Fatalf("mode = %q, want listen", cfg.L3.Mode)
@@ -161,7 +161,7 @@ func TestRenderEscapesQuotes(t *testing.T) {
 		Side: sideIran, Transport: "tcp", Addr: "1.2.3.4:8443",
 		Token: `a"quoted"token`, Ports: []string{"443"},
 	}
-	cfg := decode(t, spec.render())
+	cfg := decode(t, spec.Render())
 	if cfg.Direct.Token != `a"quoted"token` {
 		t.Fatalf("token = %q, want the original with its quotes", cfg.Direct.Token)
 	}
@@ -173,7 +173,7 @@ func TestListRecognisesBothKinds(t *testing.T) {
 	direct := decode(t, directSpec{
 		Side: sideIran, Transport: "ws", Addr: "1.2.3.4:8443",
 		Token: "t", Ports: []string{"443"},
-	}.render())
+	}.Render())
 	if got := directRole(direct.Direct.ResolvedRole()); got != "iran" {
 		t.Fatalf("direct role label = %q, want iran", got)
 	}
@@ -181,7 +181,7 @@ func TestListRecognisesBothKinds(t *testing.T) {
 	l3 := decode(t, l3Spec{
 		Side: sideKharej, Carrier: "xdi", Addr: "0.0.0.0:9000", Token: "t",
 		Iface: "bp0", LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
-	}.render())
+	}.Render())
 	if got := l3Role(l3.L3.Mode); got != "kharej" {
 		t.Fatalf("l3 role label = %q, want kharej", got)
 	}
@@ -200,7 +200,7 @@ func TestRenderedConfigsPassEngineValidation(t *testing.T) {
 	iran := decode(t, directSpec{
 		Side: sideIran, Transport: "stealth", Addr: "1.2.3.4:8443",
 		Token: "a-long-token", Ports: []string{"443", "2053-2060"},
-	}.render())
+	}.Render())
 	if err := validateDirectForTest(iran); err != nil {
 		t.Fatalf("the engine refused a wizard-written iran config: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestRenderedConfigsPassEngineValidation(t *testing.T) {
 	kharej := decode(t, directSpec{
 		Side: sideKharej, Transport: "stealth", Addr: "0.0.0.0:8443",
 		Token: "a-long-token",
-	}.render())
+	}.Render())
 	if err := validateDirectForTest(kharej); err != nil {
 		t.Fatalf("the engine refused a wizard-written kharej config: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestL3EncapRoundTrips(t *testing.T) {
 	plain := decode(t, l3Spec{
 		Side: sideIran, Carrier: "udp", Encap: "ipip", Addr: "1.2.3.4:9000",
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
-	}.render())
+	}.Render())
 	if plain.L3.Encap != "gre" {
 		t.Fatalf("encap = %q, want gre", plain.L3.Encap)
 	}
@@ -232,7 +232,7 @@ func TestL3EncapRoundTrips(t *testing.T) {
 	keyed := decode(t, l3Spec{
 		Side: sideIran, Carrier: "pck", Encap: "gre", GREKey: 4242, Addr: "1.2.3.4:9000",
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1380,
-	}.render())
+	}.Render())
 	if keyed.L3.Encap != "gre" || keyed.L3.GREKey != 4242 {
 		t.Fatalf("gre round trip: encap=%q key=%d", keyed.L3.Encap, keyed.L3.GREKey)
 	}
@@ -263,7 +263,7 @@ func TestLimitsRoundTrip(t *testing.T) {
 	d := decode(t, directSpec{
 		Side: sideIran, Transport: "tcp", Addr: "1.2.3.4:8443", Token: "t",
 		Ports: []string{"443"}, MaxConnections: 250, BandwidthMbps: 100,
-	}.render())
+	}.Render())
 	if d.Direct.MaxConnections != 250 || d.Direct.BandwidthMbps != 100 {
 		t.Fatalf("direct limits: %+v", d.Direct)
 	}
@@ -272,7 +272,7 @@ func TestLimitsRoundTrip(t *testing.T) {
 		Side: sideIran, Carrier: "udp", Encap: "ipip", Addr: "1.2.3.4:9000", Token: "t",
 		Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 		Ports: []string{"443"}, MaxConnections: 64, BandwidthMbps: 50,
-	}.render())
+	}.Render())
 	if l.L3.MaxConnections != 64 || l.L3.BandwidthMbps != 50 {
 		t.Fatalf("l3 limits: %+v", l.L3)
 	}
@@ -282,7 +282,7 @@ func TestLimitsRoundTrip(t *testing.T) {
 	plain := directSpec{
 		Side: sideIran, Transport: "tcp", Addr: "1.2.3.4:8443", Token: "t",
 		Ports: []string{"443"},
-	}.render()
+	}.Render()
 	if strings.Contains(plain, "max_connections") || strings.Contains(plain, "bandwidth_mbps") {
 		t.Fatalf("an uncapped tunnel wrote limit keys:\n%s", plain)
 	}
@@ -304,7 +304,7 @@ func TestPresetRoundTrips(t *testing.T) {
 	}
 	findDirectPreset(PresetThroughput).apply(&spec)
 
-	cfg := decode(t, spec.render())
+	cfg := decode(t, spec.Render())
 	d := cfg.Direct
 
 	if d.Preset != PresetThroughput {

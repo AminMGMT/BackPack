@@ -10,7 +10,7 @@ import (
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.8.4"
+	Version = "v1.8.5"
 
 	// RepoOwner/RepoName identify the GitHub repository used by the installer
 	// and the release-based updater.
@@ -146,7 +146,8 @@ func SocksPortForToken(token string) int {
 	return 20000 + int(binary.BigEndian.Uint32(sum[:4])%20000)
 }
 
-// The architecture a release asset is named for.
+// GOARM is the ARM variant this build was made for: the architecture a release
+// asset is named for.
 //
 // runtime.GOARCH is not enough on ARM. Every 32-bit ARM build reports "arm"
 // whatever it was compiled for, and the three variants are not interchangeable:
