@@ -20,12 +20,20 @@ import (
 // limit is raised or removed: the service stays up, nothing listens and
 // nothing is dialled, which is what "offline" means for a tunnel.
 
-// quotaCheck is how often the running total is compared with the limit.
-var quotaCheck = 250 * time.Millisecond
+// quotaCheck is how often the running total is compared with the limit, and
+// quotaReread how often the limit file is read again while a tunnel runs, so
+// a limit set or raised from the panel takes effect without a restart.
+//
+// Atomic because a test shortens them while the watcher of a generation that
+// is winding down may still be reading them.
+var quotaCheck, quotaReread atomic.Int64
 
-// quotaReread is how often the limit file is read again while a tunnel runs,
-// so a limit set or raised from the panel takes effect without a restart.
-var quotaReread = 2 * time.Second
+func init() {
+	quotaCheck.Store(int64(250 * time.Millisecond))
+	quotaReread.Store(int64(2 * time.Second))
+}
+
+func every(v *atomic.Int64) time.Duration { return time.Duration(v.Load()) }
 
 // live is the running generation's collector, for the limit to read. Set by
 // startMetricsWithTraffic and cleared when that collector stops.
@@ -65,7 +73,7 @@ func awaitQuota(ctx context.Context, configPath string) (ok, waited bool) {
 	q, _ := quota.Load(dir, name)
 	logger.Warnf("traffic limit reached: %s of %s used — the tunnel stays offline until its limit is raised",
 		humanBytes(usedSoFar(configPath)), humanBytes(q.Limit))
-	t := time.NewTicker(quotaReread)
+	t := time.NewTicker(every(&quotaReread))
 	defer t.Stop()
 	for {
 		select {
@@ -84,9 +92,9 @@ func awaitQuota(ctx context.Context, configPath string) (ok, waited bool) {
 func watchQuota(gen context.Context, configPath string, end func()) {
 	dir, name := quotaDir(configPath)
 	q, _ := quota.Load(dir, name)
-	check := time.NewTicker(quotaCheck)
+	check := time.NewTicker(every(&quotaCheck))
 	defer check.Stop()
-	reread := time.NewTicker(quotaReread)
+	reread := time.NewTicker(every(&quotaReread))
 	defer reread.Stop()
 	for {
 		select {

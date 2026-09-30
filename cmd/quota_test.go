@@ -47,9 +47,10 @@ func eventually(t *testing.T, what string, within time.Duration, ok func() bool)
 // stays offline until the limit is raised — with the service still running,
 // so raising the limit is all it takes.
 func TestATunnelStopsAtItsTrafficLimitAndComesBackWhenRaised(t *testing.T) {
-	prevCheck, prevReread := quotaCheck, quotaReread
-	quotaCheck, quotaReread = 20*time.Millisecond, 100*time.Millisecond
-	defer func() { quotaCheck, quotaReread = prevCheck, prevReread }()
+	prevCheck, prevReread := quotaCheck.Load(), quotaReread.Load()
+	quotaCheck.Store(int64(20 * time.Millisecond))
+	quotaReread.Store(int64(100 * time.Millisecond))
+	defer func() { quotaCheck.Store(prevCheck); quotaReread.Store(prevReread) }()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "q1.toml")

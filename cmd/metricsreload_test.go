@@ -18,7 +18,11 @@ func TestAReloadCarriesTheTrafficTotalOverExactly(t *testing.T) {
 	path := filepath.Join(dir, "nl.toml")
 	ctx := context.Background()
 
-	in0, out0 := metrics.Traffic()
+	// A fresh tunnel counts from zero: the collector takes only what the
+	// process counts after it starts, so whatever earlier tests in this process
+	// added to the shared counters is not this tunnel's. Comparing against
+	// those counters made the test pass only when it ran first.
+	var in0, out0 uint64
 
 	stop := startMetrics(ctx, path, "tcp", "server")
 	metrics.AddBytes(1000, 400)
