@@ -70,6 +70,7 @@ func startMetricsWithTraffic(
 		return func() {}
 	}
 	c := metrics.NewCollector(filepath.Dir(configPath), name, transport, role, bytesIn, bytesOut)
+	liveCollector.Store(c)
 	ctx, cancel := context.WithCancel(ctx)
 	written := make(chan struct{})
 	go func() {
@@ -78,6 +79,7 @@ func startMetricsWithTraffic(
 		c.Run(ctx.Done(), 30*time.Second)
 	}()
 	return func() {
+		liveCollector.CompareAndSwap(c, nil)
 		cancel()
 		<-written
 	}
@@ -114,6 +116,22 @@ func Run(configPath string, ctx context.Context) {
 	serveEngineControl(ctx, ctl)
 
 	for {
+		// A tunnel that has used its traffic limit up does not start until the
+		// limit is raised. The file may have changed while it waited, so it is
+		// read again rather than starting what was loaded before. See quota.go.
+		ok, waited := awaitQuota(ctx, configPath)
+		if !ok {
+			return
+		}
+		if waited {
+			if next, err := loadConfig(configPath); err == nil {
+				applyDefaults(next)
+				if validateConfig(next) == nil {
+					cfg = next
+				}
+			}
+		}
+
 		// The engine mutates the configuration it is given — the transports
 		// write their status back into it — so it gets its own copy and the
 		// pristine one is kept for comparing against the file.
@@ -134,6 +152,7 @@ func Run(configPath string, ctx context.Context) {
 			defer close(done)
 			runEngine(&running, runCtx, configPath, applyTuning)
 		}()
+		go watchQuota(runCtx, configPath, cancel)
 
 		next, why := awaitConfigChange(ctx, runCtx, configPath, cfg)
 		cancel()
@@ -144,6 +163,10 @@ func Run(configPath string, ctx context.Context) {
 			return
 
 		case wakeRestart:
+			if quotaReached(configPath) {
+				// Ended by its traffic limit; awaitQuota holds it at the top.
+				continue
+			}
 			// A restart asked for over the control socket. It is not a reload
 			// and is not reported as one: the same configuration starts again,
 			// after its ports come free.

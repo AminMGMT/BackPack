@@ -1,0 +1,77 @@
+/* quota — a tunnel's traffic limit. */
+.dlg.quota{width:min(600px,100%);height:auto;max-height:90vh}
+.dlg.quota .pane{padding:20px;display:flex;flex-direction:column;gap:18px}
+.dlg.quota .dh .fl{display:grid;place-items:center;background:var(--s2);border:1px solid var(--ln)}
+
+/* the gauge */
+.dlg.quota .qt-hero{display:grid;grid-template-columns:150px 1fr;gap:20px;align-items:center}
+.dlg.quota .qt-ring{position:relative;width:150px;height:150px;--p:0;--c:var(--ac)}
+.dlg.quota .qt-ring svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.dlg.quota .qt-ring circle{fill:none;stroke-width:10;stroke-linecap:round}
+.dlg.quota .qt-ring .trk{stroke:var(--sunk)}
+.dlg.quota .qt-ring .arc{stroke:var(--c);stroke-dasharray:1000;stroke-dashoffset:calc(1000 * (1 - var(--p)));
+  transition:stroke-dashoffset .9s cubic-bezier(.32,.72,0,1),stroke .3s ease;
+  filter:drop-shadow(0 0 6px color-mix(in srgb,var(--c) 45%,transparent))}
+.dlg.quota .qt-ring .new{stroke:color-mix(in srgb,var(--tx) 22%,transparent);stroke-width:10;stroke-dasharray:2 5}
+.dlg.quota .qt-ring .mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.dlg.quota .qt-ring .mid b{font-size:26px;font-weight:700;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.dlg.quota .qt-ring .mid b em{font-style:normal;font-size:13px;color:var(--mu);margin-left:1px}
+.dlg.quota .qt-ring .mid small{font-size:10px;font-weight:640;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.dlg.quota .qt-ring.inf .arc{display:none}
+.dlg.quota .qt-ring.inf .mid b{font-size:34px}
+.dlg.quota .qt-nums{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--ln);border:1px solid var(--ln);
+  border-radius:13px;overflow:hidden}
+.dlg.quota .qt-nums > div{background:var(--field);padding:11px 13px}
+.dlg.quota .qt-nums span{display:block;font-size:10px;font-weight:640;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+.dlg.quota .qt-nums b{display:block;font-size:16px;font-weight:660;margin-top:3px;font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em}
+.dlg.quota .qt-nums .wide{grid-column:1/-1}
+.dlg.quota .qt-state{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border-radius:12px;font-size:12px;
+  line-height:1.55;color:var(--tx2);background:var(--sunk);border:1px solid var(--ln)}
+.dlg.quota .qt-state i{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none;background:var(--ok)}
+.dlg.quota .qt-state.er{background:color-mix(in srgb,var(--er) 9%,transparent);border-color:color-mix(in srgb,var(--er) 30%,transparent)}
+.dlg.quota .qt-state.er i{background:var(--er);animation:qt-pulse 1.4s ease-in-out infinite}
+.dlg.quota .qt-state.wr{background:color-mix(in srgb,var(--wr) 8%,transparent);border-color:color-mix(in srgb,var(--wr) 28%,transparent)}
+.dlg.quota .qt-state.wr i{background:var(--wr)}
+.dlg.quota .qt-state b{color:var(--tx);font-weight:630}
+@keyframes qt-pulse{50%{opacity:.35}}
+
+/* choosing */
+.dlg.quota .qt-h{font-size:10.5px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+  display:flex;align-items:center;gap:9px}
+.dlg.quota .qt-h::after{content:"";flex:1;height:1px;background:var(--ln)}
+.dlg.quota .qt-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.dlg.quota .qt-presets button,.dlg.quota .qt-add button{font:inherit;font-size:12.5px;font-weight:620;padding:11px 8px;border-radius:11px;
+  border:1px solid var(--ln);background:var(--field);color:var(--tx2);cursor:pointer;
+  transition:border-color .18s ease,background .18s ease,color .18s ease,transform .12s ease}
+.dlg.quota .qt-presets button:hover,.dlg.quota .qt-add button:hover{border-color:var(--ln2);color:var(--tx)}
+.dlg.quota .qt-presets button:active,.dlg.quota .qt-add button:active{transform:scale(.97)}
+.dlg.quota .qt-presets button.on{background:var(--tx);color:var(--bg);border-color:var(--tx)}
+body[data-accent] .dlg.quota .qt-presets button.on{background:var(--ac);color:var(--ac-on);border-color:transparent}
+.dlg.quota .qt-presets button small{display:block;font-size:9.5px;font-weight:560;opacity:.7;margin-top:1px}
+.dlg.quota .qt-custom{display:flex;gap:8px;align-items:stretch}
+.dlg.quota .qt-custom input{flex:1;min-width:0;font:inherit;font-size:15px;font-weight:620;color:var(--tx);background:var(--field);
+  border:1px solid var(--ln);border-radius:11px;padding:10px 13px;outline:0;font-variant-numeric:tabular-nums}
+.dlg.quota .qt-custom input:focus{border-color:var(--ln3)}
+.dlg.quota .qt-unit{display:flex;gap:3px;padding:3px;border-radius:11px;background:var(--sunk)}
+.dlg.quota .qt-unit button{font:inherit;font-size:12px;font-weight:640;padding:0 14px;border:0;border-radius:8px;
+  background:transparent;color:var(--mu);cursor:pointer}
+.dlg.quota .qt-unit button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.22)}
+.dlg.quota .qt-add{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.dlg.quota .qt-add span{font-size:11.5px;color:var(--dim);margin-right:2px}
+.dlg.quota .qt-add button{padding:7px 11px;font-size:12px}
+.dlg.quota .qt-preview{font-size:12px;color:var(--dim);min-height:18px}
+.dlg.quota .qt-preview b{color:var(--tx);font-weight:630}
+.dlg.quota .qt-preview.er b{color:var(--er)}
+.dlg.quota .pane > *{animation:qt-in .45s cubic-bezier(.32,.72,0,1) both}
+.dlg.quota .pane > *:nth-child(2){animation-delay:.04s} .dlg.quota .pane > *:nth-child(3){animation-delay:.08s}
+.dlg.quota .pane > *:nth-child(n+4){animation-delay:.12s}
+@keyframes qt-in{from{opacity:0;transform:translateY(6px)}}
+.dlg.quota .qt-wait{padding:30px 0;text-align:center;font-size:12.5px;color:var(--dim)}
+@media (max-width:560px){
+  .dlg.quota .qt-hero{grid-template-columns:1fr;justify-items:center}
+  .dlg.quota .qt-nums{width:100%}
+  .dlg.quota .qt-presets{grid-template-columns:repeat(2,1fr)}
+  .dlg.quota .pane{padding:16px}
+}
+@media (prefers-reduced-motion:reduce){ .dlg.quota .pane > *,.dlg.quota .qt-state.er i{animation:none} }

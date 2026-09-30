@@ -8,18 +8,15 @@ import (
 	"github.com/backpack/backpack/internal/manage"
 )
 
-// The setup link is gone from the panel, and this is what it leaves behind.
+// Add tunnel builds this server's end and hands over the setup link.
 //
-// It existed for a second panel on the other server: the operator built one
-// end here, copied a link, opened the panel over there and pasted it in. That
-// is the two-pass flow the fleet exists to remove, and it is where most of what
-// went wrong with pairing came from — two forms, filled in twice, agreeing by
-// hand. The panel writes both ends over SSH now.
-//
-// What must not go with it is the mirroring itself: pushing the far end still
-// derives it from the tunnel just written, through exactly the same code.
-
-func TestThePanelNoLongerHandsOutSetupLinks(t *testing.T) {
+// For a while the wizard only built tunnels across a managed server, writing
+// both ends over SSH, and refused outright without one. Servers is out of the
+// panel now, so the wizard is the CLI's again — Setup Iran or Setup Kharej on
+// the machine in front of you — and the other end is built from the link, the
+// one line the menu prints too. What must not come back is the old second
+// pass: a second panel on the other server with a paste box, filled in twice.
+func TestAddTunnelBuildsThisEndAndHandsOverTheLink(t *testing.T) {
 	loadPanel()
 
 	api, err := fs.ReadFile(panelRoot, "js/api.js")
@@ -27,8 +24,7 @@ func TestThePanelNoLongerHandsOutSetupLinks(t *testing.T) {
 		t.Fatalf("cannot read api.js: %v", err)
 	}
 	if strings.Contains(string(api), "sharelink") {
-		t.Error("the panel still calls the share-link endpoint, which is gone — the " +
-			"call would 404 and the wizard would offer a link it cannot build")
+		t.Error("the panel calls the old share-link endpoint, which is gone")
 	}
 
 	add, err := fs.ReadFile(panelRoot, "js/views/add.js")
@@ -38,13 +34,15 @@ func TestThePanelNoLongerHandsOutSetupLinks(t *testing.T) {
 	src := string(add)
 	for _, gone := range []string{"shareLinkDecode", "paintHandoff", "applyPastedLink"} {
 		if strings.Contains(src, gone) {
-			t.Errorf("add.js still has %s, so the second-pass path is still on screen", gone)
+			t.Errorf("add.js still has %s, the second-pass paste flow", gone)
 		}
 	}
-	// And it must refuse rather than build half a tunnel.
-	if !strings.Contains(src, "noFleet") {
-		t.Error("the wizard no longer has a state for having no managed server, so with " +
-			"an empty fleet it would build this end and leave the other undone")
+	if strings.Contains(src, "api.nodes(") || strings.Contains(src, "noFleet") {
+		t.Error("the wizard still waits on the fleet, which is not part of the panel any more")
+	}
+	if !strings.Contains(src, "api.tunnelLink(") || !strings.Contains(src, "setupLinkHTML(") {
+		t.Error("the wizard builds this end and does not hand over the setup link, so the " +
+			"other end has no way to be built from here")
 	}
 }
 

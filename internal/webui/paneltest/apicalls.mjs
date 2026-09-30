@@ -64,7 +64,7 @@ const samples = {
   nodeRemove: [['n1']], nodeAdd: [[node]], nodeCredentials: [[node]],
   nodeUpgrade: [['n1']], nodeRefresh: [['n1']], nodeRolloutPlan: [[]], nodeUpgradeAll: [[]],
   nodeRolloutStatus: [[]], nodeRolloutCancel: [[]], nodePin: [['n1', 'soak']], nodeUnpin: [['n1']],
-  nodePair: [[{}]],
+
   tunnelDefaults: [[{ preset: 'balanced', role: 'server', transport: 'tcp' }]],
   tunnelToken: [[]], tunnelSuggest: [[]],
   tunnelCreate: [[{}]], directOptions: [[]], directDefaults: [['iran']], directCreate: [[{}]],
@@ -92,10 +92,18 @@ const samples = {
   manageState: [[]], setAutoRefresh: [[12]],
   proxyEnable: [[{ type: 'socks5', port: 1085, username: 'u', password: 'p' }]],
   proxyDisable: [[]], proxyTest: [[]],
+  tunnelLink: [['fr-relay'], ['fr-relay', '203.0.113.7']],
+  tunnelQuota: [['fr-relay']], setTunnelQuota: [['fr-relay', 5e12], ['fr-relay', 0]],
+  backups: [[]], backupCreate: [[]], backupTest: [['backpack-backup-1.tar.gz']],
+  backupRestoreSaved: [['backpack-backup-1.tar.gz']], backupDelete: [['backpack-backup-1.tar.gz']],
+  setOffsite: [['rclone copy {} remote:backpack/']], sendOffsite: [[]],
+  localUpdate: [[]], uploadUpdate: [[new Blob(['x']), new Blob(['y'])]], installLocalUpdate: [[]],
+  rollback: [['20260901-1200']],
+  panelSelf: [[]], panelNewCode: [[]], panelPath: [['random'], ['custom', 'my-panel']], panelRestart: [[]],
 };
 // Exports that build an address instead of fetching one; the address is
 // checked as the GET a browser makes when it follows it.
-const addresses = { backupExportURL: [[]] };
+const addresses = { backupExportURL: [[]], savedBackupURL: [['backpack-backup-1.tar.gz']] };
 const notRoutes = new Set(['base', 'terminalURL']);
 
 const api = await import(new URL('../panel/js/api.js', import.meta.url));

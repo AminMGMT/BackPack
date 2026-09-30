@@ -62,6 +62,8 @@ type conntestView struct {
 	Error    string               `json:"error,omitempty"`
 	Started  int64                `json:"started,omitempty"`
 	Deadline int64                `json:"deadline,omitempty"` // unix: when waiting gives up
+	Ran      int64                `json:"ran,omitempty"`      // unix: when the kharej joined and the test began
+	Ends     int64                `json:"ends,omitempty"`     // unix: about when the running test is judged
 	Finished int64                `json:"finished,omitempty"`
 	Rows     []conntestRow        `json:"rows,omitempty"`
 	Best     *manage.ConnTestBest `json:"best,omitempty"`
@@ -168,7 +170,11 @@ func (c *conntestRunner) start(parent context.Context, host, preset string) erro
 			finish(ctFailed, "the kharej never checked in — nothing reached this server's test port, neither over TCP nor UDP")
 			return
 		}
-		c.update(func(v *conntestView) { v.State, v.Kharej = ctRunning, s.Kharej() })
+		c.update(func(v *conntestView) {
+			v.State, v.Kharej = ctRunning, s.Kharej()
+			v.Ran = time.Now().Unix()
+			v.Ends = time.Now().Add(manage.ConnTestRunTime()).Unix()
+		})
 
 		results := s.Run(ctx, func(i int, r manage.ConnTestResult) {
 			c.update(func(v *conntestView) {

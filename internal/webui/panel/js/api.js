@@ -129,20 +129,17 @@ export const nodeRolloutCancel = () => nodePost({ action: 'rolloutcancel' });
 export const nodePin = (name, reason) => nodePost({ action: 'pin', name, reason });
 export const nodeUnpin = name => nodePost({ action: 'unpin', name });
 
-/* Both ends in one submission: this end is created here, and the other is
-   derived from it and applied on the node. See handleNodePair. */
-export const nodePair = body => post('/api/node/pair', body);
 /* What a preset actually produces, for the drawer that calls itself "preset
    defaults": the three arguments decide the answer, and asking without them
    describes some other tunnel. */
 export const tunnelDefaults = ({ preset = '', role = '', transport = '' } = {}) =>
   get(`/api/tunnel/defaults?preset=${encodeURIComponent(preset)}`
     + `&role=${encodeURIComponent(role)}&transport=${encodeURIComponent(transport)}`);
-/* A token both ends will hold. Generated rather than typed wherever the panel
-   writes both ends itself — nobody has to read it, so nobody should. */
-export const tunnelToken = () => get('/api/tunnel/suggest?what=token');
 /* what=port, because the endpoint answers two questions and refuses one that
    names neither: without it every Random port button got a 400. */
+/* A fresh token for the side of a tunnel that makes it; the setup link carries
+   it to the other end. */
+export const tunnelToken = () => get('/api/tunnel/suggest?what=token');
 export const tunnelSuggest = () => get('/api/tunnel/suggest?what=port');
 
 /* ---- CLI: 1 Setup Iran / 2 Setup Kharej ---------------------------------- */
@@ -284,6 +281,45 @@ export const proxyEnable = ({ type, port, username = '', password = '' }) =>
   post('/api/manage/proxy', new URLSearchParams({ action: 'enable', type, port: String(port), username, password }));
 export const proxyDisable = () => post('/api/manage/proxy', new URLSearchParams({ action: 'disable' }));
 export const proxyTest = () => post('/api/manage/proxy', new URLSearchParams({ action: 'test' }));
+
+/* ---- CLI: Manage Tunnels → Setup Link ------------------------------------ */
+/* The link that builds a tunnel's other end, and the commands that use it. */
+export const tunnelLink = (name, host = '') =>
+  get('/api/tunnel/link?name=' + encodeURIComponent(name) + (host ? '&host=' + encodeURIComponent(host) : ''));
+
+/* ---- A tunnel's traffic limit: bytes in all, 0 for none ------------------ */
+export const tunnelQuota = name => get('/api/tunnel/quota?name=' + encodeURIComponent(name));
+export const setTunnelQuota = (name, limit) =>
+  post('/api/tunnel/quota', new URLSearchParams({ name, limit: String(Math.max(0, Math.round(limit))) }));
+
+/* ---- CLI: 4 Backup & Restore — the archives kept on this server ---------- */
+export const backups = () => get('/api/backups');
+const backupPost = form => post('/api/backups', new URLSearchParams(form));
+export const backupCreate = () => backupPost({ action: 'create' });
+export const backupTest = name => backupPost({ action: 'test', name });
+export const backupRestoreSaved = name => backupPost({ action: 'restore', name });
+export const backupDelete = name => backupPost({ action: 'delete', name });
+export const setOffsite = command => backupPost({ action: 'offsite', command });
+export const sendOffsite = () => backupPost({ action: 'send' });
+export const savedBackupURL = name => at('/api/backups/file?name=' + encodeURIComponent(name));
+
+/* ---- CLI: 8 Update → Install From A File, Restore Points ----------------- */
+export const localUpdate = () => get('/api/update/local');
+export const uploadUpdate = (archive, sums) => {
+  const fd = new FormData();
+  fd.append('archive', archive);
+  if (sums) fd.append('sums', sums);
+  return post('/api/update/local', fd);
+};
+export const installLocalUpdate = () => post('/api/update/local?action=install');
+export const rollback = stamp => post('/api/update/rollback', new URLSearchParams({ stamp }));
+
+/* ---- CLI: 5 Web Panel → Panel Path, New Login Code, Restart Panel -------- */
+export const panelSelf = () => get('/api/panel');
+export const panelNewCode = () => post('/api/panel', new URLSearchParams({ action: 'code' }));
+export const panelPath = (mode, path = '') =>
+  post('/api/panel', new URLSearchParams({ action: 'path', mode, path }));
+export const panelRestart = () => post('/api/panel', new URLSearchParams({ action: 'restart' }));
 
 /* ---- the terminal -------------------------------------------------------- */
 /* A WebSocket, not a fetch, so it is the one address here built by hand — on

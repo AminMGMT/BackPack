@@ -263,6 +263,9 @@ func Serve() error {
 	// The cards' rate history, kept whether or not a browser is polling. See
 	// runRateSampler.
 	go runRateSampler(probeCtx.Done())
+	// Asked once now, so the first Settings or Maintenance opened does not
+	// wait on GitHub. See updateAnswer.
+	go updateAnswer.get()
 	// Background jobs share that lifetime. A rollout left running against a
 	// fleet after the panel has gone is exactly the thing nobody would notice
 	// until it had finished.
@@ -417,6 +420,15 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/confhist", s.requireAuth(s.handleConfHistory))
 	mux.HandleFunc("/api/confhist/restore", s.requireAuth(s.handleConfRestore))
 	mux.HandleFunc("/api/restorepoints", s.requireAuth(s.handleRestorePoints))
+	// Setup links, backups on the server, installing from a file, rollback and
+	// the panel's own path, code and restart. See handlers_upkeep.go.
+	mux.HandleFunc("/api/tunnel/link", s.requireAuth(s.handleTunnelLink))
+	mux.HandleFunc("/api/tunnel/quota", s.requireAuth(s.handleTunnelQuota))
+	mux.HandleFunc("/api/backups", s.requireAdmin(s.handleBackups))
+	mux.HandleFunc("/api/backups/file", s.requireAdmin(s.handleBackupFile))
+	mux.HandleFunc("/api/update/local", s.requireAdmin(s.handleLocalUpdate))
+	mux.HandleFunc("/api/update/rollback", s.requireAdmin(s.handleRollback))
+	mux.HandleFunc("/api/panel", s.requireAdmin(s.handlePanelSelf))
 	// The Connection Test and Manage sections: the menu's tools, from the
 	// browser. See handlers_conntest.go and handlers_manage.go.
 	mux.HandleFunc("/api/conntest", s.requireAuth(s.handleConnTest))
@@ -784,12 +796,7 @@ func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		available, summary, err := manage.CheckUpdate()
-		if err != nil {
-			writeJSON(w, map[string]any{"available": false, "summary": err.Error(), "error": true})
-			return
-		}
-		writeJSON(w, map[string]any{"available": available, "summary": summary})
+		writeJSON(w, updateAnswer.get())
 	case http.MethodPost:
 		updateProgress.start()
 		go func() {
@@ -803,6 +810,41 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// updateAnswer is the last "is there a newer release" answer, kept a while.
+//
+// Asking GitHub is the slow part of opening Settings or Maintenance — seconds
+// from a server in Iran — and both dialogs waited on it, drawing the preview's
+// sample versions until it came back. The answer changes a few times a year;
+// ten minutes old is as good as new. A failed check is kept for less, so a
+// blocked moment does not stick.
+var updateAnswer = &updateCache{}
+
+type updateCache struct {
+	mu   sync.Mutex
+	at   time.Time
+	resp map[string]any
+}
+
+func (c *updateCache) get() map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	keep := 10 * time.Minute
+	if c.resp != nil && c.resp["error"] == true {
+		keep = 30 * time.Second
+	}
+	if c.resp != nil && time.Since(c.at) < keep {
+		return c.resp
+	}
+	available, summary, err := manage.CheckUpdate()
+	if err != nil {
+		c.resp = map[string]any{"available": false, "summary": err.Error(), "error": true}
+	} else {
+		c.resp = map[string]any{"available": available, "summary": summary}
+	}
+	c.at = time.Now()
+	return c.resp
 }
 
 // updateProgress records what the last update attempt did.

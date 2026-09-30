@@ -95,7 +95,7 @@ func filesView() []manageFile {
 func (s *server) handleManage(w http.ResponseWriter, r *http.Request) {
 	hours := schedule.AutoRefreshHours()
 	writeJSON(w, map[string]any{
-		"refresh": map[string]any{"hours": hours, "effective": schedule.EffectiveHours(hours)},
+		"refresh": refreshView(hours),
 		"proxy":   proxyView(),
 		"files":   filesView(),
 		"root":    os.Geteuid() == 0,
@@ -128,8 +128,20 @@ func (s *server) handleAutoRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	// What cron will actually do, which is not always what was typed: above a
 	// day it is whole days. The page says the number that is in force.
-	now := schedule.AutoRefreshHours()
-	writeJSON(w, map[string]any{"hours": now, "effective": schedule.EffectiveHours(now)})
+	writeJSON(w, refreshView(schedule.AutoRefreshHours()))
+}
+
+// refreshView is the schedule as the page draws it: what was asked, what cron
+// does with it, and when it next fires on this server's clock — the page
+// counts down to that, and the browser's clock and zone are not the server's.
+func refreshView(hours int) map[string]any {
+	v := map[string]any{"hours": hours, "effective": schedule.EffectiveHours(hours), "now": time.Now().Unix()}
+	if next := schedule.NextRun(hours, time.Now()); !next.IsZero() {
+		v["next"] = next.Unix()
+		name, off := next.Zone()
+		v["zone"], v["offset"] = name, off
+	}
+	return v
 }
 
 // --- Built-in Proxy ---------------------------------------------------------

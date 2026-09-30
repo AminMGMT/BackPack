@@ -62,10 +62,12 @@ command to carry to the other end and nothing to wait for. See
 
 ### Connection test — `#/conntest`
 
-The Iran side of the menu's Connection Test. Start it here, copy the one line it
-gives you — `sudo backpack link apply 'backpack://t.…'` — onto the kharej, and
-watch every transport's row fill as its echoes come back, ending in the settings
-the measurement argues for. The test tunnels are removed when it ends.
+The Iran side of the menu's Connection Test, in two panes of one size. The left
+one is what to do now: the form, then a 15-minute dial with the one line for the
+kharej — `sudo backpack link apply 'backpack://t.…'` — then the test's own
+countdown, then *Best for this path*. The right one fills a row per transport as
+its echoes come back and, at the end, keeps only what held or was unstable. The
+test tunnels are removed when it ends.
 
 *CLI: 0 Connection Test → Iran.*
 
@@ -79,8 +81,10 @@ and the alert feed. The shell stays open while you move between sections.
 
 ### Manage — `#/manage`
 
-Auto Refresh, the Built-in Proxy (with a test that speaks its handshake) and
-File Locations, each as a panel on one page.
+Auto Refresh (a 24-hour dial counting down to the next restart on the server's
+clock), the Built-in Proxy (on this server, or wired to a reverse tunnel with the
+kharej's `backpack proxy enable` line; a test that speaks its handshake) and
+File Locations (a search bar that opens), on one page.
 
 *CLI: 3 Manage → Auto Refresh, Built-in Proxy, File Locations.*
 
@@ -103,6 +107,8 @@ were on. `fr-relay` below is an example name.
 | Metrics | `#/t/fr-relay/metrics` | Everything known about one tunnel: traffic, the peer, limits, the bot relay, the certificate, failover, the connection pool, and on a KCP link what the error correction is repairing. Sections with nothing behind them are removed rather than shown empty. | Manage → Tunnel Metrics |
 | History | `#/t/fr-relay/history` | The long view: speed over the last day, per-day totals for the week, both uptime figures, and the configuration changes inside the window. | Manage → Tunnel Metrics |
 | Link test | `#/t/fr-relay/link` | Twelve TCP connects to the tunnel port, then the transport the measurement argues for. Same branch logic as the CLI's recommendation, in the same order. | Manage → Link Test |
+| Setup link | `#/t/fr-relay/share` | The link that builds the tunnel's other end, with the one line for a kharej (`sudo backpack link apply '…'`) and the install-and-set-up line for one without Backpack. Add tunnel shows the same block when it builds only this end. | Manage → Manage Tunnels → Setup Link |
+| Traffic limit | `#/t/fr-relay/quota` | How much the tunnel may carry, in and out together, before it goes offline: used, limit and what is left, presets from 50 GB to 10 TB or any amount, and quick adds. Opened from the pencil in the card's bottom band, on the Iran end only. The count survives restarts and updates; the engine takes the tunnel offline the moment it reaches the limit and brings it back when the limit is raised. | — (panel only) |
 | Edit | `#/t/fr-relay/edit` | Every setting the tunnel has. The values come from the same call the CLI's edit screen makes, so a tunnel edited here is byte for byte a tunnel edited in the terminal. | Manage → Manage Tunnels → Edit |
 | Undo | `#/t/fr-relay/undo` | The configuration history for this tunnel, and a restore back to any earlier version of it. | Manage → Manage Tunnels → Config history |
 
@@ -112,11 +118,11 @@ These belong to the machine rather than to one tunnel.
 
 | Screen | Address | What it is | CLI |
 | --- | --- | --- | --- |
-| Add tunnel | `#/add` | Pick the side, then the transport family, then the transport, then the settings that side actually has. The families and presets are served rather than written into the page, so a transport added to the CLI appears here on its own. | 1 Setup Iran, 2 Setup Kharej |
-| Settings | `#/settings` | Panel access, security, the Telegram bot, and the release channel. | 5 Web Panel, 7 Telegram Bot, 8 Update → Release channel |
+| Add tunnel | `#/add` | Five steps: this server as the Iran end with reverse or direct under it, the tunnel (forwarded ports with a Random), performance (preset cards and what the chosen one sets), optional, done. Only this server's end is built; the last step hands over its setup link — the kharej's `sudo backpack link apply '…'` line. The families and presets are served rather than written into the page. | 1 Setup Iran, 2 Setup Kharej |
+| Settings | `#/settings` | Panel access (port, certificate, password, address path, a new login code, restart), security, the Telegram bot, and the release channel. | 5 Web Panel, 7 Telegram Bot, 8 Update → Release channel |
 | Alerts | `#/alerts` | The alert history: what fired, when, and about which tunnel. | The alert history |
 | Health check | `#/health` | The machine-level checks — the same list the CLI runs, with the same fixes offered. Reached from the warning bar as well as directly. | Manage → Health Check |
-| Maintenance | `#/maintenance` | Update, restore points and backup: the machine-level chores. | 4 Backup & Restore, 8 Update |
+| Maintenance | `#/maintenance` | Update (also from an uploaded archive), restore points with roll back, and backup: download or upload one, the archives kept on this server with Test / Restore / Delete, and the off-site copy command. The fleet key stays in the menu on purpose. | 4 Backup & Restore, 8 Update |
 | Support | `#/support` | Static. Addresses copy on click. | — |
 | Enjoying Backpack? | `#/star` | Static. | — |
 

@@ -461,3 +461,68 @@ svg.x{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke
 .dlg .nofleet code{font-family:var(--mono,ui-monospace,monospace);font-size:11px;
   background:var(--sunk);border-radius:6px;padding:1px 5px}
 .dlg .nf-act{margin-top:6px}
+
+/* A result that is not a success reads as one: it was drawn in the success
+   green whatever it said. */
+.dlg.add .doneline.warn{background:color-mix(in srgb,var(--wr) 9%,transparent);
+  border-color:color-mix(in srgb,var(--wr) 32%,transparent)}
+.dlg.add .doneline.warn .tick{background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr)}
+.dlg.add input[readonly]{color:var(--tx2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.dlg.add .kindgrp{border-top:0;padding-top:0;margin-top:0}
+
+/* ---- Type: this server is Iran, then reverse or direct ---- */
+.dlg.add .typegrp{display:flex;flex-direction:column;gap:14px}
+.dlg.add .here-card{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:15px;
+  border:1px solid var(--ln);background:linear-gradient(135deg,var(--s2),var(--field));position:relative;overflow:hidden}
+.dlg.add .here-card::after{content:"";position:absolute;right:-40px;top:-40px;width:140px;height:140px;border-radius:50%;
+  background:radial-gradient(circle,color-mix(in srgb,var(--ok) 12%,transparent),transparent 70%);pointer-events:none}
+.dlg.add .here-flag{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;font-size:22px;flex:none;
+  background:var(--sunk);border:1px solid var(--ln)}
+.dlg.add .here-card > div{flex:1;min-width:0}
+.dlg.add .here-card b{display:block;font-size:14.5px;font-weight:660;letter-spacing:-.02em}
+.dlg.add .here-card small{display:block;font-size:11.5px;color:var(--dim);line-height:1.55;margin-top:3px}
+.dlg.add .here-pill{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:650;letter-spacing:.04em;
+  text-transform:uppercase;padding:5px 9px;border-radius:8px;flex:none;color:var(--ok);
+  background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.dlg.add .here-pill i{width:6px;height:6px;border-radius:50%;background:currentColor;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+.dlg.add .kindq{margin:4px 0 -4px}
+@media (max-width:560px){ .dlg.add .here-pill{display:none} }
+
+/* ---- Performance: cards that fill the row ---- */
+.dlg.add .trgrid.rpgrid{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.dlg.add .trgrid .rp.rp2{display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:15px;min-height:168px}
+.dlg.add .rp2 .rp-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
+  background:var(--sunk);border:1px solid var(--ln);color:var(--mu);transition:color .25s ease,background .25s ease,transform .35s var(--spring)}
+.dlg.add .rp2 .rp-ic svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.dlg.add .rp2.on .rp-ic{color:var(--bg);background:var(--tx);border-color:var(--tx);transform:scale(1.06) rotate(-4deg)}
+body[data-accent] .dlg.add .rp2.on .rp-ic{background:var(--ac);border-color:var(--ac);color:var(--ac-on)}
+.dlg.add .rp2 .rp-tx{display:flex;flex-direction:column;gap:3px;flex:1}
+.dlg.add .rp2 .rp-tx b{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:14.5px;font-weight:660;letter-spacing:-.02em}
+.dlg.add .rp2 .rp-tx b em{font-style:normal;font-size:9.5px;font-weight:680;letter-spacing:.06em;text-transform:uppercase;
+  padding:2px 6px;border-radius:5px;color:var(--ok);background:color-mix(in srgb,var(--ok) 13%,transparent)}
+.dlg.add .rp2 .rp-line{font-size:12px;color:var(--tx2);font-weight:560}
+.dlg.add .rp2 small{font-size:11px;color:var(--dim);line-height:1.5}
+.dlg.add .rp2 .rp-load{display:flex;gap:4px;align-items:flex-end}
+.dlg.add .rp2 .rp-load i{width:16px;height:4px;border-radius:2px;background:var(--ln)}
+.dlg.add .rp2 .rp-load i.on{background:var(--mu)}
+.dlg.add .rp2.on .rp-load i.on{background:var(--tx)}
+body[data-accent] .dlg.add .rp2.on .rp-load i.on{background:var(--ac)}
+.dlg.add .rp2 .rp-load::after{content:"load";font-size:9.5px;font-weight:620;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--faint);margin-left:5px;line-height:1}
+@media (max-width:640px){
+  .dlg.add .trgrid.rpgrid{grid-template-columns:1fr}
+  .dlg.add .trgrid .rp.rp2{min-height:0;display:grid;grid-template-columns:40px 1fr;align-items:start;column-gap:12px;row-gap:8px}
+  .dlg.add .rp2 .rp-load{grid-column:2}
+}
+.dlg.add .withb .rnd{flex:none}
+.dlg.add .rp-sets{margin-top:12px;border:1px solid var(--ln);border-radius:14px;background:var(--field);overflow:hidden}
+.dlg.add .rp-sets-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:11px 14px;border-bottom:1px solid var(--ln)}
+.dlg.add .rp-sets-h b{font-size:12.5px;font-weight:640}
+.dlg.add .rp-sets-h small{font-size:11px;color:var(--dim)}
+.dlg.add .rp-sets-g{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:0}
+.dlg.add .rp-sets-g > div{box-shadow:inset -1px 0 0 var(--ln),inset 0 -1px 0 var(--ln);padding:10px 14px;animation:rps-in .4s cubic-bezier(.32,.72,0,1) both;animation-delay:var(--d)}
+@keyframes rps-in{from{opacity:0;transform:translateY(4px)}}
+.dlg.add .rp-sets-g span{display:block;font-size:10px;font-weight:640;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+.dlg.add .rp-sets-g b{display:block;font-size:14px;font-weight:650;margin-top:3px;font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion:reduce){ .dlg.add .rp-sets-g > div{animation:none} }

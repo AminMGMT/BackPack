@@ -119,6 +119,30 @@
 .c7 .mstats i{font-style:normal;opacity:.4}
 @container pg (max-width:520px){ .c7 .mstats{display:none} }
 
+/* The traffic limit in the band: used / limit, the line under it, and the
+   pencil that changes it. The line is the tunnel's state colour until it is
+   worth a look — amber from 70%, red from 90% and when the limit is reached. */
+.c7 .qm{flex:1;min-width:0;display:grid;grid-template-columns:auto 1fr auto;align-items:center;column-gap:10px}
+.c7 .qm-tx{font-size:11.5px;white-space:nowrap;color:var(--dim);font-variant-numeric:tabular-nums}
+.c7 .qm-tx b{color:var(--tx);font-weight:650}
+.c7 .qm-tx i{font-style:normal;margin:0 4px;opacity:.5}
+.c7 .qm-tx em{font-style:normal;font-size:14px;color:var(--mu);line-height:1}
+.c7 .qm-bar{height:5px;border-radius:3px;background:var(--sunk);overflow:hidden;min-width:40px;position:relative}
+.c7 .qm-bar i{position:absolute;left:0;top:0;bottom:0;width:var(--w);border-radius:3px;background:var(--mu);
+  transition:width .8s var(--spring),background .3s ease}
+.c7 .qm.ok .qm-bar i{background:var(--ac)}
+body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
+.c7 .qm.wr .qm-bar i{background:var(--wr)}
+.c7 .qm.er .qm-bar i{background:var(--er);box-shadow:0 0 8px color-mix(in srgb,var(--er) 55%,transparent)}
+.c7 .qm.none .qm-bar{background:repeating-linear-gradient(90deg,var(--ln) 0 4px,transparent 4px 8px)}
+.c7 .qm-pc{font-size:10.5px;font-weight:650;color:var(--mu);font-variant-numeric:tabular-nums}
+.c7 .qm.wr .qm-pc{color:var(--wr)} .c7 .qm.er .qm-pc{color:var(--er)}
+.c7 .qm-ed{width:28px;height:28px;flex:none;border-radius:9px;border:1px solid var(--ln);background:var(--s2);
+  color:var(--mu);display:grid;place-items:center;cursor:pointer;transition:background .18s ease,color .18s ease,transform .12s ease}
+.c7 .qm-ed:hover{background:var(--s3);color:var(--tx)}
+.c7 .qm-ed:active{transform:scale(.94)}
+.c7 .qm-ed svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
 /* ---- the trend, and the window it is measured over ----------------------
  *
  * The figure is how much the window moved end to end. It is deliberately not
@@ -184,6 +208,10 @@
 /* min-width:0 so the ports chip can actually give way. A flex item will not
    shrink below its content without it, so a tunnel forwarding several ports
    would push the window control off the row instead of ellipsising itself. */
+/* The preset: the one chip that is a choice rather than a fact about the
+   wiring, so it carries the accent where the others are grey. */
+.c7 .kind span.pr{background:color-mix(in srgb,var(--ac) 14%,transparent);color:var(--ac);flex:none}
+body:not([data-accent]) .c7 .kind span.pr{background:color-mix(in srgb,var(--tx) 10%,transparent);color:var(--tx2)}
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;
   letter-spacing:0;font-weight:560;min-width:0;max-width:100%;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}

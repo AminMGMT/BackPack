@@ -95,7 +95,13 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .dlg .mbody::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:5px;border:2px solid transparent;background-clip:content-box}
 .dlg .sec2{display:flex;align-items:center;gap:9px;padding:20px 18px 9px}
 .dlg .sec2 h4{font-size:10.5px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
-.dlg .sec2 .ln{flex:1;height:1px;background:var(--ln)}
+/* The rule beside a section title. It shares its class name with a log line
+   (.dlg .ln above, a three-column grid with padding), and inherited all of it:
+   on a phone the rule became a padded grid wider than the dialog, ran off the
+   right edge and left a bar through the row under it. */
+.dlg .sec2 .ln{flex:1;height:1px;background:var(--ln);display:block;padding:0;min-width:0;
+  grid-template-columns:none;font-size:0;animation:none}
+.dlg .sec2 .ln:hover{background:var(--ln)}
 .dlg .sec2 .badge2{font-size:10px;font-weight:620;padding:2px 7px;border-radius:6px;background:var(--sunk);color:var(--dim)}
 .dlg .sec2 svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;color:var(--dim)}
 .dlg .dl{padding:0 18px}

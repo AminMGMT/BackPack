@@ -77,6 +77,9 @@ const usage = `backpack — non-interactive commands
   backpack check -c <file>              validate a config without starting it
   backpack link apply [--name N] [--host IP] '<setup link>'
                                         build and start the tunnel a setup link describes
+  backpack proxy enable <socks5|http> <port> [--user U --pass P]
+  backpack proxy disable | status [--json]
+                                        the built-in proxy a tunnel's port forwards to
   backpack version [--json]
 
 Run backpack with no arguments for the interactive menu.
@@ -103,6 +106,8 @@ func Run(args []string) Result {
 		return runCheck(args[1:])
 	case "link":
 		return runLink(args[1:])
+	case "proxy":
+		return runProxy(args[1:])
 	case "version":
 		return runVersion(args[1:])
 	case "help", "-h", "--help":
@@ -444,7 +449,7 @@ func takeJSONFlag(args []string) (bool, []string) {
 // drifting — a command added below is routable immediately.
 func IsCommand(s string) bool {
 	switch s {
-	case "tunnel", "check", "version", "link":
+	case "tunnel", "check", "version", "link", "proxy":
 		return true
 	}
 	return false
@@ -535,37 +540,83 @@ func runLink(args []string) Result {
 	if err != nil {
 		return fail(CodeFailed, "could not set up the tunnel: %v\n", err)
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Tunnel %q created (%s %s)", done.Name, done.Kind, done.Transport)
-	if done.Dials != "" {
-		fmt.Fprintf(&b, ", dialling %s", done.Dials)
+	return linkReport(done)
+}
+
+// Progress, when set, receives the lines of a long command as they happen —
+// main.go points it at the terminal, so "waiting for the Iran server" is on the
+// screen while it waits rather than after. Unset, everything lands in the
+// Result, which is what a test reads.
+var Progress func(string)
+
+// Color turns on the terminal's colours in reports; main.go sets it when the
+// output is a terminal.
+var Color bool
+
+func paint(code, s string) string {
+	if !Color {
+		return s
 	}
-	b.WriteString(".\n")
+	return "\033[" + code + "m" + s + "\033[0m"
+}
+
+const rule = "  ────────────────────────────────────────────\n"
+
+// linkReport is what `link apply` says: what was built or brought into step,
+// then whether it reached the Iran server — the answer the person at this
+// terminal is actually waiting for.
+func linkReport(done manage.LinkApplied) Result {
+	var b strings.Builder
+	say := func(format string, a ...any) {
+		line := fmt.Sprintf(format, a...)
+		if Progress != nil {
+			Progress(b.String() + line)
+			b.Reset()
+			return
+		}
+		b.WriteString(line)
+	}
+	ok := paint("32;1", "✓")
+	row := func(k, v string) { say("    %s %s\n", paint("2", fmt.Sprintf("%-9s", k)), v) }
+
+	say("\n  %s\n%s", paint("1", "Backpack · setup link"), rule)
+	verb := "created"
+	if done.Updated {
+		verb = "updated to match the Iran side"
+	}
+	say("  %s Tunnel %q %s   %s\n", ok, done.Name, verb, paint("2", done.Kind+" · "+strings.ToUpper(done.Transport)))
+	if done.Dials != "" {
+		row("dials", done.Dials)
+	}
 	if len(done.Backups) > 0 {
-		fmt.Fprintf(&b, "Backup addresses: %s — tried in turn if the main one stops answering.\n", strings.Join(done.Backups, ", "))
+		row("backups", strings.Join(done.Backups, ", ")+" — tried in turn if the main one stops answering")
 	}
 	if done.RestartHours > 0 {
-		fmt.Fprintf(&b, "Scheduled restart: every %d hours at :%02d UTC, together with the Iran server.\n", done.RestartHours, done.RestartMinute)
+		row("restart", fmt.Sprintf("every %d hours at :%02d UTC, together with the Iran server", done.RestartHours, done.RestartMinute))
 	}
 	if done.ScheduleFailed != "" {
-		fmt.Fprintf(&b, "The scheduled restart could not be set: %s\n", done.ScheduleFailed)
+		row("restart", "could not be set: "+done.ScheduleFailed)
 	}
 	if !done.Active {
-		fmt.Fprintf(&b, "The service %s did not start — see: journalctl -u %s -n 30\n", done.Service, done.Service)
+		say("  %s The service %s did not start — see: journalctl -u %s -n 30\n%s", paint("31;1", "✗"), done.Service, done.Service, rule)
 		return Result{Out: b.String(), Code: CodeUnhealthy}
 	}
 	if done.Kind == "direct" {
-		b.WriteString("Running. It connects as soon as the Iran server dials in.\n")
-		return ok(b.String())
+		say("  %s Running. It connects as soon as the Iran server dials in.\n%s", ok, rule)
+		return Result{Out: b.String()}
 	}
-	b.WriteString("Waiting for the Iran server...\n")
+	say("  %s Waiting for the Iran server …\n", paint("33", "◌"))
 	if connected, detail := awaitLink(done.Name, linkAwait); connected {
-		b.WriteString("Connected. The tunnel is up.\n")
-		return ok(b.String())
+		say("  %s %s\n", ok, paint("32;1", "Connected — the tunnel is up."))
+		if d := strings.TrimSpace(detail); d != "" {
+			row("link", d)
+		}
+		say("%s", rule)
+		return Result{Out: b.String()}
 	} else {
-		fmt.Fprintf(&b, "Not connected yet (%s). It keeps trying on its own; if it stays down, check that the "+
+		say("  %s Not connected yet (%s). It keeps trying on its own; if it stays down, check that the "+
 			"Iran server's tunnel port is open and that both ends are on the same version: "+
-			"backpack tunnel status %s\n", strings.TrimSpace(detail), done.Name)
+			"backpack tunnel status %s\n%s", paint("33;1", "!"), strings.TrimSpace(detail), done.Name, rule)
 		return Result{Out: b.String(), Code: CodeUnhealthy}
 	}
 }

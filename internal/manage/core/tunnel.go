@@ -10,6 +10,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/quota"
 )
 
 // Tunnel is a discovered tunnel derived from a config file on disk.
@@ -95,6 +96,9 @@ func Delete(name string) error {
 	// What it carried stays in the server's total, and its own counters go
 	// with it: the service is stopped by now, so its last write is in.
 	_ = metrics.Retire(app.ConfigDir, name)
+	// Its traffic limit goes with it: a new tunnel given the same name starts
+	// with no limit and a count of zero, not with the old one's.
+	_ = quota.Remove(app.ConfigDir, name)
 	deleteTunnelMeta(name)
 	// The other end, if it was on a managed server, is left running there —
 	// there is deliberately no operation that removes a tunnel on a node, and a

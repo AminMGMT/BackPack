@@ -48,3 +48,22 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   transition:background .16s ease,color .16s ease}
 .dlg .selopt:hover{background:var(--sunk);color:var(--tx)}
+
+/* A phone: the tabs scroll sideways as one row instead of wrapping their
+   labels in two ("Fine-/tune") and pushing History off the edge. */
+@media (max-width:560px){
+  .dlg .tabs{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
+  .dlg .tabs::-webkit-scrollbar{display:none}
+  .dlg .tabs button{white-space:nowrap;flex:none}
+}
+
+/* After an edit the kharej has to follow: the one line that does it. */
+.dlg .ed-hand{display:flex;flex-direction:column;gap:14px;padding:18px;animation:edh-in .45s cubic-bezier(.32,.72,0,1) both}
+@keyframes edh-in{from{opacity:0;transform:translateY(8px)}}
+.dlg .ed-hand-h{display:flex;gap:12px;align-items:flex-start}
+.dlg .ed-hand-h b{display:block;font-size:14px;font-weight:650;letter-spacing:-.02em}
+.dlg .ed-hand-h small{display:block;font-size:12px;color:var(--dim);line-height:1.55;margin-top:3px}
+.dlg .ed-ok{width:30px;height:30px;border-radius:50%;flex:none;position:relative;
+  background:color-mix(in srgb,var(--ok) 15%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+.dlg .ed-ok::after{content:"";position:absolute;left:10px;top:7px;width:6px;height:11px;border:solid var(--ok);
+  border-width:0 2px 2px 0;transform:rotate(45deg)}

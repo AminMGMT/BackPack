@@ -18,6 +18,8 @@ import { serversView } from './views/servers.js';
 import { connTestView } from './views/conntest.js';
 import { terminalView } from './views/terminal.js';
 import { manageView } from './views/manage.js';
+import { shareView } from './views/share.js';
+import { quotaView } from './views/quota.js';
 import { maintView, undoView } from './views/maint.js';
 import { alertsView, healthView } from './views/monitor.js';
 import { starView, supportView } from './views/support.js';
@@ -139,6 +141,8 @@ router.route('/t/:name/logs',    over(logsView));
 router.route('/t/:name/metrics', over(metricsView));
 router.route('/t/:name/history', over(historyView));
 router.route('/t/:name/link',    over(linkTestView));
+router.route('/t/:name/share',   over(shareView));
+router.route('/t/:name/quota',   over(quotaView));
 router.route('/t/:name/edit',    over(editView));
 router.route('/t/:name/undo',    over(undoView));
 

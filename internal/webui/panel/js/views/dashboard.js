@@ -263,6 +263,7 @@ ${field(t, idx)}
 
   <div class="kind">
     <span>${dir}</span><span>${esc(carrier)}</span>
+    ${t.preset ? `<span class="pr" title="Performance preset">${esc(t.preset)}</span>` : ''}
     ${ports ? `<span class="q">${esc(ports)}</span>` : ''}
     ${st ? `<button type="button" class="per" data-per-open aria-haspopup="true"
       title="What the chart covers">${esc(per.label)}${CHEV}</button>` : ''}
@@ -288,12 +289,12 @@ ${field(t, idx)}
      stops where it starts. -->
 <div class="mfoot">
   <span class="relaymark">${t.botRelay ? `<span class="relay" title="Bot Relay">${RELAY_SVG}</span>` : ''}</span>
-  <span class="sp2"></span>
+  ${t.quotaSettable ? quotaMeter(t) : `<span class="sp2"></span>
   ${st ? `<span class="mstats">
       <span><b>${esc(fmt(st.peak))}</b> peak</span><i>·</i>
       <span><b>${esc(fmt(st.low))}</b> low</span><i>·</i>
       <span><b>${esc(fmt(st.avg))}</b> avg</span>
-    </span>` : ''}
+    </span>` : ''}`}
 </div>
 
 <div class="foot">
@@ -319,6 +320,8 @@ ${st ? `<div class="permenu">
   <!-- Offered only while the other end is unknown. Everything the fleet does
        for a tunnel is gated on knowing where that end lives, and a tunnel not
        built through the fleet has never had a way to say. -->
+  <!-- The line that builds the other end, as the menu prints it. -->
+  <button data-do="share"><span>⛓</span>Setup link…</button>
   ${t.node
     ? `<button data-do="unlink"><span>⛓</span>Unlink from ${esc(t.node)}</button>`
     : `<button data-do="adopt"><span>⛓</span>Link to a server…</button>`}
@@ -391,6 +394,22 @@ const ACTION_DONE = {
   restart: 'Tunnel restarted.', delete: 'Tunnel deleted.',
 };
 
+/* The traffic limit, in the card's bottom band: what has been used of it, as
+ * a figure and a line, and the button that changes it. On the Iran end only —
+ * the one a limit is set on. With none set it says so, with the same button. */
+const PEN = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>';
+function quotaMeter(t) {
+  const used = t.totalBytes || 0, lim = t.quotaLimit || 0;
+  const pct = lim ? Math.min(100, (used / lim) * 100) : 0;
+  const tone = !lim ? 'none' : t.quotaHit || pct >= 100 ? 'er' : pct >= 90 ? 'er' : pct >= 70 ? 'wr' : 'ok';
+  return `<span class="qm ${tone}" title="${lim ? `${pct.toFixed(1)}% of the traffic limit used` : 'No traffic limit'}">
+    <span class="qm-tx"><b>${esc(bytes(used))}</b><i>/</i>${lim ? esc(bytes(lim)) : '<em>∞</em>'}</span>
+    <span class="qm-bar"><i style="--w:${pct.toFixed(2)}%"></i></span>
+    ${lim ? `<span class="qm-pc">${pct >= 99.95 && !t.quotaHit ? '99.9' : pct.toFixed(pct < 10 ? 1 : 0)}%</span>` : ''}
+  </span>
+  <button class="qm-ed" data-act="quota" title="${lim ? 'Change the traffic limit' : 'Set a traffic limit'}">${PEN}</button>`;
+}
+
 /* What a card draws, minus the chart.
  *
  * The chart is left out on purpose. Its points change on every poll, so a
@@ -404,7 +423,7 @@ function cardSig(t) {
     t.ping, t.uptime, t.bytesIn, t.bytesOut, t.bytesTotal, t.country, t.peerCountry,
     t.peerLocation, t.peerISP, t.botRelay, t.botRelayPort, t.tunnelPort,
     t.kcpLossPercent, t.pool, t.preset, t.certType, t.certDomain, t.certExpiry,
-    t.maxConnections, t.bandwidthMbps,
+    t.maxConnections, t.bandwidthMbps, t.quotaLimit, t.quotaHit, t.quotaSettable,
   ]);
 }
 
@@ -534,6 +553,7 @@ export function dashboard(ctx) {
         break;
       }
       case 'edit':   go(`/t/${encodeURIComponent(name)}/edit`); break;
+      case 'quota':  go(`/t/${encodeURIComponent(name)}/quota`); break;
       case 'logs':   go(`/t/${encodeURIComponent(name)}/logs`); break;
       case 'detail': go(`/t/${encodeURIComponent(name)}/metrics`); break;
       /* The link test is no longer a button on the card: the card is for the
@@ -564,6 +584,7 @@ export function dashboard(ctx) {
     const action = btn.dataset.do;
     cardEl.querySelector('.card-more').classList.remove('on');
 
+    if (action === 'share') { go(`/t/${encodeURIComponent(name)}/share`); return; }
     if (action === 'adopt') { await linkToServer(name); store.refresh(); return; }
     if (action === 'unlink') {
       const t = store.tunnel(name);

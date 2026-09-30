@@ -9,6 +9,14 @@
 @container pg (max-width:1100px) { .wide .grid3 { grid-template-columns: repeat(2, 1fr); } }
 @container pg (max-width:720px)  { .wide .grid3 { grid-template-columns: 1fr; } }
 
+/* The tunnels fill the row they are on. Still three to a row at most, but two
+   tunnels take the width between them instead of leaving a third of it empty
+   for a card that is not there — and a last row of one or two does the same. */
+.wide #tGrid.grid3 { display: flex; flex-wrap: wrap; gap: 14px; }
+.wide #tGrid.grid3 > * { flex: 1 1 calc((100% - 28px) / 3); min-width: 0; }
+@container pg (max-width:1100px) { .wide #tGrid.grid3 > * { flex-basis: calc((100% - 14px) / 2); } }
+@container pg (max-width:720px)  { .wide #tGrid.grid3 > * { flex-basis: 100%; } }
+
 .wide .c7 .inner { padding: 15px 16px 13px; }
 .wide .c7 .mid { display: flex; align-items: flex-end; gap: 18px; }
 .wide .c7 .ping { flex: none; margin-top: 11px; }

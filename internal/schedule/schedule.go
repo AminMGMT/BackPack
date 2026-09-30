@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/backpack/backpack/internal/app"
 )
@@ -183,4 +184,35 @@ func SetAutoRefresh(hours int) error {
 // AutoRefreshHours returns the current auto-refresh interval (0 = disabled).
 func AutoRefreshHours() int {
 	return GetIntervalHours(app.AutoRefreshMarker)
+}
+
+// NextRun is when a job scheduled every hours (as HourlySpec writes it) next
+// fires after now, on now's clock, or the zero time when hours is off. It
+// walks the hours the way cron matches them rather than adding the interval,
+// because cron's steps restart every day (hours) and every month (days): a
+// 5-hour job fires at 20:00 and then at 00:00, not 01:00.
+func NextRun(hours int, now time.Time) time.Time {
+	h := EffectiveHours(hours)
+	if h <= 0 {
+		return time.Time{}
+	}
+	// Built from the clock's fields, not Truncate: Truncate rounds absolute
+	// time, which on a half-hour zone such as Iran's lands on :30.
+	t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
+	if !t.After(now) {
+		t = t.Add(time.Hour)
+	}
+	for i := 0; i < 24*62; i++ {
+		c := t.Add(time.Duration(i) * time.Hour)
+		if h < 24 {
+			if c.Hour()%h == 0 {
+				return c
+			}
+			continue
+		}
+		if c.Hour() == 0 && (c.Day()-1)%(h/24) == 0 {
+			return c
+		}
+	}
+	return time.Time{}
 }

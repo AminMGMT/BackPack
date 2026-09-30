@@ -40,3 +40,17 @@ button, a, input, select, textarea, [role="button"], [role="menuitem"] {
     scroll-behavior: auto !important;
   }
 }
+
+/* A dialog whose values are still being read: the frame and its title show,
+   the preview's sample content does not. See openScreen. */
+.priming > :not(.dh):not(.sheen){opacity:0;pointer-events:none}
+.scrim .dlg > *{transition:opacity .28s ease}
+.priming::after{content:"";position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;
+  border-radius:50%;border:2px solid var(--ln2);border-top-color:var(--tx);animation:priming-spin .8s linear infinite}
+@keyframes priming-spin{to{transform:rotate(1turn)}}
+@media (prefers-reduced-motion:reduce){ .priming::after{animation-duration:2.4s} }
+
+/* A dialog's subtitle on a phone: two lines at most, not four. */
+@media (max-width:560px){
+  .dlg .dh small{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+}

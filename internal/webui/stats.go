@@ -12,6 +12,7 @@ import (
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/node"
+	"github.com/backpack/backpack/internal/quota"
 	"github.com/backpack/backpack/internal/sysstat"
 )
 
@@ -87,6 +88,12 @@ type TunnelInfo struct {
 	InBytes    uint64 `json:"inBytes,omitempty"`
 	OutBytes   uint64 `json:"outBytes,omitempty"`
 	TotalBytes uint64 `json:"totalBytes,omitempty"`
+	// QuotaLimit is the traffic the tunnel may carry in all, in bytes (0: no
+	// limit); QuotaHit is that it has, and is offline until the limit is
+	// raised. QuotaSettable is the Iran end, the one a limit is set on.
+	QuotaLimit    uint64 `json:"quotaLimit,omitempty"`
+	QuotaHit      bool   `json:"quotaHit,omitempty"`
+	QuotaSettable bool   `json:"quotaSettable,omitempty"`
 	// BytesTotal is the two added. The card shows all three on one line, and a
 	// sum of two already-formatted strings is not something the browser can do.
 	BytesTotal string `json:"bytesTotal,omitempty"`
@@ -242,6 +249,12 @@ func tunnelInfo(t manage.Tunnel, h manage.Health, peersByPort map[string][]peerC
 	// cumulative and survive restarts by design.
 	if info.State == "stopped" {
 		info.Uptime = ""
+	}
+	// The traffic limit, on the end that can have one. See internal/quota.
+	info.QuotaSettable = manage.HoldsPorts(t)
+	if q, err := quota.Load(app.ConfigDir, t.Name); err == nil && q.Limit > 0 {
+		info.QuotaLimit = q.Limit
+		info.QuotaHit = q.Reached(info.TotalBytes)
 	}
 	fillConfig(&info, t)
 	return info
@@ -530,15 +543,19 @@ func peerHost(peer string) string {
 
 // fillDirectConfig reports what a direct or layer-3 tunnel actually has.
 //
-// Neither carries a performance preset or a connection limit — those belong to
-// the reverse transports' tuning, which these do not share — so the panel
-// leaves those fields empty rather than showing a zero that looks like a
-// setting. What it does show is the certificate, which is the one thing an
+// Each keeps its own preset and limits in its own table, so they are read from
+// there; a field the table does not have stays empty rather than showing a
+// zero that looks like a setting. What it also shows is the certificate, which is the one thing an
 // operator of a wss direct tunnel has to keep an eye on.
 func fillDirectConfig(info *TunnelInfo, cfg config.Config) {
 	if cfg.L3.Enabled() {
 		info.MaxConnections = cfg.L3.MaxConnections
 		info.BandwidthMbps = cfg.L3.BandwidthMbps
+		// A layer-3 tunnel has its own presets (the queue and the socket
+		// memory), and the card names the one it was built with.
+		if cfg.L3.Preset != "" {
+			info.Preset = manage.PresetValueLabel(cfg.L3.Preset)
+		}
 		return // and no certificate: a layer-3 tunnel has none
 	}
 	if !cfg.Direct.Enabled() {

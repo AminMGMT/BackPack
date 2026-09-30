@@ -12,6 +12,7 @@ import { $$, el, esc, dialogSubtitle } from '../lib/dom.js';
 import { isUp } from '../lib/tstate.js';
 import { NUMERIC } from '../lib/numeric.js';
 import * as api from '../api.js';
+import { setupLinkHTML, bindSetupLink } from '../ui/setuplink.js';
 import * as store from '../store.js';
 import { openScreen } from '../ui/screen.js';
 import { oops, toast } from '../ui/toast.js';
@@ -21,7 +22,7 @@ export function addView(ctx) {
   openScreen('add', {
     pick: '.dlg',
     bind: async (root, close) => {
-      dialogSubtitle(root, store.get().stats, 'you will do this on both servers');
+      dialogSubtitle(root, store.get().stats, 'this server’s end — the other is built from its setup link');
       let opts = { families: [], presets: [] };
       try { opts = await api.tunnelOptions(); } catch (e) { oops(e); }
 
@@ -51,8 +52,20 @@ export function addView(ctx) {
        *
        * Read from the markup rather than hard-coded, so the default is
        * whichever button carries `on`, and it stays right if that changes. */
+      /* Reverse and direct each have a row of presets, and both are in the
+         page. The first `.rp.on` in the document is the reverse row's, so a
+         direct tunnel read Balance from a row it could not see. Only the row
+         in the shape on screen counts — a step being hidden is not the row
+         being hidden, which is why steps are passed over. */
+      const inShape = n => {
+        for (let at = n; at && at !== root; at = at.parentElement) {
+          if (at.hidden && !at.classList.contains('step')) return false;
+        }
+        return true;
+      };
       const markedPreset = () => {
-        const b = root.querySelector('.rp.on:not([hidden])') || root.querySelector('.rp:not([hidden])');
+        const live = [...root.querySelectorAll('.rp')].filter(inShape);
+        const b = live.find(x => x.classList.contains('on')) || live[0];
         return (b?.querySelector('.key2, .k3')?.textContent || b?.dataset.pre || '')
           .trim().toLowerCase() || null;
       };
@@ -255,6 +268,7 @@ export function addView(ctx) {
           sw.dataset.wired = '1';
           const input = el('input', { type: 'checkbox', name, hidden: true });
           input.checked = sw.classList.contains('on');
+          input.dataset.drawn = '1';
           sw.after(input);
           sw.setAttribute('role', 'switch');
           sw.setAttribute('aria-checked', String(input.checked));
@@ -262,6 +276,7 @@ export function addView(ctx) {
           const flip = () => {
             sw.classList.toggle('on');
             input.checked = sw.classList.contains('on');
+            delete input.dataset.drawn;
             sw.setAttribute('aria-checked', String(input.checked));
           };
           sw.addEventListener('click', flip);
@@ -282,6 +297,7 @@ export function addView(ctx) {
           const shown = sel.childNodes[0]?.textContent?.trim() || '';
           const start = choices.find(c => c.label === shown) || choices[0];
           input.value = start.value;
+          input.dataset.drawn = '1';
           sel.after(input);
           sel.setAttribute('role', 'combobox');
           sel.tabIndex = 0;
@@ -292,6 +308,7 @@ export function addView(ctx) {
             opt.addEventListener('click', ev => {
               ev.stopPropagation();
               input.value = c.value;
+              delete input.dataset.drawn;
               sel.childNodes[0].textContent = c.label;
               close4();
             });
@@ -445,6 +462,10 @@ export function addView(ctx) {
         if (spoofField) spoofField.hidden = !(direct && chosen.carrier === 'spoof'
                                               && chosen.side === 'client');
         if (!direct) { applyFields(); applyPresets(); }
+        /* Direct has no applyPresets, so without this an untouched direct
+           form sent no preset and the server took its default: Turbo, under a
+           row showing Balance. */
+        else chosen.preset = markedPreset();
       }
 
       /* The last step is not a summary.
@@ -479,20 +500,12 @@ export function addView(ctx) {
         if (conn) runBuild(conn);
       }
 
-      /* Building both ends, said out loud.
+      /* Building this end, said out loud.
        *
-       * Four stages, and each one is a fact from the answer rather than a
-       * timer: the config written here, the service up here, the config written
-       * there, and both ends agreeing. The panel makes one call — the work is
-       * one transaction on the server — so these are not live telemetry and are
-       * not dressed up as it. They resolve in order as the answer is read, and a
-       * stage that did not happen is marked failed and says which end it was.
-       *
-       * That last part is the whole reason for showing stages at all. "Could
-       * not create the tunnel" is a message with nowhere to go. "Written here,
-       * started here, not written on kharej-de" is one that tells you which
-       * machine to look at.
-       */
+       * Two stages, each a fact from the answer rather than a timer: the config
+       * written, and the service up. Then the setup link — the other end is
+       * the operator's to build, and the line that does it is what this screen
+       * owes them, the way the menu's wizard prints it. */
       let building = false;
       async function runBuild(conn) {
         if (!conn || building) return;
@@ -502,25 +515,16 @@ export function addView(ctx) {
         const sub = conn.querySelector('#connSub');
         const result = conn.querySelector('#connResult');
         const spin = conn.querySelector('.spin');
-        const onNode = nodeSel?.value || '';
-        const direct = chosen.direction === 'direct';
         const t0 = Date.now();
 
-        const labels = [
-          'Writing the configuration on this server',
-          'Starting it here',
-          `Writing the configuration on ${onNode || 'the other server'}`,
-          'Both ends reporting up',
-        ];
-        rows.forEach((r, i) => {
-          const tx = r.querySelector('.tx6');
-          if (tx && labels[i]) tx.textContent = labels[i];
-          r.classList.remove('done', 'doing', 'failed');
-          const d = r.querySelector('.dur');
-          if (d) d.textContent = '';
+        rows.slice(2).forEach(r => r.remove());
+        ['Writing the configuration', 'Starting it here'].forEach((lb, i) => {
+          const tx = rows[i]?.querySelector('.tx6');
+          if (tx) tx.textContent = lb;
+          rows[i]?.classList.remove('done', 'doing', 'failed');
         });
         if (title) title.textContent = 'Building…';
-        if (sub) sub.textContent = 'Both ends are written from what you filled in.';
+        if (sub) sub.textContent = 'This server’s end, from what you filled in.';
 
         const settle = (i, ok) => {
           if (!rows[i]) return;
@@ -540,7 +544,7 @@ export function addView(ctx) {
           settle(0, false);
           spin?.setAttribute('hidden', '');
           if (title) title.textContent = 'Nothing was created';
-          if (sub) sub.textContent = 'This server refused the settings, so neither end was written.';
+          if (sub) sub.textContent = 'This server refused the settings.';
           if (result) {
             result.innerHTML = `<div class="doneline warn"><span class="tick">!</span><div>
               <b>${esc(e.message || 'The panel could not build the tunnel')}</b>
@@ -552,53 +556,26 @@ export function addView(ctx) {
         }
 
         const { r, name } = out;
-        const partial = r.status === 'partial';
-
-        settle(0, !!r.service || !onNode);
-        await pause(260);
-
+        settle(0, true);
+        await pause(240);
         start(1); await pause(200);
-        settle(1, r.active !== false);
-
-        if (onNode) {
-          await pause(260);
-          start(2); await pause(240);
-          settle(2, !partial);
-
-          await pause(200);
-          start(3); await pause(200);
-          settle(3, !partial && r.active !== false && r.peer?.active !== false);
-        } else {
-          rows[2]?.remove();
-          rows[3]?.remove();
-        }
-
+        const up = r.active !== false;
+        settle(1, up);
         spin?.setAttribute('hidden', '');
         store.refresh();
-        paired = partial ? false : (onNode || false);
 
-        const good = !partial && r.active !== false;
-        if (title) title.textContent = good ? 'Both ends are up' : partial ? 'Only this end was built' : 'Created, not up yet';
-        if (sub) {
-          sub.textContent = good
-            ? 'Nothing else to do on either server.'
-            : partial
-              ? `This server has it. ${onNode} does not.`
-              : 'The config is written and the service is running, but the tunnel has not come up.';
-        }
+        if (title) title.textContent = up ? 'Built on this server' : 'Created, not up yet';
+        if (sub) sub.textContent = up ? 'Now build the other end with the line below.'
+          : 'The config is written but the service did not start — its log says why.';
         if (result) {
-          result.innerHTML = good
-            ? `<div class="doneline"><span class="tick">✓</span><div>
-                 <b id="doneName">${esc(name || 'The tunnel')} is running on both servers</b>
-                 <span>Written here and on ${esc(onNode)}.</span>
-               </div></div>`
-            : `<div class="doneline warn"><span class="tick">!</span><div>
-                 <b>${esc(partial ? (r.peerError || 'The other end was not written')
-                                  : 'Give it a moment')}</b>
-                 <span>${esc(partial
-                   ? (r.peerHint || `Open the tunnel's setup link and paste it on ${onNode}.`)
-                   : 'The tunnel card turns green on its own when it connects.')}</span>
-               </div></div>`;
+          result.innerHTML = `<div class="sl-wait">Building the setup link…</div>`;
+          bindSetupLink(result);
+          try {
+            result.innerHTML = setupLinkHTML(await api.tunnelLink(name));
+          } catch (e) {
+            result.innerHTML = `<div class="doneline warn"><span class="tick">!</span><div>
+              <b>${esc(e.message)}</b><span>Open the tunnel's menu → Setup link to try again.</span></div></div>`;
+          }
         }
         building = false;
       }
@@ -630,7 +607,7 @@ export function addView(ctx) {
         if (fn === 'setPre') chosen.preset = (el.querySelector('.key2, .k3')?.textContent
           || el.textContent).trim().toLowerCase().split(/\s+/)[0];
         applyShape();
-        if (fn === 'setPre' || fn === 'setTr' || fn === 'setSide') showPresetDefaults();
+        if (fn === 'setPre' || fn === 'setTr' || fn === 'setSide' || fn === 'mode3') showPresetDefaults();
       });
 
       /* The Fine Tune drawer calls itself "preset defaults" and showed empty
@@ -651,6 +628,47 @@ export function addView(ctx) {
           const key = inp.name.slice('tune.'.length);
           const v = d[key];
           inp.placeholder = (v === undefined || v === null || v === '') ? '' : String(v);
+        });
+        paintPresetSets(d);
+      }
+
+      /* Under the preset cards: what the chosen one actually sets on this
+         transport, read from the same answer the Fine Tune drawer shows. The
+         step was three buttons and a screen of nothing; this is the thing an
+         operator comparing them wants to see. */
+      const DIRECT_SETS = {
+        turbo: [['Socket buffer', '8 MB'], ['Queue', 'fq_codel'], ['Suits', 'most links']],
+        balance: [['Socket buffer', 'smallest'], ['Queue', 'fq_codel'], ['Suits', 'small VPS']],
+        aggressive: [['Socket buffer', '32 MB'], ['Queue', 'deep'], ['Suits', 'fast, bursty links']],
+      };
+      function paintPresetSets(d) {
+        root.querySelectorAll('.rpgrid').forEach(grid => {
+          let box = grid.nextElementSibling;
+          if (!box || !box.classList.contains('rp-sets')) {
+            box = el('div', { class: 'rp-sets' });
+            grid.after(box);
+          }
+          const direct = !!grid.closest('[data-mode="dir"], .step3direct');
+          const p = chosen.preset || 'turbo';
+          let cells;
+          if (direct) cells = DIRECT_SETS[p] || [];
+          else {
+            const n = (k, unit = '') => (d[k] ? [d[k] + unit] : []);
+            cells = [
+              ['Keepalive', ...n('keepAlive', ' s')], ['Heartbeat', ...n('heartbeat', ' s')],
+              ['Channel', ...n('channelSize')],
+              ...(isMux(chosen.transport) ? [['Mux streams', ...n('muxCon')]] : []),
+              ...(isKCP(chosen.transport) ? [
+                ['KCP window', ...(d.kcpSndWnd ? [`${d.kcpSndWnd}/${d.kcpRcvWnd}`] : [])],
+                ['FEC', ...(d.kcpDataShards ? [`${d.kcpDataShards}+${d.kcpParityShards}`] : [])]] : []),
+              ['No-delay', d.nodelay ? 'on' : 'off'],
+            ].filter(c => c.length === 2);
+          }
+          const label = p[0].toUpperCase() + p.slice(1);
+          box.innerHTML = `<div class="rp-sets-h"><b>What ${esc(label)} sets</b>
+              <small>${direct ? 'on this direct tunnel' : `on ${esc((chosen.transport || '').toUpperCase())}`} · change any of it under Optional → Fine Tune</small></div>
+            <div class="rp-sets-g">${cells.map(([k, v], i) =>
+              `<div style="--d:${i * 35}ms"><span>${esc(k)}</span><b>${esc(String(v))}</b></div>`).join('')}</div>`;
         });
       }
       showPresetDefaults();
@@ -708,6 +726,34 @@ export function addView(ctx) {
           });
         }));
 
+      /* Forwarded ports get a Random of their own, asked for by name: a port
+         free on this server, added to the list. It is a port for users to
+         reach this server on, and the kharej hands it to the same port there —
+         which the hint under the field now says in as many words, because the
+         service on the kharej has to be listening on it. */
+      root.querySelectorAll('input[name="ports"]').forEach(inp => {
+        if (inp.closest('.withb')) return;
+        const wrap = el('div', { class: 'withb' });
+        inp.before(wrap);
+        wrap.append(inp);
+        const b = el('button', { type: 'button', class: 'mini3 rnd', text: 'Random' });
+        wrap.append(b);
+        b.addEventListener('click', async () => {
+          try {
+            const r = await api.tunnelSuggest();
+            if (!r.port) return;
+            const have = inp.value.split(',').map(x => x.trim()).filter(Boolean);
+            if (!have.includes(String(r.port))) have.push(String(r.port));
+            inp.value = have.join(', ');
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+          } catch (e) { oops(e); }
+        });
+        const hint = wrap.parentElement?.querySelector('.hint');
+        if (hint) hint.textContent = 'Users connect to these ports on this server. A bare port is handed to the same '
+          + 'port on the kharej, so the service there has to listen on it — 443=8080 sends this server’s 443 to '
+          + 'the kharej’s 8080. Random adds a port that is free here. Separate several with commas.';
+      });
+
       [...root.querySelectorAll('button')]
         .filter(b => /show as a cli command/i.test(b.textContent.trim()))
         .forEach(b => b.addEventListener('click', async () => {
@@ -726,207 +772,6 @@ export function addView(ctx) {
          more. Both existed for a second panel on the other server, typing the
          same values in again; the panel writes that end itself now. */
 
-      const nodeSel = root.querySelector('#anode');
-      const nodeGrp = root.querySelector('#nodeGrp');
-      /* The form in three parts, which is what it has always been without
-       * saying so.
-       *
-       * A tunnel's settings fall into three kinds and the markup already knows
-       * which is which: data-when="server" belongs to this machine,
-       * data-when="client" to the other one, and a field with neither is one
-       * both ends have to agree on. Until now that only decided what to hide,
-       * because you filled in one side and went and filled in the other. When
-       * the panel writes both, it is the structure of the form.
-       */
-      function markSides(root) {
-        root.querySelectorAll('.step3rev .grp3, .step3direct .grp3').forEach(g => {
-          const label = g.querySelector('.gl3');
-          if (!label || label.querySelector('.sidechip')) return;
-          const fields = [...g.querySelectorAll('[name]')].filter(f => !f.closest('#nodeGrp'));
-          const local = fields.filter(f => f.closest('[data-when]'));
-
-          /* Marked only when the whole group is one kind. A group that mixes
-           * them gets nothing: the fields inside already say which is which,
-           * and a heading that claims "both servers" over a name that is this
-           * machine's alone is worse than a heading that claims nothing.
-           *
-           * A group with no fields at all — the transport and the preset are
-           * chosen with buttons — is shared: those are carried to the other end
-           * with everything else, and the form's own convention is that what is
-           * not marked as one machine's belongs to both. */
-          const chip = !fields.length ? 'both servers'
-            : local.length === fields.length ? 'this server'
-            : local.length === 0 ? 'both servers'
-            : '';
-          if (!chip) return;
-          label.append(el('span', { class: 'sidechip', text: chip }));
-        });
-      }
-
-      /* The other server's own settings.
-       *
-       * These four cannot be worked out from this end — which proxy that
-       * machine dials through, which CDN edge it fronts, which interface it
-       * leaves by, what it falls back to. Everything else about the far end is
-       * derived from this one; these are the only answers that have to be
-       * given. They were unreachable before: the form hid them because you were
-       * not setting up that side, and you were not setting up that side, so
-       * they could only be set by logging into it.
-       *
-       * The fields are the existing ones, moved and renamed — peerConn.* rather
-       * than conn.*, so the submit puts them on the far end instead of this one.
-       */
-      function buildPeerGroup(root) {
-        const rev = root.querySelector('.step3rev');
-        if (!rev || rev.querySelector('#peerGrp')) return;
-        /* Every ConnTune setting that is the client's own.
-         *
-         * SimpleAuth is left behind deliberately: it is applied before the role
-         * check in ConnTune.apply, so it belongs to both ends and is not the
-         * far end's to answer alone. */
-        const wanted = ['conn.edgeIP', 'conn.proxy', 'conn.interface', 'conn.localAddr',
-          'conn.fallbackAddrs', 'conn.loadBalance', 'conn.healthFailover'];
-        const fields = wanted
-          .map(n => {
-            const el2 = root.querySelector(`.step3rev [name="${n}"]`)
-              // The switches and menus are wired to a hidden input beside them,
-              // so the row is found from the control when there is no field yet.
-              || root.querySelector(`.step3rev [id$="${n.split('.')[1]}"]`);
-            return el2?.closest('.f3, .tg3');
-          })
-          .filter(Boolean);
-        if (!fields.length) return;
-
-        const grid = el('div', { class: 'fgrid' });
-        fields.forEach(f => {
-          // data-when decided which side saw the field; the section it is
-          // moving into answers that now, so the marker goes and the field is
-          // taken out of the hidden state it was left in. What must survive is
-          // the transport rule, and that lives in applyFields.
-          f.removeAttribute('data-when');
-          f.hidden = false;
-          const input = f.querySelector('[name]');
-          input.name = 'peerConn.' + input.name.slice('conn.'.length);
-          // The labels said "kharej only" when this side was the one being set
-          // up. Under a heading that names the server, that is now noise.
-          f.querySelectorAll('.sidechip').forEach(c => c.remove());
-          grid.append(f);
-        });
-        const grp = el('div', { class: 'grp3', id: 'peerGrp' }, [
-          el('div', { class: 'gl3', text: 'The other server' }, [
-            el('span', { class: 'sidechip', text: 'that machine only' }),
-          ]),
-          grid,
-        ]);
-        rev.append(grp);
-        applyFields();
-      }
-
-      /* No token to read, so no token to type.
-       *
-       * There are four token fields in this form — each side has one it
-       * generates and one it pastes, for reverse and for direct — because the
-       * secret used to be carried between two machines by a person. One of them
-       * has no name attribute at all, so the value it shows has never been
-       * submitted by anything.
-       *
-       * None of that survives contact with a panel that writes both ends. The
-       * token is generated here, kept in a variable, and put into the payload
-       * on the way out; every field is hidden and none of them is read. That is
-       * one place the secret exists instead of four, and nothing depends on
-       * which of the four the operator happened to be looking at.
-       */
-      let autoTok = '';
-
-      function autoToken(root) {
-        root.querySelectorAll('[name="token"], #atok').forEach(i => {
-          const box = i.closest('.f3');
-          // Marked, not just hidden: applyShape sets the same attribute from
-          // the side, and would put them back on the next change.
-          if (box) box.classList.add('tokgone');
-        });
-        applyShape();
-        api.tunnelToken()
-          .then(r => { autoTok = r.token || ''; })
-          .catch(() => { /* the create will say the token is missing */ });
-      }
-
-      /* Five steps, in the order the work happens.
-       *
-       * The wizard was built around doing this twice: pick a side, fill it in,
-       * then carry the paired values to the other machine. With a managed
-       * server there is one pass and it covers both ends, so the steps are the
-       * parts of the tunnel rather than the halves of the job — this server,
-       * that server, how fast, what else, and then what happened.
-       *
-       * The panes are the existing ones, moved. Nothing here re-renders a field
-       * or re-implements a drawer; the groups keep their markup, their names and
-       * their bindings, and only their parent changes.
-       */
-      const STAGES = ['Iran side', 'Kharej side', 'Performance', 'Optional', 'Done'];
-
-      function restage(root) {
-        const body = root.querySelector('.body5');
-        const details = root.querySelector('.step[data-s="1"]');
-        if (!body || !details || root.dataset.staged) return;
-        root.dataset.staged = '1';
-
-        /* A group is about to leave the container that decided whether it is
-           shown, so it takes that decision with it.
-           
-           The drawers are tagged too, and they need it more: Fine Tune,
-           Connectivity and the packet carrier fill tune.*, conn.* and pck.*,
-           and a direct tunnel has none of those. Left visible, opening one on a
-           direct tunnel put keys in the payload that the create handler refuses
-           by name — so the whole submission failed because a drawer was open. */
-        root.querySelectorAll('.step3rev .grp3, .step3rev .dr2b')
-          .forEach(g => { g.dataset.mode = 'rev'; });
-        root.querySelectorAll('.step3direct .grp3, .step3direct .dr2b')
-          .forEach(g => { g.dataset.mode = 'dir'; });
-
-        const pane = () => el('div', { class: 'step', hidden: true });
-        const kharej = pane(), perf = pane(), opt = pane();
-
-        const take = (label, into) => {
-          root.querySelectorAll('.grp3').forEach(g => {
-            const head = g.querySelector('.gl3')?.childNodes[0]?.textContent?.trim();
-            if (head === label) into.append(g);
-          });
-        };
-        take('Performance', perf);
-        take('Optional', opt);
-        const peer = root.querySelector('#peerGrp');
-        if (peer) kharej.append(peer);
-
-        // The side question is gone, not hidden: with a managed server there is
-        // no second machine to go and set up, so there is nothing to ask.
-        root.querySelector('.step[data-s="0"]')?.remove();
-
-        details.after(kharej);
-        kharej.after(perf);
-        perf.after(opt);
-
-        [...body.querySelectorAll('.step')].forEach((el2, i) => {
-          el2.dataset.s = String(i);
-          el2.hidden = i !== 0;
-        });
-
-        const rail = root.querySelector('.steps');
-        if (rail) {
-          rail.innerHTML = '';
-          STAGES.forEach((lb, i) => {
-            if (i) rail.append(el('span', { class: 'bar4' }));
-            rail.append(el('span', { class: 'st2' + (i ? '' : ' on'), dataset: { s: String(i) } }, [
-              el('span', { class: 'n3', text: String(i + 1) }),
-              el('span', { class: 'lb4', text: lb }),
-            ]));
-          });
-        }
-        const back = root.querySelector('#backb');
-        if (back) back.disabled = true;
-        paintNav(0);
-      }
-
       /* A step with nothing in it is not a step.
        *
        * The five are the parts of a reverse tunnel. A direct one has no
@@ -944,6 +789,7 @@ export function addView(ctx) {
       function paneEmpty(pane, i, of) {
         // The last one is the result, which is not made of groups.
         if (i === of - 1) return false;
+        if (pane.querySelector('.choices')) return false;
         return ![...pane.querySelectorAll('.grp3, .dr2b')].some(g => !g.hidden);
       }
 
@@ -1000,7 +846,7 @@ export function addView(ctx) {
           next.onclick = null;
         }
         if (note) note.textContent = at === last - 1
-          ? 'Both ends are written when you press this.' : '';
+          ? 'This server’s end is written when you press this.' : '';
       }
 
       /* The wizard is held back until the fleet has answered.
@@ -1016,140 +862,166 @@ export function addView(ctx) {
       // Never left hidden by a request that hangs.
       setTimeout(reveal, 2500);
 
-      const nodeMsg = root.querySelector('#nodeMsg');
-      const nodeAddr = new Map();   // name -> the address it reported
-      let peerIP = '';               // the one for the server that was picked
-      api.nodes().then(state => {
-        const live = (state.nodes || []).filter(n => n.online);
-        /* No managed server, no tunnel from here.
-         *
-         * This form writes both ends. Without a server to write the other one
-         * on it could only ever build half a tunnel and then ask the operator
-         * to go and finish it somewhere else — which is the two-pass flow the
-         * fleet exists to remove, and the source of most of what went wrong
-         * with it: two forms, filled in twice, agreeing by hand.
-         *
-         * So it says what is missing and where the other route is. Tunnels can
-         * still be made from the CLI on each machine; the panel shows their
-         * cards and manages them like any other. */
-        if (!live.length || !nodeSel || !nodeGrp) {
-          noFleet(state);
-          return;
-        }
-        live.forEach(n => {
-          nodeSel.append(el('option', { value: n.name, text: n.name }));
-          const ip = n.info?.ipv4;
-          if (ip && ip !== '-') nodeAddr.set(n.name, ip);
+      /* One server: this one.
+       *
+       * The wizard used to need a managed server to write the far end on, and
+       * refused to build anything without one. Servers is out of the panel, so
+       * the form is what the CLI wizard is — Setup Iran or Setup Kharej, on the
+       * machine in front of you — and the other end is built from the setup
+       * link this screen hands over at the end. Six steps, in the order the
+       * menu asks: which side, which kind, the tunnel, how fast, what else,
+       * and what happened. */
+      const SINGLE = ['Type', 'Tunnel', 'Performance', 'Optional', 'Done'];
+
+      /* The preset cards: the three (four, on udp+kcp) profiles as cards that
+         fill the row, each with its own mark and what it costs — they were
+         three small buttons in an empty step. The button keeps its class, its
+         data-pre and its .key2, because those are what the rest of the form
+         reads. */
+      const PRESET_ART = {
+        balance: { icon: '<svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7l-3 7a3.5 3.5 0 006 0z"/><path d="M19 7l-3 7a3.5 3.5 0 006 0z"/><path d="M8 21h8"/></svg>',
+          line: 'Light on CPU and memory', fits: 'Small or shared VPS · several tunnels on one box', load: 1 },
+        turbo: { icon: '<svg viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12z"/></svg>',
+          line: 'The tuned default', fits: 'Most Iran → abroad links', load: 2, rec: true },
+        aggressive: { icon: '<svg viewBox="0 0 24 24"><path d="M12 22c4.4 0 7-2.9 7-6.8 0-3.6-2.4-6-4.2-8.2-.4 2.2-1.6 3.4-2.8 4C12.3 7.6 10.4 4.6 8 2c.2 3.5-3 6-3 11.2C5 18.9 7.6 22 12 22z"/><path d="M12 22c-1.7 0-3-1.3-3-3.2 0-1.8 1.4-2.9 3-4.8 1.6 1.9 3 3 3 4.8 0 1.9-1.3 3.2-3 3.2z"/></svg>',
+          line: 'Maximum headroom', fits: 'Strong servers · gaming · fast links with bursts', load: 3 },
+        throughput: { icon: '<svg viewBox="0 0 24 24"><path d="M4 18a8 8 0 1116 0"/><path d="M12 18l4.5-6"/><circle cx="12" cy="18" r="1.4"/></svg>',
+          line: 'Bandwidth over steady ping', fits: 'udp + kcp + fec only', load: 3 },
+      };
+      function dressPresets() {
+        root.querySelectorAll('.rp').forEach(b => {
+          const v = (b.dataset.pre || b.querySelector('.key2')?.textContent || '').trim().toLowerCase();
+          const a = PRESET_ART[v];
+          if (!a || b.dataset.dressed) return;
+          b.dataset.dressed = '1';
+          const label = v[0].toUpperCase() + v.slice(1);
+          b.classList.add('rp2');
+          b.innerHTML = `<span class="rp-ic">${a.icon}</span>
+            <span class="rp-tx"><b>${label}${a.rec ? '<em>recommended</em>' : ''}</b>
+              <span class="rp-line">${a.line}</span><small>${a.fits}</small></span>
+            <span class="rp-load" title="CPU and memory it takes">${[1, 2, 3].map(i => `<i class="${i <= a.load ? 'on' : ''}"></i>`).join('')}</span>
+            <span class="key2" hidden>${v}</span>`;
         });
-        nodeGrp.hidden = false;
-
-        /* With a managed server there is no second pass, so the form stops
-         * offering one.
-         *
-         * "Which machine are you setting up" is a question that only exists
-         * because the operator used to have to answer it twice — once here and
-         * once over there. A server that is managed from this panel is written
-         * from this panel, so this side is Iran and the other side is that
-         * server; asking which of the two you are in front of would be asking
-         * about a step that no longer happens.
-         *
-         * The choice comes back the moment it means something again: it is
-         * hidden, not removed, and a panel with no managed servers is the form
-         * exactly as it was.
-         */
-        const kharej = root.querySelector('[data-fn="setSide"][data-args*="client"]');
-        const iran = root.querySelector('[data-fn="setSide"][data-args*="server"]');
-        if (kharej) kharej.hidden = true;
-        if (iran) { chosen.side = 'server'; markGroup('setSide', 'server'); }
-        const lede = root.querySelector('.step[data-s="0"] .lede2');
-        if (lede) {
-          lede.innerHTML = 'This panel is the <b>Iran</b> side. The other end is written on the '
-            + 'server you pick in the next step — you do not set it up again over there.';
-        }
-        markSides(root);
-        buildPeerGroup(root);
-        autoToken(root);
-        restage(root);
-
-        // The last step hands the settings over to be typed in somewhere else.
-        // Nothing is handed over here.
-        const sub = root.querySelector('.dh small, .ttl small');
-        if (sub) sub.textContent = sub.textContent.split('·')[0].trim()
-          + ' · both ends are written from here';
-
-        // One server is not a choice worth making; it is preselected and can
-        // still be changed if another comes along.
-        if (live.length === 1) {
-          nodeSel.value = live[0].name;
-          nodeSel.dispatchEvent(new Event('change'));
-        }
-        applyShape();
-
-      }).catch(() => noFleet(null));
-
-      /* What this screen is when there is no server to build the far end on. */
-      function noFleet(state) {
-        const body = root.querySelector('.body5');
-        const steps = root.querySelector('.steps');
-        const foot = root.querySelector('.df, .dfoot, .actions5');
-        if (steps) steps.hidden = true;
-        if (foot) foot.hidden = true;
-        if (!body) { reveal(); return; }
-
-        const any = (state?.nodes || []).length;
-        body.innerHTML = `
-          <div class="nofleet">
-            <svg class="x" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/>
-              <path d="M7 7.5h.01M7 17.5h.01"/></svg>
-            <b>${any ? 'No server is answering' : 'No managed server yet'}</b>
-            <p>This screen writes <b>both</b> ends of a tunnel — this one here, and the other
-               one on a server the panel logs into. ${any
-                 ? 'The servers in the fleet are not answering at the moment, so the far end could not be written.'
-                 : 'Add a server first: its address, SSH port, username and password.'}</p>
-            <p class="alt">A tunnel whose other end is a machine this panel does not manage is
-               made from the CLI on each server — <code>sudo backpack</code> — and its card
-               appears here like any other.</p>
-            <div class="nf-act">
-              <button class="nb primary" data-to="/servers">${any ? 'Open the fleet' : 'Add a server'}</button>
-            </div>
-          </div>`;
-        body.querySelector('[data-to]')?.addEventListener('click', () => {
-          close();
-          go('/servers');
-        });
-        reveal();
+        root.querySelectorAll('.rp2').forEach(b => b.parentElement?.classList.add('rpgrid'));
       }
 
-      /* Picking a server and pasting a link from one are the same job done two
-         ways, so only one of them is ever on screen. */
-      nodeSel?.addEventListener('change', () => {
+      function stageSingle() {
+        const body = root.querySelector('.body5');
+        const side = root.querySelector('.step[data-s="0"]');
+        const details = root.querySelector('.step[data-s="1"]');
+        if (!body || !side || !details || root.dataset.staged) return;
+        root.dataset.staged = '1';
+        root.querySelector('#nodeGrp')?.remove();
 
-        /* The address is not asked for, because it is already known.
+        root.querySelectorAll('.step3rev .grp3, .step3rev .dr2b')
+          .forEach(g => { g.dataset.mode = 'rev'; });
+        root.querySelectorAll('.step3direct .grp3, .step3direct .dr2b')
+          .forEach(g => { g.dataset.mode = 'dir'; });
+
+        /* This server is the Iran end.
          *
-         * A managed server dials this panel, and reports what it is when it
-         * gets there — hostname, version, addresses. This side of a direct
-         * tunnel needs that address, and it is a worse answer coming from a
-         * person: it can be mistyped, and it goes stale when the machine's
-         * address changes. So the field goes, the value is carried in the
-         * payload, and it is shown here as a fact rather than a question.
-         */
-        peerIP = nodeAddr.get(nodeSel.value) || '';
-        const addr = root.querySelector('[name="peerAddr"], [name="serverAddr"]');
-        const box = addr?.closest('.f3');
-        if (box) box.classList.toggle('addrgone', !!nodeSel.value && !!peerIP);
-        if (addr && peerIP) addr.value = peerIP;
-        applyShape();
+         * The panel runs where tunnels are started from, and that is Iran: the
+         * kharej end is made from the setup link at the end, with one line, and
+         * a kharej-side form here was a second way to do the same thing that
+         * nobody needed. The side question is gone; the side buttons stay in
+         * the markup, hidden, because the rest of the form listens to them. */
+        chosen.side = 'server';
+        root.querySelector('[data-fn="setSide"][data-args*="server"]')?.click();
+        side.querySelector('.choices')?.setAttribute('hidden', '');
+        const lede = side.querySelector('.lede2');
+        if (lede) lede.hidden = true;
 
-        if (nodeMsg) {
-          nodeMsg.hidden = !(nodeSel.value && peerIP);
-          if (!nodeMsg.hidden) {
-            nodeMsg.querySelector('span:last-child').textContent =
-              `${nodeSel.value} reports its address as ${peerIP}. Nothing else about it needs entering.`;
-          }
+        /* Reverse or direct, in cards under that. It was a small switch above
+           the transport list, easy to miss and the one choice that changes
+           every field after it. The switch is kept, hidden, because it is what
+           the rest of the form listens to. */
+        const kind = el('div', { class: 'typegrp' });
+        kind.innerHTML = `<div class="here-card">
+            <span class="here-flag">🇮🇷</span>
+            <div><b>Iran — this server</b><small>This end is built here. The kharej is set up from the one line
+              you get at the end: paste it there and the tunnel comes up.</small></div>
+            <span class="here-pill"><i></i>this server</span></div>
+          <div class="lede2 kindq">How do the two servers reach each other?</div>
+          <div class="grp3 kindgrp"><div class="choices">
+            <button type="button" class="ch4" data-kind="rev">
+              <span class="ic4"><svg viewBox="0 0 24 24"><path d="M20 12H4"/><path d="M10 6l-6 6 6 6"/></svg></span>
+              <b>Reverse<span class="rec">usual</span></b>
+              <i>The kharej dials in to this server. Ten transports, from plain TCP to WebSocket behind a CDN — what to try first.</i>
+              <div class="diagram">🌍 kharej <b>→</b> 🇮🇷 Iran</div></button>
+            <button type="button" class="ch4" data-kind="dir">
+              <span class="ic4"><svg viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M14 6l6 6-6 6"/></svg></span>
+              <b>Direct</b>
+              <i>This server dials out to the kharej over a layer-3 carrier. For paths where reverse is filtered.</i>
+              <div class="diagram">🇮🇷 Iran <b>→</b> 🌍 kharej</div></button>
+          </div></div>`;
+        side.append(kind);
+        const swap = root.querySelector('.modeswap');
+        const markKind = () => kind.querySelectorAll('[data-kind]').forEach(b =>
+          b.classList.toggle('on', b.dataset.kind === (chosen.direction === 'direct' ? 'dir' : 'rev')));
+        kind.addEventListener('click', ev => {
+          const b = ev.target.closest('[data-kind]');
+          if (!b) return;
+          swap?.querySelector(`[data-args*="${b.dataset.kind}"]`)?.click();
+          markKind();
+        });
+        if (swap) swap.hidden = true;
+        markKind();
+        dressPresets();
+
+        const pane = () => el('div', { class: 'step', hidden: true });
+        const perf = pane(), opt = pane();
+        root.querySelectorAll('.grp3').forEach(g => {
+          const head = g.querySelector('.gl3')?.childNodes[0]?.textContent?.trim();
+          if (head === 'Performance') perf.append(g);
+          if (head === 'Optional') opt.append(g);
+        });
+        details.after(perf);
+        perf.after(opt);
+
+        [...body.querySelectorAll('.step')].forEach((x, i) => {
+          x.dataset.s = String(i);
+          x.hidden = i !== 0;
+        });
+        const rail = root.querySelector('.steps');
+        if (rail) {
+          rail.innerHTML = '';
+          SINGLE.forEach((lb, i) => {
+            if (i) rail.append(el('span', { class: 'bar4' }));
+            rail.append(el('span', { class: 'st2' + (i ? '' : ' on'), dataset: { s: String(i) } }, [
+              el('span', { class: 'n3', text: String(i + 1) }),
+              el('span', { class: 'lb4', text: lb }),
+            ]));
+          });
         }
-      });
+        const back = root.querySelector('#backb');
+        if (back) back.disabled = true;
+        paintNav(0);
+        applyShape();
+      }
+      stageSingle();
+      reveal();
 
+      /* The token, made here.
+       *
+       * The form still has the two-pass wording: one side "creates" the secret
+       * with a Copy button and the other "pastes" it. With the setup link that
+       * split is gone — whichever end is built first makes the token and the
+       * link carries it to the other one. So every token field starts filled
+       * with a fresh one from the server and stays editable, for the case where
+       * the other end already exists and its token is the one to use. The
+       * creating field on the reverse side was drawn with no name at all, which
+       * is why a create from here used to be refused for having no token. */
+      const tokenFields = [...root.querySelectorAll('#atok, [name="token"]')];
+      tokenFields.forEach(i => {
+        i.name = 'token';
+        i.removeAttribute('data-unwired');
+        const hint = i.closest('.f3')?.querySelector('.hint');
+        if (hint) hint.textContent = 'Made for this tunnel — the setup link carries it to the other server. '
+          + 'If that server is already set up, paste its token here instead.';
+      });
+      api.tunnelToken()
+        .then(r => tokenFields.forEach(i => { if (!i.value || i.defaultValue === i.value) i.value = r.token || ''; }))
+        .catch(() => tokenFields.forEach(i => { i.value = ''; i.placeholder = 'type a long random token'; }));
 
       /* Building the tunnel.
        *
@@ -1177,8 +1049,15 @@ export function addView(ctx) {
         const payload = {};
         root.querySelectorAll('input[name], select[name]').forEach(n => {
           if (irrelevant(n)) return;
+          /* A drawer switch or menu nobody touched says nothing. Posting what
+             it was drawn with sent every knob in Fine Tune on every create, and
+             a tunnel given its own numbers is a tunnel off its preset: pick
+             Aggressive, get no preset line and the drawing's buffers — which
+             are Turbo's. Touched, it is sent, off included. */
+          if (n.dataset.drawn) return;
+          const wired = n.hidden && n.type === 'checkbox';
           const v = n.type === 'checkbox' ? n.checked : n.value.trim();
-          if (v === '' || v === false) return;
+          if (v === '' || (v === false && !wired)) return;
           const keys = n.name.split('.'), last = keys.pop();
           let at = payload;
           for (const k of keys) at = at[k] ??= {};
@@ -1194,28 +1073,11 @@ export function addView(ctx) {
         }
         if (chosen.preset) payload.preset = chosen.preset;
 
-        const onNode = nodeSel?.value || '';
-        const direct = chosen.direction === 'direct';
-        // Collected by name like everything else, then lifted out: it describes
-        // the other machine and must not be written onto this one.
-        const peerConn = payload.peerConn;
-        delete payload.peerConn;
-        // Every token field is hidden in this flow, so the collector skipped
-        // them all — correctly. The one the panel generated goes in here, and
-        // so does the address the server reported for itself.
-        if (onNode && autoTok) payload.token = autoTok;
-        if (onNode && peerIP && direct) payload.peerAddr ||= peerIP;
-
-        const r = onNode
-          ? await api.nodePair({
-              node: onNode,
-              kind: direct ? 'direct' : 'reverse',
-              [direct ? 'direct' : 'tunnel']: payload,
-              ...(peerConn ? { peerConn } : {}),
-            })
-          : direct ? await api.directCreate(payload)
-                   : await api.tunnelCreate(payload);
-        return { r, onNode, name: payload.name };
+        // Only this end: the other is built from its setup link.
+        const r = chosen.direction === 'direct'
+          ? await api.directCreate(payload)
+          : await api.tunnelCreate(payload);
+        return { r, name: payload.name };
       }
 
       ctx.setTeardown(close);

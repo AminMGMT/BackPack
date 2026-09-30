@@ -104,3 +104,11 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   transition:background .22s ease,color .22s ease}
 .dlg .bar2 .ends button.on{background:var(--s1);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.25)}
+
+/* A phone: the level filter keeps its row and the tools wrap under it
+   instead of running off the dialog's edge. */
+@media (max-width:560px){
+  .dlg .bar2{flex-wrap:wrap;row-gap:8px;padding:10px 14px}
+  .dlg .bar2 .segs{flex:1 1 100%!important}
+  .dlg .bar2 .segs button{flex:1}
+}

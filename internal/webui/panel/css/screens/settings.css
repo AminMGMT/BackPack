@@ -407,3 +407,8 @@ body[data-t="light"]{
 .tokout{border-color:var(--ok);color:var(--tx)}
 #toklist .arow span.gone{color:var(--er)}
 #toklist .arow span.idle{color:var(--wr)}
+
+@media (max-width:560px){
+  .dlg.set .srchbar{padding:10px 14px}
+  .dlg.set .srchbar .cnt3{display:none}
+}

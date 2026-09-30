@@ -306,6 +306,14 @@ func since(now, start uint64) uint64 {
 	return now - start
 }
 
+// Total is everything this tunnel has carried, in and out, carried over from
+// every earlier run — the figure a traffic limit is held against. Cheaper than
+// Snapshot, which a limit checked several times a second does not need.
+func (c *Collector) Total() uint64 {
+	in, out := c.live()
+	return c.baseIn + since(in, c.startIn) + c.baseOut + since(out, c.startOut)
+}
+
 // Snapshot reads the current counters without writing anything.
 func (c *Collector) Snapshot() Snapshot {
 	s := Snapshot{

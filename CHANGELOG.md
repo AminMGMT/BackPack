@@ -2,9 +2,31 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.8.5 — 2026-09-28
+## v1.8.5 — 2026-09-30
 
 ### Added
+
+- **A traffic limit per tunnel.** Set on the Iran end from the pencil in the
+  card's bottom band, which now reads *used / limit* with a line that turns
+  amber at 70% and red at 90% (no limit is the default, shown as ∞). The
+  Traffic limit dialog has presets from 50 GB to 10 TB, any amount in GB or
+  TB, and quick adds. The engine enforces it: the running total, in and out
+  together, is checked four times a second and the tunnel goes offline the
+  moment it reaches the limit — the card says *Limit reached* — and stays
+  offline, service still up, until the limit is raised; then it comes back on
+  its own within two seconds. The count is the tunnel's own total, which
+  restarts, reloads and updates carry over and a backup restores, so nothing
+  resets it but deleting the tunnel. `/api/tunnel/quota`; the limit is
+  `<name>.quota.json` beside the config.
+- **`backpack proxy enable <socks5|http> <port> [--user U --pass P]`**, `proxy
+  disable` and `proxy status` — the menu's Built-in Proxy without the menu,
+  and the line Manage → Built-in Proxy hands over for the kharej.
+- **Applying a setup link again updates the tunnel it made.** After an edit on
+  the Iran end, `sudo backpack link apply '…'` on the kharej rewrites its end
+  of that tunnel in place — same name, the new transport and port — instead of
+  refusing because the tunnel exists. `link apply` also reads better: a boxed
+  report with the result, and "waiting for the Iran server" printed while it
+  waits, not after.
 
 - **Web panel: the dock is now Overview · Connection test · Tunnels · Terminal
   · Manage.** *Connection test* runs the Iran side of the menu's Connection
@@ -20,6 +42,25 @@ All notable changes to Backpack are documented here.
   the SOCKS5/HTTP handshake with the configured credentials) and File
   Locations (grouped, filterable, with size, item count and age). *Servers* is
   out of the dock for now; its route still answers.
+- **Web panel: the rest of the menu's setup, backup, update and panel screens.**
+  *Setup link* (tunnel card → ⋯ → Setup link…, and at the end of Add tunnel
+  when only this end is built) shows the link with the kharej's
+  `sudo backpack link apply '…'` line and the install-and-set-up line.
+  *Maintenance → Backup* lists the archives kept in the backups folder with
+  Back up now, Test (the menu's Test A Restore — changes nothing), Download,
+  Restore and Delete, and sets and tries the off-site copy command.
+  *Maintenance → Update* installs from an uploaded
+  `backpack_linux_<arch>.tar.gz` (+ SHA256SUMS), refusing another
+  architecture's archive, and *Restore points* can roll back. *Settings →
+  Panel access* moves the address path (random, your own, none), issues a new
+  login code and restarts the panel, following it to its new address. The
+  fleet key stays in the menu only, on purpose (see menu/backup.go).
+- **Web panel: Add tunnel no longer needs a managed server.** It is the CLI
+  wizard again — Iran or kharej, then reverse or direct (as two cards, not a
+  small switch), then the tunnel, performance, optional and done — and it
+  builds this server's end only, ending on the setup link for the other one.
+  The token is made here and carried by the link; the reverse Iran side's
+  token field had no name, so it was never sent.
 - **Connection Test (main menu, option 0): which transports actually hold
   between two servers.** Started on the Iran server, it runs a real engine for
   every reverse transport the wizard offers (tcp, tcpmux, stealth, pck, ws,
@@ -160,6 +201,53 @@ All notable changes to Backpack are documented here.
   confirmed by traffic.
 
 ### Fixed
+
+- **Web panel field report, 2026-09-30.**
+  - Every tunnel made in the panel came out as Turbo's numbers with no preset
+    (the edit dialog then said Custom), whatever preset was picked: Add tunnel
+    posted every switch and menu of the Fine Tune drawer as it was drawn, and
+    any tuning sent clears the preset. Only what was touched is sent now. An
+    untouched direct form also read the reverse form's preset row and sent
+    none, which the server took as Turbo.
+  - Editing a reverse tunnel's transport — UDP to TCP, reported on v1.8.4 —
+    took several tries: choosing the TCP family left the transport on "udp",
+    so saving changed nothing. The transport now follows the family. And the
+    kharej, still on the old transport, could not reconnect; after a change
+    both ends must agree on, the dialog now shows the kharej's one line, which
+    brings that end into step (see Added).
+  - A direct tunnel whose flow the path stopped passing stayed down until its
+    port was changed by hand (reported on v1.8.4). The reopen-from-new-ports
+    fix pck and sni got in this version now covers udp, xdi and quic too: after
+    90 seconds of unanswered handshakes the dialling end opens a new socket,
+    which is a new flow. Spoof is left out — its source is forged, not a port
+    this end can move.
+  - Settings and Maintenance showed the preview's sample figures (1.7.6, five
+    restore points, another server's port) for the seconds it took to ask
+    GitHub for the latest release. Dialogs now open on a loader until their
+    values are in, and the release check is kept for ten minutes and warmed
+    when the panel starts.
+  - On a phone, the tunnel Metrics dialog ran off its right edge — its section
+    rules had taken the log lines' grid — and the Logs toolbar, the Edit tabs,
+    the Settings search and the History figures overflowed. All fit now.
+  - Connection test is two panes of one size: the left one is the form, then a
+    15-minute dial with the kharej's line under it, then the test's own
+    countdown, then *Best for this path*; the right one waits, fills row by row
+    as each transport is tried (patched in place, not redrawn), and at the end
+    lists only what held or wobbled, with what went down counted underneath.
+    "Preset" in the verdict is now "Suggested preset", and the preset the test
+    ran on is named beside it.
+  - Manage: Auto Refresh is a square card with a 24-hour dial and a live
+    countdown to the next restart on the server's own clock and zone; the
+    Built-in Proxy beside it can be wired to a reverse tunnel — it adds the
+    forward and hands over the kharej's `backpack proxy enable` line; File
+    Locations is a search bar that opens.
+  - Tunnel cards fill the row — two tunnels take the width between them, three
+    to a row at most — and carry the preset as a chip (Reverse · TCP ·
+    Aggressive · 443).
+  - Add tunnel builds the Iran end only: one first step, *this server is Iran*,
+    with Reverse and Direct under it; forwarded ports have a Random button; and
+    the presets are cards with their own mark, what each is for and its load,
+    over a table of what the chosen one sets on this transport.
 
 - **Web panel field report, 2026-09-29.**
   - Tunnel cards' live chart started from nothing on every sign-in: the rate

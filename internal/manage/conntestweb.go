@@ -14,6 +14,15 @@ func ConnTestHost() string { return linkHost() }
 // ConnTestJoinWait is how long the Iran side waits for the kharej to check in.
 func ConnTestJoinWait() time.Duration { return connTestJoinWait }
 
+// ConnTestRunTime is about how long the tunnels take to be judged once the
+// kharej has joined: they are tried side by side, each given its connect wait
+// and its one-second echoes, and then the speed runs and the path MTU arrives.
+// It is what the panel counts down from, so it errs a little long rather than
+// reaching zero with rows still filling.
+func ConnTestRunTime() time.Duration {
+	return connTestConnectWait + time.Duration(connTestSoak)*time.Second + 45*time.Second
+}
+
 // ConnTestName is a tested transport's name as the menus print it: "TCP MUX",
 // "KCP FEC", "Iran→Kharej".
 func ConnTestName(tr string) string { return ctName(tr) }

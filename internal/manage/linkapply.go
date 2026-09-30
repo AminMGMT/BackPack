@@ -41,6 +41,9 @@ type LinkApplied struct {
 	RestartHours   int
 	RestartMinute  int
 	ScheduleFailed string // why the restart schedule could not be set, if it could not
+	// Updated is a link applied over the tunnel it made before: the Iran side
+	// was edited, and this side was brought back into step with it.
+	Updated bool
 }
 
 // ErrLinkNeedsHost is a link that does not say where the Iran server is.
@@ -100,6 +103,14 @@ func ApplySetupLink(raw string, o LinkApplyOptions) (LinkApplied, error) {
 			"paste it there, under sudo backpack → Setup from a link")
 	}
 	if existing := tunnelWithToken(link.Tok); existing != "" {
+		// The same tunnel, set up again. That is what happens after the Iran
+		// side is edited — its transport, its port — and the kharej has to
+		// follow: the link now describes the tunnel as it is, and applying it
+		// brings this end into step. A second tunnel with the same token would
+		// take the connection from the first, so it is never a new one.
+		if link.Kind == "reverse" {
+			return updateReverseFromLink(link, o, existing)
+		}
 		return LinkApplied{}, fmt.Errorf("this link has already been set up here, as tunnel %q — "+
 			"a second tunnel with the same token would take the connection from the first; "+
 			"delete that one first to set it up again", existing)
@@ -147,6 +158,32 @@ func kharejFromLink(link ShareLink, o LinkApplyOptions) (TunnelSpec, error) {
 	}
 	s.Name = freeName(s.Name)
 	return s, nil
+}
+
+// updateReverseFromLink rewrites the kharej end named existing from the link,
+// keeping its name, and restarts it — rolled back to what it was if the new
+// settings will not start, as every edit is.
+func updateReverseFromLink(link ShareLink, o LinkApplyOptions, existing string) (LinkApplied, error) {
+	host := strings.Trim(strings.TrimSpace(o.Host), "[]")
+	if host == "" {
+		host = strings.Trim(strings.TrimSpace(link.Host), "[]")
+	}
+	if host == "" {
+		return LinkApplied{}, ErrLinkNeedsHost
+	}
+	s := reverseClientFromLink(link, host)
+	s.Name = existing
+	if why := portClash(s.Role, s.RemoteAddr, s.Name); why != "" {
+		return LinkApplied{}, errors.New(why)
+	}
+	if err := applySpec(s); err != nil {
+		return LinkApplied{}, fmt.Errorf("could not bring %s into step with the Iran side: %w", existing, err)
+	}
+	service := app.ServiceName(existing)
+	return LinkApplied{
+		Name: existing, Service: service, Kind: "reverse", Transport: s.Transport,
+		Dials: s.RemoteAddr, Backups: s.FallbackAddrs, Active: IsActive(service), Updated: true,
+	}, nil
 }
 
 func applyReverseLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {

@@ -290,8 +290,8 @@ func (t *Tunnel) Up() bool {
 	return t.current != nil
 }
 
-// flowStuckAfter is how long the dialling side keeps handshaking over one pck
-// or sni flow that answers nothing before it opens the carrier again.
+// flowStuckAfter is how long the dialling side keeps handshaking over one flow
+// that answers nothing before it opens the carrier again (see stuckFlowCarrier).
 //
 // Those carriers are a TCP flow as far as the path can tell, and a middlebox
 // that stops passing one keeps dropping that flow — the same source port to the
@@ -304,6 +304,20 @@ var flowStuckAfter = 90 * time.Second
 
 // stuckFlowCarrier reports whether a carrier's flow can be blocked by the path
 // as a flow, and is worth reopening from new ports when it stops answering.
+//
+// Every carrier whose dialling end opens afresh from a new source — a new port
+// for udp and quic, a new echo identifier for xdi — and not only the two that
+// look like TCP. Reported on v1.8.4 again, for direct tunnels in general: one
+// stopped answering, restarting it did nothing, and changing the port in the
+// config brought it straight back. A UDP flow the path has stopped passing is
+// the same five-tuple on every retry for as long as the socket is kept, which
+// for a generation that never ends is for ever; changing the port was a new
+// flow, which is all reopening gives. Spoof is left out: its source is the
+// forged one, not a port this end can move.
 func stuckFlowCarrier(carrier string) bool {
-	return carrier == CarrierPck || carrier == CarrierSNI
+	switch carrier {
+	case CarrierPck, CarrierSNI, CarrierUDP, "", CarrierXdi, CarrierQuic:
+		return true
+	}
+	return false
 }

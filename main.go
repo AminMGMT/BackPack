@@ -49,6 +49,10 @@ func main() {
 	// testable without a process. This is the only part that needs one.
 	if len(os.Args) > 1 && cli.IsCommand(os.Args[1]) {
 		cli.EngineCheck = cmd.CheckConfigFile
+		if st, err := os.Stdout.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
+			cli.Color = os.Getenv("NO_COLOR") == ""
+			cli.Progress = func(s string) { fmt.Print(s) }
+		}
 		r := cli.Run(os.Args[1:])
 		if r.Out != "" {
 			fmt.Print(r.Out)

@@ -71,6 +71,7 @@ export async function openScreen(name, { pick = '.dlg', bind } = {}) {
      refused to draw them. */
   node.hidden = false;
 
+  if (bind) node.classList.add('priming');
   const scrim = el('div', { class: 'scrim' }, el('div', { class: 'veil' }));
   scrim.append(node);
   document.body.append(scrim);
@@ -106,7 +107,19 @@ export async function openScreen(name, { pick = '.dlg', bind } = {}) {
   scrim.addEventListener('click', ev => { if (ev.target === scrim) close(); });
   document.addEventListener('keydown', onKey);
 
-  if (bind) await bind(node, close);
+  /* The template is the preview the screen was drawn from, and every figure in
+     it is an example — 1.7.6, five restore points, somebody else's port. Shown
+     while the bind was still reading, those were on screen for as long as the
+     slowest read took, and looked like this server's settings. The dialog
+     opens with its frame and a loader instead, and its content appears once
+     the bind has put the real values in. A bind that hangs does not keep it
+     blank for ever. */
+  if (bind) {
+    node.classList.add('priming');
+    const shown = () => node.classList.remove('priming');
+    const cap = setTimeout(shown, 6000);
+    try { await bind(node, close); } finally { clearTimeout(cap); shown(); }
+  }
   return node;
 }
 

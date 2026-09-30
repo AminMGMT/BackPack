@@ -515,6 +515,99 @@ export function settingsView(ctx) {
         const kf = root.querySelector('[name="keyFile"]');
         if (kf) kf.value = certSnap.keyFile || '';
       } /* else the section still selects, it just starts on self-signed */
+      /* ---- The panel's own path, login code and restart ----
+       *
+       * Web Panel → Panel Path, New Login Code and Restart Panel in the menu.
+       * Every one ends in the panel restarting, so each says where it will be
+       * afterwards and the page goes there itself. */
+      {
+        const pane = inPane('access');
+        const portGrp = pane?.querySelector('.grp2:nth-of-type(1)') ? [...pane.querySelectorAll('.grp2')]
+          .find(g => /^port$/i.test(g.querySelector('.gl2')?.textContent.trim() || '')) : null;
+        const host = el('div', { class: 'grp2', id: 'pselfgrp' });
+        if (pane) (portGrp ? portGrp.after(host) : pane.append(host));
+        let self = null;
+        try { self = await api.panelSelf(); } catch (e) { /* drawn without the current path */ }
+        const where = path => `${location.protocol}//${location.host}${path || ''}/`;
+        const draw = () => {
+          host.innerHTML = `<div class="gl2">Address path</div>
+            <p class="hint">The secret segment the panel answers under — what a port scan finds instead of a login page.
+              Change it when it stops being secret: pasted in a chat, left on a screenshot.</p>
+            <div class="arow"><div class="tx"><b><code>${esc((self?.path || '') + '/')}</code></b>
+              <span>${self?.path ? 'Anything else on this port is a 404' : 'At the root — found by any scan of the port'}</span></div>
+              <button class="btn2" data-ps="random">New random path</button></div>
+            <div class="inline"><div class="f2b"><label>My own path<span class="sub3">letters, digits, - and _</span></label>
+              <input name="basePath" type="text" placeholder="e.g. my-panel-2026" autocomplete="off" spellcheck="false"></div>
+              <button class="btn2" data-ps="custom">Use it</button>
+              <button class="btn2 dgr" data-ps="none">No path</button></div>
+            <div class="gl2" style="margin-top:18px">Login code and restart</div>
+            <div class="arow"><div class="tx"><b>New login code</b>
+              <span>A fresh random 8-digit password. Every device is signed out, this one too.</span></div>
+              <button class="btn2" data-ps="code">Generate</button></div>
+            <div class="arow"><div class="tx"><b>Restart the panel</b>
+              <span>Tunnels are not touched. This page reconnects by itself in a few seconds.</span></div>
+              <button class="btn2" data-ps="restart">Restart</button></div>
+            <div id="psout"></div>`;
+        };
+        draw();
+        /* The panel restarts a moment after answering; wait for it to answer
+           again at its new address before moving there. */
+        const followTo = url => {
+          const t0 = Date.now();
+          const tick = async () => {
+            try {
+              const r = await fetch(url + 'login', { cache: 'no-store' });
+              if (r.ok) { location.href = url; return; }
+            } catch (e) { /* still restarting */ }
+            if (Date.now() - t0 < 30000) setTimeout(tick, 1200);
+            else location.href = url;
+          };
+          setTimeout(tick, 1500);
+        };
+        host.addEventListener('click', async ev => {
+          const b = ev.target.closest('[data-ps]');
+          if (!b) return;
+          const act = b.dataset.ps;
+          const out = host.querySelector('#psout');
+          try {
+            if (act === 'restart') {
+              if (!await confirmBox({ title: 'Restart the panel?', body: 'Tunnels keep running. The page reconnects on its own.', go: 'Restart' })) return;
+              await api.panelRestart();
+              toast('Restarting the panel…');
+              followTo(where(self?.path));
+              return;
+            }
+            if (act === 'code') {
+              if (!await confirmBox({ title: 'Generate a new login code?', body: 'The current password stops working and every device is signed out, including this one.', go: 'Generate', danger: true })) return;
+              const r = await api.panelNewCode();
+              /* Shown once, big, with a copy — the old password is already gone. */
+              out.innerHTML = `<div class="caution" style="margin-top:12px"><span class="ic3">!</span><span>
+                New login code: <b style="font-size:15px;letter-spacing:.12em"><code id="pscode">${esc(r.code)}</code></b>
+                <button class="btn2" id="pscopy" style="margin-left:8px">Copy</button><br>
+                Write it down now — you will be signed out when the panel restarts.</span></div>`;
+              out.querySelector('#pscopy')?.addEventListener('click', async e2 =>
+                flashCopied(e2.currentTarget, await copyText(r.code)));
+              setTimeout(() => followTo(where(self?.path)), 8000);
+              return;
+            }
+            const custom = host.querySelector('[name="basePath"]')?.value.trim() || '';
+            if (act === 'custom' && !custom) { toast('Type the path first.', true); return; }
+            const next = act === 'random' ? 'a new random path' : act === 'none' ? 'the root, with no path' : `/${custom}/`;
+            if (!await confirmBox({
+              title: `Move the panel to ${esc(next)}?`,
+              body: 'The current address stops working at once. This page follows the panel to the new one — note it down.',
+              go: 'Move', danger: act === 'none',
+            })) return;
+            const r = await api.panelPath(act, custom);
+            self = { ...(self || {}), path: r.path };
+            const url = where(r.path);
+            out.innerHTML = `<div class="caution" style="margin-top:12px"><span class="ic3">→</span>
+              <span>The panel now answers at <code>${esc(url)}</code> — going there as soon as it is back.</span></div>`;
+            followTo(url);
+          } catch (e) { oops(e); }
+        });
+      }
+
       /* Copy the address this section spells out. It had no handler of its
          own: the shared one looks for an input or a code element beside the
          button, and the address is five spans, so it found nothing and the
@@ -616,8 +709,7 @@ export function settingsView(ctx) {
               }).join('')
             : `<div class="arow"><div class="tx"><b>None yet</b>
                  <span>One is taken automatically before every update.</span></div></div>`) +
-            `<div class="hint">Rolling one back is done from the Telegram bot, under
-             ♻️ Restore points — the panel lists them and has no endpoint that puts one back.</div>`;
+            `<div class="hint">Roll back to one from <a href="#/maintenance">Maintenance → Restore points</a>.</div>`;
         }
       }
 
