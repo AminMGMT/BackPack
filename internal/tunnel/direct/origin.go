@@ -320,11 +320,15 @@ func relayDatagrams(ctx context.Context, stream net.Conn, backend net.Conn) {
 		}
 	}()
 
+	remaining := 2
 	select {
 	case <-done:
+		remaining--
 	case <-ctx.Done():
 	}
 	stream.Close()
 	backend.Close()
-	<-done
+	for i := 0; i < remaining; i++ {
+		<-done
+	}
 }

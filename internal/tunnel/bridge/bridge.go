@@ -25,11 +25,15 @@ func Join(ctx context.Context, a, b net.Conn) {
 	go copyOne(a, b)
 	go copyOne(b, a)
 
+	remaining := 2
 	select {
 	case <-done:
+		remaining--
 	case <-ctx.Done():
 	}
 	a.Close()
 	b.Close()
-	<-done // the second copy cannot outlive the closes above
+	for i := 0; i < remaining; i++ {
+		<-done
+	}
 }
