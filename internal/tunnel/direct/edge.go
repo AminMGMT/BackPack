@@ -3,11 +3,13 @@ package direct
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/tunnel/bridge"
 	"github.com/backpack/backpack/internal/tunnel/limits"
 	"github.com/backpack/backpack/internal/tunnel/portmap"
@@ -47,12 +49,7 @@ type Edge struct {
 	// tunnel pays a nil check and nothing else.
 	limiter *limits.Limiter
 
-	// sessions holds the live mux sessions, replaced wholesale whenever one is
-	// added or removed. Reads are frequent — one per user connection — and
-	// writes are rare, so the lock is held only long enough to copy a slice
-	// header.
-	mu       sync.RWMutex
-	sessions []*tunnelSession
+	sessions sessionSet
 
 	cursor atomic.Uint64
 
@@ -100,7 +97,23 @@ func (e *Edge) Stats() EdgeStats {
 
 // Run keeps the sessions up and serves the ports until ctx ends.
 func (e *Edge) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	metrics.ClearPeer()
 	var wg sync.WaitGroup
+	errors := make(chan error, 1)
+	failed := func(m portmap.Mapping, protocol string, err error) {
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		err = fmt.Errorf("direct: forwarding %s %s stopped: %w", protocol, m, err)
+		e.log.Error(err)
+		select {
+		case errors <- err:
+		default:
+		}
+		cancel()
+	}
 
 	for i := 0; i < e.cfg.Sessions; i++ {
 		wg.Add(1)
@@ -114,24 +127,25 @@ func (e *Edge) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(m portmap.Mapping) {
 			defer wg.Done()
-			if err := e.serve(ctx, m); err != nil && ctx.Err() == nil {
-				e.log.Errorf("direct: forwarding %s stopped: %v", m, err)
-			}
+			failed(m, "tcp", e.serve(ctx, m))
 		}(mapping)
 
 		if e.cfg.AcceptUDP {
 			wg.Add(1)
 			go func(m portmap.Mapping) {
 				defer wg.Done()
-				if err := e.serveUDP(ctx, m); err != nil && ctx.Err() == nil {
-					e.log.Errorf("direct: forwarding udp %s stopped: %v", m, err)
-				}
+				failed(m, "udp", e.serveUDP(ctx, m))
 			}(mapping)
 		}
 	}
 
 	wg.Wait()
-	return nil
+	select {
+	case err := <-errors:
+		return err
+	default:
+		return nil
+	}
 }
 
 // ---------------------------------------------------------------- sessions
@@ -191,36 +205,19 @@ func sleepUntil(ctx context.Context, d time.Duration) bool {
 }
 
 func (e *Edge) addSession(session *tunnelSession) {
-	e.mu.Lock()
-	e.sessions = append(append([]*tunnelSession(nil), e.sessions...), session)
-	e.mu.Unlock()
+	e.sessions.add(session)
 	e.stats.sessions.Add(1)
 }
 
 func (e *Edge) removeSession(session *tunnelSession) {
-	e.mu.Lock()
-	next := make([]*tunnelSession, 0, len(e.sessions))
-	removed := false
-	for _, s := range e.sessions {
-		if s == session {
-			removed = true
-			continue
-		}
-		next = append(next, s)
-	}
-	e.sessions = next
-	e.mu.Unlock()
-	if removed {
-		e.stats.sessions.Add(-1)
-	}
+	e.sessions.remove(session)
+	e.stats.sessions.Add(-1)
 }
 
 // pickSession returns a live session, rotating so several sessions share the
 // streams. A session that has closed since it was listed is skipped.
 func (e *Edge) pickSession() *tunnelSession {
-	e.mu.RLock()
-	sessions := e.sessions
-	e.mu.RUnlock()
+	sessions := e.sessions.snapshot()
 
 	if len(sessions) == 0 {
 		return nil
@@ -237,12 +234,20 @@ func (e *Edge) pickSession() *tunnelSession {
 // ---------------------------------------------------------------- ports
 
 func (e *Edge) serve(ctx context.Context, m portmap.Mapping) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	listener, err := net.Listen("tcp", m.Listen)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	go func() { <-ctx.Done(); listener.Close() }()
+	stopClosing := context.AfterFunc(ctx, func() { listener.Close() })
+	defer stopClosing()
+	var connections sync.WaitGroup
+	defer func() {
+		cancel()
+		connections.Wait()
+	}()
 
 	e.log.Infof("direct: forwarding %s", m)
 
@@ -254,7 +259,11 @@ func (e *Edge) serve(ctx context.Context, m portmap.Mapping) error {
 			}
 			return err
 		}
-		go e.handle(ctx, conn, m)
+		connections.Add(1)
+		go func() {
+			defer connections.Done()
+			e.handle(ctx, conn, m)
+		}()
 	}
 }
 
@@ -342,23 +351,35 @@ func (f *udpFlow) idle(now time.Time, limit time.Duration) bool {
 const udpFlowIdle = 2 * time.Minute
 
 func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	conn, err := net.ListenPacket("udp", m.Listen)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	go func() { <-ctx.Done(); conn.Close() }()
+	stopClosing := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopClosing()
 
 	e.log.Infof("direct: forwarding udp %s", m)
 
 	var flows sync.Map // client address -> *udpFlow
+	var pumps sync.WaitGroup
+	reaperDone := make(chan struct{})
 	defer func() {
+		cancel()
+		<-reaperDone
 		flows.Range(func(_, v any) bool {
-			v.(*udpFlow).stream.Close()
+			flow := v.(*udpFlow)
+			flow.stream.Close()
 			return true
 		})
+		pumps.Wait()
 	}()
-	go e.reapUDPFlows(ctx, &flows)
+	go func() {
+		defer close(reaperDone)
+		e.reapUDPFlows(ctx, &flows)
+	}()
 
 	buf := make([]byte, maxDatagram)
 	for {
@@ -370,7 +391,7 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 			return err
 		}
 
-		flow, err := e.udpFlowFor(&flows, conn, client, m)
+		flow, err := e.udpFlowFor(&flows, &pumps, conn, client, m)
 		if err != nil {
 			e.stats.refused.Add(1)
 			e.log.Debugf("direct: no udp backend for %s: %v", m.Listen, err)
@@ -385,7 +406,7 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 }
 
 // udpFlowFor returns the flow for a client, opening a stream on first sight.
-func (e *Edge) udpFlowFor(flows *sync.Map, local net.PacketConn, client net.Addr, m portmap.Mapping) (*udpFlow, error) {
+func (e *Edge) udpFlowFor(flows *sync.Map, pumps *sync.WaitGroup, local net.PacketConn, client net.Addr, m portmap.Mapping) (*udpFlow, error) {
 	key := client.String()
 	if existing, ok := flows.Load(key); ok {
 		return existing.(*udpFlow), nil
@@ -421,7 +442,11 @@ func (e *Edge) udpFlowFor(flows *sync.Map, local net.PacketConn, client net.Addr
 
 	e.stats.accepted.Add(1)
 	e.stats.active.Add(1)
-	go e.pumpUDPReplies(flows, key, flow, local, client)
+	pumps.Add(1)
+	go func() {
+		defer pumps.Done()
+		e.pumpUDPReplies(flows, key, flow, local, client)
+	}()
 	return flow, nil
 }
 
@@ -429,7 +454,7 @@ func (e *Edge) udpFlowFor(flows *sync.Map, local net.PacketConn, client net.Addr
 // belongs to.
 func (e *Edge) pumpUDPReplies(flows *sync.Map, key string, flow *udpFlow, local net.PacketConn, client net.Addr) {
 	defer func() {
-		flows.Delete(key)
+		flows.CompareAndDelete(key, flow)
 		flow.stream.Close()
 		e.stats.active.Add(-1)
 		// Paired with the Acquire in udpFlowFor. This pump is the one place a

@@ -97,7 +97,8 @@ func (l *Limiter) Wrap(ctx context.Context, conn net.Conn) net.Conn {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx}
+	ctx, cancel := context.WithCancel(ctx)
+	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx, cancel: cancel}
 }
 
 // limitedConn paces a connection's reads and writes against a shared token
@@ -106,8 +107,15 @@ func (l *Limiter) Wrap(ctx context.Context, conn net.Conn) net.Conn {
 type limitedConn struct {
 	net.Conn
 	bucket *rate.Limiter
-	// ctx ends with the tunnel. Pacing has to stop when it does; see wait.
-	ctx context.Context
+	// Pacing ends with either the tunnel or this connection. A dropped session
+	// must release its slots while the rest of the tunnel keeps running.
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (c *limitedConn) Close() error {
+	c.cancel()
+	return c.Conn.Close()
 }
 
 func (c *limitedConn) Read(b []byte) (int, error) {
