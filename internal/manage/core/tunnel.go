@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/quota"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // Tunnel is a discovered tunnel derived from a config file on disk.
@@ -86,9 +87,18 @@ func LoadTunnelConfig(name string) (config.Config, error) {
 // config, any per-tunnel refresh script, and reloads systemd. Its traffic
 // moves to the server's ledger (see metrics.Retire).
 func Delete(name string) error {
+	if err := CheckName(name); err != nil {
+		return err
+	}
+	cfg, cfgErr := LoadTunnelConfig(name)
 	service := app.ServiceName(name)
 	if IsActive(service) || IsEnabled(service) {
-		_ = DisableService(service)
+		if err := DisableService(service); err != nil {
+			return err
+		}
+	}
+	if cfgErr == nil {
+		network.CleanupPckGuards(cfg.Server.Token, cfg.Client.Token, cfg.Direct.Token, cfg.L3.Token)
 	}
 	removeUnit(name)
 	removeScheduledRestart(name)
