@@ -106,7 +106,17 @@ func (p pairing[T]) run() {
 
 		case conn := <-p.tunnel:
 			timer.Stop()
-			if err := p.announce(conn, p.local.remoteAddr); err != nil {
+			// The timer no longer covers an announcement once the select has
+			// returned. Bound that write too, and interrupt it on shutdown.
+			stop := context.AfterFunc(p.ctx, func() { p.discard(conn) })
+			err := p.announce(conn, p.local.remoteAddr)
+			stop()
+			if p.ctx.Err() != nil {
+				p.discard(conn)
+				p.abandon()
+				return
+			}
+			if err != nil {
 				p.log.Tracef("failed to send the address over the tunnel connection: %v", err)
 				p.discard(conn)
 				// That tunnel connection is gone; ask for another and wait

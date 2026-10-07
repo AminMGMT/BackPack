@@ -141,12 +141,12 @@ func NewKcpClient(parentCtx context.Context, config *KcpConfig, logger *logrus.L
 
 func (c *KcpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		c.state.Go(c.state.Usage().Monitor)
 	}
 
 	c.status.set("Disconnected (" + c.transportLabel() + ")")
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
 
 func (c *KcpTransport) Restart() {
@@ -196,7 +196,7 @@ func (c *KcpTransport) channelDialer() {
 			tunnelConn.SetACKNoDelay(true)
 
 			// Sending security token
-			if err := utils.SendBinaryTransportString(tunnelConn, c.config.Token, utils.SG_Chan); err != nil {
+			if err := utils.SendBinaryTransportStringWithin(tunnelConn, c.config.Token, utils.SG_Chan, 10*time.Second); err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelConn.Close()
 				bo.Wait(c.state.Ctx())
@@ -276,8 +276,9 @@ func (c *KcpTransport) channelDialer() {
 
 			c.status.set("Connected (" + c.transportLabel() + ")")
 
-			go c.poolMaintainer()
-			go c.control().run()
+			c.state.Go(c.poolMaintainer)
+			loop := c.control()
+			c.state.Go(func() { loop.run() })
 
 			return
 		}
@@ -296,6 +297,9 @@ func (c *KcpTransport) poolMaintainer() {
 		taken:      &c.loadConnections,
 		shrink:     c.controlFlow,
 		dial:       c.tunnelDialer,
+		spawn:      c.state.Go,
+		pending:    &c.dialingConnections,
+		maxSize:    muxPoolLimit(c.config.ConnPoolSize, c.config.MaxReceiveBuffer),
 	}.maintain()
 }
 
@@ -305,6 +309,12 @@ func (c *KcpTransport) control() controlLoop {
 }
 
 func (c *KcpTransport) tunnelDialer() {
+	ready, ok := c.beginPoolDial(muxPoolLimit(c.config.ConnPoolSize, c.config.MaxReceiveBuffer))
+	if !ok {
+		return
+	}
+	defer ready()
+
 	addr := c.config.Endpoints.Next()
 	c.logger.Debugf("initiating new tunnel connection to address %s", addr)
 
@@ -314,17 +324,20 @@ func (c *KcpTransport) tunnelDialer() {
 		return
 	}
 
+	defer c.state.Own(tunnelConn)()
+
 	// KCP has no connection handshake of its own: the server's listener only
 	// materialises a session once it receives a packet from this socket. So
 	// every pool connection announces itself with the token, which both wakes
 	// the listener and authenticates the session before any data flows.
-	if err := utils.SendBinaryTransportString(tunnelConn, c.config.Token, utils.SG_TCP); err != nil {
+	if err := utils.SendBinaryTransportStringWithin(tunnelConn, c.config.Token, utils.SG_TCP, 10*time.Second); err != nil {
 		c.logger.Errorf("failed to announce tunnel connection: %v", err)
 		tunnelConn.Close()
 		return
 	}
 
 	atomic.AddInt32(&c.poolConnections, 1)
+	ready()
 
 	c.handleSession(network.IdleAwareKCP(tunnelConn, c.kcpSettings, c.kcpSettings.AckNoDelay))
 }

@@ -74,6 +74,24 @@ func (c *clientSeat) serving() bool {
 	return c.open
 }
 
+// admit keeps checking a pool identity and filing it on the same side of a
+// client replacement. Otherwise an accept can verify the old nonce, pause
+// while vacate drains the pool, and then enqueue an old socket in the new pool.
+func (c *clientSeat) admit(genCtx context.Context, accept func(context.Context) bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ctx := c.ctx
+	if ctx == nil {
+		// A control channel can be installed before its loop owns the seat.
+		// The caller still has to verify its live channel and pool identity.
+		ctx = genCtx
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	return accept(ctx)
+}
+
 // sit seats a new client. It ends the loop of whoever held the seat and calls
 // vacate for it; install then puts the new client's channel in place — the
 // transport's nonce, control channel and peer — and run starts its control
@@ -128,6 +146,20 @@ func drainTunnelConns[C io.Closer](queue chan C) {
 			return
 		}
 	}
+}
+
+// sweepTunnelConns also catches accepts already in flight when a generation
+// ends. A single drain at client replacement cannot cover those late arrivals.
+func sweepTunnelConns[C io.Closer](ctx context.Context, queue chan C) {
+	sweepAfterEnd(ctx, func() bool {
+		select {
+		case conn := <-queue:
+			conn.Close()
+			return true
+		default:
+			return false
+		}
+	})
 }
 
 // rivalry watches who takes the seat, to tell one client re-dialing — which is

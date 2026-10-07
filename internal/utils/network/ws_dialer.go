@@ -27,6 +27,10 @@ func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP str
 		tunnelWSConn, err = attemptDialWebSocket(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, simpleAuth, SO_RCVBUF, SO_SNDBUF, mss)
 		if err == nil {
 			// If successful, return the connection
+			if ctx.Err() != nil {
+				tunnelWSConn.Close()
+				return nil, ctx.Err()
+			}
 			return tunnelWSConn, nil
 		}
 
@@ -36,7 +40,13 @@ func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP str
 		}
 
 		// Log the retry attempt and wait before retrying
-		time.Sleep(backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 		backoff *= 2 // Exponential backoff (double the wait time after each failure)
 	}
 
@@ -227,7 +237,7 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 	}
 
 	// Dial to the WebSocket server
-	tunnelWSConn, resp, err := dialer.Dial(wsURL, headers)
+	tunnelWSConn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
 		return nil, err
 	}

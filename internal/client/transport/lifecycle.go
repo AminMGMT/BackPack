@@ -37,8 +37,10 @@ type lifecycle struct {
 	restartMutex sync.Mutex
 
 	// The pool's size and load, counted for the generation that is running.
-	poolConnections int32
-	loadConnections int32
+	poolConnections    int32
+	loadConnections    int32
+	dialingConnections int32
+	poolDialMutex      sync.Mutex
 	// controlFlow carries the server's requests for pool connections.
 	controlFlow chan struct{}
 }
@@ -92,15 +94,18 @@ func (l *lifecycle) restart(teardown, reset, start func()) {
 	level := l.logger.GetLevel()
 	l.logger.SetLevel(logrus.FatalLevel)
 
-	if cancel := l.state.Cancel(); cancel != nil {
-		cancel()
-	}
-	l.state.CloseConn()
+	l.state.Stop()
 	if teardown != nil {
 		teardown()
 	}
 
-	time.Sleep(restartPause)
+	l.state.Wait()
+	timer := time.NewTimer(restartPause)
+	select {
+	case <-l.parentctx.Done():
+	case <-timer.C:
+	}
+	timer.Stop()
 
 	// The whole tunnel may have been shut down while this restart was waiting —
 	// on a reload, or on the process going down. Rebuilding the run from a
@@ -137,5 +142,18 @@ func (l *lifecycle) restart(teardown, reset, start func()) {
 
 	l.logger.SetLevel(level)
 
-	go start()
+	l.state.Go(start)
+}
+
+// beginPoolDial reserves a place before the dial, not after it has connected.
+// Control requests and pool repair therefore share the same resource ceiling.
+func (l *lifecycle) beginPoolDial(limit int) (func(), bool) {
+	l.poolDialMutex.Lock()
+	defer l.poolDialMutex.Unlock()
+	if l.state.Ctx().Err() != nil || int(atomic.LoadInt32(&l.poolConnections)+atomic.LoadInt32(&l.dialingConnections)) >= max(limit, 1) {
+		return nil, false
+	}
+	atomic.AddInt32(&l.dialingConnections, 1)
+	var once sync.Once
+	return func() { once.Do(func() { atomic.AddInt32(&l.dialingConnections, -1) }) }, true
 }

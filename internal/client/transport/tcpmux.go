@@ -85,12 +85,12 @@ func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logru
 
 func (c *TcpMuxTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		c.state.Go(c.state.Usage().Monitor)
 	}
 
 	c.status.set("Disconnected (TCPMUX)")
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
 
 func (c *TcpMuxTransport) Restart() {
@@ -132,7 +132,7 @@ func (c *TcpMuxTransport) channelDialer() {
 			// for first; a server that predates it closes the connection
 			// without answering, which is what flips the fallback below.
 			signal := c.legacyServer.signal()
-			err = utils.SendBinaryTransportString(tunnelConn, c.config.Token, signal)
+			err = utils.SendBinaryTransportStringWithin(tunnelConn, c.config.Token, signal, 10*time.Second)
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelConn.Close()
@@ -194,8 +194,9 @@ func (c *TcpMuxTransport) channelDialer() {
 
 				c.status.set("Connected (TCPMux)")
 
-				go c.poolMaintainer()
-				go c.control().run()
+				c.state.Go(c.poolMaintainer)
+				loop := c.control()
+				c.state.Go(func() { loop.run() })
 
 				return
 			} else {
@@ -221,6 +222,9 @@ func (c *TcpMuxTransport) poolMaintainer() {
 		taken:      &c.loadConnections,
 		shrink:     c.controlFlow,
 		dial:       c.tunnelDialer,
+		spawn:      c.state.Go,
+		pending:    &c.dialingConnections,
+		maxSize:    muxPoolLimit(c.config.ConnPoolSize, c.config.MaxReceiveBuffer),
 	}.maintain()
 }
 
@@ -230,6 +234,12 @@ func (c *TcpMuxTransport) control() controlLoop {
 }
 
 func (c *TcpMuxTransport) tunnelDialer() {
+	ready, ok := c.beginPoolDial(muxPoolLimit(c.config.ConnPoolSize, c.config.MaxReceiveBuffer))
+	if !ok {
+		return
+	}
+	defer ready()
+
 	c.logger.Debugf("initiating new tunnel connection to address %s", c.config.RemoteAddr)
 
 	// Dial to the tunnel server
@@ -243,6 +253,8 @@ func (c *TcpMuxTransport) tunnelDialer() {
 		return
 	}
 
+	defer c.state.Own(tunnelConn)()
+
 	// Say what this connection is, so the server admits it on the nonce rather
 	// than on the address it happened to dial out from.
 	if err := announcePoolConn(tunnelConn, c.poolNonce.Get()); err != nil {
@@ -253,6 +265,7 @@ func (c *TcpMuxTransport) tunnelDialer() {
 
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
+	ready()
 
 	c.handleSession(tunnelConn)
 }

@@ -123,14 +123,16 @@ func (l *lifecycle) serveSession(session *smux.Session, from net.Addr, o backend
 			l.logger.Trace("session is closed: ", err)
 			return
 		}
-		go func() {
+		l.state.Go(func() {
+			_ = stream.SetReadDeadline(time.Now().Add(controlAckTimeout))
 			target, err := utils.ReceiveBinaryString(stream)
 			if err != nil {
 				l.logger.Errorf("unable to get port from stream connection %s: %v", from, err)
 				stream.Close()
 				return
 			}
+			_ = stream.SetReadDeadline(time.Time{})
 			l.relayStream(stream, target, o)
-		}()
+		})
 	}
 }

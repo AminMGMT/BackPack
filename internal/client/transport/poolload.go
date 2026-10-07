@@ -41,6 +41,16 @@ const (
 	poolGrowthLimit = 4
 )
 
+// muxPoolLimit bounds automatic growth by the aggregate receive windows. Keep
+// an explicitly configured initial pool even when it exceeds this budget.
+func muxPoolLimit(size, receiveBuffer int) int {
+	limit := size * poolGrowthLimit
+	if receiveBuffer > 0 {
+		limit = min(limit, max(size, (128*1024*1024)/receiveBuffer))
+	}
+	return limit
+}
+
 // poolLoad turns the tunnel's cumulative byte counters into a per-interval
 // throughput reading.
 type poolLoad struct {

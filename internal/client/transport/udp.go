@@ -53,12 +53,12 @@ func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.L
 
 func (c *UdpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		c.state.Go(c.state.Usage().Monitor)
 	}
 
 	c.status.set("Disconnected (UDP)")
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
 
 func (c *UdpTransport) Restart() {
@@ -91,7 +91,7 @@ func (c *UdpTransport) channelDialer() {
 			}
 
 			// Sending security token
-			err = utils.SendBinaryTransportString(tunnelTCPConn, c.config.Token, utils.SG_Chan)
+			err = utils.SendBinaryTransportStringWithin(tunnelTCPConn, c.config.Token, utils.SG_Chan, 10*time.Second)
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelTCPConn.Close()
@@ -130,8 +130,9 @@ func (c *UdpTransport) channelDialer() {
 
 				c.status.set("Connected (UDP)")
 
-				go c.poolMaintainer()
-				go c.control().run()
+				c.state.Go(c.poolMaintainer)
+				loop := c.control()
+				c.state.Go(func() { loop.run() })
 
 				return
 
@@ -157,6 +158,9 @@ func (c *UdpTransport) poolMaintainer() {
 		taken:      &c.loadConnections,
 		shrink:     c.controlFlow,
 		dial:       c.tunnelDialer,
+		spawn:      c.state.Go,
+		pending:    &c.dialingConnections,
+		maxSize:    c.config.ConnPoolSize * poolGrowthLimit,
 	}.maintain()
 }
 
@@ -166,6 +170,12 @@ func (c *UdpTransport) control() controlLoop {
 }
 
 func (c *UdpTransport) tunnelDialer() {
+	ready, ok := c.beginPoolDial(c.config.ConnPoolSize * poolGrowthLimit)
+	if !ok {
+		return
+	}
+	defer ready()
+
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
 	// Next() rather than Current(): with load balancing enabled the pool
@@ -191,7 +201,7 @@ func (c *UdpTransport) tunnelDialer() {
 
 	// Start handleTunnelConn in a goroutine
 	go func() {
-		c.handleTunnelConn(tunConn)
+		c.handleTunnelConnReady(tunConn, ready)
 		close(done) // Signal that handleTunnelConn is done
 	}()
 
@@ -199,10 +209,12 @@ func (c *UdpTransport) tunnelDialer() {
 	select {
 	case <-done:
 	case <-c.state.Ctx().Done():
+		tunConn.Close()
+		<-done
 	}
 }
 
-func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
+func (c *UdpTransport) handleTunnelConnReady(tunConn *net.UDPConn, ready func()) {
 	// Send token message to the server
 	_, err := tunConn.Write([]byte(c.config.Token))
 	if err != nil {
@@ -212,6 +224,7 @@ func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
 
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
+	ready()
 
 	// Prepare a buffer to receive the server's response
 	buffer := make([]byte, 47) // maximum buffer requried for store in IPv6:Port format
@@ -271,17 +284,21 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 
 	c.applyBuffers(remoteConn)
 
-	defer remoteConn.Close()
+	defer c.state.Own(remoteConn)()
 
 	done := make(chan struct{})
 	c.logger.Debugf("start to copy from tunnel %s to local %s", tunConn.LocalAddr(), remoteAddr)
 	go func() {
 		c.udpCopy(remoteConn, tunConn, port, true)
+		tunConn.Close()
+		remoteConn.Close()
 		done <- struct{}{}
 	}()
 
 	c.udpCopy(tunConn, remoteConn, port, false)
-
+	// Ending either direction must release the other reader before joining it.
+	tunConn.Close()
+	remoteConn.Close()
 	<-done
 
 }

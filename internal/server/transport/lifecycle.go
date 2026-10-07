@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/metrics"
@@ -53,6 +54,7 @@ type lifecycle struct {
 	status tunnelStatus
 
 	restartMutex sync.Mutex
+	counterMutex sync.Mutex
 
 	// preauth bounds the connections held before they have proved the token.
 	// It outlives the generations: a flood does not start over at a restart.
@@ -61,6 +63,19 @@ type lifecycle struct {
 	// rivals notices two clients with one token taking the seat from each
 	// other. See seated.
 	rivals rivalry
+}
+
+// countGeneration serializes late session/stream completion against a restart.
+// Once the generation ends, its counters will be reset by the next run and
+// must no longer be changed by its retiring workers.
+func (l *lifecycle) countGeneration(ctx context.Context, counter *int32, delta int32) bool {
+	l.counterMutex.Lock()
+	defer l.counterMutex.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	atomic.AddInt32(counter, delta)
+	return true
 }
 
 // seated records the client that has just taken the seat: the engine reports

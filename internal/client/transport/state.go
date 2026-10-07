@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 
@@ -27,6 +28,8 @@ type clientState struct {
 	conn         net.Conn        // control channel for the byte-stream transports
 	wsConn       *websocket.Conn // control channel for the websocket transports
 	usageMonitor *web.Usage
+	workers      sync.WaitGroup
+	stopping     bool
 }
 
 // Reset publishes a whole new generation at once, so no reader can observe a
@@ -39,6 +42,46 @@ func (s *clientState) Reset(ctx context.Context, cancel context.CancelFunc, usag
 	s.usageMonitor = usage
 	s.conn = nil
 	s.wsConn = nil
+	s.stopping = false
+}
+
+// Go registers work before starting it. Restart seals the generation before
+// waiting, so a late pool request cannot attach work to its replacement.
+func (s *clientState) Go(work func()) {
+	s.mu.Lock()
+	if s.stopping || s.ctx == nil || s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.workers.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.workers.Done()
+		work()
+	}()
+}
+
+func (s *clientState) Stop() {
+	s.mu.Lock()
+	s.stopping = true
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	s.CloseConn()
+}
+
+func (s *clientState) Wait() { s.workers.Wait() }
+
+// Own interrupts even a connection waiting for its first destination. The
+// caller must defer the returned cleanup for errors and normal completion.
+func (s *clientState) Own(conn io.Closer) func() {
+	stop := context.AfterFunc(s.Ctx(), func() { _ = conn.Close() })
+	return func() {
+		stop()
+		_ = conn.Close()
+	}
 }
 
 func (s *clientState) Ctx() context.Context {
@@ -65,10 +108,18 @@ func (s *clientState) Conn() net.Conn {
 	return s.conn
 }
 
-func (s *clientState) SetConn(c net.Conn) {
+func (s *clientState) SetConn(c net.Conn) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.stopping || (s.ctx != nil && s.ctx.Err() != nil) {
+		s.mu.Unlock()
+		if c != nil {
+			_ = c.Close()
+		}
+		return false
+	}
 	s.conn = c
+	s.mu.Unlock()
+	return true
 }
 
 func (s *clientState) WSConn() *websocket.Conn {
@@ -77,10 +128,18 @@ func (s *clientState) WSConn() *websocket.Conn {
 	return s.wsConn
 }
 
-func (s *clientState) SetWSConn(c *websocket.Conn) {
+func (s *clientState) SetWSConn(c *websocket.Conn) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.stopping || (s.ctx != nil && s.ctx.Err() != nil) {
+		s.mu.Unlock()
+		if c != nil {
+			_ = c.Close()
+		}
+		return false
+	}
 	s.wsConn = c
+	s.mu.Unlock()
+	return true
 }
 
 // CloseConn closes whichever control channel is held, if any.

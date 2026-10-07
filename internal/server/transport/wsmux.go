@@ -126,6 +126,7 @@ func (s *WsMuxTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *WsMuxTransport) start(g *wsMuxGen) {
+	go sweepTunnelConns(g.ctx, g.tunnelChannel)
 	// for  webui
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
@@ -140,8 +141,10 @@ func (s *WsMuxTransport) start(g *wsMuxGen) {
 func (s *WsMuxTransport) Restart() {
 	s.restart(s.controlChannel.Close, func(ctx context.Context) {
 		s.controlChannel.Clear()
+		s.counterMutex.Lock()
 		atomic.StoreInt32(&s.streamCounter, 0)
 		atomic.StoreInt32(&s.sessionCounter, 0)
+		s.counterMutex.Unlock()
 		go s.start(s.newGen(ctx))
 	})
 }
@@ -182,7 +185,12 @@ func (s *WsMuxTransport) seatClient(g *wsMuxGen, conn *websocket.Conn) {
 			s.status.set(fmt.Sprintf("Connected (%s)", s.config.Mode))
 			s.logger.Info("control channel established successfully")
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.WS(conn)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's channel is closed and forgotten, and
@@ -346,9 +354,13 @@ func (s *WsMuxTransport) handleLoop(g *wsMuxGen) {
 
 		case session := <-g.tunnelChannel:
 			// +1 for session counter
-			atomic.AddInt32(&s.sessionCounter, 1)
+			if !s.countGeneration(g.ctx, &s.sessionCounter, 1) {
+				session.Close()
+				continue
+			}
 
-			go s.handleSession(g, session)
+			loop := s.session(g)
+			go loop.run(session)
 		}
 	}
 }
@@ -369,12 +381,6 @@ func (s *WsMuxTransport) tlsSettings() network.TLSSettings {
 	}
 }
 
-// handleSession carries connections over one session. The state machine is
-// muxSession's, shared with the other two mux transports — see muxsession.go.
-func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
-	s.session(g).run(session)
-}
-
 // session binds this transport's channels, counters and settings to the shared
 // loop. It is the whole of what is transport-specific about running a session.
 // Its context is the seated client's, so the session ends with the client that
@@ -392,6 +398,9 @@ func (s *WsMuxTransport) session(g *wsMuxGen) muxSession {
 		log:           s.logger,
 		streams:       &s.streamCounter,
 		sessions:      &s.sessionCounter,
+		count: func(counter *int32, delta int32) {
+			s.countGeneration(g.ctx, counter, delta)
+		},
 	}
 }
 
@@ -401,7 +410,7 @@ func (s *WsMuxTransport) forwarder(g *wsMuxGen) portForwarder {
 		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   s.tuneUserConn,
-		queued: muxRequest(&s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),
+		queued: muxRequestForGeneration(g.ctx, &s.counterMutex, &s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),
 	}
 }
 
