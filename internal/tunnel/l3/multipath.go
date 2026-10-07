@@ -148,6 +148,11 @@ func newMultipathCarrier(paths []DatagramCarrier, reported net.Addr) DatagramCar
 func (c *multipathCarrier) pumpPath(i int, p DatagramCarrier) {
 	width := 1
 	br := asBatchReader(p)
+	// Peer pinning stays per datagram, while the path pump can batch the UDP reads.
+	pinned, isPinned := p.(*pinnedCarrier)
+	if isPinned {
+		br = asBatchReader(pinned.DatagramCarrier)
+	}
 	if br != nil {
 		width = batchSize
 	}
@@ -169,6 +174,14 @@ func (c *multipathCarrier) pumpPath(i int, p DatagramCarrier) {
 			}
 		}
 		for j := 0; j < count; j++ {
+			if sizes[j] < 0 || sizes[j] > len(bufs[j]) {
+				continue
+			}
+			if isPinned && froms[j] != nil {
+				pinned.mu.Lock()
+				pinned.peer = froms[j]
+				pinned.mu.Unlock()
+			}
 			c.queueMu.Lock()
 			select {
 			case <-c.closed:

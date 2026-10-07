@@ -330,31 +330,6 @@ func closeAll(paths []DatagramCarrier) {
 	}
 }
 
-// ReadBatch retains the UDP receive capability through the peer-pinning layer.
-func (c *pinnedCarrier) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, error) {
-	if len(bufs) == 0 {
-		return 0, nil
-	}
-	var n int
-	var err error
-	if reader := asBatchReader(c.DatagramCarrier); reader != nil {
-		n, err = reader.ReadBatch(bufs, sizes, froms)
-	} else {
-		sizes[0], froms[0], err = c.DatagramCarrier.ReadFrom(bufs[0])
-		if err == nil {
-			n = 1
-		}
-	}
-	for i := 0; i < n; i++ {
-		if froms[i] != nil {
-			c.mu.Lock()
-			c.peer = froms[i]
-			c.mu.Unlock()
-		}
-	}
-	return n, err
-}
-
 // WriteBatch uses the learned path address without discarding sendmmsg/GSO.
 func (c *pinnedCarrier) WriteBatch(bufs [][]byte, addr net.Addr) (int, error) {
 	c.mu.Lock()
