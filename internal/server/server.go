@@ -8,6 +8,7 @@ import (
 	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/server/transport"
 	"github.com/backpack/backpack/internal/tunnel/chain"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -46,6 +47,15 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 }
 
 func (s *Server) Start() {
+	if s.config.Naive.Enabled() {
+		helper, err := naive.StartServer(s.ctx, s.config, s.logger)
+		if err != nil {
+			s.logger.Errorf("Naive helper could not start; tunnel remains stopped: %v", err)
+			<-s.ctx.Done()
+			return
+		}
+		defer helper.Close()
+	}
 	// Profiling endpoint, off unless explicitly enabled in the config.
 	//
 	// Bound to loopback on purpose: pprof has no authentication, and its heap

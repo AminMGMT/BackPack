@@ -433,6 +433,10 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 		switch {
 		case host == "" || port == "":
 			// Nothing to probe.
+		case spec.NaiveClient.Enabled():
+			// remote_addr belongs to Iran behind CONNECT; a direct dial on
+			// this machine would inspect an unrelated local service.
+			out = append(out, naiveReachability(g, spec.NaiveClient.Server))
 		case isDatagram(spec.Transport):
 			// There is no connect step to test on UDP: a silent port and a
 			// working one look identical from outside. Say so plainly
@@ -462,6 +466,9 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 	if t.Role == "server" && needsTLS(spec.Transport) {
 		out = append(out, certCheck(g, spec.TLSCert))
 	}
+	if t.Role == "server" && spec.NaiveServer.Enabled() {
+		out = append(out, certCheck(g, spec.NaiveServer.Certificate))
+	}
 
 	// Token sanity — a default/short token is a real security problem.
 	switch {
@@ -476,6 +483,12 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 			Detail: fmt.Sprintf("%d characters", len(spec.Token))})
 	}
 	return out
+}
+
+func naiveReachability(group, server string) Check {
+	return Check{Group: group, Name: "Reachability", Level: CheckInfo,
+		Detail: "managed Naive HTTP/2 via " + server + "; remote_addr is the loopback target on Iran",
+		Fix:    "use the live engine state and verified traffic through the forwarded entry port; a direct local TCP check cannot prove this path"}
 }
 
 // certCheck validates a TLS certificate file and reports its expiry.

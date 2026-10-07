@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/tunnel/l3"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils/network"
 
 	"github.com/sirupsen/logrus"
@@ -221,6 +222,7 @@ func warnIgnoredProxyProtocol(cfg *config.Config) {
 // it and keeps what is running. See reload.go.
 func validateConfig(cfg *config.Config) error {
 	for _, check := range []func(*config.Config) error{
+		checkNaive,
 		checkOutbound,
 		checkXdi,
 		checkSpoof,
@@ -233,6 +235,19 @@ func validateConfig(cfg *config.Config) error {
 		if err := check(cfg); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func checkNaive(cfg *config.Config) error {
+	if !cfg.Client.Naive.Enabled() && !cfg.Server.Naive.Enabled() {
+		return nil
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("the experimental managed Naive integration currently supports Linux only")
+	}
+	if err := naive.Validate(cfg); err != nil {
+		return fmt.Errorf("Naive configuration: %w", err)
 	}
 	return nil
 }

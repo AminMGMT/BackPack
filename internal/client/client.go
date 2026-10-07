@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/internal/client/transport"
 	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/tunnel/chain"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
@@ -93,6 +94,21 @@ func (c *Client) Start() {
 	if err != nil {
 		c.logger.Errorf("ignoring the configured outbound settings and dialling directly: %v", err)
 		outbound = nil
+	}
+	if c.config.Naive.Enabled() {
+		helper, err := naive.StartClient(c.ctx, c.config, c.logger)
+		if err != nil {
+			c.logger.Errorf("Naive helper could not start; tunnel remains stopped: %v", err)
+			<-c.ctx.Done()
+			return
+		}
+		defer helper.Close()
+		proxy, err := network.ParseProxy(helper.ProxyURL())
+		if err != nil {
+			c.logger.Error("invalid managed Naive proxy")
+			return
+		}
+		outbound = &network.Outbound{Proxy: proxy}
 	}
 	if outbound.IsSet() {
 		c.logger.Infof("reaching the tunnel server %s", outbound)

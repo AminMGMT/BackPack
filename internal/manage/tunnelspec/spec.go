@@ -5,8 +5,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage/core"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 )
 
 // Spec is the full description of a tunnel used to render a TOML config.
@@ -14,6 +17,11 @@ type Spec struct {
 	Name      string
 	Role      string // "server" (Iran/edge that exposes ports) or "client" (kharej/origin)
 	Transport string // tcp, tcpmux, udp, kcp, ws, wss, wsmux, wssmux
+
+	// Preserve experimental helper settings across ordinary tunnel edits.
+	// They include credentials and must not enter generic JSON responses.
+	NaiveServer config.NaiveServerConfig `json:"-"`
+	NaiveClient config.NaiveClientConfig `json:"-"`
 
 	// Preset is the performance profile every tuning field was filled from:
 	// balance, turbo or aggressive. Empty means the values were set by hand or
@@ -315,6 +323,7 @@ func (s Spec) Render() string {
 		}
 		b.WriteString("]\n")
 		s.writeFallbackChain(p, &b)
+		s.writeNaive(&b)
 		return b.String()
 	}
 
@@ -386,12 +395,43 @@ func (s Spec) Render() string {
 		p("web_port = %d\n", s.WebPort)
 		p("web_bind = %q\n", monitorBind(s.WebBind))
 	}
+	s.writeNaive(&b)
 	return b.String()
+}
+
+func (s Spec) writeNaive(b *strings.Builder) {
+	if s.Role == "server" && s.NaiveServer.Enabled() {
+		b.WriteString("\n[server.naive]\n")
+		_ = toml.NewEncoder(b).Encode(s.NaiveServer) // string fields into an infallible strings.Builder
+	} else if s.Role == "client" && s.NaiveClient.Enabled() {
+		b.WriteString("\n[client.naive]\n")
+		_ = toml.NewEncoder(b).Encode(s.NaiveClient)
+	}
+}
+
+func (s Spec) validateNaive() error {
+	if !s.NaiveServer.Enabled() && !s.NaiveClient.Enabled() {
+		return nil
+	}
+	var cfg config.Config
+	if _, err := toml.Decode(s.Render(), &cfg); err != nil {
+		return err
+	}
+	if s.Role == "server" && s.NaiveServer.Enabled() && !s.NaiveClient.Enabled() {
+		return naive.ValidateServer(&cfg.Server)
+	}
+	if s.Role == "client" && s.NaiveClient.Enabled() && !s.NaiveServer.Enabled() {
+		return naive.ValidateClient(&cfg.Client)
+	}
+	return fmt.Errorf("Naive helper settings do not match the tunnel role")
 }
 
 // Save writes the config file, the systemd unit, reloads systemd and starts
 // the tunnel. It returns the service name on success.
 func (s Spec) Save() (string, error) {
+	if err := s.validateNaive(); err != nil {
+		return "", fmt.Errorf("Naive configuration: %w", err)
+	}
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return "", err
 	}

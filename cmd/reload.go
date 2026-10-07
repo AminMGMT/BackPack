@@ -228,6 +228,9 @@ func bindingIsFree(binding listenerBinding) bool {
 func portsInUse(cfg *config.Config) []listenerBinding {
 	var bindings []listenerBinding
 	if cfg.Server.BindAddr != "" {
+		if cfg.Server.Naive.Enabled() {
+			bindings = append(bindings, listenerBinding{network: "tcp", address: cfg.Server.Naive.Listen})
+		}
 		// An empty network means the transport has no ordinary listener to
 		// probe, so the bind address is left out rather than guessed at.
 		if network := tunnelNetwork(cfg.Server.Transport); network != "" {

@@ -275,6 +275,8 @@ type PckConfig struct {
 
 // ServerConfig represents the configuration for the server.
 type ServerConfig struct {
+	// Naive optionally wraps the loopback TCP reverse listener in HTTP/2 with a tunnel-owned sing-box helper; experimental and disabled when empty.
+	Naive NaiveServerConfig `toml:"naive"`
 	// BindAddr is the address and port this server listens on for the
 	// control channel — "0.0.0.0:443" for every interface, or one address to pin
 	// it to a single local IP. The client's remote_addr must name the same port.
@@ -454,6 +456,8 @@ func (s ServerConfig) ForwardsUDP() bool {
 
 // ClientConfig represents the configuration for the client.
 type ClientConfig struct {
+	// Naive optionally reaches the loopback reverse target through a tunnel-owned official Chromium Naive helper; experimental and disabled when empty.
+	Naive NaiveClientConfig `toml:"naive"`
 	// RemoteAddr is the server's address and port, as the client dials it. The
 	// port must match the server's bind_addr.
 	RemoteAddr string `toml:"remote_addr"`

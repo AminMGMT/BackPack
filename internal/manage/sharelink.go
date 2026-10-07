@@ -551,6 +551,9 @@ func shareLinkWith(name, host string, cfg config.Config, x linkExtras) (string, 
 // shareLinkOf builds the link from a config in hand, which is how the direct
 // wizard shows it in its summary before the tunnel is written.
 func shareLinkOf(name, host string, cfg config.Config) (string, error) {
+	if cfg.Server.Naive.Enabled() || cfg.Client.Naive.Enabled() {
+		return "", fmt.Errorf("experimental Naive helper settings are not encoded in setup links; configure both files manually")
+	}
 	l := ShareLink{Name: name, Host: strings.TrimSpace(host)}
 
 	switch {
