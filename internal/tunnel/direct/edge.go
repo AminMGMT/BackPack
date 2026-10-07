@@ -352,6 +352,12 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 	e.log.Infof("direct: forwarding udp %s", m)
 
 	var flows sync.Map // client address -> *udpFlow
+	// Close every paced stream on service cancellation, including writers waiting
+	// for bandwidth before their socket write begins.
+	stopFlows := context.AfterFunc(ctx, func() {
+		flows.Range(func(_, v any) bool { v.(*udpFlow).stream.Close(); return true })
+	})
+	defer stopFlows()
 	defer func() {
 		flows.Range(func(_, v any) bool {
 			v.(*udpFlow).stream.Close()
@@ -370,7 +376,7 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 			return err
 		}
 
-		flow, err := e.udpFlowFor(ctx, &flows, conn, client, m)
+		flow, err := e.udpFlowFor(&flows, conn, client, m)
 		if err != nil {
 			e.stats.refused.Add(1)
 			e.log.Debugf("direct: no udp backend for %s: %v", m.Listen, err)
@@ -385,7 +391,7 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 }
 
 // udpFlowFor returns the flow for a client, opening a stream on first sight.
-func (e *Edge) udpFlowFor(ctx context.Context, flows *sync.Map, local net.PacketConn, client net.Addr, m portmap.Mapping) (*udpFlow, error) {
+func (e *Edge) udpFlowFor(flows *sync.Map, local net.PacketConn, client net.Addr, m portmap.Mapping) (*udpFlow, error) {
 	key := client.String()
 	if existing, ok := flows.Load(key); ok {
 		return existing.(*udpFlow), nil
@@ -408,7 +414,7 @@ func (e *Edge) udpFlowFor(ctx context.Context, flows *sync.Map, local net.Packet
 		return nil, err
 	}
 	// UDP streams share the same tunnel-wide bucket as forwarded TCP.
-	stream = e.limiter.Wrap(ctx, stream)
+	stream = e.limiter.Wrap(context.Background(), stream)
 	flow := &udpFlow{stream: stream}
 	flow.touch()
 
