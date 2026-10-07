@@ -106,9 +106,11 @@ type multipathCarrier struct {
 	// carries nothing.
 	reported net.Addr
 
-	in     chan pathPacket
-	closed chan struct{}
-	once   sync.Once
+	in      chan pathPacket
+	closed  chan struct{}
+	allDead chan struct{}
+	readers atomic.Int32
+	once    sync.Once
 
 	mu       sync.Mutex
 	deadline time.Time
@@ -136,9 +138,18 @@ func newMultipathCarrier(paths []DatagramCarrier, reported net.Addr) DatagramCar
 		reported: reported,
 		in:       make(chan pathPacket, pathQueue),
 		closed:   make(chan struct{}),
+		allDead:  make(chan struct{}),
 	}
+	c.readers.Store(int32(len(paths)))
 	for i, p := range paths {
-		go func(i int, p DatagramCarrier) { c.pumpPath(i, p) }(i, p)
+		go func(i int, p DatagramCarrier) {
+			defer func() {
+				if c.readers.Add(-1) == 0 {
+					close(c.allDead)
+				}
+			}()
+			c.pumpPath(i, p)
+		}(i, p)
 	}
 	return c
 }
@@ -336,6 +347,17 @@ func (c *multipathCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
 		return n, c.stableAddr(pkt.addr), nil
 	case <-c.closed:
 		return 0, nil, net.ErrClosed
+	case <-c.allDead:
+		// Every pump has stopped, so nothing more can enter the queue. Deliver
+		// its remaining packets before reporting the permanent carrier failure.
+		select {
+		case pkt := <-c.in:
+			n := copy(p, pkt.data)
+			network.PutDatagramBuffer(pkt.data)
+			return n, c.stableAddr(pkt.addr), nil
+		default:
+			return 0, nil, net.ErrClosed
+		}
 	case <-timeout:
 		return 0, nil, timeoutError{}
 	}
