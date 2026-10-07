@@ -36,7 +36,15 @@ them both ends have to agree on. This says what exists.
 | `kcp_resend` | `int` | Resend is how many duplicate acknowledgements trigger a fast retransmit. |
 | `kcp_sndwnd` | `int` | SndWnd is the send window in packets. |
 
-## NaiveClientConfig
+## PckConfig
+
+| Key | Type | Description |
+|---|---|---|
+| `pck_flags` | `[]string` | PckFlags is the cycle of TCP flag combinations stamped on outgoing segments, one per packet, spelled as in tcpdump: ["PA"] is push+ack, the flags bulk data carries and the default. A longer cycle varies the pattern for a path that matches on it. Both ends may differ — each side only decides what it sends. |
+| `pck_gateway_mac` | `string` | PckGatewayMAC is the next hop's hardware address, used when frames are injected at the link layer. Empty means read it from the kernel's neighbour table, which is where it already is. Set it only where that lookup is wrong — some virtualised networks answer ARP with an address the hypervisor then rewrites. |
+| `pck_interface` | `string` | PckInterface pins the carrier to a named egress device. Empty — the normal case — lets the route to the peer choose, which is right on every host with one uplink and on most with several. |
+
+## [client.naive]
 
 | Key | Type | Description |
 |---|---|---|
@@ -45,25 +53,6 @@ them both ends have to agree on. This says what exists.
 | `password` | `string` | Password is the HTTP/2 proxy secret; keep the tunnel configuration readable only by its owner. |
 | `server` | `string` | Server is the HTTP/2 proxy's host:port, reached from the outside client toward the Iran server. |
 | `username` | `string` | Username authenticates the HTTP/2 proxy independently of the reverse tunnel token. |
-
-## NaiveServerConfig
-
-| Key | Type | Description |
-|---|---|---|
-| `binary` | `string` | Binary is the absolute path to the compatible sing-box server binary; the initial integration is tested with v1.14.2. |
-| `certificate` | `string` | Certificate is the absolute path to the PEM certificate chain; certificate renewal remains the operator's responsibility. |
-| `key` | `string` | Key is the absolute path to the certificate's PEM private key. |
-| `listen` | `string` | Listen is the public TCP host:port for HTTP/2, separate from the loopback server.bind_addr. |
-| `password` | `string` | Password is the proxy account's secret, separate from server.token. |
-| `username` | `string` | Username is the proxy account accepted from the official Naive client. |
-
-## PckConfig
-
-| Key | Type | Description |
-|---|---|---|
-| `pck_flags` | `[]string` | PckFlags is the cycle of TCP flag combinations stamped on outgoing segments, one per packet, spelled as in tcpdump: ["PA"] is push+ack, the flags bulk data carries and the default. A longer cycle varies the pattern for a path that matches on it. Both ends may differ — each side only decides what it sends. |
-| `pck_gateway_mac` | `string` | PckGatewayMAC is the next hop's hardware address, used when frames are injected at the link layer. Empty means read it from the kernel's neighbour table, which is where it already is. Set it only where that lookup is wrong — some virtualised networks answer ARP with an address the hypervisor then rewrites. |
-| `pck_interface` | `string` | PckInterface pins the carrier to a named egress device. Empty — the normal case — lets the route to the peer choose, which is right on every host with one uplink and on most with several. |
 
 ## [client]
 
@@ -192,6 +181,17 @@ them both ends have to agree on. This says what exists.
 | `spoof_ttl_jitter` | `bool` | SpoofTTLJitter varies the IP TTL per packet across a pool of realistic OS defaults {64,128,255} instead of a fixed 64, to blur TTL-based fingerprints. |
 | `spoof_uplink` | `string` | SpoofUplink and SpoofDownlink set the profile per direction, for a path whose filtering is not symmetric — e.g. ICMP survives client→server while UDP survives server→client. Uplink is client→server, downlink is server→client; both ends must set the same pair. Empty falls back to SpoofProfile, which is the symmetric case. |
 | `spoof_xdp_interface` | `string` | SpoofXDPInterface, when set to a NIC name (e.g. "eth0"), attaches an XDP/eBPF program to that device to receive the tunnel's forged-source packets in the kernel fast path, before the normal socket stack — higher throughput and lower CPU under load than the default raw-socket receive. Pure Go (no clang or libbpf), opt-in, and best-effort: if the kernel is too old or the attach or verifier fails, the carrier logs it and silently falls back to the ordinary raw/UDP receive, so a working tunnel is never lost to it. Empty disables it. Linux only; needs CAP_BPF/CAP_NET_ADMIN in addition to the carrier's CAP_NET_RAW. |
+
+## [server.naive]
+
+| Key | Type | Description |
+|---|---|---|
+| `binary` | `string` | Binary is the absolute path to the compatible sing-box server binary; the initial integration is tested with v1.14.2. |
+| `certificate` | `string` | Certificate is the absolute path to the PEM certificate chain; certificate renewal remains the operator's responsibility. |
+| `key` | `string` | Key is the absolute path to the certificate's PEM private key. |
+| `listen` | `string` | Listen is the public TCP host:port for HTTP/2, separate from the loopback server.bind_addr. |
+| `password` | `string` | Password is the proxy account's secret, separate from server.token. |
+| `username` | `string` | Username is the proxy account accepted from the official Naive client. |
 
 ## [server]
 
