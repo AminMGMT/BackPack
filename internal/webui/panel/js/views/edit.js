@@ -452,7 +452,7 @@ export async function editView(ctx) {
         if (panes) panes.innerHTML = directMarkup(settings);
         let dopts = { presets: [] };
         try { dopts = await api.directOptions(); } catch (e) { /* the menu stays empty */ }
-        await wireControls(root, { families: [], presets: dopts.presets || [] });
+        await wireControls(root, { families: [], presets: settings.presets || dopts.presets || [] });
         fill(root, settings);
         syncControls(root);
       } else {

@@ -182,7 +182,14 @@ func PanelDirectCarriers() []map[string]string {
 
 // DirectPresets is what the panel offers for tuning, in the same order as the
 // CLI.
-func DirectPresets() []map[string]string {
+func DirectPresets(layer ...int) []map[string]string {
+	if len(layer) > 0 && layer[0] == 4 {
+		return []map[string]string{
+			{"value": PresetTurbo, "label": "Turbo", "desc": "2 MB per-stream receive window, for most links"},
+			{"value": PresetBalance, "label": "Balance", "desc": "256 KB per stream, for the smallest footprint"},
+			{"value": PresetThroughput, "label": "Throughput", "desc": "16 MB per stream and at least four sessions, for fast distant links"},
+		}
+	}
 	return []map[string]string{
 		{"value": PresetTurbo, "label": "Turbo",
 			"desc": "the default — 8 MB of socket buffer, suits most links"},
@@ -529,6 +536,8 @@ type DirectSettings struct {
 	MaxConnections int `json:"maxConnections"`
 	BandwidthMbps  int `json:"bandwidthMbps"`
 
+	Presets []map[string]string `json:"presets,omitempty"`
+
 	// HoldsPorts says whether this side has a port list at all. The kharej side
 	// does not: every target arrives on the stream that asks for it.
 	HoldsPorts bool `json:"holdsPorts"`
@@ -583,7 +592,7 @@ func DirectSettingsOf(name string) (DirectSettings, error) {
 		return DirectSettings{Name: name, Layer: 4, Side: directRole(d.ResolvedRole()), Carrier: orDefault(d.Transport, "tcp"),
 			Addr: d.Addr, Token: d.Token, Ports: strings.Join(d.Ports, ", "), AcceptUDP: d.AcceptUDP,
 			HoldsPorts: d.ResolvedRole() == "edge", Preset: d.Preset, Sessions: max(d.Sessions, 1), MSS: d.MSS,
-			MaxConnections: d.MaxConnections, BandwidthMbps: d.BandwidthMbps}, nil
+			MaxConnections: d.MaxConnections, BandwidthMbps: d.BandwidthMbps, Presets: DirectPresets(4)}, nil
 	}
 	if !cfg.L3.Enabled() {
 		return DirectSettings{}, fmt.Errorf("%q is not a direct tunnel", name)
@@ -686,6 +695,7 @@ func EditDirectSettings(name string, e DirectEdit) error {
 			d.MaxFrameSize = p.MuxFrameSize
 			d.MaxReceiveBuffer = p.MuxReceiveBuffer
 			d.MaxStreamBuffer = p.MuxStreamBuffer
+			d.Keepalive, d.Nodelay = p.Keepalive, true
 			d.Sessions = max(d.Sessions, p.Sessions)
 		}
 		engine := direct.ConfigFromTable(d)
