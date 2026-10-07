@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -214,6 +216,11 @@ func QUICDial(ctx context.Context, remoteAddr string, s QUICSettings) (*quic.Con
 type QUICStreamConn struct {
 	*quic.Stream
 	conn *quic.Conn
+
+	writeMu   sync.Mutex
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewQUICStreamConn wraps a stream and its connection as a net.Conn.
@@ -223,3 +230,36 @@ func NewQUICStreamConn(stream *quic.Stream, conn *quic.Conn) net.Conn {
 
 func (q *QUICStreamConn) LocalAddr() net.Addr  { return q.conn.LocalAddr() }
 func (q *QUICStreamConn) RemoteAddr() net.Addr { return q.conn.RemoteAddr() }
+
+// Write serializes writes with teardown: quic.Stream.Close must not run while
+// a Write is in progress, whereas net.Conn.Close must interrupt that Write.
+func (q *QUICStreamConn) Write(p []byte) (int, error) {
+	q.writeMu.Lock()
+	defer q.writeMu.Unlock()
+	if q.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	return q.Stream.Write(p)
+}
+
+// Close releases both stream directions. The embedded stream's Close only
+// sends FIN and leaves its reader blocked, which kept relay workers and their
+// connection-limit slots alive after a backend had closed.
+func (q *QUICStreamConn) Close() error {
+	q.closeOnce.Do(func() {
+		q.closed.Store(true)
+		q.Stream.CancelRead(0)
+		if q.writeMu.TryLock() {
+			// Preserve reliable delivery of bytes already accepted by Write.
+			q.closeErr = q.Stream.Close()
+			q.writeMu.Unlock()
+			return
+		}
+		// An active Write may be waiting for peer flow-control credit. Reset
+		// just this send side so teardown cannot wait on an idle peer.
+		q.Stream.CancelWrite(0)
+		q.writeMu.Lock()
+		q.writeMu.Unlock()
+	})
+	return q.closeErr
+}
