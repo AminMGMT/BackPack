@@ -88,44 +88,65 @@ func TestRelayCarriesBothDirections(t *testing.T) {
 			assertReceives(t, backend, upstream, "client to backend")
 			assertReceives(t, client, downstream, "backend to client")
 
-			// Closing one end must bring the whole relay down.
+			// Finishing both peers must release the whole relay.
 			client.Close()
+			backend.Close()
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
-				t.Fatal("the relay did not finish after one end closed")
+				t.Fatal("the relay did not finish after both ends closed")
 			}
 		})
 	}
 }
 
-// When either side goes away the handler closes both connections, so a forwarded
-// connection can never be left half open holding a socket open forever.
+// A sender's EOF leaves the response direction open. Once both directions
+// finish, the handler joins both copies and closes the sockets.
 func TestRelayClosesBothEnds(t *testing.T) {
 	client, from := tcpPair(t)
 	to, backend := tcpPair(t)
-
+	defer client.Close()
+	defer backend.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		TCPConnectionHandler(ctx, false, from, to, quietLogger(), &web.Usage{}, 8080, false)
 	}()
-
-	client.Close()
-
+	request := []byte("request finished by EOF")
+	if _, err := client.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	backend.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, err := io.ReadAll(backend)
+	if err != nil || !bytes.Equal(got, request) {
+		t.Fatalf("EOF did not preserve the request: %q, %v", got, err)
+	}
+	select {
+	case <-done:
+		t.Fatal("sender EOF closed the response direction")
+	default:
+	}
+	response := []byte("remaining response")
+	if _, err := backend.Write(response); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, err = io.ReadAll(client)
+	if err != nil || !bytes.Equal(got, response) {
+		t.Fatalf("half-close response: %q, %v", got, err)
+	}
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the relay did not finish after the client closed")
-	}
-
-	// The far end must see the connection end rather than hang.
-	backend.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := backend.Read(make([]byte, 1)); err == nil {
-		t.Error("the backend side stayed open after the client closed")
+		t.Fatal("the relay did not join both finished copies")
 	}
 }
 
