@@ -370,7 +370,7 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 			return err
 		}
 
-		flow, err := e.udpFlowFor(&flows, conn, client, m)
+		flow, err := e.udpFlowFor(ctx, &flows, conn, client, m)
 		if err != nil {
 			e.stats.refused.Add(1)
 			e.log.Debugf("direct: no udp backend for %s: %v", m.Listen, err)
