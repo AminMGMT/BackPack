@@ -97,7 +97,8 @@ func (l *Limiter) Wrap(ctx context.Context, conn net.Conn) net.Conn {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx}
+	ctx, cancel := context.WithCancel(ctx)
+	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx, cancel: cancel}
 }
 
 // limitedConn paces a connection's reads and writes against a shared token
@@ -106,20 +107,31 @@ func (l *Limiter) Wrap(ctx context.Context, conn net.Conn) net.Conn {
 type limitedConn struct {
 	net.Conn
 	bucket *rate.Limiter
-	// ctx ends with the tunnel. Pacing has to stop when it does; see wait.
-	ctx context.Context
+	// Pacing ends with either the tunnel or this connection. A dropped session
+	// must release its slots while the rest of the tunnel keeps running.
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (c *limitedConn) Close() error {
+	c.cancel()
+	return c.Conn.Close()
 }
 
 func (c *limitedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
-		c.wait(n)
+		if waitErr := c.wait(n); err == nil {
+			err = waitErr
+		}
 	}
 	return n, err
 }
 
 func (c *limitedConn) Write(b []byte) (int, error) {
-	c.wait(len(b))
+	if err := c.wait(len(b)); err != nil {
+		return 0, err
+	}
 	return c.Conn.Write(b)
 }
 
@@ -129,7 +141,7 @@ func (c *limitedConn) Write(b []byte) (int, error) {
 // limiter refuses it outright rather than waiting — so it is charged in
 // bucket-sized pieces. Without that, a single read bigger than one second's
 // worth of bandwidth would fail forever instead of simply being slow.
-func (c *limitedConn) wait(n int) {
+func (c *limitedConn) wait(n int) error {
 	burst := c.bucket.Burst()
 	for n > 0 {
 		chunk := n
@@ -146,14 +158,14 @@ func (c *limitedConn) wait(n int) {
 		// would sit here paying out a token bucket for a connection already on
 		// its way out.
 		//
-		// An error still means "let the bytes through": dropping them would
-		// corrupt the stream and blocking would hang it. A cancelled context
-		// takes the same path, which is what makes teardown immediate.
+		// Cancellation ends the operation; it must not turn a closed
+		// connection into an unpaced write while Close is still finishing.
 		if err := c.bucket.WaitN(c.ctx, chunk); err != nil {
-			return
+			return err
 		}
 		n -= chunk
 	}
+	return nil
 }
 
 // UnderlyingConn exposes the socket for directional EOF, without bypassing pacing.
