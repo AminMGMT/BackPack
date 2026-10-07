@@ -133,6 +133,7 @@ func (p poolSizer) maintain() {
 			if !quiet {
 				quietSince = time.Time{}
 			} else if quietSince.IsZero() {
+				quietSince = time.Now()
 			}
 
 			// The pool is allowed to outgrow its configured size, which from
