@@ -244,15 +244,19 @@ func (o *Origin) serveStream(ctx context.Context, stream *smux.Stream) {
 
 // dialBackend reaches the service a stream named.
 func dialBackend(ctx context.Context, network, target string, timeout time.Duration) (net.Conn, error) {
-	// The one class of address a forwarded port never legitimately reaches.
-	// See target.go for why this is not the usual block-all-private rule.
-	if err := vetTarget(target); err != nil {
-		return nil, err
-	}
 	if timeout <= 0 {
 		timeout = defaultBackendDial
 	}
-	dialer := net.Dialer{Timeout: timeout}
+	// One deadline covers target resolution and the socket dial. A stalled DNS
+	// server must not hold streams or a shutting-down session beyond it.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	// The one class of address a forwarded port never legitimately reaches.
+	// See target.go for why this is not the usual block-all-private rule.
+	if err := vetTargetContext(ctx, target); err != nil {
+		return nil, err
+	}
+	dialer := net.Dialer{}
 	return dialer.DialContext(ctx, network, target)
 }
 

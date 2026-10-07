@@ -1,6 +1,7 @@
 package direct
 
 import (
+	"context"
 	"fmt"
 	"net"
 )
@@ -53,6 +54,11 @@ var errMetadataTarget = fmt.Errorf(
 // metadata address: a name that resolves to several is a name that can be made
 // to resolve to the wrong one on the next lookup.
 func vetTarget(target string) error {
+	return vetTargetContext(context.Background(), target)
+}
+
+// Resolution belongs to the backend dial's lifetime, including its timeout.
+func vetTargetContext(ctx context.Context, target string) error {
 	host, _, err := net.SplitHostPort(target)
 	if err != nil {
 		return fmt.Errorf("direct: target %q must be host:port: %w", target, err)
@@ -67,12 +73,15 @@ func vetTarget(target string) error {
 
 	// A name. Resolution failing is not this function's business — the dial
 	// below will report it in its own words — so a lookup error passes here.
-	ips, err := net.LookupIP(host)
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return nil
 	}
 	for _, ip := range ips {
-		if isMetadataAddr(ip) {
+		if isMetadataAddr(ip.IP) {
 			return errMetadataTarget
 		}
 	}
