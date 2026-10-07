@@ -259,7 +259,7 @@ func (q *QUICStreamConn) Close() error {
 		// just this send side so teardown cannot wait on an idle peer.
 		q.Stream.CancelWrite(0)
 		q.writeMu.Lock()
-		q.writeMu.Unlock()
+		defer q.writeMu.Unlock()
 	})
 	return q.closeErr
 }
