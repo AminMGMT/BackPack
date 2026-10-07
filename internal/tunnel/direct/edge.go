@@ -352,12 +352,6 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 	e.log.Infof("direct: forwarding udp %s", m)
 
 	var flows sync.Map // client address -> *udpFlow
-	// Close every paced stream on service cancellation, including writers waiting
-	// for bandwidth before their socket write begins.
-	stopFlows := context.AfterFunc(ctx, func() {
-		flows.Range(func(_, v any) bool { v.(*udpFlow).stream.Close(); return true })
-	})
-	defer stopFlows()
 	defer func() {
 		flows.Range(func(_, v any) bool {
 			v.(*udpFlow).stream.Close()
@@ -367,6 +361,12 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 	go e.reapUDPFlows(ctx, &flows)
 
 	buf := make([]byte, maxDatagram)
+	// Close every paced stream on service cancellation, including writers waiting
+	// for bandwidth before their socket write begins.
+	stopFlows := context.AfterFunc(ctx, func() {
+		flows.Range(func(_, v any) bool { v.(*udpFlow).stream.Close(); return true })
+	})
+	defer stopFlows()
 	for {
 		n, client, err := conn.ReadFrom(buf)
 		if err != nil {
