@@ -1,7 +1,9 @@
 package l3
 
 import (
+	"errors"
 	"fmt"
+	"github.com/backpack/backpack/internal/utils/network"
 	"net"
 	"strconv"
 	"sync"
@@ -81,8 +83,11 @@ func (m MultipathConfig) Validate() error {
 
 // multipathCarrier spreads writes over several carriers and merges their reads.
 type multipathCarrier struct {
-	paths []DatagramCarrier
-	next  atomic.Uint32
+	paths   []DatagramCarrier
+	next    atomic.Uint32
+	state   []pathHealth
+	sendMu  sync.Mutex
+	queueMu sync.Mutex
 
 	// The address reported upward, guarded by mu. It is one address for the
 	// life of the tunnel, deliberately: the layer above follows a peer that
@@ -109,6 +114,11 @@ type multipathCarrier struct {
 	deadline time.Time
 }
 
+type pathHealth struct {
+	retryAt atomic.Int64
+	dead    atomic.Bool
+}
+
 type pathPacket struct {
 	data []byte
 	addr net.Addr
@@ -122,49 +132,173 @@ func newMultipathCarrier(paths []DatagramCarrier, reported net.Addr) DatagramCar
 	}
 	c := &multipathCarrier{
 		paths:    paths,
+		state:    make([]pathHealth, len(paths)),
 		reported: reported,
 		in:       make(chan pathPacket, pathQueue),
 		closed:   make(chan struct{}),
 	}
-	for _, p := range paths {
-		go c.pump(p)
+	for i, p := range paths {
+		go func(i int, p DatagramCarrier) { c.pumpPath(i, p) }(i, p)
 	}
 	return c
 }
 
 // pump drains one path into the shared queue until it or the carrier closes.
-func (c *multipathCarrier) pump(p DatagramCarrier) {
-	buf := make([]byte, 65535)
+// pumpPath preserves each path's batch capability and retries transient reads.
+func (c *multipathCarrier) pumpPath(i int, p DatagramCarrier) {
+	width := 1
+	br := asBatchReader(p)
+	if br != nil {
+		width = batchSize
+	}
+	bufs := make([][]byte, width)
+	sizes := make([]int, width)
+	froms := make([]net.Addr, width)
+	for j := range bufs {
+		bufs[j] = make([]byte, maxMTU+256)
+	}
 	for {
-		n, addr, err := p.ReadFrom(buf)
-		if err != nil {
+		var count int
+		var err error
+		if br != nil {
+			count, err = br.ReadBatch(bufs, sizes, froms)
+		} else {
+			sizes[0], froms[0], err = p.ReadFrom(bufs[0])
+			if err == nil {
+				count = 1
+			}
+		}
+		for j := 0; j < count; j++ {
+			c.queueMu.Lock()
 			select {
 			case <-c.closed:
+				c.queueMu.Unlock()
 				return
 			default:
 			}
-			// A path that fails stops pumping; the others carry the tunnel. A
-			// carrier is allowed to lose a path, and losing one is not a reason
-			// to take the tunnel down.
+			if len(c.in) == cap(c.in) {
+				c.queueMu.Unlock()
+				continue
+			}
+			frame := network.GetDatagramBuffer(sizes[j])
+			copy(frame, bufs[j][:sizes[j]])
+			c.in <- pathPacket{frame, froms[j]}
+			c.queueMu.Unlock()
+		}
+		if err == nil {
+			c.state[i].retryAt.Store(0)
+			continue
+		}
+		c.state[i].retryAt.Store(time.Now().Add(time.Second).UnixNano())
+		if errors.Is(err, net.ErrClosed) {
+			c.state[i].dead.Store(true)
 			return
 		}
-		pkt := pathPacket{data: append([]byte(nil), buf[:n]...), addr: addr}
+		timer := time.NewTimer(time.Second)
 		select {
-		case c.in <- pkt:
 		case <-c.closed:
+			timer.Stop()
 			return
-		default:
-			// The reader is behind. Drop, as any datagram carrier may.
+		case <-timer.C:
 		}
 	}
 }
 
-// WriteTo sends on the next path in turn. The address is the caller's idea of
-// the peer and is ignored: each path holds its own, which is what makes the
-// several sockets several flows to the same place.
+// availablePath chooses a usable path, with at most one probe per second after failure.
+func (c *multipathCarrier) availablePath() int {
+	start := int(c.next.Add(1)-1) % len(c.paths)
+	now := time.Now().UnixNano()
+	for offset := 0; offset < len(c.paths); offset++ {
+		i := (start + offset) % len(c.paths)
+		if !c.state[i].dead.Load() && now >= c.state[i].retryAt.Load() {
+			return i
+		}
+	}
+	return -1
+}
+func (c *multipathCarrier) pathFailed(i int, err error) {
+	c.state[i].retryAt.Store(time.Now().Add(time.Second).UnixNano())
+	if errors.Is(err, net.ErrClosed) {
+		c.state[i].dead.Store(true)
+	}
+}
+
+// WriteTo retries only an unsent datagram; a partial write is never replayed.
 func (c *multipathCarrier) WriteTo(p []byte, _ net.Addr) (int, error) {
-	i := int(c.next.Add(1)-1) % len(c.paths)
-	return c.paths[i].WriteTo(p, nil)
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	select {
+	case <-c.closed:
+		return 0, net.ErrClosed
+	default:
+	}
+	var last error
+	for range len(c.paths) {
+		i := c.availablePath()
+		if i < 0 {
+			break
+		}
+		n, err := c.paths[i].WriteTo(p, nil)
+		if err == nil {
+			return n, nil
+		}
+		c.pathFailed(i, err)
+		last = err
+		if n > 0 {
+			return n, err
+		}
+	}
+	if last == nil {
+		last = fmt.Errorf("l3: no multipath route is currently available")
+	}
+	return 0, last
+}
+
+// WriteBatch keeps the reported prefix contiguous. Each chunk uses one path's
+// sendmmsg/GSO capability; subsequent chunks rotate to the next usable path.
+func (c *multipathCarrier) WriteBatch(bufs [][]byte, _ net.Addr) (int, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	sent := 0
+	for sent < len(bufs) {
+		select {
+		case <-c.closed:
+			return sent, net.ErrClosed
+		default:
+		}
+		i := c.availablePath()
+		if i < 0 {
+			return sent, fmt.Errorf("l3: no multipath route is currently available")
+		}
+		end := min(sent+batchSize, len(bufs))
+		var n int
+		var err error
+		if bw := asBatchWriter(c.paths[i]); bw != nil {
+			n, err = bw.WriteBatch(bufs[sent:end], nil)
+		} else {
+			for sent+n < end {
+				written, e := c.paths[i].WriteTo(bufs[sent+n], nil)
+				if e != nil {
+					err = e
+					if written > 0 {
+						return sent + n, e
+					}
+					break
+				}
+				n++
+			}
+		}
+		if n < 0 || n > end-sent {
+			return sent, fmt.Errorf("l3: invalid batch result")
+		}
+		sent += n
+		if err != nil {
+			c.pathFailed(i, err)
+		} else if n == 0 {
+			return sent, nil
+		}
+	}
+	return sent, nil
 }
 
 // ReadFrom returns the next datagram from any path, honouring the read deadline
@@ -184,12 +318,39 @@ func (c *multipathCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
 	case pkt := <-c.in:
 		// The address reported is the stable one, not the path's: see the
 		// comment on the field.
-		return copy(p, pkt.data), c.stableAddr(pkt.addr), nil
+		n := copy(p, pkt.data)
+		network.PutDatagramBuffer(pkt.data)
+		return n, c.stableAddr(pkt.addr), nil
 	case <-c.closed:
 		return 0, nil, net.ErrClosed
 	case <-timeout:
 		return 0, nil, timeoutError{}
 	}
+}
+
+// ReadBatch drains queued datagrams after the first, without a timer or extra latency.
+func (c *multipathCarrier) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, error) {
+	if len(bufs) == 0 {
+		return 0, nil
+	}
+	n, addr, err := c.ReadFrom(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0], froms[0] = n, addr
+	count := 1
+	for count < len(bufs) {
+		select {
+		case pkt := <-c.in:
+			sizes[count] = copy(bufs[count], pkt.data)
+			froms[count] = c.stableAddr(pkt.addr)
+			network.PutDatagramBuffer(pkt.data)
+			count++
+		default:
+			return count, nil
+		}
+	}
+	return count, nil
 }
 
 // stableAddr is the address handed upward with every packet: the one fixed at
@@ -216,13 +377,27 @@ func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
 
 func (c *multipathCarrier) Close() error {
-	c.once.Do(func() { close(c.closed) })
 	var err error
-	for _, p := range c.paths {
-		if e := p.Close(); e != nil && err == nil {
-			err = e
+	c.once.Do(func() {
+		c.queueMu.Lock()
+		close(c.closed)
+		c.queueMu.Unlock()
+		for _, p := range c.paths {
+			if e := p.Close(); e != nil && err == nil {
+				err = e
+			}
 		}
-	}
+		c.queueMu.Lock()
+		defer c.queueMu.Unlock()
+		for {
+			select {
+			case pkt := <-c.in:
+				network.PutDatagramBuffer(pkt.data)
+			default:
+				return
+			}
+		}
+	})
 	return err
 }
 

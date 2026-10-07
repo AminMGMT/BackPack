@@ -58,6 +58,8 @@ type poolSizer struct {
 	size int
 	// aggressive selects the tighter factors: grow sooner, shrink later.
 	aggressive bool
+	// multiplexed says open includes traffic-carrying physical sessions.
+	multiplexed bool
 
 	// open counts connections sitting in the pool right now.
 	open *int32
@@ -96,6 +98,8 @@ func (p poolSizer) maintain() {
 
 	newPoolSize := p.size // initial value
 	var load poolLoad     // throughput signal, see poolload.go
+	load.spare = !p.multiplexed
+	var quietSince time.Time
 	var openSum int32
 
 	for {
@@ -131,21 +135,34 @@ func (p poolSizer) maintain() {
 			// carrying 240 Mbit/s" instead of leaving somebody to guess.
 			metrics.ReportPool(openAvg, newPoolSize, p.size, mbps)
 
+			quiet := float64(taken+x) < float64(openAvg)*y && mbps < max(openAvg, 1)*(poolScaleMbpsPerConn/2)
+			if !quiet {
+				quietSince = time.Time{}
+			} else if quietSince.IsZero() {
+				quietSince = time.Now()
+			}
 			grow := ((taken+a) > openAvg*b && poolCanGrow(newPoolSize, p.size)) ||
 				load.wantsMore(mbps, openAvg, newPoolSize, p.size)
 
 			switch {
 			case grow:
+				quietSince = time.Time{}
 				p.log.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s",
 					newPoolSize, newPoolSize+1, openAvg, taken, mbps)
 				newPoolSize++
 				go p.dial()
 
-			case float64(taken+x) < float64(openAvg)*y && newPoolSize > p.size:
+			case quiet && time.Since(quietSince) >= 30*time.Second && newPoolSize > p.size:
 				p.log.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d",
 					newPoolSize, newPoolSize-1, openAvg, taken)
 				newPoolSize--
-				p.shrink <- struct{}{}
+				select {
+				case p.shrink <- struct{}{}:
+				case <-p.ctx.Done():
+					return
+				default:
+				}
+				quietSince = time.Now()
 			}
 		}
 	}

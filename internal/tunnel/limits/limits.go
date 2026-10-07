@@ -155,3 +155,6 @@ func (c *limitedConn) wait(n int) {
 		n -= chunk
 	}
 }
+
+// UnderlyingConn exposes the socket for directional EOF, without bypassing pacing.
+func (c *limitedConn) UnderlyingConn() net.Conn { return c.Conn }

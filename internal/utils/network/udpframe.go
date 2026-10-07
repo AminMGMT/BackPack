@@ -54,11 +54,21 @@ func WriteDatagram(w io.Writer, payload []byte) error {
 	if len(payload) > MaxDatagram {
 		return fmt.Errorf("datagram of %d bytes is too large to forward", len(payload))
 	}
-	frame := make([]byte, 2+len(payload))
+	frame := GetDatagramBuffer(2 + len(payload))
+	defer PutDatagramBuffer(frame)
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(payload)))
 	copy(frame[2:], payload)
-	_, err := w.Write(frame)
-	return err
+	for len(frame) > 0 {
+		n, err := w.Write(frame)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		frame = frame[n:]
+	}
+	return nil
 }
 
 // ReadDatagram reads one length-prefixed datagram into buf and returns its
@@ -66,11 +76,15 @@ func WriteDatagram(w io.Writer, payload []byte) error {
 // not fit would have to be discarded mid-frame, which desynchronises the
 // stream — every following datagram would be read from the wrong offset.
 func ReadDatagram(r io.Reader, buf []byte) (int, error) {
-	var hdr [2]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+	var small [2]byte
+	hdr := small[:]
+	if len(buf) >= 2 {
+		hdr = buf[:2]
+	}
+	if _, err := io.ReadFull(r, hdr); err != nil {
 		return 0, err
 	}
-	size := int(binary.BigEndian.Uint16(hdr[:]))
+	size := int(binary.BigEndian.Uint16(hdr))
 	if size > len(buf) {
 		return 0, fmt.Errorf("datagram of %d bytes does not fit in a %d byte buffer", size, len(buf))
 	}
@@ -81,4 +95,35 @@ func ReadDatagram(r io.Reader, buf []byte) (int, error) {
 		return 0, err
 	}
 	return size, nil
+}
+
+var datagramClasses = [...]int{512, 2048, 16384, MaxDatagram + 2}
+var datagramBuffers = [...]chan []byte{make(chan []byte, 64), make(chan []byte, 64), make(chan []byte, 32), make(chan []byte, 16)}
+
+// GetDatagramBuffer lends a frame buffer. Put it back only after all users finish.
+func GetDatagramBuffer(size int) []byte {
+	for i, capacity := range datagramClasses {
+		if size <= capacity {
+			select {
+			case b := <-datagramBuffers[i]:
+				return b[:size]
+			default:
+				return make([]byte, size, capacity)
+			}
+		}
+	}
+	return make([]byte, size)
+}
+
+// PutDatagramBuffer retains a bounded number of reusable frames in each size class.
+func PutDatagramBuffer(b []byte) {
+	for i, capacity := range datagramClasses {
+		if cap(b) == capacity {
+			select {
+			case datagramBuffers[i] <- b[:0]:
+			default:
+			}
+			return
+		}
+	}
 }
