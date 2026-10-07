@@ -140,7 +140,7 @@ func writeAll(from, to net.Conn, data []byte, logger *logrus.Logger, usage *web.
 			to.Close()
 			return false
 		}
-		if w <= 0 {
+		if w == 0 {
 			from.Close()
 			to.Close()
 			return false

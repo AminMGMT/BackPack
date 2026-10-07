@@ -213,15 +213,15 @@ func (c *TcpMuxTransport) channelDialer() {
 // shared with every other client transport — see poolmaintain.go.
 func (c *TcpMuxTransport) poolMaintainer() {
 	poolSizer{
-		multiplexed: true,
-		ctx:         c.state.Ctx(),
-		log:         c.logger,
-		size:        c.config.ConnPoolSize,
-		aggressive:  c.config.AggressivePool,
-		open:        &c.poolConnections,
-		taken:       &c.loadConnections,
-		shrink:      c.controlFlow,
-		dial:        c.tunnelDialer,
+		mux:        true,
+		ctx:        c.state.Ctx(),
+		log:        c.logger,
+		size:       c.config.ConnPoolSize,
+		aggressive: c.config.AggressivePool,
+		open:       &c.poolConnections,
+		taken:      &c.loadConnections,
+		shrink:     c.controlFlow,
+		dial:       c.tunnelDialer,
 	}.maintain()
 }
 

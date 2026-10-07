@@ -58,8 +58,8 @@ type poolSizer struct {
 	size int
 	// aggressive selects the tighter factors: grow sooner, shrink later.
 	aggressive bool
-	// multiplexed says open includes traffic-carrying physical sessions.
-	multiplexed bool
+	// mux says open includes traffic-carrying physical sessions.
+	mux bool
 
 	// open counts connections sitting in the pool right now.
 	open *int32
@@ -75,6 +75,7 @@ type poolSizer struct {
 
 // maintain fills the pool and then keeps it the right size until ctx ends.
 func (p poolSizer) maintain() {
+	var quietSince time.Time
 	for i := 0; i < p.size; i++ { // initial pool filling
 		go p.dial()
 	}
@@ -98,8 +99,6 @@ func (p poolSizer) maintain() {
 
 	newPoolSize := p.size // initial value
 	var load poolLoad     // throughput signal, see poolload.go
-	load.spare = !p.multiplexed
-	var quietSince time.Time
 	var openSum int32
 
 	for {
@@ -112,6 +111,7 @@ func (p poolSizer) maintain() {
 			atomic.AddInt32(&openSum, atomic.LoadInt32(p.open))
 
 		case <-tickerLoad.C:
+			load.spare = !p.mux
 			// The load over the last ten seconds, and the average pool size
 			// over the same window. +9 before the divide is a ceiling: a pool
 			// that was needed at all should not round down to "not needed".
@@ -129,18 +129,18 @@ func (p poolSizer) maintain() {
 			// the same place — through CountedConn or through AddBytes.
 			mbps := load.mbps()
 
+			quiet := float64(taken+x) < float64(openAvg)*y && mbps < max(openAvg, 1)*(poolScaleMbpsPerConn/2)
+			if !quiet {
+				quietSince = time.Time{}
+			} else if quietSince.IsZero() {
+			}
+
 			// The pool is allowed to outgrow its configured size, which from
 			// outside is indistinguishable from a leak. Publish what it is
 			// doing and why, so the panel can say "8 configured, 19 open,
 			// carrying 240 Mbit/s" instead of leaving somebody to guess.
 			metrics.ReportPool(openAvg, newPoolSize, p.size, mbps)
 
-			quiet := float64(taken+x) < float64(openAvg)*y && mbps < max(openAvg, 1)*(poolScaleMbpsPerConn/2)
-			if !quiet {
-				quietSince = time.Time{}
-			} else if quietSince.IsZero() {
-				quietSince = time.Now()
-			}
 			grow := ((taken+a) > openAvg*b && poolCanGrow(newPoolSize, p.size)) ||
 				load.wantsMore(mbps, openAvg, newPoolSize, p.size)
 
@@ -153,6 +153,7 @@ func (p poolSizer) maintain() {
 				go p.dial()
 
 			case quiet && time.Since(quietSince) >= 30*time.Second && newPoolSize > p.size:
+				quietSince = time.Now()
 				p.log.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d",
 					newPoolSize, newPoolSize-1, openAvg, taken)
 				newPoolSize--
@@ -161,8 +162,8 @@ func (p poolSizer) maintain() {
 				case <-p.ctx.Done():
 					return
 				default:
+					// A full retirement queue already covers future requests.
 				}
-				quietSince = time.Now()
 			}
 		}
 	}
