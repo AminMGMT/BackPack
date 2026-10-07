@@ -147,7 +147,15 @@ func (t *tunDevice) Write(bufs [][]byte) (int, error) {
 	if len(t.wbufs) == 0 {
 		return 0, nil
 	}
-	return t.dev.Write(t.wbufs, virtioOffset)
+	// NativeTun.Write reports bytes, including coalesced packets and virtio
+	// headers. The engine needs the number of staged packets consumed instead.
+	// On error the library may have written a noncontiguous subset; report no
+	// prefix so the caller drops the remainder rather than replaying it.
+	n, err := t.dev.Write(t.wbufs, virtioOffset)
+	if err != nil || n == 0 {
+		return 0, err
+	}
+	return len(t.wbufs), nil
 }
 
 // BatchSize is the most packets one Read or Write may move.

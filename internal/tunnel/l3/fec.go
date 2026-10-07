@@ -3,6 +3,7 @@ package l3
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -113,12 +114,16 @@ type fecCarrier struct {
 	cfg   FECConfig
 	enc   reedsolomon.Encoder
 
-	sendMu   sync.Mutex
-	sendGrp  uint32
-	sendIdx  int
-	sendPad  [][]byte // padded shards of the group being built
-	sendMax  int      // the longest shard so far in this group
-	sendPeer net.Addr // where the group's parity goes, from the last write
+	sendMu    sync.Mutex
+	sendGrp   uint32
+	sendIdx   int
+	sendPad   [][]byte // padded shards of the group being built
+	sendMax   int      // the longest shard so far in this group
+	sendPeer  net.Addr // where the group's parity goes, from the last write
+	sendFrame []byte   // reused wire frame, under sendMu
+
+	readMu    sync.Mutex
+	readFrame []byte // receive scratch, held until the payload has been copied
 
 	recvMu  sync.Mutex
 	groups  map[uint32]*fecGroup
@@ -186,90 +191,105 @@ func (c *fecCarrier) SetWriteDeadline(t time.Time) error { return c.below.SetWri
 func (c *fecCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-
+	if len(p) > 65535 {
+		return 0, fmt.Errorf("l3: FEC payload of %d bytes exceeds its length field", len(p))
+	}
 	if c.sendPad == nil {
 		c.sendPad = make([][]byte, c.cfg.Data+c.cfg.Parity)
 	}
-	// The shard this packet becomes: its length, then its bytes. It is kept for
-	// the parity computation and padded out once the group's size is known.
-	shard := make([]byte, fecLenPrefix+len(p))
+	// Each slot owns its shard until parity has been sent. Keep its capacity
+	// across groups instead of allocating two copies per data packet.
+	need := fecLenPrefix + len(p)
+	shard := c.sendPad[c.sendIdx]
+	if cap(shard) < need {
+		shard = make([]byte, need)
+	} else {
+		shard = shard[:need]
+	}
 	binary.BigEndian.PutUint16(shard[:fecLenPrefix], uint16(len(p)))
 	copy(shard[fecLenPrefix:], p)
 	c.sendPad[c.sendIdx] = shard
-	if len(shard) > c.sendMax {
-		c.sendMax = len(shard)
-	}
+	c.sendMax = max(c.sendMax, need)
 	c.sendPeer = addr
-
-	// On the wire the data shard travels unpadded — the padding is only a device
-	// for computing parity, and sending it would waste the bandwidth this layer
-	// exists to spend well.
-	out := make([]byte, fecHeaderLen+len(shard))
-	putFECHeader(out, fecKindData, c.sendGrp, byte(c.sendIdx))
-	copy(out[fecHeaderLen:], shard)
-	n, err := c.below.WriteTo(out, addr)
-
+	frame := c.wireFrame(fecHeaderLen + need)
+	putFECHeader(frame, fecKindData, c.sendGrp, byte(c.sendIdx))
+	copy(frame[fecHeaderLen:], shard)
+	n, err := c.below.WriteTo(frame, addr)
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
 	c.sendIdx++
 	if c.sendIdx == c.cfg.Data {
-		// The group is full: pad every shard to the common size, compute the
-		// parity over them, and send it. A failure here is not the data
-		// packet's failure — that one is already gone — so it is dropped
-		// rather than reported: the group simply has no protection.
 		c.flushParity()
 	}
 	if err != nil {
 		return 0, err
 	}
-	// Report what the caller handed us, not what went on the wire.
-	if n >= fecHeaderLen+fecLenPrefix {
-		return len(p), nil
-	}
 	return len(p), nil
 }
 
-// flushParity computes and sends the current group's parity, then starts the
-// next group. The caller holds sendMu.
+// wireFrame is borrowed until the underlying synchronous write returns.
+// Every caller holds sendMu, including parity generation.
+func (c *fecCarrier) wireFrame(size int) []byte {
+	if cap(c.sendFrame) < size {
+		c.sendFrame = make([]byte, size)
+	} else {
+		c.sendFrame = c.sendFrame[:size]
+	}
+	return c.sendFrame
+}
+
+// flushParity sends the group's redundancy without changing the wire format.
 func (c *fecCarrier) flushParity() {
 	defer func() {
 		c.sendGrp++
 		c.sendIdx = 0
 		c.sendMax = 0
-		c.sendPad = nil
 	}()
-
 	size := c.sendMax
 	if size == 0 {
 		return
 	}
-	shards := make([][]byte, c.cfg.Data+c.cfg.Parity)
-	for i := 0; i < c.cfg.Data; i++ {
-		padded := make([]byte, size)
-		copy(padded, c.sendPad[i])
-		shards[i] = padded
+	for i, shard := range c.sendPad {
+		used := len(shard)
+		if cap(shard) < size {
+			padded := make([]byte, size)
+			copy(padded, shard)
+			shard = padded
+		} else {
+			shard = shard[:size]
+			if i < c.cfg.Data {
+				// Old group bytes must not become this group's padding.
+				clear(shard[used:])
+			}
+		}
+		c.sendPad[i] = shard
 	}
-	for i := c.cfg.Data; i < len(shards); i++ {
-		shards[i] = make([]byte, size)
-	}
-	if err := c.enc.Encode(shards); err != nil {
+	if err := c.enc.Encode(c.sendPad); err != nil {
 		return
 	}
-	for i := c.cfg.Data; i < len(shards); i++ {
-		out := make([]byte, fecHeaderLen+size)
-		putFECHeader(out, fecKindParity, c.sendGrp, byte(i))
-		copy(out[fecHeaderLen:], shards[i])
-		// Best effort: a parity packet that cannot be sent costs the group its
-		// protection and nothing else.
-		_, _ = c.below.WriteTo(out, c.sendPeer)
+	frame := c.wireFrame(fecHeaderLen + size)
+	for i := c.cfg.Data; i < len(c.sendPad); i++ {
+		putFECHeader(frame, fecKindParity, c.sendGrp, byte(i))
+		copy(frame[fecHeaderLen:], c.sendPad[i])
+		// Data is already on the wire; parity remains best effort.
+		_, _ = c.below.WriteTo(frame, c.sendPeer)
 	}
 }
 
 // ReadFrom returns the next datagram: a rebuilt one if any is waiting, else the
 // next one off the wire. Parity packets are consumed here and never surface.
 func (c *fecCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
 	if n, addr, ok := c.takePending(p); ok {
 		return n, addr, nil
 	}
-	buf := make([]byte, len(p)+fecHeaderLen+fecLenPrefix)
+	need := len(p) + fecHeaderLen + fecLenPrefix
+	if cap(c.readFrame) < need {
+		c.readFrame = make([]byte, need)
+	}
+	buf := c.readFrame[:need]
 	for {
 		n, addr, err := c.below.ReadFrom(buf)
 		if err != nil {
@@ -300,6 +320,7 @@ func (c *fecCarrier) takePending(p []byte) (int, net.Addr, bool) {
 		return 0, nil, false
 	}
 	r := c.pending[0]
+	c.pending[0] = fecReady{}
 	c.pending = c.pending[1:]
 	return copy(p, r.data), r.addr, true
 }
