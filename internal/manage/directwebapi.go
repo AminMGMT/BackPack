@@ -11,7 +11,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/manage/tunnelspec"
 	"github.com/backpack/backpack/internal/optimize"
+	"github.com/backpack/backpack/internal/tunnel/direct"
 	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
@@ -507,6 +509,9 @@ func SuggestDirectPort() string {
 // break the tunnel.
 type DirectSettings struct {
 	Name      string `json:"name"`
+	Layer     int    `json:"layer"`
+	Sessions  int    `json:"sessions"`
+	MSS       int    `json:"mss"`
 	Side      string `json:"side"`
 	Carrier   string `json:"carrier"`
 	Encap     string `json:"encap"`
@@ -543,6 +548,9 @@ type DirectSettings struct {
 
 // DirectEdit is what the panel may change.
 type DirectEdit struct {
+	Sessions       *int    `json:"sessions"`
+	MSS            *int    `json:"mss"`
+	Addr           *string `json:"addr"`
 	Ports          *string `json:"ports"`
 	AcceptUDP      *bool   `json:"acceptUdp"`
 	Preset         *string `json:"preset"`
@@ -570,6 +578,13 @@ func DirectSettingsOf(name string) (DirectSettings, error) {
 	if err != nil {
 		return DirectSettings{}, err
 	}
+	if cfg.Direct.Enabled() {
+		d := cfg.Direct
+		return DirectSettings{Name: name, Layer: 4, Side: directRole(d.ResolvedRole()), Carrier: orDefault(d.Transport, "tcp"),
+			Addr: d.Addr, Token: d.Token, Ports: strings.Join(d.Ports, ", "), AcceptUDP: d.AcceptUDP,
+			HoldsPorts: d.ResolvedRole() == "edge", Preset: d.Preset, Sessions: max(d.Sessions, 1), MSS: d.MSS,
+			MaxConnections: d.MaxConnections, BandwidthMbps: d.BandwidthMbps}, nil
+	}
 	if !cfg.L3.Enabled() {
 		return DirectSettings{}, fmt.Errorf("%q is not a direct tunnel", name)
 	}
@@ -585,6 +600,7 @@ func DirectSettingsOf(name string) (DirectSettings, error) {
 func directSettingsFrom(name string, l config.L3Config) DirectSettings {
 	return DirectSettings{
 		Name:    name,
+		Layer:   3,
 		Side:    l3Role(l.Mode),
 		Carrier: orDefault(l.Carrier, "udp"),
 		Encap:   l3EncapLabel(l),
@@ -624,28 +640,91 @@ func EditDirectSettings(name string, e DirectEdit) error {
 	if err != nil {
 		return err
 	}
-	if !cfg.L3.Enabled() {
-		return fmt.Errorf("%q is not a direct tunnel", name)
-	}
-
-	l, err := applyDirectEdit(cfg.L3, e)
+	raw, err := os.ReadFile(app.ConfigPath(name))
 	if err != nil {
 		return err
 	}
-	spec := directSpecFrom(name, l)
-	if e.Preset != nil {
-		findL3Preset(strings.ToLower(strings.TrimSpace(*e.Preset))).apply(&spec)
-	}
-
-	body := spec.Render()
-	var check config.Config
-	if _, err := toml.Decode(body, &check); err != nil {
-		return fmt.Errorf("the edit produced a config that does not parse: %w", err)
-	}
-	if err := app.WriteFileAtomic(app.ConfigPath(name), []byte(body), app.TunnelConfigMode); err != nil {
+	var document map[string]any
+	if _, err := toml.Decode(string(raw), &document); err != nil {
 		return err
 	}
-	return RestartService(app.ServiceName(name))
+	if cfg.Direct.Enabled() {
+		d := cfg.Direct
+		if e.MTU != nil || e.AutoMTU != nil || e.Paths != nil || e.FEC != nil || e.Spoof != nil || e.Stealth != nil {
+			return fmt.Errorf("layer-3 settings cannot be applied to a layer-4 tunnel")
+		}
+		if d.ResolvedRole() != "edge" && (e.Ports != nil || e.AcceptUDP != nil || e.Sessions != nil || e.MSS != nil || e.Addr != nil || e.Preset != nil || e.MaxConnections != nil || e.BandwidthMbps != nil) {
+			return fmt.Errorf("these settings belong to the Iran side")
+		}
+		if e.Ports != nil {
+			d.Ports = parsePorts(*e.Ports)
+			if err := validatePortSpecs(d.Ports); err != nil {
+				return err
+			}
+		}
+		if e.AcceptUDP != nil {
+			d.AcceptUDP = *e.AcceptUDP
+		}
+		if e.Sessions != nil {
+			d.Sessions = *e.Sessions
+		}
+		if e.MSS != nil {
+			d.MSS = *e.MSS
+		}
+		if e.Addr != nil {
+			d.Addr = strings.TrimSpace(*e.Addr)
+		}
+		if e.MaxConnections != nil {
+			d.MaxConnections = *e.MaxConnections
+		}
+		if e.BandwidthMbps != nil {
+			d.BandwidthMbps = *e.BandwidthMbps
+		}
+		if e.Preset != nil && *e.Preset != d.Preset {
+			p := findDirectPreset(strings.ToLower(strings.TrimSpace(*e.Preset)))
+			d.Preset = p.Name
+			d.MaxFrameSize = p.MuxFrameSize
+			d.MaxReceiveBuffer = p.MuxReceiveBuffer
+			d.MaxStreamBuffer = p.MuxStreamBuffer
+			d.Sessions = max(d.Sessions, p.Sessions)
+		}
+		engine := direct.ConfigFromTable(d)
+		if err := engine.Validate(); err != nil {
+			return err
+		}
+		document["direct"] = d
+	} else if cfg.L3.Enabled() {
+		if e.Sessions != nil || e.MSS != nil || e.Addr != nil {
+			return fmt.Errorf("layer-4 settings cannot be applied to a layer-3 tunnel")
+		}
+		l, err := applyDirectEdit(cfg.L3, e)
+		if err != nil {
+			return err
+		}
+		if e.Preset != nil && *e.Preset != cfg.L3.Preset {
+			spec := directSpecFrom(name, l)
+			findL3Preset(strings.ToLower(strings.TrimSpace(*e.Preset))).apply(&spec)
+			if _, err := toml.Decode(spec.Render(), &cfg); err != nil {
+				return err
+			}
+			l = cfg.L3
+		}
+		engine, err := l3.ConfigFromTable(l)
+		if err != nil {
+			return err
+		}
+		if err := engine.Validate(); err != nil {
+			return err
+		}
+		document["l3"] = l
+	} else {
+		return fmt.Errorf("%q is not a direct tunnel", name)
+	}
+	var body strings.Builder
+	if err := toml.NewEncoder(&body).Encode(document); err != nil {
+		return err
+	}
+	return tunnelspec.ApplyBody(name, body.String(), "panel edit")
 }
 
 // applyDirectEdit folds the form into a config.
@@ -722,6 +801,9 @@ func applyDirectEdit(l config.L3Config, e DirectEdit) (config.L3Config, error) {
 	}
 	if e.FEC != nil {
 		if *e.FEC {
+			if l.FECData > 0 && l.FECParity > 0 {
+				return l, nil
+			}
 			plan := defaultL3FEC()
 			l.FECData, l.FECParity = plan.Data, plan.Parity
 		} else {
@@ -745,19 +827,20 @@ func directSpecFrom(name string, l config.L3Config) l3Spec {
 		side = sideKharej
 	}
 	return l3Spec{
-		Name:    name,
-		Side:    side,
-		Carrier: orDefault(l.Carrier, "udp"),
-		Encap:   orDefault(l.Encap, "gre"),
-		GREKey:  l.GREKey,
-		Addr:    l.Addr,
-		Token:   l.Token,
-		Iface:   orDefault(l.Iface, "bp0"),
-		LocalIP: l.LocalIP,
-		PeerIP:  l.PeerIP,
-		MTU:     l.MTU,
-		AutoMTU: l.AutoMTU,
-		SockBuf: l.SockBuf, MSSClamp: l.MSSClamp,
+		Name:      name,
+		Side:      side,
+		Carrier:   orDefault(l.Carrier, "udp"),
+		Encap:     orDefault(l.Encap, "gre"),
+		SNIDomain: l.SNIDomain,
+		GREKey:    l.GREKey,
+		Addr:      l.Addr,
+		Token:     l.Token,
+		Iface:     orDefault(l.Iface, "bp0"),
+		LocalIP:   l.LocalIP,
+		PeerIP:    l.PeerIP,
+		MTU:       l.MTU,
+		AutoMTU:   l.AutoMTU,
+		SockBuf:   l.SockBuf, MSSClamp: l.MSSClamp,
 		FECData: l.FECData, FECParity: l.FECParity,
 		Paths:  l.Paths,
 		Preset: l.Preset, TxQueueLen: l.TxQueueLen, Qdisc: l.Qdisc,

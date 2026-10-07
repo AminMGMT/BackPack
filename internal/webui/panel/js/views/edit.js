@@ -381,6 +381,13 @@ const field = (name, label, hint = '') => `<div class="f"><label>${label}</label
 
 function directMarkup(set) {
   const ports = !!set.holdsPorts;
+  if (set.layer === 4) return `<div class="pane" data-tab="Direct">` + (ports ?
+    field("addr", "Kharej address", "Host and port.") + field("ports", "Forwarded ports") +
+    sw("acceptUdp", "Accept UDP") +
+    `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo<span class="sp"></span></div></div>` +
+    `<div class="two">${field("sessions", "Sessions")}${field("mss", "TCP MSS", "0 is auto.")}</div>` +
+    `<div class="two">${field("maxConnections", "Max connections")}${field("bandwidthMbps", "Bandwidth (Mbit/s)")}</div>` :
+    `<div class="hint">Forwarded ports and tuning are set on the Iran server.</div>`) + `</div>`;
   return `<div class="pane" data-tab="Direct">` +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. Blank leaves a plain TUN tunnel.') +
       sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
@@ -396,7 +403,7 @@ function directMarkup(set) {
     `</div>`;
 }
 
-const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps']);
+const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps', 'sessions', 'mss']);
 
 function readDirect(root) {
   const out = {};
@@ -474,6 +481,8 @@ export async function editView(ctx) {
         syncControls(root);
       }
 
+      const directOriginal = direct ? readDirect(root) : {};
+
       /* Tabs and drawers are the preview's own handlers, rebound in screen.js. */
 
       /* The History button has been in this dialog since it was drawn; it goes
@@ -508,7 +517,9 @@ export async function editView(ctx) {
         });
       }
       save?.addEventListener('click', async () => {
-        const payload = direct ? { name, direct: readDirect(root) } : { name, ...read(root) };
+        const changedDirect = direct ? Object.fromEntries(Object.entries(readDirect(root))
+          .filter(([key, value]) => value !== directOriginal[key])) : {};
+        const payload = direct ? { name, direct: changedDirect } : { name, ...read(root) };
         save.disabled = true;
         try {
           const r = await api.tunnelEdit(payload);

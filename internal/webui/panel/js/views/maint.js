@@ -410,7 +410,7 @@ export function undoView(ctx) {
           const row = tl.querySelector(`.ent6[data-e="${run.dataset.go}"]`);
           row.classList.remove('arm'); row.classList.add('busy6');
           try {
-            await api.confRestore(name, Number(row.dataset.at));
+            await api.confRestore(name, row.dataset.at);
             row.classList.add('done6');
             row.querySelector('span').textContent = 'put back — the tunnel came up on it';
             toast('Restored, and the tunnel came up on it.');

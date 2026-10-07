@@ -113,32 +113,4 @@ func directLogFormat(cfg *config.Config) string {
 
 // directConfigOf turns a [direct] table into the engine's configuration. Shared
 // by the engine and by validateConfig.
-func directConfigOf(cfg *config.Config) direct.Config {
-	dc := cfg.Direct
-	tunnelCfg := direct.Config{
-		Role:             dc.ResolvedRole(),
-		Addr:             dc.Addr,
-		Token:            dc.Token,
-		Transport:        dc.Transport,
-		ServerName:       dc.ServerName,
-		TLSCertFile:      dc.TLSCertFile,
-		TLSKeyFile:       dc.TLSKeyFile,
-		ACMEDomain:       dc.ACMEDomain,
-		ACMEEmail:        dc.ACMEEmail,
-		Ports:            dc.Ports,
-		AcceptUDP:        dc.AcceptUDP,
-		MaxConnections:   dc.MaxConnections,
-		BandwidthMbps:    dc.BandwidthMbps,
-		Sessions:         dc.Sessions,
-		DialTimeout:      time.Duration(dc.DialTimeout) * time.Second,
-		RetryDelay:       time.Duration(dc.RetryInterval) * time.Second,
-		Keepalive:        time.Duration(dc.Keepalive) * time.Second,
-		Nodelay:          dc.Nodelay,
-		MSS:              dc.MSS,
-		MuxVersion:       dc.MuxVersion,
-		MaxFrameSize:     dc.MaxFrameSize,
-		MaxReceiveBuffer: dc.MaxReceiveBuffer,
-		MaxStreamBuffer:  dc.MaxStreamBuffer,
-	}
-	return tunnelCfg
-}
+func directConfigOf(cfg *config.Config) direct.Config { return direct.ConfigFromTable(cfg.Direct) }

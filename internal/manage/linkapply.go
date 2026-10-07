@@ -171,8 +171,21 @@ func updateReverseFromLink(link ShareLink, o LinkApplyOptions, existing string) 
 	if host == "" {
 		return LinkApplied{}, ErrLinkNeedsHost
 	}
-	s := reverseClientFromLink(link, host)
-	s.Name = existing
+	paired := reverseClientFromLink(link, host)
+	s, err := LoadSpec(existing)
+	if err != nil {
+		return LinkApplied{}, err
+	}
+	if s.Role != "client" {
+		return LinkApplied{}, fmt.Errorf("%q is not a client tunnel", existing)
+	}
+	// Only the peer-owned wire settings come from the link. Local routing,
+	// retry timing, monitoring and capacity tuning belong to this machine.
+	s.Transport, s.RemoteAddr, s.Token = paired.Transport, paired.RemoteAddr, paired.Token
+	s.FallbackAddrs, s.FallbackTransports, s.FallbackDwell = paired.FallbackAddrs, paired.FallbackTransports, paired.FallbackDwell
+	s.MSS, s.SimpleAuth = paired.MSS, paired.SimpleAuth
+	s.MuxVersion = paired.MuxVersion
+	s.KCPDataShards, s.KCPParityShards = paired.KCPDataShards, paired.KCPParityShards
 	if why := portClash(s.Role, s.RemoteAddr, s.Name); why != "" {
 		return LinkApplied{}, errors.New(why)
 	}
