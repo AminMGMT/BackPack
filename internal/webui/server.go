@@ -45,6 +45,8 @@ type sessionInfo struct {
 	expires time.Time
 	created time.Time
 	ip      string
+	done    chan struct{}
+	timer   *time.Timer
 }
 
 type sessionStore struct {
@@ -63,7 +65,7 @@ func (s *sessionStore) create(ip string) string {
 	now := time.Now()
 	for t, si := range s.sessions {
 		if now.After(si.expires) {
-			delete(s.sessions, t)
+			s.destroyLocked(t)
 		}
 	}
 	s.sessions[tok] = &sessionInfo{expires: now.Add(sessionTTL), created: now, ip: ip}
@@ -79,10 +81,42 @@ func (s *sessionStore) valid(tok string) bool {
 		return false
 	}
 	if time.Now().After(si.expires) {
-		delete(s.sessions, tok)
+		s.destroyLocked(tok)
 		return false
 	}
 	return true
+}
+
+// watch ends every terminal owned by a revoked or expired session.
+func (s *sessionStore) watch(tok string) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	si := s.sessions[tok]
+	if si == nil {
+		return nil
+	}
+	remaining := time.Until(si.expires)
+	if remaining <= 0 {
+		s.destroyLocked(tok)
+		return nil
+	}
+	if si.done == nil {
+		si.done = make(chan struct{})
+		si.timer = time.AfterFunc(remaining, func() { s.destroy(tok) })
+	}
+	return si.done
+}
+
+func (s *sessionStore) destroyLocked(tok string) {
+	if si := s.sessions[tok]; si != nil {
+		if si.timer != nil {
+			si.timer.Stop()
+		}
+		if si.done != nil {
+			close(si.done)
+		}
+		delete(s.sessions, tok)
+	}
 }
 
 // sessionID is the public name of a session: a hash prefix, so the list can
@@ -128,7 +162,7 @@ func (s *sessionStore) revokeID(id string) {
 	defer s.mu.Unlock()
 	for tok := range s.sessions {
 		if sessionID(tok) == id {
-			delete(s.sessions, tok)
+			s.destroyLocked(tok)
 			return
 		}
 	}
@@ -140,25 +174,29 @@ func (s *sessionStore) revokeOthers(currentTok string) {
 	defer s.mu.Unlock()
 	for tok := range s.sessions {
 		if tok != currentTok {
-			delete(s.sessions, tok)
+			s.destroyLocked(tok)
 		}
 	}
 }
 
 func (s *sessionStore) destroy(tok string) {
 	s.mu.Lock()
-	delete(s.sessions, tok)
+	s.destroyLocked(tok)
 	s.mu.Unlock()
 }
 
 // clear invalidates every session (used after a password change).
 func (s *sessionStore) clear() {
 	s.mu.Lock()
+	for tok := range s.sessions {
+		s.destroyLocked(tok)
+	}
 	s.sessions = map[string]*sessionInfo{}
 	s.mu.Unlock()
 }
 
 type server struct {
+	authMu   sync.Mutex
 	sessions *sessionStore
 
 	// pending holds logins that have passed the password and not yet the
@@ -219,9 +257,8 @@ func (s *server) password() string {
 
 // updatePassword persists a new password (read fresh on the next login).
 func (s *server) updatePassword(pw string) error {
-	c := Load()
-	c.Password = pw
-	return Save(c)
+	_, err := UpdateConfig(func(c *Config) error { c.Password = pw; return nil })
+	return err
 }
 
 // Serve starts the web panel and blocks. Invoked by `backpack --webui`.
@@ -613,15 +650,19 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// moment ago and this is the code for it. Checked first, because a
 		// request carrying a pending token is never a password attempt.
 		if c, err := r.Cookie(twoFactorCookie); err == nil && s.pending.attempt(c.Value, ip) {
-			if checkSecondFactor(r.FormValue("code")) {
+			s.authMu.Lock()
+			validCode := s.pending.reserved(c.Value, ip) && checkSecondFactor(r.FormValue("code"))
+			if validCode {
 				s.pending.destroy(c.Value)
 				limiter.reset(ip)
 				http.SetCookie(w, clearedCookie(r, twoFactorCookie))
 				tok := s.sessions.create(ip)
+				s.authMu.Unlock()
 				http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
 				redirectTo(w, r, "/", http.StatusSeeOther)
 				return
 			}
+			s.authMu.Unlock()
 			// A wrong code has counted against the address, exactly as a wrong
 			// password does, and against the pending sign-in: it survives a
 			// few typos within its three minutes, and then the operator starts
@@ -641,27 +682,32 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 		given := r.FormValue("password")
 		// Constant-time comparison + small delay to slow brute force.
-		if subtle.ConstantTimeCompare([]byte(given), []byte(s.password())) == 1 {
+		s.authMu.Lock()
+		credentials, credentialErr := readConfig()
+		if credentialErr == nil && credentials.Password != "" && subtle.ConstantTimeCompare([]byte(given), []byte(credentials.Password)) == 1 {
 			// The password alone is a session only where there is no second
 			// factor. Where there is one, it buys the code prompt and nothing
 			// else — see totpauth.go.
-			if twoFactorOn() {
+			if credentials.TOTPSecret != "" {
 				// The failure count is NOT cleared here. The password alone
 				// is not a sign-in when a second factor follows; clearing the
 				// count on it let a caller who knew the password alternate
 				// password and wrong codes for ever and never reach the
 				// lockout. It is cleared when the code is right, below.
-				tok := s.pending.create(ip)
+				tok := s.pending.create(ip, credentialFingerprint(credentials))
+				s.authMu.Unlock()
 				http.SetCookie(w, authCookie(r, twoFactorCookie, tok, twoFactorTTL))
 				s.serveSecondFactorPage(w, r, http.StatusOK)
 				return
 			}
 			limiter.reset(ip)
 			tok := s.sessions.create(ip)
+			s.authMu.Unlock()
 			http.SetCookie(w, authCookie(r, sessionCookie, tok, sessionTTL))
 			redirectTo(w, r, "/", http.StatusSeeOther)
 			return
 		}
+		s.authMu.Unlock()
 		time.Sleep(1 * time.Second)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -782,11 +828,14 @@ func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password must be 4–128 characters", http.StatusBadRequest)
 		return
 	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
 	if err := s.updatePassword(pw); err != nil {
 		http.Error(w, "could not save password", http.StatusInternalServerError)
 		return
 	}
 	s.sessions.clear() // force re-login everywhere
+	s.pending.clear()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -925,8 +974,8 @@ func (s *server) handlePanelPort(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("port %d is already in use", p), http.StatusBadRequest)
 		return
 	}
-	c.Port = p
-	if err := Save(c); err != nil {
+	_, err = UpdateConfig(func(c *Config) error { c.Port = p; return nil })
+	if err != nil {
 		http.Error(w, "could not save config", http.StatusInternalServerError)
 		return
 	}

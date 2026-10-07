@@ -16,6 +16,7 @@ package quota
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,6 +33,21 @@ type Quota struct {
 
 // Path is where a tunnel's limit lives.
 func Path(dir, name string) string { return filepath.Join(dir, name+".quota.json") }
+
+// Rename preserves the exact limit and timestamp, rejecting orphaned state
+// under the destination name instead of silently applying or overwriting it.
+func Rename(dir, oldName, newName string) error {
+	if _, err := os.Stat(Path(dir, newName)); err == nil {
+		return fmt.Errorf("traffic quota for %q already exists", newName)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	err := os.Rename(Path(dir, oldName), Path(dir, newName))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
 
 // Load reads a tunnel's limit. No file is no limit; a file that cannot be read
 // is reported, because treating it as "no limit" would quietly lift one.

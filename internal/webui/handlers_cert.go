@@ -239,7 +239,7 @@ func (s *server) applyPanelCert(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := Save(next); err != nil {
+	if err := SaveTLS(next); err != nil {
 		http.Error(w, "could not save the configuration", http.StatusInternalServerError)
 		return
 	}

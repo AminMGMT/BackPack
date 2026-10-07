@@ -71,6 +71,7 @@ func (s *server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 	// The panel's own password may have just been replaced by the one from the
 	// archive, so every existing session has to go.
 	s.sessions.clear()
+	s.pending.clear()
 
 	writeJSON(w, map[string]any{
 		"status":  "ok",

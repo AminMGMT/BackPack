@@ -158,7 +158,8 @@ func (s *server) handleBackups(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "restore failed: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		s.sessions.clear() // the archive may have carried another password
+		s.sessions.clear()
+		s.pending.clear() // the archive may have carried another password
 		writeJSON(w, map[string]any{"status": "ok", "files": res.Files, "tunnels": res.Tunnels,
 			"started": res.Started, "failed": res.Failed, "warnings": res.Warnings})
 	case "delete":
@@ -326,12 +327,16 @@ func (s *server) handlePanelSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.FormValue("action") {
 	case "code":
-		c.Password = randomDigits(8)
-		if err := Save(c); err != nil {
+		s.authMu.Lock()
+		defer s.authMu.Unlock()
+		var err error
+		c, err = UpdateConfig(func(c *Config) error { c.Password = randomDigits(8); return nil })
+		if err != nil {
 			http.Error(w, "could not save", http.StatusInternalServerError)
 			return
 		}
 		s.sessions.clear()
+		s.pending.clear()
 		writeJSON(w, map[string]any{"code": c.Password})
 		restart()
 	case "path":
@@ -356,7 +361,8 @@ func (s *server) handlePanelSelf(w http.ResponseWriter, r *http.Request) {
 		} else {
 			c.BasePath = t
 		}
-		if err := Save(c); err != nil {
+		_, err := UpdateConfig(func(current *Config) error { current.BasePath = c.BasePath; return nil })
+		if err != nil {
 			http.Error(w, "could not save", http.StatusInternalServerError)
 			return
 		}

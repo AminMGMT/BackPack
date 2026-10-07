@@ -99,8 +99,13 @@ func dim(q string, def uint16) uint16 {
 func (s *server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// A browser session and nothing else.
 	c, err := r.Cookie(sessionCookie)
-	if bearer(r) != "" || err != nil || !s.sessions.valid(c.Value) {
+	if bearer(r) != "" || err != nil {
 		http.Error(w, "the terminal is only for a signed-in browser, never a token", http.StatusForbidden)
+		return
+	}
+	sessionDone := s.sessions.watch(c.Value)
+	if sessionDone == nil {
+		http.Error(w, "the terminal session has ended", http.StatusForbidden)
 		return
 	}
 	if !websocket.IsWebSocketUpgrade(r) {
@@ -118,6 +123,11 @@ func (s *server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return // the upgrader has already answered
 	}
 	defer ws.Close()
+	select {
+	case <-sessionDone:
+		return
+	default:
+	}
 	// The server's read and write timeouts were set on this connection for an
 	// ordinary request and would end a shell after thirty seconds.
 	_ = ws.NetConn().SetDeadline(time.Time{})
@@ -205,6 +215,9 @@ func (s *server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+			if !s.sessions.valid(c.Value) {
+				return
+			}
 			switch kind {
 			case websocket.BinaryMessage:
 				if _, err := pty.Write(data); err != nil {
@@ -240,6 +253,11 @@ func (s *server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	case <-inDone:
 		// The page went away: hang up on the whole session, as closing a
 		// terminal window does, and make sure of it a moment later.
+		hangUp(cmd)
+		<-exited
+	case <-sessionDone:
+		_ = ws.Close()
+		_ = pty.Close()
 		hangUp(cmd)
 		<-exited
 	}
