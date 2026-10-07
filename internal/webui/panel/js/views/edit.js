@@ -405,6 +405,8 @@ function directMarkup(set) {
 
 const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps', 'sessions', 'mss']);
 
+const directBaseline = new WeakMap();
+
 function readDirect(root) {
   const out = {};
   root.querySelectorAll('.panes input[name]').forEach(n => {
@@ -414,7 +416,9 @@ function readDirect(root) {
     if (typeof v === 'number' && Number.isNaN(v)) return;
     out[n.name] = v;
   });
-  return out;
+  const original = directBaseline.get(root);
+  return original ? Object.fromEntries(Object.entries(out)
+    .filter(([key, value]) => value !== original[key])) : out;
 }
 
 export async function editView(ctx) {
@@ -481,7 +485,7 @@ export async function editView(ctx) {
         syncControls(root);
       }
 
-      const directOriginal = direct ? readDirect(root) : {};
+      if (direct) directBaseline.set(root, readDirect(root));
 
       /* Tabs and drawers are the preview's own handlers, rebound in screen.js. */
 
@@ -517,9 +521,7 @@ export async function editView(ctx) {
         });
       }
       save?.addEventListener('click', async () => {
-        const changedDirect = direct ? Object.fromEntries(Object.entries(readDirect(root))
-          .filter(([key, value]) => value !== directOriginal[key])) : {};
-        const payload = direct ? { name, direct: changedDirect } : { name, ...read(root) };
+        const payload = direct ? { name, direct: readDirect(root) } : { name, ...read(root) };
         save.disabled = true;
         try {
           const r = await api.tunnelEdit(payload);
