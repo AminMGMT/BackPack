@@ -283,12 +283,12 @@ func (c *QuicTransport) tunnelDialer() {
 	proof, err := network.QUICClientProof(qc, c.config.Token)
 	if err != nil {
 		c.logger.Errorf("could not bind the credential to the QUIC session: %v", err)
-		stream.Close()
+		data.Close()
 		return
 	}
 	if err := utils.SendBinaryTransportString(data, proof, utils.SG_TCP); err != nil {
 		c.logger.Errorf("failed to announce tunnel stream: %v", err)
-		stream.Close()
+		data.Close()
 		return
 	}
 
@@ -299,7 +299,7 @@ func (c *QuicTransport) tunnelDialer() {
 	atomic.AddInt32(&c.poolConnections, -1)
 	if err != nil {
 		c.logger.Tracef("tunnel stream closed before use: %v", err)
-		stream.Close()
+		data.Close()
 		return
 	}
 
