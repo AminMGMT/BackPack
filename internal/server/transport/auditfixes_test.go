@@ -181,3 +181,54 @@ func eventually(t *testing.T, d time.Duration, cond func() bool, msg string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestWSTunnelShutdownClosesIncompleteRequests(t *testing.T) {
+	for _, mode := range []string{"ws", "wsmux"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			addr := freeAddr(t)
+			done := make(chan struct{})
+			if mode == "ws" {
+				s := NewWSServer(ctx, &WsConfig{BindAddr: addr, Token: "t", ChannelSize: 8,
+					Heartbeat: time.Second, KeepAlive: time.Second, Mode: "ws"}, silentLogger())
+				go func() { defer close(done); s.tunnelListener(s.newGen(s.run.context())) }()
+			} else {
+				s := NewWSMuxServer(ctx, &WsMuxConfig{BindAddr: addr, Token: "t", ChannelSize: 8,
+					Heartbeat: time.Second, KeepAlive: time.Second, Mode: "wsmux", MuxCon: 2,
+					MuxVersion: 2, MaxFrameSize: 4096, MaxReceiveBuffer: 1 << 16, MaxStreamBuffer: 4096}, silentLogger())
+				go func() { defer close(done); s.tunnelListener(s.newGen(s.run.context())) }()
+			}
+			pending := dialRetry(t, addr)
+			defer pending.Close()
+			if _, err := io.WriteString(pending, "GET / HTTP/1.1\r\nHost: localhost\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			// Confirm the request is still incomplete before ending its generation.
+			_ = pending.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			var b [1]byte
+			if _, err := pending.Read(b[:]); err == nil {
+				t.Fatal("incomplete request received a response")
+			} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+				t.Fatalf("request closed before cancellation: %v", err)
+			}
+			_ = pending.SetReadDeadline(time.Now().Add(time.Second))
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("shutdown waited for the incomplete request's header timeout")
+			}
+			if _, err := pending.Read(b[:]); err == nil {
+				t.Fatal("cancelled generation left its HTTP socket open")
+			} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				t.Fatal("cancelled HTTP connection was not closed")
+			}
+			listener, err := net.Listen("tcp", addr)
+			if err != nil {
+				t.Fatalf("cancelled listener still owns its port: %v", err)
+			}
+			_ = listener.Close()
+		})
+	}
+}
