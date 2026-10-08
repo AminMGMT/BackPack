@@ -36,8 +36,8 @@ type TransportFamily struct {
 	Entries []TransportOption `json:"entries"`
 }
 
-// TransportFamilies returns the same two-level transport menu the CLI shows,
-// so the panel never drifts from it.
+// TransportFamilies returns the ordinary engine transport menu. Managed HTTPS
+// selections require the terminal's role-specific credential and TLS wizard.
 func TransportFamilies() []TransportFamily {
 	out := make([]TransportFamily, 0, len(transportGroups))
 	for _, g := range transportGroups {

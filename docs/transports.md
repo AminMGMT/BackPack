@@ -6,8 +6,10 @@ official helpers with `BP_HELPERS=naive bash install.sh` on Linux glibc amd64 or
 arm64; the installer prints their versioned absolute paths. Certificate/key
 renewal remains external, and valid file replacements reload the tunnel without
 a TOML edit. Invalid or incomplete replacements keep the current generation.
-Helper settings are configured manually and remain outside automatic transport
-selection. Each side owns its helper under the tunnel context; TCP forwarding
+The terminal's Reverse setup and Edit → Transport menus offer an HTTPS family
+with Naive / HTTP2, XHTTP / TLS and REALITY / Vision. The wizard collects helper
+settings on each machine; these remain outside automatic transport selection.
+Each side owns its helper under the tunnel context; TCP forwarding
 and one endpoint are currently supported.
 
 `BP_HELPERS=xray` installs the pinned official Xray helper in a versioned
@@ -28,8 +30,21 @@ These optional Linux helpers carry the existing **TCP reverse engine**. Keep
 use a different port. The outside client initiates the encrypted connection
 toward Iran. Only TCP forwarding with one endpoint is supported; UDP forwarding,
 transport/address fallbacks, other outbound proxies, Direct and L3 are refused.
-Choose one helper per tunnel. Helper configuration is manual and ordinary edits
-preserve it; setup links cannot export these credentials.
+Choose one helper per tunnel. The terminal wizard configures it, and Edit →
+HTTPS Settings changes the public endpoint, internal port and credentials in
+one restart. Ordinary edits preserve it; setup links cannot export these
+credentials. The web wizard does not collect managed-helper credentials.
+
+Set up Iran first, then choose the same HTTPS protocol on Kharej. The internal
+reverse port, security token and helper account must match. Existing PEM files
+can be used for Naive and XHTTP. The private-certificate option generates a
+certificate for the chosen hostname or IP; copy only its public PEM to Kharej
+and enter that file as the CA file. REALITY generates its private key on Iran
+when left empty and prints the corresponding public key for Kharej. It also
+requires an explicit reachable TLS 1.3/H2 cover endpoint. UDP forwarding, proxy
+and routing bindings, address and transport fallbacks are excluded from this
+wizard because these wrappers cannot carry them. The helper binaries must be
+installed on both machines; the wizard suggests their pinned installer paths.
 
 The engine owns each helper, stores generated configuration with owner-only
 permissions, restarts a crashed process, and removes its process group and
