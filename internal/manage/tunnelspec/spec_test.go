@@ -262,6 +262,9 @@ func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
 						t.Fatal(err)
 					}
 					stream := generated["inbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+					if stream["xhttpSettings"].(map[string]any)["mode"] != "stream-up" {
+						t.Fatal("managed XHTTP must avoid the pinned helper's packet upload ownership race")
+					}
 					cert := stream["tlsSettings"].(map[string]any)["certificates"].([]any)[0].(map[string]any)
 					if cert["oneTimeLoading"] != true {
 						t.Fatal("Xray must not reload a certificate rejected by BackPack")

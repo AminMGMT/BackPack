@@ -525,8 +525,11 @@ func XrayClientJSON(c *config.ClientConfig, socksAddr string) ([]byte, error) {
 		if httpHost == "" {
 			httpHost = x.ServerName
 		}
+		// The pinned helper's packet upload writer reads buffer lengths after
+		// passing ownership to a concurrent consumer. Streaming uploads avoid
+		// that short-write race and the per-packet POST batching delay.
 		stream = map[string]any{"network": "xhttp", "security": "tls", "tlsSettings": tlsConfig,
-			"xhttpSettings": map[string]any{"path": x.Path, "host": httpHost, "mode": "auto"}}
+			"xhttpSettings": map[string]any{"path": x.Path, "host": httpHost, "mode": "stream-up"}}
 	}
 	routing, err := xrayRouting("local", c.RemoteAddr, "carrier")
 	if err != nil {
@@ -573,7 +576,7 @@ func XrayServerJSON(c *config.ServerConfig) ([]byte, error) {
 			httpHost = x.ServerName
 		}
 		stream = map[string]any{"network": "xhttp", "security": "tls", "xhttpSettings": map[string]any{
-			"path": x.Path, "host": httpHost, "mode": "auto"}, "tlsSettings": map[string]any{
+			"path": x.Path, "host": httpHost, "mode": "stream-up"}, "tlsSettings": map[string]any{
 			"alpn": []string{"h2"}, "certificates": []any{map[string]any{"certificate": []string{string(certificate)}, "key": []string{string(key)}, "oneTimeLoading": true}},
 		}}
 	}

@@ -98,6 +98,13 @@ Xray `v26.3.27`. Keep the ordinary reverse tables from the example above and
 replace the Naive tables with these, using a fresh UUID (`xray uuid`) and a
 random private path shared by both helpers:
 
+The wrapper fixes XHTTP to HTTP/2 `stream-up`, with a streaming upload and a
+separate download request. The pinned helper's `auto`/`packet-up` path has a
+reproduced buffer-ownership race that can report a short write after accepting
+the data. Streaming bypasses that path and its per-POST batching delay. Any
+frontend must forward streaming request bodies without buffering; CDN and Iran
+route compatibility must be tested on the intended deployment.
+
 ```toml
 [server.xray]
 binary = "/usr/local/lib/backpack/helpers/xray/v26.3.27-amd64/xray"
