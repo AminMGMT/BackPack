@@ -170,3 +170,50 @@ func TestAStrangersConnectionLeavesTheRealDiallerAlone(t *testing.T) {
 		defer stranger.Close()
 	}
 }
+
+func TestAClosedQuicPeerIsRetiredWithAFullInbox(t *testing.T) {
+	ln := openQuicPair(t, "reader-lifecycle", "127.0.0.1:0")
+	defer ln.Close()
+	d := dialQuicCarrier(t, "reader-lifecycle", ln.LocalAddr().String())
+	defer d.Close()
+	// Backpressure from the tunnel can fill the bounded inbox. Closing the
+	// connection must release its reader without waiting for that queue.
+	for deadline := time.Now().Add(3 * time.Second); len(ln.in) < cap(ln.in) && time.Now().Before(deadline); {
+		if _, err := d.WriteTo([]byte("queued"), nil); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(ln.in) != cap(ln.in) {
+		t.Fatal("the QUIC inbox did not fill")
+	}
+	if _, err := d.WriteTo([]byte("blocked"), nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	ln.mu.Lock()
+	var peer *quicPeer
+	for _, p := range ln.peers {
+		peer = p
+	}
+	ln.mu.Unlock()
+	if peer == nil {
+		t.Fatal("the listener has no peer")
+	}
+	d.Close()
+	select {
+	case <-peer.conn.Context().Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the closed connection did not end")
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		ln.mu.Lock()
+		remaining := len(ln.peers)
+		ln.mu.Unlock()
+		if remaining == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the closed peer is retained while its reader waits on a full inbox")
+}

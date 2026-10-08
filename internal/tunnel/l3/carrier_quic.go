@@ -344,18 +344,24 @@ func lessTrusted(a, b *quicPeer) bool {
 // readPeer feeds one connection's datagrams to ReadFrom until it ends.
 func (c *quicCarrier) readPeer(conn *quic.Conn) {
 	from := conn.RemoteAddr()
+	defer func() {
+		c.mu.Lock()
+		if p, ok := c.peers[from.String()]; ok && p.conn == conn {
+			delete(c.peers, from.String())
+		}
+		c.mu.Unlock()
+	}()
 	for {
 		msg, err := conn.ReceiveDatagram(context.Background())
 		if err != nil {
-			c.mu.Lock()
-			if p, ok := c.peers[from.String()]; ok && p.conn == conn {
-				delete(c.peers, from.String())
-			}
-			c.mu.Unlock()
 			return
 		}
 		select {
 		case c.in <- quicDatagram{data: msg, from: from}:
+		case <-conn.Context().Done():
+			// Eviction or peer closure must release a reader even when the
+			// tunnel is not draining its inbox.
+			return
 		case <-c.done:
 			return
 		}
