@@ -2,8 +2,12 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -110,8 +114,11 @@ type limitedConn struct {
 	bucket *rate.Limiter
 	// ctx ends with the generation. A connection being paced has to stop
 	// waiting when the tunnel is torn down; see wait.
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx           context.Context
+	cancel        context.CancelFunc
+	deadlineMu    sync.Mutex
+	readDeadline  pacingDeadline
+	writeDeadline pacingDeadline
 }
 
 func (c *limitedConn) Close() error {
@@ -122,7 +129,7 @@ func (c *limitedConn) Close() error {
 func (c *limitedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
-		if waitErr := c.wait(n); err == nil {
+		if waitErr := waitWithDeadline(c.ctx, c.bucket, n, &c.readDeadline); err == nil {
 			err = waitErr
 		}
 	}
@@ -130,14 +137,128 @@ func (c *limitedConn) Read(b []byte) (int, error) {
 }
 
 func (c *limitedConn) Write(b []byte) (int, error) {
-	if err := c.wait(len(b)); err != nil {
+	if err := waitWithDeadline(c.ctx, c.bucket, len(b), &c.writeDeadline); err != nil {
 		return 0, err
 	}
 	return c.Conn.Write(b)
 }
 
-// wait blocks long enough to keep within the configured rate.
-func (c *limitedConn) wait(n int) error { return waitFor(c.ctx, c.bucket, n) }
+// pacingDeadline wakes an in-flight token wait when its socket deadline changes.
+// Updating a deadline never cancels or requeues that operation's reservation.
+type pacingDeadline struct {
+	mu      sync.Mutex
+	when    time.Time
+	changed chan struct{}
+}
+
+func (d *pacingDeadline) set(when time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.when = when
+	if d.changed != nil {
+		close(d.changed)
+		d.changed = nil
+	}
+}
+
+func (d *pacingDeadline) snapshot() (time.Time, <-chan struct{}) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.changed == nil {
+		d.changed = make(chan struct{})
+	}
+	return d.when, d.changed
+}
+
+func (c *limitedConn) SetDeadline(when time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if err := c.Conn.SetDeadline(when); err != nil {
+		return err
+	}
+	c.readDeadline.set(when)
+	c.writeDeadline.set(when)
+	return nil
+}
+
+func (c *limitedConn) SetReadDeadline(when time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if err := c.Conn.SetReadDeadline(when); err != nil {
+		return err
+	}
+	c.readDeadline.set(when)
+	return nil
+}
+
+func (c *limitedConn) SetWriteDeadline(when time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if err := c.Conn.SetWriteDeadline(when); err != nil {
+		return err
+	}
+	c.writeDeadline.set(when)
+	return nil
+}
+
+func waitWithDeadline(ctx context.Context, bucket *rate.Limiter, n int, deadline *pacingDeadline) error {
+	burst := bucket.Burst()
+	for n > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		when, _ := deadline.snapshot()
+		now := time.Now()
+		if !when.IsZero() && !now.Before(when) {
+			return os.ErrDeadlineExceeded
+		}
+		chunk := n
+		if burst > 0 && chunk > burst {
+			chunk = burst
+		}
+		reservation := bucket.ReserveN(now, chunk)
+		if !reservation.OK() {
+			return fmt.Errorf("rate: request of %d exceeds burst %d", chunk, burst)
+		}
+		if delay := reservation.DelayFrom(now); delay > 0 {
+			ready := now.Add(delay)
+			timer := time.NewTimer(delay)
+			for {
+				when, changed := deadline.snapshot()
+				now = time.Now()
+				if err := ctx.Err(); err != nil {
+					timer.Stop()
+					reservation.CancelAt(now)
+					return err
+				}
+				if !when.IsZero() && !now.Before(when) {
+					timer.Stop()
+					reservation.CancelAt(now)
+					return os.ErrDeadlineExceeded
+				}
+				if !now.Before(ready) {
+					timer.Stop()
+					break
+				}
+				wake := ready
+				if !when.IsZero() && when.Before(wake) {
+					wake = when
+				}
+				timer.Reset(wake.Sub(now))
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					reservation.CancelAt(time.Now())
+					return ctx.Err()
+				case <-changed:
+				case <-timer.C:
+				}
+			}
+		}
+		n -= chunk
+	}
+	return nil
+}
 
 // waitFor charges n bytes against a bucket. A request larger than the bucket
 // can never be satisfied in one go, so it is charged in bucket-sized pieces
