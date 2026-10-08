@@ -22,6 +22,9 @@ func TestL3UDPDNSStopsWithItsGeneration(t *testing.T) {
 			case started <- struct{}{}:
 			default:
 			}
+			if parts[0] == "cached-peer" {
+				return nil, errors.New("temporary DNS failure")
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -38,8 +41,18 @@ func TestL3UDPDNSStopsWithItsGeneration(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			cfg := Config{Mode: ModeDial, Carrier: CarrierUDP, Addr: "stalled-l3-udp-dns.invalid:443", Token: "dns-generation"}
-			if parts[0] == "rekey" {
+			if parts[0] == "rekey" || parts[0] == "cached-peer" {
 				tun := &Tunnel{cfg: cfg, log: quietLogger()}
+				if parts[0] == "cached-peer" {
+					peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}
+					tun.setPeer(peer)
+					err := tun.resolvePeer(ctx)
+					if !sameAddr(tun.peerAddr(), peer) {
+						err = errors.New("temporary DNS failure discarded the working peer")
+					}
+					done <- err
+					return
+				}
 				done <- tun.negotiate(ctx)
 				return
 			}
@@ -62,9 +75,12 @@ func TestL3UDPDNSStopsWithItsGeneration(t *testing.T) {
 		}
 		select {
 		case err := <-done:
-			want := context.Canceled
+			var want error = context.Canceled
 			if parts[1] == "timeout" {
 				want = context.DeadlineExceeded
+			}
+			if parts[0] == "cached-peer" {
+				want = nil
 			}
 			if !errors.Is(err, want) {
 				t.Fatalf("DNS returned %v, want %v", err, want)
@@ -78,8 +94,12 @@ func TestL3UDPDNSStopsWithItsGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stage := range []string{"startup", "multipath", "rekey"} {
-		for _, kind := range []string{"cancel", "timeout"} {
+	for _, stage := range []string{"startup", "multipath", "rekey", "cached-peer"} {
+		kinds := []string{"cancel", "timeout"}
+		if stage == "cached-peer" {
+			kinds = []string{"failure"}
+		}
+		for _, kind := range kinds {
 			t.Run(stage+"/"+kind, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				defer cancel()
@@ -90,6 +110,41 @@ func TestL3UDPDNSStopsWithItsGeneration(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestL3UDPCarrierOutlivesItsSetupContext(t *testing.T) {
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	carrier, peer, err := openCarrierContext(ctx, Config{Mode: ModeDial, Carrier: CarrierUDP, Addr: listener.LocalAddr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer carrier.Close()
+	cancel()
+	time.Sleep(120 * time.Millisecond)
+	payload := []byte("UDP still carries traffic after setup cancellation")
+	if _, err := carrier.WriteTo(payload, peer); err != nil {
+		t.Fatal(err)
+	}
+	_ = listener.SetReadDeadline(time.Now().Add(time.Second))
+	buffer := make([]byte, 128)
+	n, from, err := listener.ReadFromUDP(buffer)
+	if err != nil || !bytes.Equal(buffer[:n], payload) {
+		t.Fatalf("received %q, error %v, want %q", buffer[:n], err, payload)
+	}
+	if _, err := listener.WriteToUDP(payload, from); err != nil {
+		t.Fatal(err)
+	}
+	_ = carrier.SetReadDeadline(time.Now().Add(time.Second))
+	n, _, err = carrier.ReadFrom(buffer)
+	if err != nil || !bytes.Equal(buffer[:n], payload) {
+		t.Fatalf("reply %q, error %v, want %q", buffer[:n], err, payload)
 	}
 }
 
@@ -410,7 +465,7 @@ func TestQuicEndpointKeepsResolutionSemantics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, host, err := resolveQuicEndpoint(context.Background(), address)
+		got, host, err := resolveDatagramEndpoint(context.Background(), address)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -420,7 +475,7 @@ func TestQuicEndpointKeepsResolutionSemantics(t *testing.T) {
 		}
 	}
 	for _, address := range []string{"127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.1:unknown-service-audit", "invalid"} {
-		if _, _, err := resolveQuicEndpoint(context.Background(), address); err == nil {
+		if _, _, err := resolveDatagramEndpoint(context.Background(), address); err == nil {
 			t.Fatalf("invalid endpoint %s accepted", address)
 		}
 	}

@@ -136,7 +136,7 @@ func dialQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr
 	ctx, cancel := context.WithTimeout(ctx, quicHandshakeTimeout)
 	defer cancel()
 
-	peer, host, err := resolveQuicEndpoint(ctx, cfg.Addr)
+	peer, host, err := resolveDatagramEndpoint(ctx, cfg.Addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("l3: quic: resolving %s: %w", cfg.Addr, err)
 	}
@@ -160,9 +160,9 @@ func dialQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr
 	return c, conn.RemoteAddr(), nil
 }
 
-// Resolve before DialAddr opens its socket: that function's DNS lookup ignores
-// the dial context. The original host is retained for TLS SNI.
-func resolveQuicEndpoint(ctx context.Context, address string) (*net.UDPAddr, string, error) {
+// Resolve a UDP or QUIC endpoint before opening its socket. The original host
+// is retained for QUIC TLS SNI; lookup uses the caller's cancellation budget.
+func resolveDatagramEndpoint(ctx context.Context, address string) (*net.UDPAddr, string, error) {
 	host, service, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, "", err
