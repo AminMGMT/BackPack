@@ -230,7 +230,7 @@ func (c *multipathCarrier) pumpPath(i int, p DatagramCarrier) {
 
 // availablePath chooses a usable path, with at most one probe per second after failure.
 func (c *multipathCarrier) availablePath() int {
-	start := int(c.next.Add(1)-1) % len(c.paths)
+	start := int((c.next.Add(1) - 1) % uint32(len(c.paths)))
 	now := time.Now().UnixNano()
 	for offset := 0; offset < len(c.paths); offset++ {
 		i := (start + offset) % len(c.paths)
