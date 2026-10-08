@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -135,10 +136,15 @@ func dialQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr
 	ctx, cancel := context.WithTimeout(ctx, quicHandshakeTimeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(ctx, cfg.Addr, &tls.Config{
+	peer, host, err := resolveQuicEndpoint(ctx, cfg.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("l3: quic: resolving %s: %w", cfg.Addr, err)
+	}
+	conn, err := quic.DialAddr(ctx, peer.String(), &tls.Config{
 		// See the note above: the certificate proves nothing here and is not
 		// meant to. The token in the Noise handshake is what authenticates.
 		InsecureSkipVerify: true,
+		ServerName:         host,
 		NextProtos:         []string{quicALPN},
 		MinVersion:         tls.VersionTLS13,
 	}, quicConfig())
@@ -152,6 +158,39 @@ func dialQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr
 	c := newQuicCarrier()
 	c.conn = conn
 	return c, conn.RemoteAddr(), nil
+}
+
+// Resolve before DialAddr opens its socket: that function's DNS lookup ignores
+// the dial context. The original host is retained for TLS SNI.
+func resolveQuicEndpoint(ctx context.Context, address string) (*net.UDPAddr, string, error) {
+	host, service, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, "", err
+	}
+	port, err := net.DefaultResolver.LookupPort(ctx, "udp", service)
+	if err != nil {
+		return nil, "", err
+	}
+	if host == "" {
+		return &net.UDPAddr{Port: port}, host, nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(ips) == 0 {
+		return nil, "", &net.AddrError{Err: "no suitable address found", Addr: address}
+	}
+	// Match ResolveUDPAddr: IPv4 is preferred except for bracketed addresses.
+	chosen := ips[0]
+	want6 := strings.Contains(address, "[")
+	for _, ip := range ips {
+		if (ip.IP.To4() == nil) == want6 {
+			chosen = ip
+			break
+		}
+	}
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, host, nil
 }
 
 func listenQuic(cfg Config) (DatagramCarrier, net.Addr, error) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -254,5 +255,91 @@ func TestQuicInitialDialStopsWithItsParent(t *testing.T) {
 		t.Logf("QUIC initial dial cancelled after %s", time.Since(begin))
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("Tunnel.Run ignores parent cancellation while QUIC initial handshake waits up to 12 seconds")
+	}
+}
+
+func TestQuicDNSLookupStopsWithContext(t *testing.T) {
+	if kind := os.Getenv("BACKPACK_QUIC_DNS_CHILD"); kind != "" {
+		started := make(chan struct{}, 1)
+		net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if kind == "timeout" {
+			ctx, cancel = context.WithTimeout(context.Background(), 80*time.Millisecond)
+			defer cancel()
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := dialQuicContext(ctx, Config{Mode: ModeDial, Addr: "quic-dns-audit.example:443", Carrier: CarrierQuic})
+			done <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("DNS resolver was not reached")
+		}
+		began := time.Now()
+		if kind == "cancel" {
+			cancel()
+		}
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("DNS unexpectedly succeeded")
+			}
+			want := context.Canceled
+			if kind == "timeout" {
+				want = context.DeadlineExceeded
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("DNS error %v does not preserve %v", err, want)
+			}
+			t.Logf("blocked DNS %s released in %s", kind, time.Since(began))
+		case <-time.After(300 * time.Millisecond):
+			t.Fatalf("QUIC DNS lookup ignores %s context while DialAddr resolves synchronously", kind)
+		}
+		return
+	}
+	for _, kind := range []string{"cancel", "timeout"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestQuicDNSLookupStopsWithContext$", "-test.v")
+			cmd.Env = append(os.Environ(), "BACKPACK_QUIC_DNS_CHILD="+kind)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("isolated DNS %s: %v\n%s", kind, err, out)
+			}
+			t.Logf("%s", out)
+		})
+	}
+}
+
+func TestQuicEndpointKeepsResolutionSemantics(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:443", "[::1]:443", "[::]:443", "[::ffff:127.0.0.1]:443", "[fe80::1%testzone]:domain", "localhost:domain", ":443"} {
+		expected, err := net.ResolveUDPAddr("udp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, host, err := resolveQuicEndpoint(context.Background(), address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalHost, _, _ := net.SplitHostPort(address)
+		if got.String() != expected.String() || host != originalHost {
+			t.Fatalf("%s got %s host%q, expected%s host%q", address, got, host, expected, originalHost)
+		}
+	}
+	for _, address := range []string{"127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.1:unknown-service-audit", "invalid"} {
+		if _, _, err := resolveQuicEndpoint(context.Background(), address); err == nil {
+			t.Fatalf("invalid endpoint %s accepted", address)
+		}
 	}
 }
