@@ -94,6 +94,9 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 				t.log.Debugf("l3: not forwarding a packet off %s: %v", t.cfg.Iface, err)
 				continue
 			}
+			// AutoMTU can raise the packet size beyond the configured initial
+			// capacity. Keep the grown scratch instead of allocating per packet.
+			frame = wrapped[:0]
 			out, err := sess.seal(sealed[k][:0], wrapped)
 			if err != nil {
 				t.stats.dropped.Add(1)
