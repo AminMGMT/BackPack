@@ -214,6 +214,9 @@ func serverJSON(c *config.ServerConfig) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// IPv4-mapped loopback literals must use a canonical IPv4 /32, not an
+	// IPv6 /32 that would permit other addresses in the same broad prefix.
+	target = net.ParseIP(target).String()
 	bits := "/32"
 	if net.ParseIP(target).To4() == nil {
 		bits = "/128"
