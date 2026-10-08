@@ -89,7 +89,7 @@ func (l *lifecycle) relay(user net.Conn, addr string, port int, o backendOpts) {
 // a UDP flow is handed to the UDP forwarder, anything else is resolved and
 // relayed.
 func (l *lifecycle) relayStream(stream net.Conn, target string, o backendOpts) {
-	if dialForwardedUDP(stream, target, l.logger, l.state.Usage(), o.sniffer) {
+	if dialForwardedUDP(l.state.Ctx(), o.dialTimeout, stream, target, l.logger, l.state.Usage(), o.sniffer) {
 		return
 	}
 	port, addr, err := network.ResolveRemoteAddr(target)

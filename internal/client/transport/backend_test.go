@@ -1,13 +1,17 @@
 package transport
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/xtaci/smux"
 )
 
@@ -104,6 +108,134 @@ func TestARefusedBackendClosesTheUsersConnection(t *testing.T) {
 		t.Fatal("the user's connection stayed open with nothing behind it")
 	}
 	<-done
+}
+
+// DNS is part of the UDP backend dial budget, and cancellation must not leave
+// an old generation waiting for a resolver before it can reconnect.
+func TestUDPBackendDNSObeysGenerationAndDialTimeout(t *testing.T) {
+	for _, cancelGeneration := range []bool{true, false} {
+		name := "timeout"
+		if cancelGeneration {
+			name = "generation"
+		}
+		t.Run(name, func(t *testing.T) {
+			previous := net.DefaultResolver
+			started := make(chan struct{}, 1)
+			release := make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-release:
+					return nil, errors.New("resolver released")
+				}
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			var l lifecycle
+			l.firstGeneration(ctx, silentLogger(), usageSpec{})
+			user, stream := net.Pipe()
+			done := make(chan struct{})
+			timeout := 40 * time.Millisecond
+			if cancelGeneration {
+				timeout = 5 * time.Second
+			}
+			go func() {
+				defer close(done)
+				l.relayStream(stream, "udp://stalled.backend.invalid:53", backendOpts{dialTimeout: timeout})
+			}()
+			defer func() {
+				cancel()
+				unblock()
+				stream.Close()
+				user.Close()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Error("UDP worker did not stop")
+				}
+				net.DefaultResolver = previous
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("DNS lookup did not start")
+			}
+			if cancelGeneration {
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-time.After(300 * time.Millisecond):
+				t.Fatal("UDP backend DNS ignored generation cancellation or dial timeout")
+			}
+			user.SetReadDeadline(time.Now().Add(time.Second))
+			if _, err := user.Read(make([]byte, 1)); err == nil {
+				t.Fatal("failed UDP dial left tunnel open")
+			}
+		})
+	}
+}
+
+// A generation ending must also join an already connected, idle UDP flow.
+func TestUDPBackendIdleFlowEndsWithGeneration(t *testing.T) {
+	backend, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var l lifecycle
+	l.firstGeneration(ctx, silentLogger(), usageSpec{})
+	user, stream := net.Pipe()
+	defer user.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		l.relayStream(stream, "udp://"+backend.LocalAddr().String(), backendOpts{dialTimeout: time.Second})
+	}()
+	defer func() {
+		cancel()
+		stream.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("idle UDP flow did not stop")
+		}
+	}()
+	user.SetDeadline(time.Now().Add(time.Second))
+	payload := []byte("connected before cancellation")
+	if err := network.WriteDatagram(user, payload); err != nil {
+		t.Fatal(err)
+	}
+	backend.SetReadDeadline(time.Now().Add(time.Second))
+	received := make([]byte, network.MaxDatagram)
+	n, from, err := backend.ReadFromUDP(received)
+	if err != nil || !bytes.Equal(received[:n], payload) {
+		t.Fatalf("UDP backend payload=%q err=%v", received[:n], err)
+	}
+	if _, err := backend.WriteToUDP(received[:n], from); err != nil {
+		t.Fatal(err)
+	}
+	n, err = network.ReadDatagram(user, received)
+	if err != nil || !bytes.Equal(received[:n], payload) {
+		t.Fatalf("UDP tunnel reply=%q err=%v", received[:n], err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("idle UDP flow outlived its generation")
+	}
+	if _, err := user.Read(make([]byte, 1)); err == nil {
+		t.Fatal("canceled UDP flow left tunnel open")
+	}
 }
 
 // A session belongs to its generation: when the generation ends, the session

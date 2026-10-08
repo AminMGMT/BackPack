@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"net"
 	"sync"
@@ -28,10 +29,13 @@ import (
 // a silent flow at about the same time.
 const udpBackendIdle = 60 * time.Second
 
+// udpBackendDialTimeout also bounds DNS for callers without a configured budget.
+const udpBackendDialTimeout = 10 * time.Second
+
 // dialForwardedUDP takes a flow whose target is marked as UDP, reporting
 // whether it was one. Every transport calls it before resolving the target the
 // ordinary way, so recognising a datagram flow is one thing in one place.
-func dialForwardedUDP(stream net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, sniffer bool) bool {
+func dialForwardedUDP(ctx context.Context, timeout time.Duration, stream net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, sniffer bool) bool {
 	target, isUDP := network.SplitUDPTarget(remoteAddr)
 	if !isUDP {
 		return false
@@ -42,27 +46,38 @@ func dialForwardedUDP(stream net.Conn, remoteAddr string, logger *logrus.Logger,
 		stream.Close()
 		return true
 	}
-	UDPForward(stream, resolved, logger, usage, port, sniffer)
+	udpForwardContext(ctx, timeout, stream, resolved, logger, usage, port, sniffer)
 	return true
 }
 
 // UDPForward pipes a tunnel stream carrying framed datagrams to a UDP backend.
 // It returns when either side ends, having closed both.
 func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
+	udpForwardContext(context.Background(), udpBackendDialTimeout, stream, target, logger, usage, port, sniffer)
+}
+
+// udpForwardContext binds backend lookup and the flow to its generation.
+func udpForwardContext(ctx context.Context, timeout time.Duration, stream net.Conn, target string, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
 	// A UDP backend cannot be health-checked the way a TCP one is — there is
 	// nothing to connect to — so a multi-backend list takes its first entry
 	// rather than being handed to the resolver as one nonsense address.
 	target = firstUDPBackend(target)
 
-	addr, err := net.ResolveUDPAddr("udp", target)
+	if timeout <= 0 {
+		timeout = udpBackendDialTimeout
+	}
+	// The same dial budget covers DNS and socket setup. Resolving first with
+	// ResolveUDPAddr would ignore both the budget and generation cancellation.
+	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "udp", target)
 	if err != nil {
-		logger.Errorf("failed to resolve UDP target %q: %v", target, err)
+		logger.Errorf("failed to dial UDP backend %q: %v", target, err)
 		stream.Close()
 		return
 	}
-	backend, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		logger.Errorf("failed to dial UDP backend %q: %v", target, err)
+	backend, ok := conn.(*net.UDPConn)
+	if !ok {
+		logger.Errorf("unexpected UDP backend connection type %T", conn)
+		conn.Close()
 		stream.Close()
 		return
 	}
@@ -79,6 +94,8 @@ func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *we
 		})
 	}
 	defer shutdown()
+	stop := context.AfterFunc(ctx, shutdown)
+	defer stop()
 
 	done := make(chan struct{})
 	go func() {
