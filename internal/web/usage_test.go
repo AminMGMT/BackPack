@@ -274,3 +274,60 @@ func TestUsageSaveRetriesAfterCommittedLogWriteFailure(t *testing.T) {
 		t.Fatalf("retry lost pending traffic: %d", got)
 	}
 }
+
+func TestUsageSavePreservesConfiguredSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks may require Windows privileges")
+	}
+	m := testUsage(t)
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "target.json")
+	if err := os.WriteFile(target, []byte("null"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(filepath.Dir(m.snifferLog), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(relative, m.snifferLog); err != nil {
+		t.Fatal(err)
+	}
+	m.AddOrUpdatePort(8080, 64)
+	m.saveUsageData()
+	if link, err := os.Readlink(m.snifferLog); err != nil || link != relative {
+		t.Fatalf("configured symlink replaced: link=%q err=%v", link, err)
+	}
+	data := m.getUsageFromFile()
+	if len(data) != 1 || data[0].Usage != 64 {
+		t.Fatalf("resolved target lost usage: %v", data)
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0640 {
+		t.Fatalf("target permissions changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestUsageSaveRetainsDanglingSymlinkAndPendingTraffic(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks may require Windows privileges")
+	}
+	m := testUsage(t)
+	if err := os.Symlink("target.json", m.snifferLog); err != nil {
+		t.Fatal(err)
+	}
+	m.AddOrUpdatePort(8080, 64)
+	m.saveUsageData()
+	if _, err := os.Readlink(m.snifferLog); err != nil {
+		t.Fatal("dangling symlink was replaced:", err)
+	}
+	if got := m.totalTraffic.Load(); got != 0 {
+		t.Fatalf("failed save published %d bytes", got)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(m.snifferLog), "target.json"), []byte("null"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m.saveUsageData()
+	if got := m.totalTraffic.Load(); got != 64 {
+		t.Fatalf("retry lost usage: got=%d", got)
+	}
+}

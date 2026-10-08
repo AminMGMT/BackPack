@@ -372,13 +372,26 @@ func (m *Usage) collectUsageDataFromSyncMap() []PortUsage {
 // writeUsageData replaces the log only once a complete new document is ready.
 // A failed write must leave the previous committed totals readable for retry.
 func (m *Usage) writeUsageData(data []byte) error {
+	path := m.snifferLog
 	mode := os.FileMode(0644)
-	if info, err := os.Stat(m.snifferLog); err == nil {
+	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
+		// The old writer followed symlinks. Replace the resolved target,
+		// retaining the configured link and writing in the target directory.
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
 	} else if !os.IsNotExist(err) {
 		return err
+	} else if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		// A dangling link must not be silently replaced with a regular log.
+		// Keep the pending counters until its destination becomes available.
+		if _, err := filepath.EvalSymlinks(path); err != nil {
+			return err
+		}
 	}
-	file, err := os.CreateTemp(filepath.Dir(m.snifferLog), ".usage-*")
+	file, err := os.CreateTemp(filepath.Dir(path), ".usage-*")
 	if err != nil {
 		return err
 	}
@@ -397,7 +410,7 @@ func (m *Usage) writeUsageData(data []byte) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, m.snifferLog)
+	return os.Rename(tmp, path)
 }
 
 // ConvertBytesToReadable converts bytes into a human-readable format (KB, MB, GB)
