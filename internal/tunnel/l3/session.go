@@ -166,6 +166,7 @@ type session struct {
 	// steps have to be atomic with respect to each other, or two datagrams
 	// carrying the same counter could both pass accept before either commits.
 	recvMu sync.Mutex
+	recvAD [headerLen]byte // authenticated-header scratch, guarded by recvMu
 	replay replayWindow
 
 	// adoptFresh is a handshake stamp older than the last one accepted, let
@@ -236,8 +237,8 @@ func (s *session) open(dst []byte, h header, body []byte) ([]byte, error) {
 	if !s.replay.accept(h.counter) {
 		return nil, errReplayed
 	}
-	ad := h.bytes()
-	plain, err := s.recv.Decrypt(dst[:0], h.counter, ad[:], body)
+	h.put(s.recvAD[:])
+	plain, err := s.recv.Decrypt(dst[:0], h.counter, s.recvAD[:], body)
 	if err != nil {
 		return nil, err
 	}
