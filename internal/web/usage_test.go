@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -57,9 +59,9 @@ func TestTrafficTotalIsSafeAcrossGoroutines(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-
-	if got := m.totalTraffic.Load(); got == 0 {
-		t.Fatal("nothing was accounted for at all")
+	m.saveUsageData()
+	if got, want := m.totalTraffic.Load(), uint64(4*200*64); got != want {
+		t.Fatalf("concurrent additions and saves recorded %d bytes, want %d", got, want)
 	}
 }
 
@@ -130,5 +132,145 @@ func TestFirstReadCreatesTheUsageFile(t *testing.T) {
 	}
 	if string(body) != "null" {
 		t.Fatalf("the new usage file holds %q, want \"null\"", body)
+	}
+}
+
+// A failed save must retain the drained snapshot, including when writers add
+// more traffic before the next attempt succeeds.
+func TestFailedUsageSavePreservesPendingTraffic(t *testing.T) {
+	m := testUsage(t)
+	m.snifferLog = filepath.Join(t.TempDir(), "missing", "usage.json")
+	m.AddOrUpdatePort(8080, 4096)
+	m.saveUsageData()
+	if got := m.totalTraffic.Load(); got != 0 {
+		t.Errorf("failed save published uncommitted total %d", got)
+	}
+	m.AddOrUpdatePort(8080, 1024)
+	if err := os.MkdirAll(filepath.Dir(m.snifferLog), 0755); err != nil {
+		t.Fatal(err)
+	}
+	m.saveUsageData()
+	if got := m.totalTraffic.Load(); got != 5120 {
+		t.Fatalf("retry recorded %d bytes, want 5120", got)
+	}
+	m.saveUsageData()
+	if got := m.totalTraffic.Load(); got != 5120 {
+		t.Fatalf("next save counted the snapshot twice: %d", got)
+	}
+}
+
+// Saving must not delete a counter a writer already holds. Every addition is
+// assigned to either this snapshot or the next, with no gaps or duplicates.
+func TestUsageSnapshotsPreserveConcurrentSamePortWriters(t *testing.T) {
+	m := testUsage(t)
+	var wg sync.WaitGroup
+	const writers, additions = 8, 10000
+	var finished atomic.Bool
+	collected := make(chan uint64, 1)
+	go func() {
+		var sum uint64
+		for !finished.Load() {
+			for _, usage := range m.collectUsageDataFromSyncMap() {
+				sum += usage.Usage
+			}
+		}
+		for _, usage := range m.collectUsageDataFromSyncMap() {
+			sum += usage.Usage
+		}
+		collected <- sum
+	}()
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range additions {
+				m.AddOrUpdatePort(8080, 64)
+			}
+		}()
+	}
+	wg.Wait()
+	finished.Store(true)
+	if got, want := <-collected, uint64(writers*additions*64); got != want {
+		t.Fatalf("snapshots recorded %d bytes, want %d", got, want)
+	}
+}
+
+func TestUsageSavePreservesLogPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file modes do not represent Unix permission bits")
+	}
+	m := testUsage(t)
+	if err := os.WriteFile(m.snifferLog, []byte("null"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	m.AddOrUpdatePort(8080, 64)
+	m.saveUsageData()
+	info, err := os.Stat(m.snifferLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0640 {
+		t.Fatalf("usage log permissions changed to %o, want 0640", mode)
+	}
+}
+
+// A failed replacement must leave the committed document intact. In
+// particular, an incomplete temporary document cannot truncate the old one.
+func TestUsageReplacementFailurePreservesCommittedDocument(t *testing.T) {
+	m := testUsage(t)
+	m.AddOrUpdatePort(8080, 64)
+	m.saveUsageData()
+	original, err := os.ReadFile(m.snifferLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory is a deterministic replacement failure on every platform.
+	blocked := filepath.Join(filepath.Dir(m.snifferLog), "blocked")
+	if err := os.Mkdir(blocked, 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := m.snifferLog
+	m.snifferLog = blocked
+	if err := m.writeUsageData([]byte("replacement")); err == nil {
+		t.Fatal("replaced an existing directory with the usage document")
+	}
+	m.snifferLog = oldPath
+	body, err := os.ReadFile(m.snifferLog)
+	if err != nil || string(body) != string(original) {
+		t.Fatalf("committed document changed: %q, err=%v", body, err)
+	}
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(oldPath), ".usage-*"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("failed replacement left temporary files: %v, err=%v", files, err)
+	}
+}
+
+func TestUsageSaveRetriesAfterCommittedLogWriteFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix directory permissions enforced for a non-root user")
+	}
+	m := testUsage(t)
+	m.AddOrUpdatePort(8080, 64)
+	m.saveUsageData()
+	dir := filepath.Dir(m.snifferLog)
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+	m.AddOrUpdatePort(8080, 1024)
+	m.saveUsageData()
+	if got := m.totalTraffic.Load(); got != 64 {
+		t.Fatalf("failed save published uncommitted traffic: %d", got)
+	}
+	data := m.getUsageFromFile()
+	if len(data) != 1 || data[0].Usage != 64 {
+		t.Fatalf("failed write changed committed document: %v", data)
+	}
+	if err := os.Chmod(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	m.saveUsageData()
+	if got := m.totalTraffic.Load(); got != 1088 {
+		t.Fatalf("retry lost pending traffic: %d", got)
 	}
 }
