@@ -206,6 +206,22 @@ func validateManagedSpec(s TunnelSpec) error {
 	return naive.ValidateXray(&c)
 }
 
+func managedEndpointClash(s TunnelSpec) string {
+	for _, t := range List() {
+		if t.Role != s.Role || strings.EqualFold(t.Name, s.Name) {
+			continue
+		}
+		other, err := LoadSpec(t.Name)
+		if err != nil {
+			continue
+		}
+		if s.Role == "client" && strings.EqualFold(managedEndpoint(s), managedEndpoint(other)) {
+			return fmt.Sprintf("Tunnel %q already connects to this HTTPS endpoint; choose another endpoint.", t.Name)
+		}
+	}
+	return ""
+}
+
 // setupManagedCarrier collects a complete role-specific configuration before
 // modifying the caller. The public endpoint and private reverse port are distinct.
 func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
@@ -340,6 +356,10 @@ func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
 	tui.StopIfInputGone()
 	if err := validateManagedSpec(n); err != nil {
 		tui.Error("HTTPS configuration: " + err.Error())
+		return false
+	}
+	if why := managedEndpointClash(n); why != "" {
+		tui.Error(why)
 		return false
 	}
 	if n.Role == "server" && !fileExists(app.ConfigPath(n.Name)) {

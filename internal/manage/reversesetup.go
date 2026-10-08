@@ -605,7 +605,15 @@ func finishSetup(s TunnelSpec) bool {
 	if s.Role == "client" {
 		addr = s.RemoteAddr
 	}
-	if why := portClash(s.Role, addr, s.Name); why != "" {
+	why := ""
+	if s.Role == "client" && managedTransport(selectedTransport(s)) {
+		// The loopback address identifies a target on Iran, not this host's
+		// outgoing channel. Different HTTPS endpoints may share that port.
+		why = managedEndpointClash(s)
+	} else {
+		why = portClash(s.Role, addr, s.Name)
+	}
+	if why != "" {
 		fmt.Println()
 		tui.Error(why)
 		fmt.Println()

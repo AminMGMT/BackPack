@@ -166,6 +166,52 @@ func TestManagedHTTPSRefusalKeepsTheCurrentSpec(t *testing.T) {
 	}
 }
 
+func TestManagedHTTPSClientWizardCanBeCancelledBeforeSaving(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux helper wizard")
+	}
+	binary, cert, _ := managedWizardFixture(t)
+	name := "https-menu-cancel-" + randomToken(10)
+	input := []string{"4", "2", "127.0.0.1", "8443", name, "shared-token", "3080", "6bf7a33e-7833-4e72-9219-506585657345", "localhost", "/private-path", binary, "", cert, "1", "n", "n"}
+	restore := tui.SetInput(strings.NewReader(strings.Join(input, "\n") + "\n"))
+	defer restore()
+	out := capture(t, SetupClient)
+	if !strings.Contains(out, "Reverse XHTTP / TLS (Kharej)") || !strings.Contains(out, "127.0.0.1:8443") || strings.Contains(out, "Optional Connection Settings") || strings.Contains(out, "How Do You Want To Set Up This Side?") {
+		t.Fatalf("incorrect managed wizard flow:\n%s", out)
+	}
+	if _, err := os.Stat("/etc/backpack/" + name + ".toml"); !os.IsNotExist(err) {
+		t.Fatal("cancelled wizard wrote a tunnel config")
+	}
+}
+
+func TestManagedHTTPSInputLossDoesNotReplaceTheSpec(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux helper wizard")
+	}
+	binary, _, _ := managedWizardFixture(t)
+	_, pub, err := managedRealityKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := TunnelSpec{Name: "https-input-loss", Role: "client", Transport: "tcp", RemoteAddr: "127.0.0.1:3080"}
+	s.XrayClient = config.XrayClientConfig{Binary: binary, Mode: "reality", Server: "203.0.113.1:443", UUID: "6bf7a33e-7833-4e72-9219-506585657345", ServerName: "cover.example.com", ShortID: "0123456789abcdef", PublicKey: pub}
+	before := s
+	// All defaults would be valid, but input ends before the last answer.
+	restore := tui.SetInput(strings.NewReader("\n\n\n\n\n"))
+	defer restore()
+	stopped := make(chan struct{})
+	defer tui.OnInputEnd(func() { close(stopped); runtime.Goexit() })()
+	go func() { setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com") }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wizard did not stop after input loss")
+	}
+	if !reflect.DeepEqual(before, s) {
+		t.Fatal("input loss changed the managed spec")
+	}
+}
+
 // The link the Iran summary shows, before anything is written, builds the
 // kharej that matches it: same transport, token and port, the Iran address to
 // dial, and every paired setting as the Iran server has it — not as the
