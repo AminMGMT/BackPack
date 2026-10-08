@@ -3,6 +3,7 @@ package direct
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"syscall"
@@ -99,12 +100,13 @@ func clampMSS(tcp *net.TCPConn, mss int) {
 // watchedConn is a net.Conn that announces its own death.
 type watchedConn struct {
 	net.Conn
-	once sync.Once
-	dead chan struct{}
+	once         sync.Once
+	dead         chan struct{}
+	writeTimeout time.Duration
 }
 
-func newWatchedConn(conn net.Conn) *watchedConn {
-	return &watchedConn{Conn: conn, dead: make(chan struct{})}
+func newWatchedConn(conn net.Conn, writeTimeout time.Duration) *watchedConn {
+	return &watchedConn{Conn: conn, dead: make(chan struct{}), writeTimeout: writeTimeout}
 }
 
 func (c *watchedConn) Read(p []byte) (int, error) {
@@ -116,7 +118,16 @@ func (c *watchedConn) Read(p []byte) (int, error) {
 }
 
 func (c *watchedConn) Write(p []byte) (int, error) {
+	// A blocked socket write also blocks smux's sender. Its frame deadlines
+	// only stop the callers waiting for that sender; they do not end the write.
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+		c.markDead()
+		return 0, err
+	}
 	n, err := c.Conn.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
 	if err != nil {
 		c.markDead()
 	}
@@ -172,6 +183,9 @@ func dialSession(ctx context.Context, cfg *Config) (*tunnelSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	raw := conn
+	stopClosing := context.AfterFunc(ctx, func() { raw.Close() })
+	defer stopClosing()
 
 	// Stealth first, so everything above it — the token proof, the mux, every
 	// stream — travels inside the encrypted record layer.
@@ -191,7 +205,7 @@ func dialSession(ctx context.Context, cfg *Config) (*tunnelSession, error) {
 
 	// Wrapped only now, so the handshake's own deadlines and errors do not
 	// count as the session dying before it has begun.
-	watched := newWatchedConn(conn)
+	watched := newWatchedConn(conn, cfg.muxSettings().KeepAliveTimeout)
 
 	// The edge dials the session, so it is the smux client.
 	session, err := smux.Client(watched, cfg.muxSettings())
@@ -199,12 +213,16 @@ func dialSession(ctx context.Context, cfg *Config) (*tunnelSession, error) {
 		watched.Close()
 		return nil, fmt.Errorf("direct: opening the mux session: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		session.Close()
+		return nil, err
+	}
 	return &tunnelSession{Session: session, dead: watched.dead}, nil
 }
 
 // acceptSession takes one accepted connection through everything it must pass
 // before it can carry streams.
-func acceptSession(conn net.Conn, cfg *Config) (*smux.Session, error) {
+func acceptSession(conn net.Conn, cfg *Config) (*tunnelSession, error) {
 	tuneConn(conn, cfg)
 
 	if cfg.Transport == TransportStealth {
@@ -219,11 +237,12 @@ func acceptSession(conn net.Conn, cfg *Config) (*smux.Session, error) {
 		return nil, err
 	}
 
-	session, err := smux.Server(conn, cfg.muxSettings())
+	watched := newWatchedConn(conn, cfg.muxSettings().KeepAliveTimeout)
+	session, err := smux.Server(watched, cfg.muxSettings())
 	if err != nil {
 		return nil, fmt.Errorf("opening the mux session: %w", err)
 	}
-	return session, nil
+	return &tunnelSession{Session: session, dead: watched.dead}, nil
 }
 
 // openStream opens a stream on a session and asks the origin to join it to a

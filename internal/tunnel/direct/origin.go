@@ -42,7 +42,8 @@ type Origin struct {
 	// preauth bounds the connections still in their handshake: each is a
 	// goroutine waiting up to handshakeTimeout for anyone who can reach the
 	// port. See acceptloop.Gate.
-	preauth acceptloop.Gate
+	preauth  acceptloop.Gate
+	sessions sessionSet
 
 	stats struct {
 		sessions atomic.Int64
@@ -95,12 +96,16 @@ func (o *Origin) listen() (net.Listener, error) {
 
 // Run serves tunnel sessions until ctx ends.
 func (o *Origin) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	metrics.ClearPeer()
 	listener, err := o.listen()
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	go func() { <-ctx.Done(); listener.Close() }()
+	stopClosing := context.AfterFunc(ctx, func() { listener.Close() })
+	defer stopClosing()
 
 	o.addrMu.Lock()
 	o.addr = listener.Addr()
@@ -109,7 +114,10 @@ func (o *Origin) Run(ctx context.Context) error {
 	o.log.Infof("direct: origin listening on %s (%s)", listener.Addr(), o.cfg.Transport)
 
 	var sessions sync.WaitGroup
-	defer sessions.Wait()
+	defer func() {
+		cancel()
+		sessions.Wait()
+	}()
 
 	for {
 		conn, err := listener.Accept()
@@ -139,6 +147,11 @@ func (o *Origin) Run(ctx context.Context) error {
 // admit takes one accepted connection through the handshake and, if it passes,
 // serves the streams opened on it.
 func (o *Origin) admit(ctx context.Context, conn net.Conn, leave func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopClosing := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopClosing()
+	defer conn.Close()
 	session, err := acceptSession(conn, &o.cfg)
 	leave() // judged: from here it is a session, or nothing
 	if err == nil {
@@ -152,8 +165,12 @@ func (o *Origin) admit(ctx context.Context, conn net.Conn, leave func()) {
 		conn.Close()
 		return
 	}
-	defer session.Close()
+	if ctx.Err() != nil {
+		session.Close()
+		return
+	}
 
+	o.sessions.add(session)
 	o.stats.sessions.Add(1)
 	defer o.stats.sessions.Add(-1)
 	o.log.Infof("direct: session established with %s", conn.RemoteAddr())
@@ -165,12 +182,16 @@ func (o *Origin) admit(ctx context.Context, conn net.Conn, leave func()) {
 	// as the link is up, so on a steady tunnel that is nothing — but a flapping
 	// link reconnects every few seconds, and a month of that is a slow leak
 	// with no symptom until the process is large.
-	sessionCtx, stopWatching := context.WithCancel(ctx)
-	defer stopWatching()
-	go func() { <-sessionCtx.Done(); session.Close() }()
+	stopSession := context.AfterFunc(ctx, func() { session.Close() })
+	defer stopSession()
 
 	var streams sync.WaitGroup
-	defer streams.Wait()
+	defer func() {
+		o.sessions.remove(session)
+		cancel()
+		session.Close()
+		streams.Wait()
+	}()
 
 	for {
 		stream, err := session.AcceptStream()
@@ -299,11 +320,15 @@ func relayDatagrams(ctx context.Context, stream net.Conn, backend net.Conn) {
 		}
 	}()
 
+	remaining := 2
 	select {
 	case <-done:
+		remaining--
 	case <-ctx.Done():
 	}
 	stream.Close()
 	backend.Close()
-	<-done
+	for i := 0; i < remaining; i++ {
+		<-done
+	}
 }
