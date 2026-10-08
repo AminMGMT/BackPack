@@ -104,9 +104,12 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 		configureProcess(cmd)
 		cmd.Cancel = func() error { return killProcess(cmd.Process) }
 		cmd.Env = env
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
+		// Nil streams go straight to /dev/null. An io.Discard writer creates
+		// copy pipes which descendants can retain after the leader exits.
 		err = cmd.Run()
+		if cmd.Process != nil {
+			_ = killProcess(cmd.Process)
+		}
 		stop()
 		if err != nil {
 			cancel()
@@ -134,8 +137,8 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 			cmd := exec.Command(binary, args...)
 			configureProcess(cmd)
 			cmd.Env = env
-			cmd.Stdout = io.Discard
-			cmd.Stderr = io.Discard
+			// Do not create output-copy pipes: a descendant retaining one would
+			// keep Wait blocked and prevent restart after the leader exits.
 			if err := cmd.Start(); err != nil {
 				if first {
 					ready <- fmt.Errorf("starting Naive %s helper: %w", mode, err)
