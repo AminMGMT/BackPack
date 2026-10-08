@@ -120,7 +120,7 @@ func ConnTestTable(results []ConnTestResult) string {
 			if r.Mbps > 0 {
 				speed = fmt.Sprintf("%.1f Mbps", r.Mbps)
 			}
-			fmt.Fprintf(&b, "%s %-24s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)
+			fmt.Fprintf(&b, "%s %-26s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)
 		}
 	}
 	if steady == 0 {

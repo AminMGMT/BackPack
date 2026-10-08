@@ -271,7 +271,7 @@ func ctLastMatch(dir, name string) int {
 func ConnTestBestTable(b ConnTestBest) string {
 	var s strings.Builder
 	row := func(setting, value, measured string) {
-		fmt.Fprintf(&s, "%-15s %-24s %s\n", setting, value, measured)
+		fmt.Fprintf(&s, "%-15s %-26s %s\n", setting, value, measured)
 	}
 	s.WriteString("BEST SETTINGS\n" + ctRule() + "\n\n")
 	row("SETTING", "VALUE", "MEASURED")

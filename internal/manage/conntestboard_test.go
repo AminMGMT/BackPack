@@ -56,7 +56,7 @@ func TestTheVerdictIsGroupedAndListsWhatWorks(t *testing.T) {
 		{Kind: "direct", Transport: "quic", Status: ctDown, Total: 60},
 	})
 	order := []string{"Direct    PCK", "Direct    UDP", "Reverse   TCP", "Reverse   KCP FEC", "Direct    QUIC", "Works Steadily:",
-		"🟢 Direct PCK               69ms    29.9 Mbps", "🟢 Direct UDP               73ms    28.0 Mbps"}
+		"🟢 Direct PCK                 69ms    29.9 Mbps", "🟢 Direct UDP                 73ms    28.0 Mbps"}
 	at := 0
 	for _, want := range order {
 		i := strings.Index(table[at:], want)
