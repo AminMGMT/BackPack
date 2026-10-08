@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync/atomic"
 	"time"
@@ -295,7 +296,7 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 // transport counted neither, so however much it carried the panel, the CLI, the
 // Telegram report and the traffic history all read it as an idle tunnel.
 func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTunnel bool) {
-	buf := make([]byte, 16*1024)
+	buf := make([]byte, network.MaxDatagram)
 	readTimeout := 60 * time.Second
 
 	for {
@@ -324,15 +325,14 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 			metrics.AddBytes(uint64(n), 0)
 		}
 
-		totalWritten := 0
-		// Write the read data to the destination UDP connection
-		for totalWritten < n {
-			w, err := dstConn.Write(buf[totalWritten:n])
-			if err != nil {
-				c.logger.Errorf("failed to write to UDP %s: %v", dstConn.RemoteAddr().String(), err)
-				return
-			}
-			totalWritten += w
+		// One write preserves the packet boundary and forwards empty datagrams.
+		totalWritten, err := dstConn.Write(buf[:n])
+		if err == nil && totalWritten != n {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			c.logger.Errorf("failed to write to UDP %s: %v", dstConn.RemoteAddr().String(), err)
+			return
 		}
 
 		if dstIsTunnel {

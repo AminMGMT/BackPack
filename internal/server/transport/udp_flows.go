@@ -3,12 +3,14 @@ package transport
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // The udp transport's forwarded ports: each source address is a flow, carried
@@ -46,7 +48,7 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 	s.logger.Infof("UDP listener started successfully, listening on address: %s", listener.LocalAddr().String())
 
 	// Buffer for UDP reads
-	buf := make([]byte, 16*1024)
+	buf := make([]byte, network.MaxDatagram)
 
 	// Track active connections
 	activeConnections := map[string]*LocalUDPConn{}
@@ -371,15 +373,14 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 
 			packetSize := len(data)
 
-			totalWritten := 0
-			for totalWritten < packetSize {
-				// Write the packet to the tunnel
-				w, err := to.listener.WriteToUDP(data[totalWritten:], to.addr)
-				if err != nil {
-					s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
-					return
-				}
-				totalWritten += w
+			// One write is one datagram, including an empty keepalive.
+			totalWritten, err := to.listener.WriteToUDP(data, to.addr)
+			if err == nil && totalWritten != packetSize {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
+				return
 			}
 
 			// Onto the tunnel: the other half of what this transport never
@@ -424,15 +425,14 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 
 			packetSize := len(data)
 
-			totalWritten := 0
-			for totalWritten < packetSize {
-				// Write the packet to the tunnel
-				w, err := to.listener.WriteToUDP(data[totalWritten:], to.addr)
-				if err != nil {
-					s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
-					return
-				}
-				totalWritten += w
+			// A short write cannot be continued without splitting the datagram.
+			totalWritten, err := to.listener.WriteToUDP(data, to.addr)
+			if err == nil && totalWritten != packetSize {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
+				return
 			}
 
 			if s.config.Sniffer {

@@ -214,7 +214,7 @@ func (s *UdpTransport) tunnelListener(g *udpGen) {
 
 func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 	// Buffer for UDP reads
-	buf := make([]byte, 16*1024)
+	buf := make([]byte, network.MaxDatagram)
 
 	for {
 		select {
