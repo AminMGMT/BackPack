@@ -189,6 +189,9 @@ func listenWebSocket(cfg *Config, log *logrus.Logger) (*wsListener, error) {
 		ReadHeaderTimeout: wsHandshakeTimeout,
 	}
 	go func() {
+		// A stopped HTTP listener must wake Accept and retire pending upgrades,
+		// allowing the origin supervisor to start a replacement generation.
+		defer l.Close()
 		if err := l.server.Serve(listener); err != nil && !isClosed(err) {
 			log.Debugf("direct: websocket server stopped: %v", err)
 		}

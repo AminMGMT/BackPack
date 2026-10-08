@@ -2,6 +2,8 @@ package direct
 
 import (
 	"context"
+	"errors"
+	"net"
 	"runtime"
 	"testing"
 	"time"
@@ -49,5 +51,40 @@ func TestAnEndedWebsocketSessionLeavesNoGoroutine(t *testing.T) {
 	}
 	if after := settle(); after > base+5 {
 		t.Fatalf("goroutines grew from %d to %d over twenty ended sessions", base, after)
+	}
+}
+
+// The HTTP server can stop independently of the wrapper. Its exit must wake
+// Accept so the origin can retire this generation and bind a replacement.
+func TestWebsocketServerExitUnblocksAccept(t *testing.T) {
+	cfg := &Config{Role: RoleOrigin, Addr: "127.0.0.1:0", Token: "a-long-enough-token", Transport: TransportWS}
+	l, err := listenWebSocket(cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	done := make(chan error, 1)
+	go func() {
+		conn, err := l.Accept()
+		if conn != nil {
+			conn.Close()
+		}
+		done <- err
+	}()
+	if err := l.listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept error = %v, want closed listener", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP server exited but websocket Accept kept waiting")
+	}
+	select {
+	case <-l.closed:
+	default:
+		t.Fatal("server exit did not close pending upgrade handlers")
 	}
 }
