@@ -130,7 +130,7 @@ func TestKCPClientDNSStopsWithItsDialAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, carrier := range []string{"udp", "pck"} {
+	for _, carrier := range []string{"udp", "pck", "icmp"} {
 		for _, kind := range []string{"cancel", "timeout"} {
 			t.Run(carrier+"/"+kind, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
