@@ -83,39 +83,39 @@ func transferTCPToWebSocket(tcpConn net.Conn, wsConn *websocket.Conn, logger *lo
 	defer putRelayBuffer(bufp)
 	buf := *bufp
 	for {
-		// Read data from the TCP connection
-		n, err := tcpConn.Read(buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		// Reader bytes come before its error, including a final read with EOF.
+		n, readErr := tcpConn.Read(buf)
+		if n > 0 {
+			if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+				if errors.Is(err, websocket.ErrCloseSent) || errors.Is(err, io.EOF) {
+					logger.Trace("WebSocket writer stream closed or EOF received")
+				} else {
+					logger.Trace("unable to write to the WebSocket connection: ", err)
+				}
+				tcpConn.Close()
+				wsConn.Close()
+				return
+			}
+
+			// Leaving over the tunnel, after the message was written successfully.
+			metrics.AddBytes(0, uint64(n))
+			logger.Tracef("transferred data from TCP to WebSocket: %d bytes", n)
+			if sniffer {
+				usage.AddOrUpdatePort(remotePort, uint64(n))
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) || errors.Is(readErr, net.ErrClosed) {
 				logger.Trace("TCP reader stream closed or EOF received")
 			} else {
-				logger.Trace("unable to read from the TCP connection: ", err)
+				logger.Trace("unable to read from the TCP connection: ", readErr)
 			}
 			tcpConn.Close()
 			wsConn.Close()
 			return
-		}
-
-		// Write the data to the WebSocket connection as a binary message
-		err = wsConn.WriteMessage(websocket.BinaryMessage, buf[:n])
-		if err != nil {
-			if errors.Is(err, websocket.ErrCloseSent) || errors.Is(err, io.EOF) {
-				logger.Trace("WebSocket writer stream closed or EOF received")
-			} else {
-				logger.Trace("unable to write to the WebSocket connection: ", err)
-			}
-			tcpConn.Close()
-			wsConn.Close()
-			return
-		}
-
-		// Leaving over the tunnel.
-		metrics.AddBytes(0, uint64(n))
-		logger.Tracef("transferred data from TCP to WebSocket: %d bytes", n)
-		if sniffer {
-			usage.AddOrUpdatePort(remotePort, uint64(n))
 		}
 	}
+
 }
 
 // readerOnly and writerOnly hide everything but Read and Write, so
