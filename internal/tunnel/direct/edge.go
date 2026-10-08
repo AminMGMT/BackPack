@@ -114,18 +114,14 @@ func (e *Edge) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(m portmap.Mapping) {
 			defer wg.Done()
-			if err := e.serve(ctx, m); err != nil && ctx.Err() == nil {
-				e.log.Errorf("direct: forwarding %s stopped: %v", m, err)
-			}
+			e.keepForwarder(ctx, m, false)
 		}(mapping)
 
 		if e.cfg.AcceptUDP {
 			wg.Add(1)
 			go func(m portmap.Mapping) {
 				defer wg.Done()
-				if err := e.serveUDP(ctx, m); err != nil && ctx.Err() == nil {
-					e.log.Errorf("direct: forwarding udp %s stopped: %v", m, err)
-				}
+				e.keepForwarder(ctx, m, true)
 			}(mapping)
 		}
 	}
@@ -236,13 +232,35 @@ func (e *Edge) pickSession() *tunnelSession {
 
 // ---------------------------------------------------------------- ports
 
+// Retry only the listener that failed. A temporary bind conflict or fatal
+// socket error must not leave a mapping down until the whole tunnel restarts,
+// nor should recovery interrupt the other ports and established sessions.
+func (e *Edge) keepForwarder(ctx context.Context, m portmap.Mapping, udp bool) {
+	serve, protocol := e.serve, "tcp"
+	if udp {
+		serve, protocol = e.serveUDP, "udp"
+	}
+	for ctx.Err() == nil {
+		err := serve(ctx, m)
+		if ctx.Err() != nil {
+			return
+		}
+		e.log.Errorf("direct: forwarding %s %s stopped: %v — retrying in %s",
+			protocol, m, err, e.cfg.RetryDelay)
+		if !sleepUntil(ctx, e.cfg.RetryDelay) {
+			return
+		}
+	}
+}
+
 func (e *Edge) serve(ctx context.Context, m portmap.Mapping) error {
 	listener, err := net.Listen("tcp", m.Listen)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	go func() { <-ctx.Done(); listener.Close() }()
+	stopWatching := context.AfterFunc(ctx, func() { listener.Close() })
+	defer stopWatching()
 
 	e.log.Infof("direct: forwarding %s", m)
 
@@ -347,7 +365,12 @@ func (e *Edge) serveUDP(ctx context.Context, m portmap.Mapping) error {
 		return err
 	}
 	defer conn.Close()
-	go func() { <-ctx.Done(); conn.Close() }()
+	// The reaper and close callback belong to this listener attempt, so a
+	// failed socket leaves no workers behind when its replacement is opened.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopWatching := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopWatching()
 
 	e.log.Infof("direct: forwarding udp %s", m)
 
