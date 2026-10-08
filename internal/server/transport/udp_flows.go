@@ -113,6 +113,9 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 
 				// Create a new payload channel for this connection
 				payloadChan := make(chan []byte, udpPayloadQueue)
+				// Queue the opening packet before publishing the flow. Once it
+				// is offered, pairing or generation cleanup may close the channel.
+				payloadChan <- append([]byte(nil), buf[:n]...)
 
 				// Build the UDP connection object
 				newUDPConn := LocalUDPConn{
@@ -131,7 +134,6 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 				select {
 				case udpChan <- &newUDPConn:
 					s.logger.Debugf("accepted UDP connection from %s", addr.String())
-					payloadChan <- append([]byte(nil), buf[:n]...) // Send a copy of the new payload to the channel
 
 					// Request a new TCP connection
 					select {

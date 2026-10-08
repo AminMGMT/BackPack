@@ -3,9 +3,13 @@ package transport
 import (
 	"context"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // A failed reply ends the whole flow even while the other worker waits for a
@@ -113,6 +117,69 @@ func TestUDPHandleLoopReleasesAFlowItGivesUpOn(t *testing.T) {
 	}
 	t.Fatal("a flow the loop gave up on stayed in the table — every later datagram " +
 		"from that source would be filed against a channel nobody reads")
+}
+
+type udpAdmissionEndHook struct {
+	cancel   context.CancelFunc
+	limits   *limiter
+	observed chan struct{}
+	once     atomic.Bool
+}
+
+func (*udpAdmissionEndHook) Levels() []logrus.Level { return logrus.AllLevels }
+func (h *udpAdmissionEndHook) Fire(entry *logrus.Entry) error {
+	if strings.HasPrefix(entry.Message, "accepted UDP connection from ") && h.once.CompareAndSwap(false, true) {
+		// Pause only at the existing production publication/first-send boundary.
+		h.cancel()
+		until := time.Now().Add(time.Second)
+		for h.limits.active.Load() != 0 && time.Now().Before(until) {
+			time.Sleep(time.Millisecond)
+		}
+		close(h.observed)
+	}
+	return nil
+}
+
+func TestUDPOpeningPacketCanRaceGenerationShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lim := newLimiter(Limits{MaxConnections: 1})
+	log := quietLogger()
+	log.SetLevel(logrus.DebugLevel)
+	hook := &udpAdmissionEndHook{cancel: cancel, limits: lim, observed: make(chan struct{})}
+	log.AddHook(hook)
+	s := &UdpTransport{config: &UdpConfig{ChannelSize: 1}, limits: lim, lifecycle: lifecycle{logger: log}}
+	g := &udpGen{ctx: ctx, tunnelChannel: make(chan *TunnelUDPConn), reqNewConnChan: make(chan struct{}, 1)}
+	addr := freeAddr(t)
+	done := make(chan struct{})
+	go func() { defer close(done); s.localListener(g, addr, "127.0.0.1:9") }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("listener leaked")
+		}
+	})
+	peer, err := net.Dial("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	until := time.Now().Add(3 * time.Second)
+	for time.Now().Before(until) {
+		peer.Write([]byte("first"))
+		select {
+		case <-hook.observed:
+			if lim.active.Load() != 0 {
+				t.Fatal("generation shutdown did not release flow")
+			}
+			time.Sleep(50 * time.Millisecond)
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	t.Fatal("listener did not admit a flow")
 }
 
 // A flow that is still fresh must be paired, not dropped: the cutoff exists to
