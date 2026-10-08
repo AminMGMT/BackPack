@@ -136,7 +136,9 @@ func setupFromLink() {
 	} else {
 		tui.Warn("Created, But " + service + " Is Not Running — Check Its Log.")
 	}
-	scheduleFromLink(form.Name, link)
+	if form.ManagedLink == nil {
+		scheduleFromLink(form.Name, link)
+	}
 	tui.PressEnter()
 }
 
