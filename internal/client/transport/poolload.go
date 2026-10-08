@@ -44,6 +44,7 @@ const (
 // poolLoad turns the tunnel's cumulative byte counters into a per-interval
 // throughput reading.
 type poolLoad struct {
+	spare           bool
 	lastIn, lastOut uint64
 	lastAt          time.Time
 }
@@ -77,7 +78,7 @@ func (p *poolLoad) mbps() int {
 // dividing by it is what makes this a statement about how hard each connection
 // is working rather than about the tunnel's total speed.
 func (p *poolLoad) wantsMore(mbps, liveConns, poolSize, configuredSize int) bool {
-	if mbps <= 0 || liveConns <= 0 {
+	if p.spare || mbps <= 0 || liveConns <= 0 {
 		return false
 	}
 	if !poolCanGrow(poolSize, configuredSize) {

@@ -2,10 +2,16 @@ package limits
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
+	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // A tunnel that asked for nothing must get a nil limiter, so the unlimited
@@ -211,5 +217,236 @@ func TestWriteLargerThanTheBucket(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("an oversize write never completed")
+	}
+}
+
+// Socket deadlines also cover pacing, and updates affect the reservation already
+// in progress. A direction's deadline must not interrupt the other direction.
+func TestPacingHonorsMutableDeadlines(t *testing.T) {
+	for _, mode := range []string{"before", "during", "move", "clear", "extend", "read", "both", "isolation"} {
+		t.Run(mode, func(t *testing.T) {
+			socket, peer := net.Pipe()
+			defer peer.Close()
+			plain := &deadlinePacingProbe{Conn: socket}
+			bucket := rate.NewLimiter(1, 1)
+			bucket.AllowN(time.Now(), 1)
+			conn := (&Limiter{bucket: bucket}).Wrap(context.Background(), plain)
+			defer conn.Close()
+			if mode == "before" {
+				conn.SetWriteDeadline(time.Now().Add(30 * time.Millisecond))
+			}
+			if mode == "move" {
+				conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			}
+			if mode == "clear" || mode == "extend" {
+				conn.SetWriteDeadline(time.Now().Add(150 * time.Millisecond))
+			}
+			if mode == "read" {
+				conn.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
+			}
+			if mode == "isolation" {
+				conn.SetReadDeadline(time.Now().Add(-time.Second))
+			}
+			type result struct {
+				n   int
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				if mode == "read" {
+					n, err := conn.Read(make([]byte, 1))
+					done <- result{n, err}
+				} else {
+					n, err := conn.Write([]byte{7})
+					done <- result{n, err}
+				}
+			}()
+			if mode == "read" {
+				if _, err := peer.Write([]byte{7}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			until := time.Now().Add(time.Second)
+			for bucket.Tokens() > -0.5 && time.Now().Before(until) {
+				time.Sleep(time.Millisecond)
+			}
+			if bucket.Tokens() > -0.5 {
+				t.Fatal("operation did not enter pacing")
+			}
+			switch mode {
+			case "during", "move":
+				conn.SetWriteDeadline(time.Now().Add(30 * time.Millisecond))
+			case "both":
+				conn.SetDeadline(time.Now().Add(30 * time.Millisecond))
+			case "clear":
+				conn.SetWriteDeadline(time.Time{})
+			case "extend":
+				conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			}
+			successful := mode == "clear" || mode == "extend" || mode == "isolation"
+			if successful {
+				drained := make(chan struct{})
+				go func() { peer.Read(make([]byte, 1)); close(drained) }()
+				select {
+				case r := <-done:
+					if r.n != 1 || r.err != nil {
+						t.Fatalf("updated deadline n%d err%v", r.n, r.err)
+					}
+				case <-time.After(2 * time.Second):
+					conn.Close()
+					t.Fatal("updated deadline did not release paced operation")
+				}
+				<-drained
+			} else {
+				select {
+				case r := <-done:
+					wantN := 0
+					if mode == "read" {
+						wantN = 1
+					}
+					if r.n != wantN || !errors.Is(r.err, os.ErrDeadlineExceeded) {
+						t.Fatalf("deadline n%d err%v", r.n, r.err)
+					}
+				case <-time.After(300 * time.Millisecond):
+					conn.Close()
+					<-done
+					t.Fatal("pacing ignored the socket deadline")
+				}
+				if plain.writes.Load() != 0 {
+					t.Fatal("expired pacing reached the socket Write")
+				}
+				if tokens := bucket.Tokens(); tokens < -0.1 {
+					t.Fatalf("pending reservation was not refunded: %g", tokens)
+				}
+			}
+		})
+	}
+}
+
+type deadlinePacingProbe struct {
+	net.Conn
+	writes  atomic.Int64
+	reject  bool
+	readEOF bool
+}
+
+func (c *deadlinePacingProbe) Write(p []byte) (int, error) { c.writes.Add(1); return c.Conn.Write(p) }
+func (c *deadlinePacingProbe) Read(p []byte) (int, error) {
+	if c.readEOF {
+		p[0] = 7
+		return 1, io.EOF
+	}
+	return c.Conn.Read(p)
+}
+func (c *deadlinePacingProbe) SetDeadline(t time.Time) error {
+	if c.reject {
+		return errPacingDeadlineRejected
+	}
+	return c.Conn.SetDeadline(t)
+}
+func (c *deadlinePacingProbe) SetReadDeadline(t time.Time) error {
+	if c.reject {
+		return errPacingDeadlineRejected
+	}
+	return c.Conn.SetReadDeadline(t)
+}
+func (c *deadlinePacingProbe) SetWriteDeadline(t time.Time) error {
+	if c.reject {
+		return errPacingDeadlineRejected
+	}
+	return c.Conn.SetWriteDeadline(t)
+}
+
+var errPacingDeadlineRejected = errors.New("deadline rejected")
+
+// Failed setters leave pacing unchanged, and timeout does not discard bytes or
+// replace an EOF returned by the socket. Closing still cancels a pending wait.
+func TestPacingDeadlineFailureAndEOF(t *testing.T) {
+	for _, mode := range []string{"setter", "EOF", "close"} {
+		t.Run(mode, func(t *testing.T) {
+			socket, peer := net.Pipe()
+			defer peer.Close()
+			plain := &deadlinePacingProbe{Conn: socket, reject: mode == "setter", readEOF: mode == "EOF"}
+			bucket := rate.NewLimiter(100, 1)
+			bucket.AllowN(time.Now(), 1)
+			conn := (&Limiter{bucket: bucket}).Wrap(context.Background(), plain)
+			defer conn.Close()
+			if mode == "setter" {
+				for _, set := range []func(time.Time) error{conn.SetDeadline, conn.SetReadDeadline, conn.SetWriteDeadline} {
+					if !errors.Is(set(time.Now().Add(-time.Second)), errPacingDeadlineRejected) {
+						t.Fatal("setter did not reject")
+					}
+				}
+				go peer.Read(make([]byte, 1))
+				if n, err := conn.Write([]byte{7}); n != 1 || err != nil {
+					t.Fatalf("rejected setter changed pacing n%d err%v", n, err)
+				}
+				return
+			}
+			if mode == "EOF" {
+				conn.SetReadDeadline(time.Now().Add(-time.Second))
+				b := make([]byte, 1)
+				n, err := conn.Read(b)
+				if n != 1 || b[0] != 7 || !errors.Is(err, io.EOF) {
+					t.Fatalf("EOF data n%d b%v err%v", n, b, err)
+				}
+				return
+			}
+			bucket.SetLimit(1)
+			done := make(chan error, 1)
+			go func() { _, err := conn.Write([]byte{7}); done <- err }()
+			until := time.Now().Add(time.Second)
+			for bucket.Tokens() > -0.5 && time.Now().Before(until) {
+				time.Sleep(time.Millisecond)
+			}
+			conn.Close()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("close err%v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("close ignored")
+			}
+			if plain.writes.Load() != 0 {
+				t.Fatal("closed pacing reached socket Write")
+			}
+		})
+	}
+}
+
+type pacingAllocationSink struct{ net.Conn }
+
+func (c *pacingAllocationSink) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *pacingAllocationSink) SetWriteDeadline(time.Time) error { return nil }
+func TestPacingDeadlineHotPathDoesNotAllocate(t *testing.T) {
+	socket, peer := net.Pipe()
+	defer peer.Close()
+	plain := &pacingAllocationSink{Conn: socket}
+	bucket := rate.NewLimiter(rate.Inf, 65535)
+	conn := (&Limiter{bucket: bucket}).Wrap(context.Background(), plain)
+	defer conn.Close()
+	payload := make([]byte, 1200)
+	conn.Write(payload)
+	if allocs := testing.AllocsPerRun(1000, func() {
+		conn.SetWriteDeadline(time.Now().Add(time.Minute))
+		conn.Write(payload)
+	}); allocs != 0 {
+		t.Fatalf("warmed immediate pacing allocated %g times", allocs)
+	}
+}
+func BenchmarkPacingDeadlineHotPath(b *testing.B) {
+	socket, peer := net.Pipe()
+	defer peer.Close()
+	plain := &pacingAllocationSink{Conn: socket}
+	bucket := rate.NewLimiter(rate.Inf, 65535)
+	conn := (&Limiter{bucket: bucket}).Wrap(context.Background(), plain)
+	defer conn.Close()
+	payload := make([]byte, 1200)
+	conn.Write(payload)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		conn.Write(payload)
 	}
 }

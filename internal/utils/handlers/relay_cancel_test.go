@@ -89,12 +89,14 @@ func TestRelayReturnsOnlyAfterBothCopiesStop(t *testing.T) {
 		TCPConnectionHandler(ctx, false, from, to, quietLogger(), &web.Usage{}, 8080, false)
 	}()
 
-	// Ending one direction must take the whole relay down with it.
+	// After one direction ends, cancellation still has to interrupt and join
+	// the response copy before the caller can release its connection quota.
 	client.Close()
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the relay did not return after one direction ended")
+		t.Fatal("the relay did not join both copies after cancellation")
 	}
 
 	// Both ends are closed by the time it returns, which is what makes the

@@ -308,7 +308,7 @@ func (c *pinnedCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if dst == nil {
 		// Nothing has arrived on this path yet and nobody said where to send:
 		// dropping is right, and the other paths carry the tunnel meanwhile.
-		return len(p), nil
+		return 0, fmt.Errorf("l3: this path has not learned its peer yet")
 	}
 	return c.DatagramCarrier.WriteTo(p, dst)
 }
@@ -328,4 +328,30 @@ func closeAll(paths []DatagramCarrier) {
 	for _, p := range paths {
 		p.Close()
 	}
+}
+
+// WriteBatch uses the learned path address without discarding sendmmsg/GSO.
+func (c *pinnedCarrier) WriteBatch(bufs [][]byte, addr net.Addr) (int, error) {
+	c.mu.Lock()
+	dst := c.peer
+	c.mu.Unlock()
+	if dst == nil {
+		dst = addr
+	}
+	if dst == nil {
+		return 0, fmt.Errorf("l3: this path has not learned its peer yet")
+	}
+	if writer := asBatchWriter(c.DatagramCarrier); writer != nil {
+		return writer.WriteBatch(bufs, dst)
+	}
+	for i, p := range bufs {
+		n, err := c.DatagramCarrier.WriteTo(p, dst)
+		if err != nil {
+			return i, err
+		}
+		if n != len(p) {
+			return i, fmt.Errorf("l3: short datagram write")
+		}
+	}
+	return len(bufs), nil
 }
