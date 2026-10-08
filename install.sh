@@ -116,6 +116,102 @@ case "$(uname -m)" in
   *) err "Unsupported architecture: $(uname -m)"; exit 1 ;;
 esac
 
+# Optional protocol helpers: pinned, isolated and installed only on request.
+helpers_validate() {
+  case "${BP_HELPERS:-}" in
+    ""|naive|xray|naive,xray) ;;
+    *) err 'BP_HELPERS must be empty, naive, xray or naive,xray'; return 2 ;;
+  esac
+  [[ -z "${BP_HELPERS:-}" ]] && return 0
+  [[ "$(uname -s)" == Linux ]] || { err 'Optional helpers require Linux'; return 1; }
+  case "$ARCH" in amd64|arm64) ;; *) err "Optional helpers do not support $ARCH"; return 1 ;; esac
+  if [[ "$BP_HELPERS" == *naive* ]]; then
+    getconf GNU_LIBC_VERSION >/dev/null 2>&1 || { err 'Pinned Naive helpers require glibc; install suitable binaries manually on musl'; return 1; }
+    command -v xz >/dev/null || { err 'xz is required for the Naive archive'; return 1; }
+  fi
+  if [[ "$BP_HELPERS" == *xray* ]]; then
+    command -v unzip >/dev/null || { err 'unzip is required for the Xray archive'; return 1; }
+  fi
+  command -v sha256sum >/dev/null || command -v shasum >/dev/null || { err 'A SHA256 utility is required'; return 1; }
+}
+
+# Exact immutable archive pins, obtained from each official release API digest.
+helper_spec() {
+  helper_tool="$1"; helper_arch="$2"; helper_extra=""
+  case "$helper_tool/$helper_arch" in
+    naive/amd64) helper_sha=9d765620b90f7c60eb40c7c68b2f82537757cc52a8693dee7a00f8ba8b13dfd0; helper_arch=x64 ;;
+    naive/arm64) helper_sha=dfa99dc36dafa1ee7f97f48bde14e9ee96bc4011e5cc10c7881fa7883859a036 ;;
+    sing-box/amd64) helper_sha=a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6 ;;
+    sing-box/arm64) helper_sha=b43a1fb1bda131c6653576741ce527eb2bdeab7c9308ca90ee8b972abb7e4a7f ;;
+    xray/amd64) helper_sha=23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae; helper_arch=64 ;;
+    xray/arm64) helper_sha=4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c; helper_arch=arm64-v8a ;;
+    *) return 1 ;;
+  esac
+  case "$helper_tool" in
+    naive)
+      helper_version=v154.0.8037.49-4; helper_repo=klzgrad/naiveproxy
+      helper_stem="naiveproxy-$helper_version-linux-$helper_arch"
+      helper_asset="$helper_stem.tar.xz"; helper_member="$helper_stem/naive"; helper_kind=xz ;;
+    sing-box)
+      helper_version=v1.14.2; helper_repo=SagerNet/sing-box
+      helper_stem="sing-box-${helper_version#v}-linux-$helper_arch"
+      helper_asset="$helper_stem.tar.gz"; helper_member="$helper_stem/sing-box"; helper_extra="$helper_stem/libcronet.so"; helper_kind=gz ;;
+    xray)
+      helper_version=v26.3.27; helper_repo=XTLS/Xray-core
+      helper_asset="Xray-linux-$helper_arch.zip"; helper_member=xray; helper_kind=zip ;;
+  esac
+}
+
+# Subshell owns its staging cleanup and never overwrites an existing directory.
+install_helper() (
+  set -euo pipefail
+  helper_spec "$1" "$ARCH" || exit 1
+  root="/usr/local/lib/backpack/helpers/$helper_tool"
+  final="$root/$helper_version-$ARCH"
+  if [[ -e "$final" || -L "$final" ]]; then
+    info "Keeping existing helper directory: $final (configure its binary explicitly)"
+    exit 0
+  fi
+  mkdir -p "$root" || exit 1
+  stage="$(mktemp -d "$root/.stage.XXXXXX")" || exit 1
+  trap 'rm -rf -- "$stage"' EXIT
+  archive="$stage/archive"
+  fetch "https://github.com/$helper_repo/releases/download/$helper_version/$helper_asset" "$archive" || exit 1
+  if command -v sha256sum >/dev/null; then
+    actual="$(sha256sum "$archive" | awk '{print $1}')"
+  else
+    actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+  fi
+  [[ "$actual" == "$helper_sha" ]] || { err "CHECKSUM MISMATCH for $helper_asset"; exit 1; }
+  mkdir "$stage/payload" || exit 1
+  case "$helper_kind" in
+    zip) unzip -p "$archive" "$helper_member" > "$stage/payload/$helper_tool" || exit 1 ;;
+    xz) tar -xJf "$archive" -C "$stage/payload" --strip-components=1 "$helper_member" || exit 1 ;;
+    gz) tar -xzf "$archive" -C "$stage/payload" --strip-components=1 "$helper_member" "$helper_extra" || exit 1 ;;
+  esac
+  [[ -f "$stage/payload/$helper_tool" && ! -L "$stage/payload/$helper_tool" && -s "$stage/payload/$helper_tool" ]] || exit 1
+  chmod 0755 "$stage/payload" "$stage/payload/$helper_tool" || exit 1
+  if [[ -f "$stage/payload/libcronet.so" ]]; then chmod 0644 "$stage/payload/libcronet.so" || exit 1; fi
+  # GNU mv's no-clobber protects simultaneous installers too. Confirm that the
+  # directory really moved: mv -n itself reports success when it skipped it.
+  mv -Tn -- "$stage/payload" "$final" || exit 1
+  [[ ! -d "$stage/payload" ]] || { err "Helper directory appeared concurrently: $final"; exit 1; }
+  info "Verified helper installed: $final/$helper_tool"
+)
+
+install_helpers() {
+  [[ -n "${BP_HELPERS:-}" ]] || return 0
+  if [[ "$BP_HELPERS" == *naive* ]]; then
+    install_helper naive || return 1
+    install_helper sing-box || return 1
+  fi
+  [[ "$BP_HELPERS" != *xray* ]] || install_helper xray
+}
+
+
+# End optional protocol helpers.
+helpers_validate || exit $?
+
 ASSET="backpack_linux_${ARCH}.tar.gz"
 mkdir -p /etc/backpack "$INSTALL_DIR/backups"
 
@@ -407,6 +503,8 @@ else
   err "offline steps in the README. Or clone the repo and run install.sh inside it."
   exit 1
 fi
+
+install_helpers || { err "Optional helper installation failed; no helper was started"; exit 1; }
 
 chmod +x "$BIN_PATH"
 echo

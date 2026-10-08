@@ -28,7 +28,7 @@ type NaiveServerConfig struct {
 	Username string `toml:"username"`
 	// Password is the proxy account's secret, separate from server.token.
 	Password string `toml:"password"`
-	// Certificate is the absolute path to the PEM certificate chain; certificate renewal remains the operator's responsibility.
+	// Certificate is the absolute path to the PEM certificate chain. Renew externally; validated certificate/key replacements reload the tunnel automatically.
 	Certificate string `toml:"certificate"`
 	// Key is the absolute path to the certificate's PEM private key.
 	Key string `toml:"key"`

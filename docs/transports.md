@@ -1,5 +1,20 @@
 # Transports
 
+The optional managed Naive HTTP/2 wrapper runs with the existing TCP Reverse
+engine, configured using `[server.naive]` and `[client.naive]`. Install its pinned
+official helpers with `BP_HELPERS=naive bash install.sh` on Linux glibc amd64 or
+arm64; the installer prints their versioned absolute paths. Certificate/key
+renewal remains external, and valid file replacements reload the tunnel without
+a TOML edit. Invalid or incomplete replacements keep the current generation.
+Helper settings are configured manually and remain outside automatic transport
+selection. Each side owns its helper under the tunnel context; TCP forwarding
+and one endpoint are currently supported.
+
+`BP_HELPERS=xray` installs the pinned official Xray helper in a versioned
+directory; `BP_HELPERS=naive,xray` installs both sets. Existing helper directories
+are retained. No helper is started by the installer. Xray transport settings
+require a Backpack build that implements the managed Xray wrapper.
+
 Backpack carries every tunnel over one transport, chosen when you create the
 tunnel and changeable later from **Edit → Change transport**. They all move the
 same traffic between the two engines — they differ only in what they put on the
