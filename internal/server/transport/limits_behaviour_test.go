@@ -549,7 +549,8 @@ func TestPacingDeadlineFailureAndEOF(t *testing.T) {
 
 type pacingAllocationSink struct{ net.Conn }
 
-func (c *pacingAllocationSink) Write(p []byte) (int, error) { return len(p), nil }
+func (c *pacingAllocationSink) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *pacingAllocationSink) SetWriteDeadline(time.Time) error { return nil }
 func TestPacingDeadlineHotPathDoesNotAllocate(t *testing.T) {
 	socket, peer := net.Pipe()
 	defer peer.Close()
@@ -559,7 +560,10 @@ func TestPacingDeadlineHotPathDoesNotAllocate(t *testing.T) {
 	defer conn.Close()
 	payload := make([]byte, 1200)
 	conn.Write(payload)
-	if allocs := testing.AllocsPerRun(1000, func() { conn.Write(payload) }); allocs != 0 {
+	if allocs := testing.AllocsPerRun(1000, func() {
+		conn.SetWriteDeadline(time.Now().Add(time.Minute))
+		conn.Write(payload)
+	}); allocs != 0 {
 		t.Fatalf("warmed immediate pacing allocated %g times", allocs)
 	}
 }
