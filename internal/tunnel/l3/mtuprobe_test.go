@@ -3,6 +3,7 @@ package l3
 import (
 	"context"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -101,10 +102,11 @@ func TestTheTunnelMeasuresACappedPathAndSetsTheInterface(t *testing.T) {
 	}
 
 	// The dialler's carrier is wrapped so anything over the ceiling is
-	// swallowed, which is what a too-small path does.
+	// swallowed, which is what a too-small path does. The first handshake is
+	// also delayed past the settle period: measurement must wait for its keys.
 	var dropped atomic.Int64
 	dialer.wrapCarrier = func(c DatagramCarrier) DatagramCarrier {
-		return &cappedCarrier{DatagramCarrier: c, ceiling: wireCeiling, dropped: &dropped}
+		return &cappedCarrier{DatagramCarrier: c, ceiling: wireCeiling, dropped: &dropped, initDelay: 200 * time.Millisecond}
 	}
 	start(t, ctx, cancel, dialer, dialDev)
 
@@ -137,11 +139,18 @@ func TestTheTunnelMeasuresACappedPathAndSetsTheInterface(t *testing.T) {
 // cappedCarrier is a path with a size limit and no way of telling you about it.
 type cappedCarrier struct {
 	DatagramCarrier
-	ceiling int
-	dropped *atomic.Int64
+	ceiling   int
+	dropped   *atomic.Int64
+	initDelay time.Duration
+	initOnce  sync.Once
 }
 
 func (c *cappedCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if c.initDelay > 0 {
+		if h, _, err := parseHeader(p); err == nil && h.kind == typeInit {
+			c.initOnce.Do(func() { time.Sleep(c.initDelay) })
+		}
+	}
 	if len(p)+c.Overhead() > c.ceiling {
 		// Silently. That is the whole point: a real path sends nothing back.
 		c.dropped.Add(1)
