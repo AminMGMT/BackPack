@@ -154,9 +154,10 @@ For XHTTP and Naive, certificate renewal is external. Valid changes to the
 certificate/key files or a configured CA file reload the tunnel without a TOML
 edit. Identical file rewrites do not restart it; missing files, invalid pairs,
 and expired certificates keep the running generation.
-The generated helper configuration embeds validated TLS material so a helper
-cannot reread files changed after validation or install a rejected renewal.
-Protect both TOML files and the helper binaries from untrusted writes. The installer verifies pinned
+Naive server and Xray configurations embed validated TLS material so a helper
+cannot reread those files after validation or install a rejected renewal.
+Protect both TOML files and the helper binaries from untrusted writes. The
+installer verifies pinned
 archive hashes and never replaces an existing version directory.
 
 Backpack carries every tunnel over one transport, chosen when you create the
