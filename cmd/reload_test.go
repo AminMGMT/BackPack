@@ -44,6 +44,9 @@ func TestHelperCertificateRenewalValidatesBeforeReload(t *testing.T) {
 				if serial == 3 {
 					cert.DNSNames = []string{"wrong.example.org"}
 				}
+				if serial == 4 {
+					cert.NotBefore, cert.NotAfter = time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+				}
 				der, err := x509.CreateCertificate(rand.Reader, cert, cert, public, private)
 				if err != nil {
 					t.Fatal(err)
@@ -110,6 +113,10 @@ func TestHelperCertificateRenewalValidatesBeforeReload(t *testing.T) {
 			unchanged()
 			write(certPath, oldCert) // abandoned renewal restores the still-running pair
 			unchanged()
+			badCert, badKey := makePair(4)
+			write(certPath, badCert)
+			write(keyPath, badKey)
+			unchanged() // matched but expired replacement must keep the old generation
 			if helper == "xhttp" {
 				wrongCert, wrongKey := makePair(3)
 				write(certPath, wrongCert)
