@@ -511,7 +511,7 @@ func XrayClientJSON(c *config.ClientConfig, socksAddr string) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
+		"log": map[string]any{"loglevel": "warning", "access": "none"},
 		"inbounds": []any{map[string]any{"tag": "local", "listen": host, "port": port, "protocol": "socks",
 			"settings": map[string]any{"auth": "noauth", "udp": false}}},
 		"outbounds": []any{map[string]any{"tag": "block", "protocol": "blackhole"}, map[string]any{
@@ -556,7 +556,7 @@ func XrayServerJSON(c *config.ServerConfig) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
+		"log": map[string]any{"loglevel": "warning", "access": "none"},
 		"inbounds": []any{map[string]any{"tag": "carrier", "listen": host, "port": port, "protocol": "vless",
 			"settings": map[string]any{"clients": []any{user}, "decryption": "none"}, "streamSettings": stream}},
 		"outbounds": []any{map[string]any{"tag": "block", "protocol": "blackhole"}, map[string]any{
