@@ -13,6 +13,96 @@ import (
 	"github.com/backpack/backpack/internal/utils"
 )
 
+// The quiet reader initially has a short remaining budget. A real packet in
+// the opposite direction must refresh that budget, so a later reply survives.
+func TestRawUDPIdleBudgetTracksBothDirections(t *testing.T) {
+	listen := func() *net.UDPConn {
+		c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	server, backend := listen(), listen()
+	dial := func(peer *net.UDPConn) *net.UDPConn {
+		c, err := net.DialUDP("udp", nil, peer.LocalAddr().(*net.UDPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	tunnel, local := dial(server), dial(backend)
+	c := &UdpTransport{config: &UdpConfig{}, lifecycle: lifecycle{logger: silentLogger()}}
+	started := time.Now().Add(-60*time.Second + time.Second)
+	var activity atomic.Int64
+	done := make(chan struct{}, 2)
+	go func() { c.udpCopy(tunnel, local, 0, false, started, &activity); done <- struct{}{} }()
+	go func() { c.udpCopy(local, tunnel, 0, true, started, &activity); done <- struct{}{} }()
+	t.Cleanup(func() {
+		tunnel.Close()
+		local.Close()
+		for i := 0; i < 2; i++ {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("copy worker leaked")
+			}
+		}
+	})
+	time.Sleep(50 * time.Millisecond)
+	if _, err := server.WriteToUDP([]byte("upload"), tunnel.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatal(err)
+	}
+	backend.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 64)
+	n, addr, err := backend.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "upload" {
+		t.Fatalf("upload=%q", buf[:n])
+	}
+	time.Sleep(1100 * time.Millisecond)
+	select {
+	case <-done:
+		done <- struct{}{}
+		t.Fatal("one direction expired despite opposite traffic")
+	default:
+	}
+	if _, err := backend.WriteToUDP([]byte("reply"), addr); err != nil {
+		t.Fatal(err)
+	}
+	server.SetReadDeadline(time.Now().Add(time.Second))
+	n, _, err = server.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "reply" {
+		t.Fatalf("reply=%q", buf[:n])
+	}
+}
+
+func TestRawUDPExpiredFlowReturnsWithoutAnotherPacket(t *testing.T) {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	c := &UdpTransport{config: &UdpConfig{}, lifecycle: lifecycle{logger: silentLogger()}}
+	var activity atomic.Int64
+	done := make(chan struct{})
+	go func() { defer close(done); c.udpCopy(pc, pc, 0, false, time.Now().Add(-61*time.Second), &activity) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		pc.Close()
+		<-done
+		t.Fatal("fully idle flow waited for another packet")
+	}
+}
+
 type loopProbe struct {
 	server   controlwire.Link // the far end, as the server holds it
 	restarts atomic.Int32
