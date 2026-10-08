@@ -1,6 +1,7 @@
 package l3
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -177,7 +178,12 @@ func knownCarrier(name string) bool {
 // the peer to send to, or nil on the listening side of a carrier that learns
 // its peer from the packets that arrive.
 func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
-	carrier, peer, err := openBareCarrier(cfg)
+	return openCarrierContext(context.Background(), cfg)
+}
+
+// openCarrierContext lets Run cancel a pending QUIC handshake at shutdown.
+func openCarrierContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
+	carrier, peer, err := openBareCarrier(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -194,7 +200,7 @@ func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 
 // openBareCarrier builds the carrier the config names, without the layers that
 // wrap it.
-func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
+func openBareCarrier(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Carrier)) {
 	case "", CarrierUDP:
 		return openUDPPaths(cfg)
@@ -205,7 +211,7 @@ func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 	case CarrierSpoof:
 		return openSpoof(cfg)
 	case CarrierQuic:
-		return openQuic(cfg)
+		return openQuicContext(ctx, cfg)
 	case CarrierSNI:
 		return openSNI(cfg)
 	default:
