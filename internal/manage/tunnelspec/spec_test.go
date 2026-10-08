@@ -19,6 +19,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"strings"
 	"testing"
 )
@@ -157,8 +158,19 @@ func TestNaiveIncompatibleEditPreservesExistingConfig(t *testing.T) {
 				t.Fatalf("valid base: %v", err)
 			}
 			tc.edit(&s)
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if _, err := s.Save(); err == nil || !strings.Contains(err.Error(), "Naive configuration") {
 				t.Fatalf("incompatible edit reached config/service mutation: %v", err)
+			}
+			if err := Apply(s); err == nil || !strings.Contains(err.Error(), "Naive configuration") {
+				t.Fatalf("incompatible apply reached config/service mutation: %v", err)
+			}
+			after, err := os.Stat(path)
+			if err != nil || !os.SameFile(before, after) || before.ModTime() != after.ModTime() {
+				t.Fatal("invalid helper edit replaced the current file")
 			}
 			got, err := os.ReadFile(path)
 			if err != nil || string(got) != string(original) {
@@ -237,6 +249,21 @@ func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
 				if cfg.Server.Xray != s.XrayServer || cfg.Client.Xray != s.XrayClient {
 					t.Fatal("ordinary edit changed Xray settings")
 				}
+				if role == "server" && mode == "xhttp" {
+					body, err := naive.XrayServerJSON(&cfg.Server)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var generated map[string]any
+					if err := json.Unmarshal(body, &generated); err != nil {
+						t.Fatal(err)
+					}
+					stream := generated["inbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+					cert := stream["tlsSettings"].(map[string]any)["certificates"].([]any)[0].(map[string]any)
+					if cert["oneTimeLoading"] != true {
+						t.Fatal("Xray must not reload a certificate rejected by BackPack")
+					}
+				}
 				encoded, err := json.Marshal(loaded)
 				if err != nil {
 					t.Fatal(err)
@@ -254,8 +281,19 @@ func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
 				} {
 					invalid := s
 					edit(&invalid)
+					before, err := os.Stat(path)
+					if err != nil {
+						t.Fatal(err)
+					}
 					if _, err := invalid.Save(); err == nil || !strings.Contains(err.Error(), "Xray configuration") {
 						t.Fatalf("invalid edit reached mutation: %v", err)
+					}
+					if err := Apply(invalid); err == nil || !strings.Contains(err.Error(), "Xray configuration") {
+						t.Fatalf("invalid apply reached mutation: %v", err)
+					}
+					after, err := os.Stat(path)
+					if err != nil || !os.SameFile(before, after) || before.ModTime() != after.ModTime() {
+						t.Fatal("invalid helper edit replaced the current file")
 					}
 					got, err := os.ReadFile(path)
 					if err != nil || string(got) != original {

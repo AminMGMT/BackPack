@@ -450,14 +450,21 @@ func (s Spec) validateNaive() error {
 	return fmt.Errorf("Naive helper settings do not match the tunnel role")
 }
 
+func (s Spec) validateHelpers() error {
+	if err := s.validateNaive(); err != nil {
+		return fmt.Errorf("Naive configuration: %w", err)
+	}
+	if err := s.validateXray(); err != nil {
+		return fmt.Errorf("Xray configuration: %w", err)
+	}
+	return nil
+}
+
 // Save writes the config file, the systemd unit, reloads systemd and starts
 // the tunnel. It returns the service name on success.
 func (s Spec) Save() (string, error) {
-	if err := s.validateNaive(); err != nil {
-		return "", fmt.Errorf("Naive configuration: %w", err)
-	}
-	if err := s.validateXray(); err != nil {
-		return "", fmt.Errorf("Xray configuration: %w", err)
+	if err := s.validateHelpers(); err != nil {
+		return "", err
 	}
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return "", err

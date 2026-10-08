@@ -16,6 +16,11 @@ import (
 // the tunnel restarted with it, so a bad edit (a port already in use, a wrong
 // address) can never leave the user with a dead tunnel and a lost config.
 func Apply(s Spec) error {
+	// Helper refusals happen before any mutation; do not enter rollback and
+	// replace the current file for an edit that was never written.
+	if err := s.validateHelpers(); err != nil {
+		return err
+	}
 	path := app.ConfigPath(s.Name)
 	service := app.ServiceName(s.Name)
 

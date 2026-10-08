@@ -522,7 +522,7 @@ func XrayServerJSON(c *config.ServerConfig) ([]byte, error) {
 		}
 		stream = map[string]any{"network": "xhttp", "security": "tls", "xhttpSettings": map[string]any{
 			"path": x.Path, "host": httpHost, "mode": "auto"}, "tlsSettings": map[string]any{
-			"alpn": []string{"h2"}, "certificates": []any{map[string]any{"certificateFile": x.Certificate, "keyFile": x.Key}},
+			"alpn": []string{"h2"}, "certificates": []any{map[string]any{"certificateFile": x.Certificate, "keyFile": x.Key, "oneTimeLoading": true}},
 		}}
 	}
 	routing, err := xrayRouting("carrier", c.BindAddr, "tunnel")
