@@ -162,22 +162,29 @@ func TestBatchedUDPCarriesMixedRunsIntactBothWays(t *testing.T) {
 		name     string
 		from, to *batchDevice
 	}{{"dial→listen", aDev, bDev}, {"listen→dial", bDev, aDev}} {
-		want := map[string]int{}
-		for i := 0; i < packets; i++ {
-			p := build(i)
-			want[string(p)]++
-			dir.from.queue(p)
-		}
 		deadline := time.After(20 * time.Second)
-		for got := 0; got < packets; got++ {
-			select {
-			case p := <-dir.to.emitted:
-				if want[string(p)] == 0 {
-					t.Fatalf("%s: a packet arrived changed or twice (%d bytes)", dir.name, len(p))
+		// Check batch integrity without assuming UDP can retain an arbitrary
+		// burst: the kernel may clamp the requested receive buffer on CI hosts.
+		// Drain each device-sized batch before submitting the next one. Every
+		// packet must still arrive exactly once, with no retransmissions.
+		for first := 0; first < packets; first += batch {
+			end := min(first+batch, packets)
+			want := map[string]int{}
+			for i := first; i < end; i++ {
+				p := build(i)
+				want[string(p)]++
+				dir.from.queue(p)
+			}
+			for got := first; got < end; got++ {
+				select {
+				case p := <-dir.to.emitted:
+					if want[string(p)] == 0 {
+						t.Fatalf("%s: a packet arrived changed or twice (%d bytes)", dir.name, len(p))
+					}
+					want[string(p)]--
+				case <-deadline:
+					t.Fatalf("%s: only %d of %d packets crossed", dir.name, got, packets)
 				}
-				want[string(p)]--
-			case <-deadline:
-				t.Fatalf("%s: only %d of %d packets crossed", dir.name, got, packets)
 			}
 		}
 	}
