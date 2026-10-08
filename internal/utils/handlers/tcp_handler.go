@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 	"github.com/sirupsen/logrus"
 )
@@ -234,8 +235,14 @@ func plainTCP(c net.Conn) *net.TCPConn {
 // TCP and QUIC both carry directional EOF without changing the tunnel wire.
 // Other transports retain their existing full-close behavior.
 func halfCloser(c net.Conn) interface{ CloseWrite() error } {
-	conn, _ := relayConn(c).(interface{ CloseWrite() error })
-	return conn
+	switch conn := relayConn(c).(type) {
+	case *net.TCPConn:
+		return conn
+	case *network.QUICStreamConn:
+		return conn
+	default:
+		return nil
+	}
 }
 func finishDirection(from, to net.Conn, err error) {
 	if (err == nil || errors.Is(err, io.EOF)) && halfCloser(from) != nil {
