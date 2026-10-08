@@ -387,7 +387,8 @@ func (m *Usage) writeUsageData(data []byte) error {
 	} else if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		// A dangling link must not be silently replaced with a regular log.
 		// Keep the pending counters until its destination becomes available.
-		if _, err := filepath.EvalSymlinks(path); err != nil {
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
 			return err
 		}
 	}
