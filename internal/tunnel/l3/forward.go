@@ -358,6 +358,19 @@ func (f *udpFlow) idle(now time.Time, limit time.Duration) bool {
 	return now.Sub(time.Unix(0, f.lastSeen.Load())) > limit
 }
 
+// UDP dial succeeds even when nothing listens. An explicit backend read error
+// is the failure signal; silence, idle reaping and shutdown say nothing about
+// the backend and must not keep a one-way UDP service out of rotation.
+func (f *udpFlow) noteBackendReadError(ctx context.Context, err error) {
+	var netErr net.Error
+	if err == nil || ctx.Err() != nil || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) {
+		return
+	}
+	f.member.downUntil.Store(time.Now().Add(backendCooldown).UnixNano())
+}
+
 func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func()) error {
 	conn, err := net.ListenPacket("udp", m.Listen)
 	bound()
@@ -494,6 +507,7 @@ func (f *Forwarder) pumpUDPReplies(
 			if errors.As(err, &netErr) && netErr.Timeout() && !flow.idle(time.Now(), udpFlowIdle) {
 				continue // the client is still sending; keep waiting for a reply
 			}
+			flow.noteBackendReadError(ctx, err)
 			return
 		}
 		flow.touch()
