@@ -76,10 +76,11 @@ func WriteDatagram(w io.Writer, payload []byte) error {
 // not fit would have to be discarded mid-frame, which desynchronises the
 // stream — every following datagram would be read from the wrong offset.
 func ReadDatagram(r io.Reader, buf []byte) (int, error) {
-	var small [2]byte
-	hdr := small[:]
+	var hdr []byte
 	if len(buf) >= 2 {
 		hdr = buf[:2]
+	} else {
+		hdr = make([]byte, 2)
 	}
 	if _, err := io.ReadFull(r, hdr); err != nil {
 		return 0, err
@@ -95,6 +96,35 @@ func ReadDatagram(r io.Reader, buf []byte) (int, error) {
 		return 0, err
 	}
 	return size, nil
+}
+
+// ReadDatagramInto reads one complete frame, growing a reusable receive buffer
+// to its payload. The returned slice is valid until the next read into it.
+// Small flows keep 2 KiB instead of reserving the maximum datagram size; growth
+// is bounded by the 16-bit wire length, and a warmed flow does not allocate.
+// On an incomplete frame it returns an empty slice and the read error.
+func ReadDatagramInto(r io.Reader, buf []byte) ([]byte, error) {
+	if cap(buf) < 2 {
+		buf = make([]byte, 2048)
+	}
+	if _, err := io.ReadFull(r, buf[:2]); err != nil {
+		return buf[:0], err
+	}
+	size := int(binary.BigEndian.Uint16(buf[:2]))
+	if cap(buf) < size {
+		capacity := MaxDatagram
+		if size <= 2048 {
+			capacity = 2048
+		} else if size <= 16384 {
+			capacity = 16384
+		}
+		buf = make([]byte, size, capacity)
+	}
+	buf = buf[:size]
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return buf[:0], err
+	}
+	return buf, nil
 }
 
 var datagramClasses = [...]int{512, 2048, 16384, MaxDatagram + 2}

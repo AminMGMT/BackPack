@@ -446,14 +446,15 @@ func (e *Edge) pumpUDPReplies(flows *sync.Map, key string, flow *udpFlow, local 
 		e.limiter.Release()
 	}()
 
-	buf := make([]byte, maxDatagram)
+	var buf []byte
 	for {
-		n, err := network.ReadDatagram(flow.stream, buf)
+		var err error
+		buf, err = network.ReadDatagramInto(flow.stream, buf)
 		if err != nil {
 			return
 		}
 		flow.touch()
-		if _, err := local.WriteTo(buf[:n], client); err != nil {
+		if _, err := local.WriteTo(buf, client); err != nil {
 			return
 		}
 	}
