@@ -213,7 +213,8 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			Outbound:       outbound,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth: tr == config.STEALTH,
+			Stealth:       tr == config.STEALTH,
+			ManagedHelper: c.config.Naive.Enabled() || c.config.Xray.Enabled(),
 		}
 		tcpClient := transport.NewTCPClient(ctx, tcpConfig, c.logger)
 		go tcpClient.Start()

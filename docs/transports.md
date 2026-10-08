@@ -35,6 +35,16 @@ reverse control connection and pool reconnect. Start with a modest pool and
 measure memory/CPU and verified throughput before increasing it: each reverse
 pool connection adds work in the helper as well as the TCP engine.
 
+Both engines must run the same managed-carrier build. Managed connections now
+carry bounded data records and an explicit EOF marker inside the encrypted
+helper stream, because a physical TCP half-close can make a proxy helper close
+the response direction as well. The adapter preserves delayed backend replies
+and closes the physical stream once both directions finish or the generation
+is cancelled. Ordinary TCP connections keep their existing wire format. The
+record header adds four bytes per at-most-64KiB chunk; vectored TCP writes avoid
+a separate header syscall. There is no automatic fallback to older unframed
+managed peers. Deploy the matching build to both sides together.
+
 ### Naive HTTP/2
 
 Install with `BP_HELPERS=naive bash install.sh`. The pinned versions are

@@ -181,7 +181,8 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 			BandwidthMbps:  s.config.BandwidthMbps,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth: tr == config.STEALTH,
+			Stealth:       tr == config.STEALTH,
+			ManagedHelper: s.config.Naive.Enabled() || s.config.Xray.Enabled(),
 		}
 
 		tcpServer := transport.NewTCPServer(ctx, tcpConfig, s.logger)

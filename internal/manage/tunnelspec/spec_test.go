@@ -1,6 +1,7 @@
 package tunnelspec
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -9,7 +10,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -301,6 +304,75 @@ func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestManagedCarrierPreservesReplyAfterDirectionalEOF(t *testing.T) {
+	for _, size := range []int{0, 65536, 65537, 262144} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			left, right := net.Pipe()
+			client, server := naive.WrapDuplex(left), naive.WrapDuplex(right)
+			defer client.Close()
+			defer server.Close()
+			client.SetDeadline(time.Now().Add(3 * time.Second))
+			server.SetDeadline(time.Now().Add(3 * time.Second))
+			payload := bytes.Repeat([]byte{0xA7}, size)
+			reply := []byte("complete backend reply after request EOF")
+			done := make(chan error, 1)
+			go func() {
+				got, err := io.ReadAll(server)
+				if err == nil && !bytes.Equal(got, payload) {
+					err = fmt.Errorf("request data changed")
+				}
+				if err == nil {
+					_, err = server.Write(reply)
+				}
+				if err == nil {
+					err = server.CloseWrite()
+				}
+				done <- err
+			}()
+			if n, err := client.Write(payload); err != nil || n != len(payload) {
+				t.Fatalf("write: %d %v", n, err)
+			}
+			if err := client.CloseWrite(); err != nil {
+				t.Fatal(err)
+			}
+			if err := client.CloseWrite(); err != nil {
+				t.Fatalf("repeated EOF: %v", err)
+			}
+			if _, err := client.Write([]byte("late")); err == nil {
+				t.Fatal("write after EOF succeeded")
+			}
+			got, err := io.ReadAll(client)
+			if err != nil || !bytes.Equal(got, reply) {
+				t.Fatalf("response after EOF: %q %v", got, err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestManagedCarrierCloseInterruptsBothDirections(t *testing.T) {
+	left, right := net.Pipe()
+	c := naive.WrapDuplex(left)
+	defer right.Close()
+	defer c.Close()
+	done := make(chan error, 2)
+	go func() { _, err := c.Read(make([]byte, 1)); done <- err }()
+	go func() { _, err := c.Write([]byte("blocked")); done <- err }()
+	c.Close()
+	for range 2 {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("closed carrier completed blocked IO successfully")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("close waited on an IO mutex")
 		}
 	}
 }

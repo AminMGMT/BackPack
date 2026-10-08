@@ -2,6 +2,7 @@ package naive
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -312,4 +313,164 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// DuplexConn carries directional EOF inside the helper's byte stream. Official
+// proxy helpers may close both directions on a physical FIN; keeping the carrier
+// open until both relays finish preserves a backend's reply after request EOF.
+// Both managed peers must use this framing. Ordinary TCP remains unframed.
+type DuplexConn struct {
+	net.Conn
+	readMu, writeMu         sync.Mutex
+	readHeader, writeHeader [4]byte
+	headerRead              int
+	remaining               uint32
+	readEOF, writeEOF       bool
+	writeErr                error
+	writeParts              [2][]byte
+	writeBuffers            net.Buffers
+}
+
+func WrapDuplex(conn net.Conn) *DuplexConn {
+	c := &DuplexConn{Conn: conn}
+	c.writeBuffers = c.writeParts[:]
+	return c
+}
+
+// PreservesDirectionalEOF identifies the explicit framing capability to the
+// relay without exposing the raw connection to zero-copy bypasses.
+func (*DuplexConn) PreservesDirectionalEOF() {}
+
+func (c *DuplexConn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	if c.readEOF {
+		return 0, io.EOF
+	}
+	for c.remaining == 0 {
+		for c.headerRead < len(c.readHeader) {
+			n, err := c.Conn.Read(c.readHeader[c.headerRead:])
+			c.headerRead += n
+			if err != nil {
+				if errors.Is(err, io.EOF) && c.headerRead == len(c.readHeader) && binary.BigEndian.Uint32(c.readHeader[:]) == 0 {
+					c.readEOF = true
+					return 0, io.EOF
+				}
+				return 0, c.readFailure(err)
+			}
+			if n == 0 {
+				return 0, nil
+			}
+		}
+		c.remaining = binary.BigEndian.Uint32(c.readHeader[:])
+		c.headerRead = 0
+		if c.remaining == 0 {
+			c.readEOF = true
+			return 0, io.EOF
+		}
+		if c.remaining > 65536 {
+			c.Conn.Close()
+			return 0, errors.New("managed helper frame exceeds 65536 bytes")
+		}
+	}
+	if len(p) > int(c.remaining) {
+		p = p[:c.remaining]
+	}
+	n, err := c.Conn.Read(p)
+	c.remaining -= uint32(n)
+	if err != nil {
+		err = c.readFailure(err)
+	}
+	return n, err
+}
+
+func (c *DuplexConn) readFailure(err error) error {
+	if errors.Is(err, io.EOF) {
+		err = io.ErrUnexpectedEOF
+	}
+	if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		c.Conn.Close()
+	}
+	return err
+}
+
+func (c *DuplexConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	if c.writeEOF {
+		return 0, io.ErrClosedPipe
+	}
+	written := 0
+	for len(p) != 0 {
+		size := min(len(p), 65536)
+		binary.BigEndian.PutUint32(c.writeHeader[:], uint32(size))
+		if _, ok := c.Conn.(*net.TCPConn); ok {
+			// One vectored TCP write carries both header and data, avoiding an
+			// extra syscall/small packet for each record. Never bypass framing.
+			c.writeParts[0], c.writeParts[1] = c.writeHeader[:], p[:size]
+			c.writeBuffers = c.writeParts[:]
+			n, err := c.writeBuffers.WriteTo(c.Conn)
+			clear(c.writeParts[:])
+			written += max(0, int(n)-len(c.writeHeader))
+			if err == nil && n != int64(len(c.writeHeader)+size) {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				c.writeErr = err
+				c.Conn.Close()
+				return written, err
+			}
+			p = p[size:]
+			continue
+		}
+		if _, err := c.writeRecordPart(c.writeHeader[:]); err != nil {
+			return written, err
+		}
+		n, err := c.writeRecordPart(p[:size])
+		written += n
+		if err != nil {
+			return written, err
+		}
+		p = p[size:]
+	}
+	return written, nil
+}
+
+func (c *DuplexConn) writeRecordPart(p []byte) (int, error) {
+	written := 0
+	for len(p) != 0 {
+		n, err := c.Conn.Write(p)
+		written += n
+		p = p[n:]
+		if err == nil && n == 0 {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			c.writeErr = err
+			c.Conn.Close() // A partial record cannot safely be retried.
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+func (c *DuplexConn) CloseWrite() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.writeErr != nil {
+		return c.writeErr
+	}
+	if c.writeEOF {
+		return nil
+	}
+	c.writeEOF = true
+	clear(c.writeHeader[:])
+	_, err := c.writeRecordPart(c.writeHeader[:])
+	return err
 }

@@ -234,6 +234,11 @@ func halfCloser(c net.Conn) interface{ CloseWrite() error } {
 		return conn
 	case *network.QUICStreamConn:
 		return conn
+	case interface {
+		CloseWrite() error
+		PreservesDirectionalEOF()
+	}:
+		return conn
 	default:
 		return nil
 	}

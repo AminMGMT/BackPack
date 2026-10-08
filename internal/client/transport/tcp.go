@@ -8,6 +8,7 @@ import (
 
 	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
 
@@ -56,6 +57,8 @@ type TcpConfig struct {
 	// Stealth wraps every tunnel-carrying connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// ManagedHelper carries directional EOF as records through an outer proxy.
+	ManagedHelper bool
 }
 
 // wrapStealth upgrades a freshly dialled tunnel connection to the Noise record
@@ -63,6 +66,9 @@ type TcpConfig struct {
 // otherwise. Only tunnel-carrying connections are wrapped; the dial to the
 // local backend stays plain, since that traffic never leaves the machine.
 func (c *TcpTransport) wrapStealth(conn net.Conn) (net.Conn, error) {
+	if c.config.ManagedHelper {
+		return naive.WrapDuplex(conn), nil
+	}
 	if !c.config.Stealth {
 		return conn, nil
 	}
