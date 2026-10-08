@@ -315,3 +315,24 @@ func TestManagedHTTPSLinksRejectPrivateOrMalformedTrust(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedHTTPSSetupInstructionsRequireMatchingBuild(t *testing.T) {
+	link := ShareLink{Kind: "reverse", From: "iran", Tok: "secret", Tr: "reality", Port: "443", InnerPort: "3080"}
+	raw, err := link.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command := InstallCommand(raw); command != "" {
+		t.Fatal("managed helper link would install the published legacy release")
+	}
+	out := capture(t, func() { printLinkBlock(raw, "unused") })
+	for _, expected := range []string{"BP_HELPERS=naive,xray", "HTTPS → Same Protocol → Setup Link", "sudo backpack link apply '" + raw + "'"} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("missing setup instruction %q", expected)
+		}
+	}
+	form := MirrorForPeer(link)
+	if form.ManagedLink == nil || form.ManagedLink.Tr != link.Tr {
+		t.Fatal("terminal form discarded managed settings")
+	}
+}

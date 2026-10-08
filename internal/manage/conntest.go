@@ -320,14 +320,15 @@ type connTestCase struct {
 
 // ConnTestIran is a test the Iran side is running.
 type ConnTestIran struct {
-	dir     string
-	link    ConnTestLink
-	cases   []*connTestCase
-	coord   *ctCoordinator
-	mu      sync.Mutex
-	engines []*ctEngine
-	root    bool
-	best    ConnTestBest
+	dir           string
+	link          ConnTestLink
+	cases         []*connTestCase
+	coord         *ctCoordinator
+	mu            sync.Mutex
+	engines       []*ctEngine
+	root          bool
+	best          ConnTestBest
+	realityTarget string
 }
 
 // ConnTestOptions are what the Iran operator answers.
@@ -581,6 +582,7 @@ func ctCertificate(dir, name, host string) (cert, key, ca string, err error) {
 func ctProbeRealityCover(ctx context.Context, target string, roots *x509.CertPool) error {
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{
 		MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}, RootCAs: roots,
+		CurvePreferences: []tls.CurveID{tls.X25519},
 	}}
 	conn, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
@@ -702,6 +704,9 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		return
 	}
 	s.engines = append(s.engines, engine)
+	if c.tr == "reality" {
+		s.realityTarget = coverTarget
+	}
 	body, _ := json.Marshal(settings)
 	s.coord.mu.Lock()
 	if s.coord.carriers == nil {

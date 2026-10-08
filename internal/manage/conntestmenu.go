@@ -79,6 +79,9 @@ func connTestIranMenu() {
 		return
 	}
 	defer s.Close()
+	if s.realityTarget != "" {
+		tui.Info("REALITY Cover Selected: " + s.realityTarget)
+	}
 
 	fmt.Println()
 	tui.Info("Test Link (On The Kharej: sudo backpack → 0 → Kharej):")
