@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
+	"github.com/sirupsen/logrus"
 )
 
 // The udp transport's forwarded ports: each source address is a flow, carried
@@ -392,7 +393,9 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 				g.usageMonitor.AddOrUpdatePort(from.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
 
-			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			if s.logger.IsLevelEnabled(logrus.DebugLevel) {
+				s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			}
 
 		case <-idle.C:
 			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
@@ -439,7 +442,9 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 				g.usageMonitor.AddOrUpdatePort(to.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
 
-			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			if s.logger.IsLevelEnabled(logrus.DebugLevel) {
+				s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			}
 
 		case <-idle.C:
 			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())

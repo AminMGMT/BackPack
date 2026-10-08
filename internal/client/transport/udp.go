@@ -344,7 +344,9 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 			c.state.Usage().AddOrUpdatePort(port, uint64(totalWritten))
 		}
 
-		c.logger.Debugf("forwarded %d bytes from %s to %s", n, srcConn.LocalAddr().String(), dstConn.RemoteAddr().String())
+		if c.logger.IsLevelEnabled(logrus.DebugLevel) {
+			c.logger.Debugf("forwarded %d bytes from %s to %s", n, srcConn.LocalAddr().String(), dstConn.RemoteAddr().String())
+		}
 	}
 }
 
