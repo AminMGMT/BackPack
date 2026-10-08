@@ -258,6 +258,9 @@ func (c *quicCarrier) Overhead() int       { return quicOverhead }
 
 // acceptLoop takes every connection the listener is offered.
 func (c *quicCarrier) acceptLoop() {
+	// A failed listener cannot accept a returning peer. Wake the receive pump
+	// and release this carrier so the tunnel generation can be rebuilt.
+	defer c.Close()
 	for {
 		conn, err := c.ln.Accept(context.Background())
 		if err != nil {
