@@ -110,6 +110,90 @@ func TestARefusedBackendClosesTheUsersConnection(t *testing.T) {
 	<-done
 }
 
+// Raw UDP uses the same DNS budget for its tunnel endpoint and local backend.
+func TestRawUDPBackendAndEndpointDNSRespectCancellationAndTimeout(t *testing.T) {
+	for _, backendPhase := range []bool{false, true} {
+		for _, cancelGeneration := range []bool{true, false} {
+			name := "endpoint"
+			if backendPhase {
+				name = "backend"
+			}
+			if cancelGeneration {
+				name += "/cancel"
+			} else {
+				name += "/timeout"
+			}
+			t.Run(name, func(t *testing.T) {
+				previous := net.DefaultResolver
+				release := make(chan struct{})
+				started := make(chan struct{}, 1)
+				var once sync.Once
+				unblock := func() { once.Do(func() { close(release) }) }
+				net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					select {
+					case started <- struct{}{}:
+					default:
+					}
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-release:
+						return nil, errors.New("resolver released")
+					}
+				}}
+				ctx, cancel := context.WithCancel(context.Background())
+				timeout := 40 * time.Millisecond
+				if cancelGeneration {
+					timeout = 5 * time.Second
+				}
+				config := &UdpConfig{RemoteAddr: "raw-endpoint.invalid:53", Endpoints: network.NewEndpoints("raw-endpoint.invalid:53"), DialTimeOut: timeout, ConnPoolSize: 1}
+				c := &UdpTransport{config: config}
+				c.logger = silentLogger()
+				c.state.Reset(ctx, cancel, nil)
+				run := c.tunnelDialer
+				if backendPhase {
+					listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer listener.Close()
+					tunnel, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer tunnel.Close()
+					run = func() { c.localDialer("raw-backend.invalid:53", 53, tunnel) }
+				}
+				done := make(chan struct{})
+				go func() { defer close(done); run() }()
+				defer func() {
+					cancel()
+					unblock()
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("raw UDP DNS worker did not stop")
+					}
+					net.DefaultResolver = previous
+				}()
+				select {
+				case <-started:
+				case <-time.After(time.Second):
+					t.Fatal("raw UDP DNS did not start")
+				}
+				if cancelGeneration {
+					cancel()
+				}
+				select {
+				case <-done:
+				case <-time.After(300 * time.Millisecond):
+					t.Fatal("raw UDP DNS ignored cancellation or dial timeout")
+				}
+			})
+		}
+	}
+}
+
 // DNS is part of the UDP backend dial budget, and cancellation must not leave
 // an old generation waiting for a resolver before it can reconnect.
 func TestUDPBackendDNSObeysGenerationAndDialTimeout(t *testing.T) {
