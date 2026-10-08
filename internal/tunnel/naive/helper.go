@@ -190,11 +190,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 			cmd.Env = env
 			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 			if err := cmd.Start(); err != nil {
-				if first {
-					ready <- fmt.Errorf("starting %s %s helper: %w", label, mode, err)
-					return
-				}
-				log.Warnf("%s %s helper could not restart; retrying", label, mode)
+				log.Warnf("%s %s helper could not start: %v; retrying in one second", label, mode, err)
 				if !sleep(ctx, time.Second) {
 					return
 				}
@@ -206,8 +202,15 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 				err := waitReady(ctx, addr, mode, exited)
 				if err != nil {
 					stopChild(cmd, exited)
-					ready <- err
-					return
+					if ctx.Err() != nil {
+						ready <- ctx.Err()
+						return
+					}
+					log.Warnf("%s %s helper did not become ready: %v; retrying in one second", label, mode, err)
+					if !sleep(ctx, time.Second) {
+						return
+					}
+					continue
 				}
 				first = false
 				ready <- nil
