@@ -207,9 +207,21 @@ func (s *session) sealKind(dst, plaintext []byte, kind byte) ([]byte, error) {
 		return nil, errSessionExhausted
 	}
 	h := header{kind: kind, session: s.id, counter: counter}
-	ad := h.bytes()
-	dst = append(dst[:0], ad[:]...)
-	return s.send.Encrypt(dst, counter, ad[:], plaintext), nil
+	wireLen := headerLen + len(plaintext) + tagLen
+	if cap(dst) < wireLen+headerLen {
+		dst = make([]byte, wireLen+headerLen)
+	} else {
+		dst = dst[:wireLen+headerLen]
+	}
+	// Keep authenticated data disjoint from the AEAD destination. Clipping
+	// its capacity prevents ciphertext from reaching the scratch header.
+	ad := dst[wireLen:]
+	h.put(ad)
+	copy(dst[:headerLen], ad)
+	// ChaCha20-Poly1305 appends exactly tagLen bytes, fitting in place.
+	s.send.Encrypt(dst[:headerLen:wireLen], counter, ad, plaintext)
+	// Preserve the scratch capacity for the next packet.
+	return dst[:wireLen], nil
 }
 
 // open authenticates and decrypts a data message, appending the plaintext to
