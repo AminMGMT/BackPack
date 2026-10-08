@@ -8,6 +8,51 @@ import (
 	"time"
 )
 
+// A failed reply ends the whole flow even while the other worker waits for a
+// packet; it must not occupy admission capacity until the 60-second idle timer.
+func TestUDPReplyFailureReleasesBothCopyWorkers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := pc.LocalAddr().(*net.UDPAddr)
+	pc.Close()
+	local := &LocalUDPConn{addr: peer, listener: pc, payload: make(chan []byte, 1)}
+	tunnel := &TunnelUDPConn{addr: peer, listener: pc, payload: make(chan []byte, 1)}
+	tunnel.payload <- []byte("reply")
+	active := map[string]*LocalUDPConn{peer.String(): local}
+	mu := &sync.Mutex{}
+	lim := newLimiter(Limits{MaxConnections: 1})
+	if !lim.acquire() {
+		t.Fatal("cannot acquire flow slot")
+	}
+	s := &UdpTransport{config: &UdpConfig{}, limits: lim, lifecycle: lifecycle{logger: quietLogger()}, activeConnections: map[string]*TunnelUDPConn{peer.String(): tunnel}}
+	g := &udpGen{ctx: ctx}
+	done := make(chan struct{})
+	go func() { defer close(done); s.udpCopy(g, local, tunnel, &active, mu) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("copy workers leaked")
+		}
+	})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reply failure waited for the other direction's idle timeout")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("flow failure canceled the whole generation")
+	}
+	if len(active) != 0 || len(s.activeConnections) != 0 || lim.active.Load() != 0 {
+		t.Fatal("failed flow retained its entries or connection slot")
+	}
+}
+
 // The udp transport gives up on a forwarded flow that has waited more than
 // three seconds for a tunnel connection — which happens whenever the pool is
 // momentarily empty, and always happens when traffic arrives before the client

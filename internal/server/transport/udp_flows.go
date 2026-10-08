@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/metrics"
@@ -252,18 +253,25 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 }
 
 func (s *UdpTransport) udpCopy(g *udpGen, udpLocal *LocalUDPConn, udpTunnel *TunnelUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
+	ctx, cancel := context.WithCancel(g.ctx)
+	defer cancel()
+	flow := &udpGen{ctx: ctx, usageMonitor: g.usageMonitor}
+	started := time.Now()
+	var activity atomic.Int64
 	done := make(chan struct{})
 
 	// Handle data from local to tunnel
 	go func() {
 		defer close(done)
-		s.udpLocalCopy(g, udpLocal, udpTunnel)
+		defer cancel()
+		s.udpLocalCopy(flow, udpLocal, udpTunnel, started, &activity)
 	}()
 
 	// Handle data from tunnel to local
-	s.udpTunnelCopy(g, udpTunnel, udpLocal)
+	s.udpTunnelCopy(flow, udpTunnel, udpLocal, started, &activity)
+	cancel()
 
-	// Wait until one of the directions is done (connection closed or idle)
+	// Cancellation stops the other direction before joining it.
 	<-done
 
 	// Remove local connection from active connections and close the channel.
@@ -344,7 +352,7 @@ func (s *UdpTransport) dropTunnelConn(conn *TunnelUDPConn) {
 	s.activeMu.Unlock()
 }
 
-func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn) {
+func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn, started time.Time, activity *atomic.Int64) {
 	// One timer for the session, reset per packet.
 	//
 	// This was time.After inside the select, which allocates a fresh timer on
@@ -382,6 +390,7 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 				totalWritten += w
 			}
 
+			touchUDPActivity(started, activity)
 			// Onto the tunnel: the other half of what this transport never
 			// counted. See acceptTunnelConn for the inbound side.
 			metrics.AddBytes(0, uint64(totalWritten))
@@ -394,6 +403,10 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
 
 		case <-idle.C:
+			if remaining := idleForward - (time.Since(started) - time.Duration(activity.Load())); remaining > 0 {
+				idle.Reset(remaining)
+				continue
+			}
 			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
 			return
 		}
@@ -406,7 +419,7 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 	}
 }
 
-func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUDPConn) {
+func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUDPConn, started time.Time, activity *atomic.Int64) {
 	// See udpLocalCopy for why this is one timer rather than a time.After per
 	// packet, and why the context is watched.
 	idle := time.NewTimer(idleForward)
@@ -435,6 +448,7 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 				totalWritten += w
 			}
 
+			touchUDPActivity(started, activity)
 			if s.config.Sniffer {
 				g.usageMonitor.AddOrUpdatePort(to.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
@@ -442,6 +456,10 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
 
 		case <-idle.C:
+			if remaining := idleForward - (time.Since(started) - time.Duration(activity.Load())); remaining > 0 {
+				idle.Reset(remaining)
+				continue
+			}
 			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
 			return
 		}
@@ -451,6 +469,17 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 		// its channel is empty and Reset is safe.
 		idle.Stop()
 		idle.Reset(idleForward)
+	}
+}
+
+// Activity is elapsed monotonic time, shared by both directions. Concurrent
+// updates must not move it backwards if one writer is briefly descheduled.
+func touchUDPActivity(started time.Time, activity *atomic.Int64) {
+	now := time.Since(started).Nanoseconds()
+	for previous := activity.Load(); now > previous; previous = activity.Load() {
+		if activity.CompareAndSwap(previous, now) {
+			return
+		}
 	}
 }
 

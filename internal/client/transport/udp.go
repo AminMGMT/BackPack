@@ -273,15 +273,21 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 
 	defer remoteConn.Close()
 
+	started := time.Now()
+	var activity atomic.Int64
 	done := make(chan struct{})
 	c.logger.Debugf("start to copy from tunnel %s to local %s", tunConn.LocalAddr(), remoteAddr)
 	go func() {
-		c.udpCopy(remoteConn, tunConn, port, true)
+		c.udpCopy(remoteConn, tunConn, port, true, started, &activity)
+		tunConn.Close()
+		remoteConn.Close()
 		done <- struct{}{}
 	}()
 
-	c.udpCopy(tunConn, remoteConn, port, false)
-
+	c.udpCopy(tunConn, remoteConn, port, false, started, &activity)
+	// Ending either direction must release the other reader before joining it.
+	tunConn.Close()
+	remoteConn.Close()
 	<-done
 
 }
@@ -294,13 +300,18 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 // inbound, bytes written to it are outbound, on both ends of the link. This
 // transport counted neither, so however much it carried the panel, the CLI, the
 // Telegram report and the traffic history all read it as an idle tunnel.
-func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTunnel bool) {
+func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTunnel bool, started time.Time, activity *atomic.Int64) {
 	buf := make([]byte, 16*1024)
 	readTimeout := 60 * time.Second
 
 	for {
-		// Set the read deadline to 60 seconds from now
-		err := srcConn.SetReadDeadline(time.Now().Add(readTimeout))
+		// Either direction keeps this flow alive. Use the remaining shared idle
+		// budget, so a final packet does not leave the quiet reader another 60s.
+		remaining := readTimeout - (time.Since(started) - time.Duration(activity.Load()))
+		if remaining <= 0 {
+			return
+		}
+		err := srcConn.SetReadDeadline(time.Now().Add(remaining))
 		if err != nil {
 			c.logger.Errorf("failed to set read deadline: %v", err)
 			return
@@ -310,6 +321,9 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 		n, _, err := srcConn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if time.Since(started)-time.Duration(activity.Load()) < readTimeout {
+					continue
+				}
 				c.logger.Debug("read from UDP timed out")
 				return // Exit on timeout
 			}
@@ -335,6 +349,7 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 			totalWritten += w
 		}
 
+		touchUDPActivity(started, activity)
 		if dstIsTunnel {
 			metrics.AddBytes(0, uint64(totalWritten))
 		}
@@ -345,6 +360,17 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 		}
 
 		c.logger.Debugf("forwarded %d bytes from %s to %s", n, srcConn.LocalAddr().String(), dstConn.RemoteAddr().String())
+	}
+}
+
+// Both copy workers share elapsed monotonic time; a delayed update must not
+// overwrite a newer packet's activity.
+func touchUDPActivity(started time.Time, activity *atomic.Int64) {
+	now := time.Since(started).Nanoseconds()
+	for previous := activity.Load(); now > previous; previous = activity.Load() {
+		if activity.CompareAndSwap(previous, now) {
+			return
+		}
 	}
 }
 
