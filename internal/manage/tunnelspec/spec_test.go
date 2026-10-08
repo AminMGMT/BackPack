@@ -266,6 +266,18 @@ func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
 					if cert["oneTimeLoading"] != true {
 						t.Fatal("Xray must not reload a certificate rejected by BackPack")
 					}
+					if cert["certificateFile"] != nil || cert["keyFile"] != nil {
+						t.Fatal("Xray must not reread mutable TLS paths after validation")
+					}
+					for field, path := range map[string]string{"certificate": cfg.Server.Xray.Certificate, "key": cfg.Server.Xray.Key} {
+						material, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if cert[field].([]any)[0] != string(material) {
+							t.Fatalf("generated %s differs from the validated material", field)
+						}
+					}
 				}
 				encoded, err := json.Marshal(loaded)
 				if err != nil {

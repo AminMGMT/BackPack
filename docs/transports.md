@@ -35,6 +35,8 @@ The engine owns each helper, stores generated configuration with owner-only
 permissions, restarts a crashed process, and removes its process group and
 temporary directory when the generation ends. Local listener readiness is
 distinct from tunnel health: verify traffic through a forwarded entry port.
+Runtime startup failures also retry with a cancellable one-second backoff;
+invalid generated configuration is rejected before launching the supervisor.
 Existing flows can fail during a crash or reload; new flows recover after the
 reverse control connection and pool reconnect. Start with a modest pool and
 measure memory/CPU and verified throughput before increasing it: each reverse
@@ -151,8 +153,10 @@ availability on every filtered network; validate your own Iran/outside route.
 For XHTTP and Naive, certificate renewal is external. Valid changes to the
 certificate/key files or a configured CA file reload the tunnel without a TOML
 edit. Identical file rewrites do not restart it; missing files, invalid pairs,
-and expired certificates keep the running generation. Protect both TOML files
-and the helper binaries from untrusted writes. The installer verifies pinned
+and expired certificates keep the running generation.
+The generated helper configuration embeds validated TLS material so a helper
+cannot reread files changed after validation or install a rejected renewal.
+Protect both TOML files and the helper binaries from untrusted writes. The installer verifies pinned
 archive hashes and never replaces an existing version directory.
 
 Backpack carries every tunnel over one transport, chosen when you create the

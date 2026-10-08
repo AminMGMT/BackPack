@@ -186,25 +186,9 @@ func serverJSON(c *config.ServerConfig) ([]byte, error) {
 	// sing-box watches certificate/key paths itself and accepts matched but
 	// expired replacements. Freeze the validated material for this generation
 	// so only BackPack's certificate watcher can replace it.
-	certificate, err := os.ReadFile(n.Certificate)
+	certificate, key, err := validatedTLSMaterial(n.Certificate, n.Key, "", "Naive")
 	if err != nil {
 		return nil, err
-	}
-	key, err := os.ReadFile(n.Key)
-	if err != nil {
-		return nil, err
-	}
-	pair, err := tls.X509KeyPair(certificate, key)
-	if err != nil {
-		return nil, fmt.Errorf("Naive TLS certificate/key: %w", err)
-	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		return nil, fmt.Errorf("Naive TLS certificate: %w", err)
-	}
-	now := time.Now()
-	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
-		return nil, errors.New("Naive TLS certificate is expired or not yet valid")
 	}
 	host, port, err := hostPort(n.Listen, false)
 	if err != nil {
@@ -227,6 +211,37 @@ func serverJSON(c *config.ServerConfig) ([]byte, error) {
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "tunnel"}},
 		"route":     map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{target + bits}, "port": []int{targetPort}, "network": "tcp", "action": "route", "outbound": "tunnel"}, map[string]any{"action": "reject"}}},
 	})
+}
+
+// Validate the exact bytes embedded in a generation. Helpers must not reread
+// mutable paths after validation or independently adopt rejected renewals.
+func validatedTLSMaterial(certificateFile, keyFile, serverName, label string) ([]byte, []byte, error) {
+	certificate, err := os.ReadFile(certificateFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	pair, err := tls.X509KeyPair(certificate, key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s TLS certificate/key: %w", label, err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s TLS certificate: %w", label, err)
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+		return nil, nil, fmt.Errorf("%s TLS certificate is expired or not yet valid", label)
+	}
+	if serverName != "" {
+		if err := leaf.VerifyHostname(serverName); err != nil {
+			return nil, nil, fmt.Errorf("%s certificate does not match server_name", label)
+		}
+	}
+	return certificate, key, nil
 }
 
 // ValidateXray keeps Xray as a restricted carrier of the existing reverse TCP
@@ -497,7 +512,14 @@ func XrayClientJSON(c *config.ClientConfig, socksAddr string) ([]byte, error) {
 	} else {
 		tlsConfig := map[string]any{"serverName": x.ServerName, "alpn": []string{"h2"}, "allowInsecure": false}
 		if x.CAFile != "" {
-			tlsConfig["certificates"] = []any{map[string]any{"certificateFile": x.CAFile, "usage": "verify"}}
+			certificate, err := os.ReadFile(x.CAFile)
+			if err != nil {
+				return nil, err
+			}
+			if !x509.NewCertPool().AppendCertsFromPEM(certificate) {
+				return nil, errors.New("client.xray.ca_file contains no PEM certificates")
+			}
+			tlsConfig["certificates"] = []any{map[string]any{"certificate": []string{string(certificate)}, "usage": "verify"}}
 		}
 		httpHost := x.Host
 		if httpHost == "" {
@@ -542,13 +564,17 @@ func XrayServerJSON(c *config.ServerConfig) ([]byte, error) {
 			"privateKey": x.PrivateKey, "shortIds": []string{x.ShortID},
 		}}
 	} else {
+		certificate, key, err := validatedTLSMaterial(x.Certificate, x.Key, x.ServerName, "XHTTP")
+		if err != nil {
+			return nil, err
+		}
 		httpHost := x.Host
 		if httpHost == "" {
 			httpHost = x.ServerName
 		}
 		stream = map[string]any{"network": "xhttp", "security": "tls", "xhttpSettings": map[string]any{
 			"path": x.Path, "host": httpHost, "mode": "auto"}, "tlsSettings": map[string]any{
-			"alpn": []string{"h2"}, "certificates": []any{map[string]any{"certificateFile": x.Certificate, "keyFile": x.Key, "oneTimeLoading": true}},
+			"alpn": []string{"h2"}, "certificates": []any{map[string]any{"certificate": []string{string(certificate)}, "key": []string{string(key)}, "oneTimeLoading": true}},
 		}}
 	}
 	routing, err := xrayRouting("carrier", c.BindAddr, "tunnel")
