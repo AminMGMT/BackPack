@@ -32,14 +32,19 @@ toward Iran. Only TCP forwarding with one endpoint is supported; UDP forwarding,
 transport/address fallbacks, other outbound proxies, Direct and L3 are refused.
 Choose one helper per tunnel. The terminal wizard configures it, and Edit →
 HTTPS Settings changes the public endpoint, internal port and credentials in
-one restart. Ordinary edits preserve it; setup links cannot export these
-credentials. The web wizard does not collect managed-helper credentials.
+one restart. Ordinary edits preserve it. Iran exports a Setup Link carrying
+the peer credentials, public endpoint and private-certificate trust for
+Kharej; server private keys and binary paths remain local. Use the terminal
+or `backpack link apply` with matching updated builds. The web wizard does
+not collect managed-helper credentials.
 
 Set up Iran first, then choose the same HTTPS protocol on Kharej. The internal
-reverse port, security token and helper account must match. Existing PEM files
+reverse port, security token and helper account must match; the Setup Link
+copies them. Existing PEM files
 can be used for Naive and XHTTP. The private-certificate option generates a
-certificate for the chosen hostname or IP; copy only its public PEM to Kharej
-and enter that file as the CA file. REALITY generates its private key on Iran
+certificate for the chosen hostname or IP; its public PEM travels in the
+Setup Link. For manual setup, copy only the public PEM to Kharej and enter
+that file as the CA file. REALITY generates its private key on Iran
 when left empty and prints the corresponding public key for Kharej. It also
 requires an explicit reachable TLS 1.3/H2 cover endpoint. UDP forwarding, proxy
 and routing bindings, address and transport fallbacks are excluded from this

@@ -173,16 +173,19 @@ func updateReverseFromLink(link ShareLink, o LinkApplyOptions, existing string) 
 	}
 	s := reverseClientFromLink(link, host)
 	s.Name = existing
-	if why := portClash(s.Role, s.RemoteAddr, s.Name); why != "" {
+	if why := reverseLinkClash(s); why != "" {
 		return LinkApplied{}, errors.New(why)
+	}
+	if err := prepareManagedLink(s, link); err != nil {
+		return LinkApplied{}, err
 	}
 	if err := applySpec(s); err != nil {
 		return LinkApplied{}, fmt.Errorf("could not bring %s into step with the Iran side: %w", existing, err)
 	}
 	service := app.ServiceName(existing)
 	return LinkApplied{
-		Name: existing, Service: service, Kind: "reverse", Transport: s.Transport,
-		Dials: s.RemoteAddr, Backups: s.FallbackAddrs, Active: IsActive(service), Updated: true,
+		Name: existing, Service: service, Kind: "reverse", Transport: selectedTransport(s),
+		Dials: managedEndpoint(s), Backups: s.FallbackAddrs, Active: IsActive(service), Updated: true,
 	}, nil
 }
 
@@ -191,8 +194,11 @@ func applyReverseLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {
 	if err != nil {
 		return LinkApplied{}, err
 	}
-	if why := portClash(s.Role, s.RemoteAddr, s.Name); why != "" {
+	if why := reverseLinkClash(s); why != "" {
 		return LinkApplied{}, errors.New(why)
+	}
+	if err := prepareManagedLink(s, link); err != nil {
+		return LinkApplied{}, err
 	}
 	optimize.ApplyQuiet(ReservedPorts())
 	service, err := s.Save()
@@ -200,9 +206,16 @@ func applyReverseLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {
 		return LinkApplied{}, err
 	}
 	return LinkApplied{
-		Name: s.Name, Service: service, Kind: "reverse", Transport: s.Transport,
-		Dials: s.RemoteAddr, Backups: s.FallbackAddrs, Active: IsActive(service),
+		Name: s.Name, Service: service, Kind: "reverse", Transport: selectedTransport(s),
+		Dials: managedEndpoint(s), Backups: s.FallbackAddrs, Active: IsActive(service),
 	}, nil
+}
+
+func reverseLinkClash(s TunnelSpec) string {
+	if managedTransport(selectedTransport(s)) {
+		return managedEndpointClash(s)
+	}
+	return portClash(s.Role, s.RemoteAddr, s.Name)
 }
 
 func applyDirectLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {

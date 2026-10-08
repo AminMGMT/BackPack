@@ -1,6 +1,8 @@
 package manage
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -274,5 +276,42 @@ func TestASpoofLinkCarriesTheRealAddressEvenWithNoTuning(t *testing.T) {
 	}
 	if f.ToNewDirectTunnel().SpoofPeerIP != "198.51.100.5" {
 		t.Error("the setup form built from the mirror drops the address again")
+	}
+}
+
+func TestManagedHTTPSLinksRejectPrivateOrMalformedTrust(t *testing.T) {
+	_, cert, key := managedWizardFixture(t)
+	public, _ := os.ReadFile(cert)
+	private, _ := os.ReadFile(key)
+	for _, body := range []string{"", "garbage" + string(public), string(private), string(public) + string(private), strings.Repeat("x", 16<<10+1)} {
+		if _, err := managedLinkCertificates(body); err == nil {
+			t.Fatal("invalid or private certificate content accepted")
+		}
+	}
+	if _, err := managedLinkCertificates(string(public)); err != nil {
+		t.Fatal(err)
+	}
+	path := managedLinkCAPath(string(public))
+	if filepath.Base(path) == "" || !strings.HasPrefix(filepath.Base(path), "https-peer-") || path != managedLinkCAPath(string(public)) {
+		t.Fatal("trust storage is not deterministic")
+	}
+	link := ShareLink{Kind: "reverse", From: "iran", Tr: "reality", InnerPort: "3080", Port: "443"}
+	for _, tc := range []struct {
+		name   string
+		change func(*ShareLink)
+	}{
+		{"missing internal port", func(l *ShareLink) { l.InnerPort = "" }},
+		{"same port", func(l *ShareLink) { l.InnerPort = "443" }},
+		{"UDP forwarding", func(l *ShareLink) { l.AcceptUDP = true }},
+		{"fallbacks", func(l *ShareLink) { l.Hosts = []string{"backup.example.org"} }},
+		{"wrong side", func(l *ShareLink) { l.From = "kharej" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := link
+			tc.change(&bad)
+			if err := prepareManagedLink(TunnelSpec{}, bad); err == nil {
+				t.Fatal("incomplete or incompatible managed link accepted")
+			}
+		})
 	}
 }

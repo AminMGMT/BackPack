@@ -142,6 +142,14 @@ func setupFromLink() {
 
 // applyPeerForm creates whichever kind of tunnel the form describes.
 func applyPeerForm(f PeerForm) (service string, active bool, err error) {
+	if f.ManagedLink != nil {
+		raw, err := f.ManagedLink.Encode()
+		if err != nil {
+			return "", false, err
+		}
+		applied, err := ApplySetupLink(raw, LinkApplyOptions{Name: f.Name, Host: f.ServerAddr})
+		return applied.Service, applied.Active, err
+	}
 	if f.Kind == "direct" {
 		d := f.ToNewDirectTunnel()
 		return CreateDirectTunnel(d)

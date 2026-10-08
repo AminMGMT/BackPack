@@ -57,7 +57,6 @@ func connTestIranMenu() {
 		return
 	}
 	preset := presets[pick]
-	realityTarget := strings.TrimSpace(tui.Prompt("REALITY Cover Endpoint (TLS 1.3/H2 Host:Port; Empty = Skip): "))
 	tui.StopIfInputGone()
 
 	// Every transport is tested; what needs root is left out only without it.
@@ -73,7 +72,7 @@ func connTestIranMenu() {
 	defer stop()
 	tui.Info("Starting The Test Tunnels...")
 	s, link, err := StartConnTestIran(ConnTestOptions{Context: ctx, Host: host, Direct: direct,
-		Preset: preset, SpoofSrc: spoof, RealityTarget: realityTarget})
+		Preset: preset, SpoofSrc: spoof})
 	if err != nil {
 		tui.Error(err.Error())
 		tui.PressEnter()

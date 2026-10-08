@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -335,7 +336,7 @@ type ConnTestOptions struct {
 	Host      string          // this server's address, as the kharej dials it
 	SNIDomain string          // what the sni carrier announces
 	// RealityTarget is an explicit reachable TLS 1.3/H2 hostname:port used
-	// for the REALITY cover handshake. Empty reports REALITY as skipped.
+	// for the REALITY cover handshake. Empty selects a verified endpoint automatically.
 	RealityTarget string
 	// Direct includes the direct tunnels. They need root on both servers.
 	Direct bool
@@ -576,6 +577,41 @@ func ctCertificate(dir, name, host string) (cert, key, ca string, err error) {
 	return cert, key, ca, nil
 }
 
+// Probe from Iran: DNS, certificate trust, TLS version and ALPN can differ by route.
+func ctProbeRealityCover(ctx context.Context, target string, roots *x509.CertPool) error {
+	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{
+		MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}, RootCAs: roots,
+	}}
+	conn, err := d.DialContext(ctx, "tcp", target)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	state := conn.(*tls.Conn).ConnectionState()
+	if state.Version != tls.VersionTLS13 || state.NegotiatedProtocol != "h2" {
+		return errors.New("cover endpoint does not support TLS 1.3 and HTTP/2")
+	}
+	return nil
+}
+
+func ctFindRealityCover(ctx context.Context, targets []string, probe func(context.Context, string) error) (string, error) {
+	for _, target := range targets {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := probe(attempt, target)
+		cancel()
+		if err == nil && ctx.Err() == nil {
+			return target, nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "", errors.New("no reachable TLS 1.3/HTTP2 REALITY cover endpoint found from Iran")
+}
+
 func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o ConnTestOptions) {
 	tool := "xray"
 	if c.tr == "naive" {
@@ -587,8 +623,21 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		return
 	}
 	coverHost := ""
+	coverTarget := strings.TrimSpace(o.RealityTarget)
 	if c.tr == "reality" {
-		coverHost, _, err = net.SplitHostPort(strings.TrimSpace(o.RealityTarget))
+		if coverTarget == "" {
+			ctx := o.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			coverTarget, err = ctFindRealityCover(ctx, []string{"www.microsoft.com:443", "www.apple.com:443", "www.bing.com:443"},
+				func(ctx context.Context, target string) error { return ctProbeRealityCover(ctx, target, nil) })
+			if err != nil {
+				c.skip = err.Error()
+				return
+			}
+		}
+		coverHost, _, err = net.SplitHostPort(coverTarget)
 		if err != nil || coverHost == "" || net.ParseIP(coverHost) != nil {
 			c.skip = "set a REALITY cover endpoint (reachable TLS 1.3/H2 hostname:port) on Iran"
 			return
@@ -641,7 +690,7 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		settings.ServerName, settings.ShortID = coverHost, token[:16]
 		spec.XrayServer = config.XrayServerConfig{Binary: binary, Listen: public, Mode: c.tr,
 			UUID: ctUUID(token), ServerName: coverHost, PrivateKey: private, ShortID: settings.ShortID,
-			Target: strings.TrimSpace(o.RealityTarget)}
+			Target: coverTarget}
 	}
 	if err := validateManagedSpec(spec); err != nil {
 		c.skip = "invalid helper settings: " + err.Error()
@@ -680,33 +729,34 @@ func ctManagedClient(ctx context.Context, link ConnTestLink, c ShareLink, dir st
 	if err != nil || json.Unmarshal(body, &settings) != nil || settings.TargetPort < 1 || settings.TargetPort > 65535 {
 		return TunnelSpec{}, errors.New("invalid managed test settings")
 	}
-	inner := c
-	inner.Tr, inner.Port = "tcp", strconv.Itoa(settings.TargetPort)
-	spec, err := kharejFromLink(inner, LinkApplyOptions{Host: "127.0.0.1"})
-	if err != nil {
-		return TunnelSpec{}, err
+	// Use the same paired mapping as production Setup Links. Test trust is
+	// written inside the disposable directory rather than the persistent store.
+	paired := c
+	paired.InnerPort = strconv.Itoa(settings.TargetPort)
+	paired.HelperUser, paired.HelperPassword = "backpack", c.Tok
+	paired.HelperUUID, paired.HelperSNI = ctUUID(c.Tok), settings.ServerName
+	paired.HelperPublicKey, paired.HelperShortID = settings.PublicKey, settings.ShortID
+	if c.Tr == "xhttp" {
+		paired.HelperPath = "/" + c.Tok
 	}
+	spec := reverseClientFromLink(paired, link.Host)
 	var ca string
 	if c.Tr != "reality" {
 		if settings.CA == "" {
 			return TunnelSpec{}, errors.New("the managed TLS test has no trust certificate")
+		}
+		if _, err := managedLinkCertificates(settings.CA); err != nil {
+			return TunnelSpec{}, err
 		}
 		ca = filepath.Join(dir, c.Tr+".crt")
 		if err := os.WriteFile(ca, []byte(settings.CA), 0600); err != nil {
 			return TunnelSpec{}, err
 		}
 	}
-	public := net.JoinHostPort(link.Host, c.Port)
 	if c.Tr == "naive" {
-		spec.NaiveClient = config.NaiveClientConfig{Binary: binary, Server: public,
-			Username: "backpack", Password: c.Tok, CAFile: ca}
+		spec.NaiveClient.Binary, spec.NaiveClient.CAFile = binary, ca
 	} else {
-		spec.XrayClient = config.XrayClientConfig{Binary: binary, Server: public, Mode: c.Tr,
-			UUID: ctUUID(c.Tok), ServerName: settings.ServerName, CAFile: ca,
-			PublicKey: settings.PublicKey, ShortID: settings.ShortID}
-		if c.Tr == "xhttp" {
-			spec.XrayClient.Path = "/" + c.Tok
-		}
+		spec.XrayClient.Binary, spec.XrayClient.CAFile = binary, ca
 	}
 	return spec, validateManagedSpec(spec)
 }

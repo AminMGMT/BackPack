@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/backpack/backpack/config"
 )
 
 // The link an operator copies is short: where the coordinator is and the
@@ -185,6 +189,42 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer iran.Close()
+
+	// Production Setup Links must build the same helper peer as Connection Test.
+	for _, c := range iran.cases {
+		if !managedTransport(c.tr) || c.skip != "" {
+			continue
+		}
+		var cfg config.Config
+		if _, err := toml.DecodeFile(filepath.Join(iran.dir, c.name+".toml"), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := shareLinkOf(c.name, "127.0.0.1", cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paired, err := DecodeShareLink(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		production, err := kharejFromLink(paired, LinkApplyOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		testPeer, err := ctManagedClient(context.Background(), iran.link, c.link, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The test's trust file is disposable; persistent setup uses its hash.
+		production.NaiveClient.CAFile = testPeer.NaiveClient.CAFile
+		production.XrayClient.CAFile = testPeer.XrayClient.CAFile
+		if production.NaiveClient != testPeer.NaiveClient || production.XrayClient != testPeer.XrayClient || production.RemoteAddr != testPeer.RemoteAddr || production.Token != testPeer.Token {
+			t.Fatalf("%s production Setup Link differs from the tested helper peer", c.tr)
+		}
+		if err := validateManagedSpec(production); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -441,4 +481,85 @@ func TestConnTestStopsAllUnresponsiveEnginesWithinOneDeadline(t *testing.T) {
 		t.Fatal("cleanup waited per engine instead of sharing the deadline")
 	}
 	engines = nil
+}
+
+func TestConnTestRealityCoverVerifiesTLSAndHTTP2(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		version           uint16
+		h2, trusted, pass bool
+	}{
+		{"compatible", tls.VersionTLS13, true, true, true},
+		{"TLS12", tls.VersionTLS12, true, true, false},
+		{"HTTP1", tls.VersionTLS13, false, true, false},
+		{"untrusted", tls.VersionTLS13, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+			server.EnableHTTP2 = tc.h2
+			server.TLS = &tls.Config{MinVersion: tc.version, MaxVersion: tc.version}
+			server.StartTLS()
+			defer server.Close()
+			var roots *x509.CertPool
+			if tc.trusted {
+				roots = x509.NewCertPool()
+				roots.AddCert(server.Certificate())
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := ctProbeRealityCover(ctx, server.Listener.Addr().String(), roots)
+			if (err == nil) != tc.pass {
+				t.Fatalf("compatible=%v, error=%v", tc.pass, err)
+			}
+		})
+	}
+}
+
+func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
+	tried := []string{}
+	target, err := ctFindRealityCover(context.Background(), []string{"blocked", "compatible", "unused"}, func(ctx context.Context, target string) error {
+		tried = append(tried, target)
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("probe has no deadline")
+		}
+		if target == "blocked" {
+			return errors.New("blocked")
+		}
+		return nil
+	})
+	if err != nil || target != "compatible" || strings.Join(tried, ",") != "blocked,compatible" {
+		t.Fatalf("selection: %q %v %v", target, tried, err)
+	}
+	if target, err := ctFindRealityCover(context.Background(), []string{"blocked"}, func(context.Context, string) error { return errors.New("blocked") }); err == nil || target != "" {
+		t.Fatal("unreachable cover was selected")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	target, err = ctFindRealityCover(ctx, []string{"cancelled", "unused"}, func(context.Context, string) error { cancel(); return nil })
+	if target != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled selection succeeded: %q %v", target, err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			_, _ = io.Copy(io.Discard, c)
+		}
+	}()
+	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := ctProbeRealityCover(ctx, ln.Addr().String(), nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled handshake: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled probe left its connection open")
+	}
 }

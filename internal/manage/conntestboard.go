@@ -72,7 +72,7 @@ func ctEmoji(status string) string {
 // Every emoji here takes two columns; the rest of the RESULT column is spaces.
 const ctRowFormat = "%s       %-9s %-16s %-11s %-8s %s"
 
-const ctHeader = "RESULT   KIND      NAME        STATUS      ECHOES   TESTING"
+var ctHeader = fmt.Sprintf("%-8s %-9s %-16s %-11s %-8s %s", "RESULT", "KIND", "NAME", "STATUS", "ECHOES", "TESTING")
 
 // ctRow is one tunnel's line. While it runs, ECHOES and the bar are the echoes
 // sent; once it has a verdict, the echoes that came back.
@@ -120,7 +120,7 @@ func ConnTestTable(results []ConnTestResult) string {
 			if r.Mbps > 0 {
 				speed = fmt.Sprintf("%.1f Mbps", r.Mbps)
 			}
-			fmt.Fprintf(&b, "%s %-19s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)
+			fmt.Fprintf(&b, "%s %-24s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)
 		}
 	}
 	if steady == 0 {

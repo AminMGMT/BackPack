@@ -181,20 +181,16 @@ func SetupClient() {
 		return
 	}
 
-	if !managedTransport(transport) {
-		switch tui.ChooseOpt("How Do You Want To Set Up This Side?", []tui.Option{
-			{Title: "Setup Link", Desc: "recommended — paste the Iran server's link"},
-			{Title: "Manual", Desc: "type the address, port and token"},
-		}) {
-		case 0:
-			setupClientFromLink(transport)
-			return
-		case 1:
-		default:
-			return
-		}
-	} else {
-		tui.Info("Use The Internal Port, Security Token And HTTPS Credentials From Iran.")
+	switch tui.ChooseOpt("How Do You Want To Set Up This Side?", []tui.Option{
+		{Title: "Setup Link", Desc: "recommended — paste the Iran server's link"},
+		{Title: "Manual", Desc: "type the address, port and token"},
+	}) {
+	case 0:
+		setupClientFromLink(transport)
+		return
+	case 1:
+	default:
+		return
 	}
 
 	s := TunnelSpec{Role: "client", Transport: transport}
@@ -364,10 +360,17 @@ func setupClientFromLink(chosen string) {
 		s.EdgeIP = strings.TrimSpace(tui.PromptDefault("Edge IP (Optional, For A CDN)", ""))
 	}
 	askPck(&s)
-	askConnectionOptions(&s, link.Port)
+	if !managedTransport(link.Tr) {
+		askConnectionOptions(&s, link.Port)
+	}
 
 	summariseReverse(s, "", "")
 	if !tui.Confirm("Create This Tunnel", true) {
+		return
+	}
+	if err := prepareManagedLink(s, link); err != nil {
+		tui.Error(err.Error())
+		tui.PressEnter()
 		return
 	}
 	if finishSetup(s) {
@@ -426,6 +429,9 @@ func reverseClientFromLink(link ShareLink, host string) TunnelSpec {
 	// holds, in the same order.
 	s.FallbackTransports = append([]string(nil), link.Fallbacks...)
 	s.FallbackDwell = link.Dwell
+	if managedTransport(link.Tr) {
+		managedClientFromLink(&s, link, host)
+	}
 	return s
 }
 
@@ -518,7 +524,7 @@ func summariseReverse(s TunnelSpec, host, link string) {
 		}
 		row("Internal Target", internal)
 		tui.Info("Kharej Must Use The Same Internal Port, Security Token And HTTPS Credentials.")
-		tui.Info("HTTPS Credentials Are Configured In The Menu On Both Sides; No Setup Link Is Exported.")
+		tui.Info("Use Iran's Setup Link On Kharej To Copy The Paired HTTPS Settings.")
 	}
 	if link != "" {
 		printLinkBlock(link, "sudo backpack → Setup Kharej → Reverse → Setup Link")

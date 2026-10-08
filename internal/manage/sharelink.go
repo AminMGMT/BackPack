@@ -3,15 +3,22 @@ package manage
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/app"
 )
 
 // Handing a tunnel's settings to the other server.
@@ -136,6 +143,19 @@ type ShareLink struct {
 	// how the other server finds it whatever it is called there — and even
 	// when this very edit changes the token. See editlink.go.
 	Edit string `json:"ed,omitempty"`
+
+	// Managed HTTPS links carry peer credentials, never executable paths or
+	// server private keys. The public TLS bundle is needed for private CAs.
+	InnerPort       string `json:"hi,omitempty"`
+	HelperUser      string `json:"hu,omitempty"`
+	HelperPassword  string `json:"hp,omitempty"`
+	HelperUUID      string `json:"hid,omitempty"`
+	HelperSNI       string `json:"hn,omitempty"`
+	HelperPath      string `json:"hpa,omitempty"`
+	HelperHost      string `json:"hh,omitempty"`
+	HelperPublicKey string `json:"hk,omitempty"`
+	HelperShortID   string `json:"hsid,omitempty"`
+	HelperCA        string `json:"hca,omitempty"`
 }
 
 // Encode renders a link as the string an operator copies.
@@ -316,7 +336,8 @@ type PeerForm struct {
 
 	// Note is anything the operator should read once, in plain words — a
 	// setting the link could not carry across, rather than an error.
-	Note string `json:"note,omitempty"`
+	Note        string     `json:"note,omitempty"`
+	ManagedLink *ShareLink `json:"-"`
 }
 
 // PeerNeedsAddress reports whether the side this link is for dials the side
@@ -366,6 +387,10 @@ func MirrorForPeer(l ShareLink) PeerForm {
 
 	if l.Kind == "reverse" {
 		f.Transport = l.Tr
+		if managedTransport(l.Tr) {
+			f.ManagedLink = &l
+			f.Note = "Managed HTTPS setup links require the terminal and matching optional helpers."
+		}
 		paired = append(paired, "transport")
 		f.SimpleAuth, f.MuxVersion = l.SimpleAuth, l.MuxVer
 		if l.SimpleAuth {
@@ -551,11 +576,8 @@ func shareLinkWith(name, host string, cfg config.Config, x linkExtras) (string, 
 // shareLinkOf builds the link from a config in hand, which is how the direct
 // wizard shows it in its summary before the tunnel is written.
 func shareLinkOf(name, host string, cfg config.Config) (string, error) {
-	if cfg.Server.Naive.Enabled() || cfg.Client.Naive.Enabled() {
-		return "", fmt.Errorf("experimental Naive helper settings are not encoded in setup links; configure both files manually")
-	}
-	if cfg.Server.Xray.Enabled() || cfg.Client.Xray.Enabled() {
-		return "", fmt.Errorf("managed Xray helper settings are not encoded in setup links; configure both files manually")
+	if cfg.Client.Naive.Enabled() || cfg.Client.Xray.Enabled() {
+		return "", fmt.Errorf("generate the managed HTTPS setup link on Iran; server private keys cannot be reconstructed from Kharej")
 	}
 	l := ShareLink{Name: name, Host: strings.TrimSpace(host)}
 
@@ -619,7 +641,122 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 	if l.Tok == "" {
 		return "", fmt.Errorf("%q has no token to hand over", name)
 	}
+	if cfg.Server.Naive.Enabled() || cfg.Server.Xray.Enabled() {
+		l.InnerPort = l.Port
+		var cert string
+		if cfg.Server.Naive.Enabled() {
+			x := cfg.Server.Naive
+			l.Tr, l.Port, l.HelperUser, l.HelperPassword = "naive", addrPort(x.Listen), x.Username, x.Password
+			cert = x.Certificate
+		} else {
+			x := cfg.Server.Xray
+			l.Tr, l.Port = x.Mode, addrPort(x.Listen)
+			l.HelperUUID, l.HelperSNI, l.HelperPath, l.HelperHost = x.UUID, x.ServerName, x.Path, x.Host
+			cert = x.Certificate
+			if x.Mode == "reality" {
+				_, public, err := managedRealityKey(x.PrivateKey)
+				if err != nil {
+					return "", err
+				}
+				l.HelperPublicKey = public
+				l.HelperShortID = x.ShortID
+			}
+		}
+		if cert != "" {
+			body, err := os.ReadFile(cert)
+			if err != nil {
+				return "", fmt.Errorf("reading the public HTTPS certificate: %w", err)
+			}
+			certs, err := managedLinkCertificates(string(body))
+			if err != nil {
+				return "", err
+			}
+			intermediates := x509.NewCertPool()
+			for _, c := range certs[1:] {
+				intermediates.AddCert(c)
+			}
+			// Public TLS keeps using system roots, including after renewal.
+			if _, err := certs[0].Verify(x509.VerifyOptions{Intermediates: intermediates}); err != nil {
+				l.HelperCA = string(body)
+			}
+		}
+	}
 	return l.Encode()
+}
+
+func managedLinkCertificates(body string) ([]*x509.Certificate, error) {
+	if len(body) > 16<<10 {
+		return nil, fmt.Errorf("the public HTTPS certificate bundle exceeds 16 KiB")
+	}
+	var certs []*x509.Certificate
+	for rest := []byte(strings.TrimSpace(body)); len(rest) > 0; {
+		if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
+			return nil, fmt.Errorf("HTTPS setup links accept only public PEM certificates")
+		}
+		block, tail := pem.Decode(rest)
+		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			return nil, fmt.Errorf("HTTPS setup links accept only public PEM certificates")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid public HTTPS certificate: %w", err)
+		}
+		certs = append(certs, cert)
+		rest = []byte(strings.TrimSpace(string(tail)))
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("missing public HTTPS certificate")
+	}
+	return certs, nil
+}
+
+func managedLinkCAPath(body string) string {
+	if body == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(body))
+	return filepath.Join(app.ConfigDir, "certs", fmt.Sprintf("https-peer-%x.crt", sum[:16]))
+}
+
+// Called only after confirmation, before saving or updating the tunnel.
+func prepareManagedLink(s TunnelSpec, link ShareLink) error {
+	if !managedTransport(link.Tr) {
+		return nil
+	}
+	if link.Kind != "reverse" || link.From != "iran" || !validPort(link.InnerPort) || !validPort(link.Port) || link.InnerPort == link.Port || link.AcceptUDP || len(link.Fallbacks) != 0 || len(link.Hosts) != 0 {
+		return fmt.Errorf("invalid managed HTTPS setup link; generate a new link on Iran")
+	}
+	if link.HelperCA != "" {
+		if _, err := managedLinkCertificates(link.HelperCA); err != nil {
+			return err
+		}
+		withoutCA := s
+		withoutCA.NaiveClient.CAFile, withoutCA.XrayClient.CAFile = "", ""
+		if err := validateManagedSpec(withoutCA); err != nil {
+			return err
+		}
+		if err := app.WriteFileAtomic(managedLinkCAPath(link.HelperCA), []byte(link.HelperCA), 0600); err != nil {
+			return err
+		}
+	}
+	return validateManagedSpec(s)
+}
+
+func managedClientFromLink(s *TunnelSpec, link ShareLink, host string) {
+	s.Transport, s.RemoteAddr = "tcp", net.JoinHostPort("127.0.0.1", link.InnerPort)
+	s.AcceptUDP, s.SimpleAuth, s.HealthFailover = false, false, false
+	s.FallbackAddrs, s.FallbackTransports = nil, nil
+	s.FallbackDwell = 0
+	public := net.JoinHostPort(host, link.Port)
+	if link.Tr == "naive" {
+		s.NaiveClient = config.NaiveClientConfig{Binary: managedHelperPath("naive"), Server: public,
+			Username: link.HelperUser, Password: link.HelperPassword, CAFile: managedLinkCAPath(link.HelperCA)}
+	} else {
+		s.XrayClient = config.XrayClientConfig{Binary: managedHelperPath("xray"), Server: public,
+			Mode: link.Tr, UUID: link.HelperUUID, ServerName: link.HelperSNI, Path: link.HelperPath,
+			Host: link.HelperHost, PublicKey: link.HelperPublicKey, ShortID: link.HelperShortID,
+			CAFile: managedLinkCAPath(link.HelperCA)}
+	}
 }
 
 // nonEmpty drops blanks and duplicates from a list of addresses, keeping order.

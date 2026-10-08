@@ -137,8 +137,28 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 				if err := validateManagedSpec(s); err != nil {
 					t.Fatal(err)
 				}
-				if pendingReverseLink(s, "localhost", linkExtras{}) != "" {
-					t.Fatal("helper credentials leaked into an ordinary setup link")
+				raw := pendingReverseLink(s, "localhost", linkExtras{})
+				if role == "server" {
+					link, err := DecodeShareLink(raw)
+					if err != nil || link.Tr != chosen || link.Port != outer || link.InnerPort != internal {
+						t.Fatalf("managed setup link: %v %+v", err, link)
+					}
+					peer, err := kharejFromLink(link, LinkApplyOptions{})
+					if err != nil || peer.RemoteAddr != "127.0.0.1:"+internal || managedEndpoint(peer) != "localhost:"+outer || selectedTransport(peer) != chosen {
+						t.Fatalf("managed peer: %v %s", err, peer.Render())
+					}
+					_, expectedPublic, _ := managedRealityKey(s.XrayServer.PrivateKey)
+					if peer.XrayClient.PublicKey != expectedPublic && chosen == "reality" {
+						t.Fatal("REALITY public key changed")
+					}
+					if link.HelperCA == "" && chosen != "reality" {
+						t.Fatal("private certificate trust was omitted")
+					}
+					if link.HelperPublicKey == s.XrayServer.PrivateKey && chosen == "reality" || peer.XrayServer.PrivateKey != "" || strings.Contains(link.HelperCA, "PRIVATE KEY") {
+						t.Fatal("private server key escaped")
+					}
+				} else if raw != "" {
+					t.Fatal("Kharej cannot generate Iran private settings")
 				}
 				summary := capture(t, func() { summariseReverse(s, "localhost", "") })
 				if !strings.Contains(summary, public) || !strings.Contains(summary, transportLabel(chosen)) || strings.Contains(summary, "private-password") || s.XrayServer.PrivateKey != "" && strings.Contains(summary, s.XrayServer.PrivateKey) {
