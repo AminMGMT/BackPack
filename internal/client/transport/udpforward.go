@@ -97,14 +97,15 @@ func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *we
 
 // tunnelToBackend unpacks datagrams from the tunnel and sends them on.
 func tunnelToBackend(stream net.Conn, backend *net.UDPConn, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool, activity ...*atomic.Int64) {
-	buf := make([]byte, network.MaxDatagram)
+	var buf []byte
 	for {
-		n, err := network.ReadDatagram(stream, buf)
+		var err error
+		buf, err = network.ReadDatagramInto(stream, buf)
 		if err != nil {
 			logger.Tracef("UDP flow to %s ended: %v", backend.RemoteAddr(), err)
 			return
 		}
-		if _, err := backend.Write(buf[:n]); err != nil {
+		if _, err := backend.Write(buf); err != nil {
 			logger.Debugf("failed to write to UDP backend %s: %v", backend.RemoteAddr(), err)
 			return
 		}
@@ -113,7 +114,7 @@ func tunnelToBackend(stream net.Conn, backend *net.UDPConn, logger *logrus.Logge
 			_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
 		}
 		if sniffer {
-			usage.AddOrUpdatePort(port, uint64(n))
+			usage.AddOrUpdatePort(port, uint64(len(buf)))
 		}
 	}
 }
