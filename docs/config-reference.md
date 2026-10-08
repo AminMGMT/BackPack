@@ -187,7 +187,7 @@ them both ends have to agree on. This says what exists.
 | Key | Type | Description |
 |---|---|---|
 | `binary` | `string` | Binary is the absolute path to the compatible sing-box server binary; the initial integration is tested with v1.14.2. |
-| `certificate` | `string` | Certificate is the absolute path to the PEM certificate chain; certificate renewal remains the operator's responsibility. |
+| `certificate` | `string` | Certificate is the absolute path to the PEM certificate chain. Renew externally; validated certificate/key replacements reload the tunnel automatically. |
 | `key` | `string` | Key is the absolute path to the certificate's PEM private key. |
 | `listen` | `string` | Listen is the public TCP host:port for HTTP/2, separate from the loopback server.bind_addr. |
 | `password` | `string` | Password is the proxy account's secret, separate from server.token. |
