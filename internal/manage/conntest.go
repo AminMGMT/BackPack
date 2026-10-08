@@ -1574,11 +1574,8 @@ func (c *ctCoordinator) close() {
 	c.sockets.close()
 }
 
-// ctAsk puts one question to the coordinator, over TCP and then UDP.
-func ctAsk(host string, port int, line string) (string, error) {
-	return ctAskContext(context.Background(), host, port, line)
-}
-
+// ctAskContext puts one question to the coordinator over TCP and then UDP,
+// stopping the dial and any pending reply when the test is cancelled.
 func ctAskContext(ctx context.Context, host string, port int, line string) (string, error) {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	var last error
