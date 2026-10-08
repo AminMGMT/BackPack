@@ -2,8 +2,11 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -202,6 +205,111 @@ func TestAWriteLargerThanTheBucketIsChargedInPieces(t *testing.T) {
 
 // fakeConn is a net.Conn that does nothing, for the wrap tests.
 type fakeConn struct{ net.Conn }
+
+type pacingProbeConn struct {
+	net.Conn
+	writes  atomic.Int32
+	entered chan struct{}
+	readEOF bool
+}
+
+func (c *pacingProbeConn) Write(p []byte) (int, error) {
+	c.writes.Add(1)
+	return len(p), nil
+}
+
+func (c *pacingProbeConn) Read(p []byte) (int, error) {
+	close(c.entered)
+	copy(p, "tail")
+	if c.readEOF {
+		return 4, io.EOF
+	}
+	return 4, nil
+}
+
+func TestClosingAPacedConnectionInterruptsItsWait(t *testing.T) {
+	l := newLimiter(Limits{BandwidthMbps: 1})
+	socket, peer := net.Pipe()
+	defer peer.Close()
+	plain := &pacingProbeConn{Conn: socket}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := l.wrap(ctx, plain)
+	defer c.Close()
+	l.waitBytes(ctx, 125000)
+	done := make(chan error, 1)
+	go func() { _, err := c.Write(make([]byte, 125000)); done <- err }()
+	time.Sleep(20 * time.Millisecond)
+	c.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("closed pacing write returned %v", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("closed connection retained its pacing worker")
+	}
+	if ctx.Err() != nil || plain.writes.Load() != 0 {
+		t.Fatalf("parent=%v, underlying writes=%d", ctx.Err(), plain.writes.Load())
+	}
+}
+
+func TestPacingCancellationNeverStartsAWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	socket, peer := net.Pipe()
+	defer socket.Close()
+	defer peer.Close()
+	plain := &pacingProbeConn{Conn: socket}
+	c := newLimiter(Limits{BandwidthMbps: 1}).wrap(ctx, plain)
+	defer c.Close()
+	n, err := c.Write([]byte("rejected"))
+	if n != 0 || !errors.Is(err, context.Canceled) || plain.writes.Load() != 0 {
+		t.Fatalf("cancelled write n=%d err=%v underlying writes=%d", n, err, plain.writes.Load())
+	}
+}
+
+func TestPacingReadKeepsBytesAndReportsCancellation(t *testing.T) {
+	for _, eof := range []bool{false, true} {
+		t.Run(map[bool]string{false: "read", true: "tailEOF"}[eof], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			socket, peer := net.Pipe()
+			defer socket.Close()
+			defer peer.Close()
+			plain := &pacingProbeConn{Conn: socket, entered: make(chan struct{}), readEOF: eof}
+			l := newLimiter(Limits{BandwidthMbps: 1})
+			l.waitBytes(ctx, 125000)
+			c := l.wrap(ctx, plain)
+			defer c.Close()
+			done := make(chan error, 1)
+			go func() {
+				buf := make([]byte, 8)
+				n, err := c.Read(buf)
+				if n != 4 || string(buf[:n]) != "tail" {
+					t.Errorf("read n=%d payload=%q", n, buf[:n])
+				}
+				done <- err
+			}()
+			<-plain.entered
+			cancel()
+			select {
+			case err := <-done:
+				want := error(context.Canceled)
+				if eof {
+					want = io.EOF
+				}
+				if !errors.Is(err, want) {
+					t.Errorf("read error=%v, want %v", err, want)
+				}
+			case <-time.After(150 * time.Millisecond):
+				t.Fatal("read pacing ignored cancellation")
+			}
+		})
+	}
+}
 
 // Tearing a tunnel down must not wait on a token bucket.
 //

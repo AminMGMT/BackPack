@@ -81,7 +81,11 @@ func (l *limiter) wrap(ctx context.Context, conn net.Conn) net.Conn {
 	if l == nil || l.bucket == nil {
 		return conn
 	}
-	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx, cancel: cancel}
 }
 
 // waitBytes charges n bytes against the bandwidth cap, blocking for as long as
@@ -95,7 +99,7 @@ func (l *limiter) waitBytes(ctx context.Context, n int) {
 	if l == nil || l.bucket == nil {
 		return
 	}
-	waitFor(ctx, l.bucket, n)
+	_ = waitFor(ctx, l.bucket, n)
 }
 
 // limitedConn paces a connection's reads and writes against a shared token
@@ -106,29 +110,39 @@ type limitedConn struct {
 	bucket *rate.Limiter
 	// ctx ends with the generation. A connection being paced has to stop
 	// waiting when the tunnel is torn down; see wait.
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (c *limitedConn) Close() error {
+	c.cancel()
+	return c.Conn.Close()
 }
 
 func (c *limitedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
-		c.wait(n)
+		if waitErr := c.wait(n); err == nil {
+			err = waitErr
+		}
 	}
 	return n, err
 }
 
 func (c *limitedConn) Write(b []byte) (int, error) {
-	c.wait(len(b))
+	if err := c.wait(len(b)); err != nil {
+		return 0, err
+	}
 	return c.Conn.Write(b)
 }
 
 // wait blocks long enough to keep within the configured rate.
-func (c *limitedConn) wait(n int) { waitFor(c.ctx, c.bucket, n) }
+func (c *limitedConn) wait(n int) error { return waitFor(c.ctx, c.bucket, n) }
 
 // waitFor charges n bytes against a bucket. A request larger than the bucket
 // can never be satisfied in one go, so it is charged in bucket-sized pieces
 // rather than failing.
-func waitFor(ctx context.Context, bucket *rate.Limiter, n int) {
+func waitFor(ctx context.Context, bucket *rate.Limiter, n int) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -150,12 +164,12 @@ func waitFor(ctx context.Context, bucket *rate.Limiter, n int) {
 		// over the configured rate, which is small at realistic limits and
 		// unbounded by anything the caller controls.
 		//
-		// An expired context returns an error here, which is the same "give up
-		// and let the bytes through" path a failed reservation already took:
-		// dropping them would corrupt the stream and blocking would hang it.
+		// A failed wait ends this operation. Letting bytes through after
+		// cancellation would turn teardown into an unpaced write.
 		if err := bucket.WaitN(ctx, chunk); err != nil {
-			return
+			return err
 		}
 		n -= chunk
 	}
+	return nil
 }
