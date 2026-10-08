@@ -822,7 +822,8 @@ func (s *ConnTestIran) spoofProbe(ctx context.Context, c *connTestCase, kharej s
 			// the rest — still leaves what went before it on the wire, so the
 			// verdict is still what the kharej counted.
 			sendErr := spooftest.RunSender(spooftest.SenderConfig{
-				Token: s.link.Tok, TargetIP: net.ParseIP(kharej), DstPort: uint16(s.link.SpoofK),
+				Context: ctx,
+				Token:   s.link.Tok, TargetIP: net.ParseIP(kharej), DstPort: uint16(s.link.SpoofK),
 				Attempts: n, Delay: time.Second, IPs: []net.IP{forged},
 			})
 			select {
@@ -844,7 +845,8 @@ func (s *ConnTestIran) spoofProbe(ctx context.Context, c *connTestCase, kharej s
 	default: // ctSpoofToIran
 		go func() {
 			res, err := spooftest.RunReceiver(spooftest.ReceiverConfig{
-				Token: s.link.Tok, Port: uint16(s.link.SpoofI), Attempts: n,
+				Context: ctx,
+				Token:   s.link.Tok, Port: uint16(s.link.SpoofI), Attempts: n,
 				Window: time.Duration(n)*time.Second + 20*time.Second,
 			})
 			finished <- count{arrived: ctArrivedFrom(res, forged), err: err}
@@ -913,7 +915,8 @@ func ctKharejSpoof(ctx context.Context, link ConnTestLink, root bool) {
 	forged := net.ParseIP(link.SpoofSrc)
 	go func() {
 		res, err := spooftest.RunReceiver(spooftest.ReceiverConfig{
-			Token: link.Tok, Port: uint16(link.SpoofK), Attempts: n,
+			Context: ctx,
+			Token:   link.Tok, Port: uint16(link.SpoofK), Attempts: n,
 			Window: time.Duration(n)*time.Second + 20*time.Second,
 		})
 		got := 0
@@ -931,7 +934,8 @@ func ctKharejSpoof(ctx context.Context, link ConnTestLink, root bool) {
 		go func() {
 			ctSleep(ctx, 2*time.Second)
 			_ = spooftest.RunSender(spooftest.SenderConfig{
-				Token: link.Tok, TargetIP: net.ParseIP(ctIPv4(link.Host)), DstPort: uint16(link.SpoofI),
+				Context: ctx,
+				Token:   link.Tok, TargetIP: net.ParseIP(ctIPv4(link.Host)), DstPort: uint16(link.SpoofI),
 				Attempts: n, Delay: time.Second, IPs: []net.IP{forged},
 			})
 		}()
