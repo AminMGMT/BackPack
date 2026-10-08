@@ -160,6 +160,12 @@ func (d *pacingDeadline) set(when time.Time) {
 	}
 }
 
+func (d *pacingDeadline) value() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.when
+}
+
 func (d *pacingDeadline) snapshot() (time.Time, <-chan struct{}) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -206,7 +212,7 @@ func waitWithDeadline(ctx context.Context, bucket *rate.Limiter, n int, deadline
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		when, _ := deadline.snapshot()
+		when := deadline.value()
 		now := time.Now()
 		if !when.IsZero() && !now.Before(when) {
 			return os.ErrDeadlineExceeded
