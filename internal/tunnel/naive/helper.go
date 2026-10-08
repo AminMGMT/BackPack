@@ -154,8 +154,9 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 		configureProcess(cmd)
 		cmd.Cancel = func() error { return killProcess(cmd.Process) }
 		cmd.Env = env
-		// Nil streams go straight to /dev/null. An io.Discard writer creates
-		// copy pipes which descendants can retain after the leader exits.
+		// Use actual file descriptors so failures remain diagnosable without
+		// copy pipes that descendants could retain after the leader exits.
+		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 		err = cmd.Run()
 		if cmd.Process != nil {
 			_ = killProcess(cmd.Process)
@@ -187,8 +188,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 			cmd := exec.Command(binary, args...)
 			configureProcess(cmd)
 			cmd.Env = env
-			// Do not create output-copy pipes: a descendant retaining one would
-			// keep Wait blocked and prevent restart after the leader exits.
+			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 			if err := cmd.Start(); err != nil {
 				if first {
 					ready <- fmt.Errorf("starting %s %s helper: %w", label, mode, err)
