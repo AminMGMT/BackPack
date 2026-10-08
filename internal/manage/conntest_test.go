@@ -3,6 +3,13 @@ package manage
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,7 +67,10 @@ func TestTheTestSettingsFitOnePacketAndCarryNoToken(t *testing.T) {
 	}
 	defer func(prev func() (string, error)) { connTestBinary = prev }(connTestBinary)
 	connTestBinary = func() (string, error) { return "/bin/true", nil }
-	s, link, err := StartConnTestIran(ConnTestOptions{Host: "94.139.180.179", Direct: true, SpoofSrc: ConnTestSpoofSource})
+	previousHelper := connTestHelperBinary
+	connTestHelperBinary = func(string) (string, error) { return "/bin/true", nil }
+	defer func() { connTestHelperBinary = previousHelper }()
+	s, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1", Direct: true, SpoofSrc: ConnTestSpoofSource, RealityTarget: "example.com:443"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +88,19 @@ func TestTheTestSettingsFitOnePacketAndCarryNoToken(t *testing.T) {
 		}
 		if got := ctCaseToken(s.link.Tok, c.Kind, c.Tr); got != c.Tok {
 			t.Errorf("%s/%s: the kharej would derive %q, the Iran side has %q", c.Kind, c.Tr, got, c.Tok)
+		}
+		if managedTransport(c.Tr) {
+			reply := s.coord.answer("carrier "+s.link.Tok+" "+c.Tr, "1.1.1.1")
+			if !strings.HasPrefix(reply, "carrier ") || len(reply) > 1200 {
+				t.Errorf("%s settings are missing or exceed a packet: %d bytes", c.Tr, len(reply))
+			}
+			spec, err := ctManagedClient(context.Background(), s.link, c, t.TempDir())
+			if err != nil || selectedTransport(spec) != c.Tr || spec.Transport != "tcp" {
+				t.Fatalf("%s client: %v, %s", c.Tr, err, selectedTransport(spec))
+			}
+			if spec.XrayServer.PrivateKey != "" || spec.NaiveServer.Key != "" {
+				t.Error("private server settings escaped into the client")
+			}
 		}
 	}
 	a, _ := parseConnTestLink(link)
@@ -148,8 +171,16 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 	}(connTestBinary, connTestSoak)
 	connTestBinary = func() (string, error) { return bin, nil }
 	connTestSoak = 8
+	cover := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	cover.EnableHTTP2 = true
+	cover.TLS = &tls.Config{MinVersion: tls.VersionTLS13}
+	cover.StartTLS()
+	defer cover.Close()
+	_, coverPort, _ := net.SplitHostPort(cover.Listener.Addr().String())
 
-	iran, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1"})
+	iran, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1", RealityTarget: "localhost:" + coverPort})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +213,10 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		t.Fatalf("%d results for %d transports", len(results), len(connTestReverse))
 	}
 	for _, r := range results {
+		if r.Status == ctSkipped && managedTransport(r.Transport) && os.Getenv("BP_CONNTEST_HELPERS") != "1" {
+			t.Logf("%s skipped: %s", r.Transport, r.Detail)
+			continue
+		}
 		if r.Status == ctSkipped && connTestNeedsRoot(r.Transport) && os.Geteuid() != 0 {
 			continue
 		}
@@ -193,4 +228,175 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		t.Errorf("the kharej received %d results, the Iran side had %d", len(kharej), len(results))
 	}
 	t.Log("\n" + ConnTestTable(results))
+}
+
+func TestConnTestUnavailableHelpersAreSkipped(t *testing.T) {
+	previous := connTestHelperBinary
+	connTestHelperBinary = func(tool string) (string, error) { return "", fmt.Errorf("%s is unavailable", tool) }
+	defer func() { connTestHelperBinary = previous }()
+	s := &ConnTestIran{}
+	for _, tr := range []string{"naive", "xhttp", "reality"} {
+		c := &connTestCase{kind: "reverse", tr: tr}
+		s.startManagedCase(c, map[int]bool{}, ConnTestOptions{})
+		if !strings.Contains(c.skip, "unavailable") {
+			t.Errorf("%s did not explain the missing helper: %q", tr, c.skip)
+		}
+	}
+}
+
+func TestConnTestCancellationCannotPassAPartialSoak(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	echoes := &ctEchoes{}
+	echoes.add(l)
+	defer echoes.close()
+	go ctServeTCPEcho(l, echoes)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &connTestCase{kind: "reverse", tr: "tcp", entry: l.Addr().(*net.TCPAddr).Port}
+	r := ctProbe(ctx, c, 0, func(r ConnTestResult) {
+		if r.OK == 1 {
+			cancel()
+		}
+	})
+	if r.Status != ctUnstable || r.Tried != 1 || !strings.Contains(r.Detail, "stopped") {
+		t.Fatalf("partial soak incorrectly passed: %+v", r)
+	}
+}
+
+func TestConnTestBulkRejectsCorruptionAndStopsOnCancellation(t *testing.T) {
+	t.Run("corruption", func(t *testing.T) {
+		client, peer := net.Pipe()
+		defer peer.Close()
+		go func() {
+			buf := make([]byte, connTestBulk)
+			if _, err := io.ReadFull(peer, buf); err == nil {
+				buf[len(buf)/2] ^= 1
+				_, _ = peer.Write(buf)
+			}
+		}()
+		if speed, err := ctBulk(func() (net.Conn, error) { return client, nil }); err == nil || speed != 0 {
+			t.Fatalf("corrupt transfer returned %f, %v", speed, err)
+		}
+	})
+	t.Run("cancelled writer", func(t *testing.T) {
+		client, peer := net.Pipe()
+		defer peer.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		if _, err := ctBulkContext(ctx, func() (net.Conn, error) { return client, nil }); err == nil {
+			t.Fatal("blocked transfer passed")
+		}
+		if time.Since(start) > time.Second {
+			t.Fatal("cancellation waited for the transfer timeout")
+		}
+	})
+}
+
+type ctShortWriter struct{ net.Conn }
+
+func (c ctShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestConnTestEchoRejectsShortWrites(t *testing.T) {
+	c, peer := net.Pipe()
+	defer c.Close()
+	defer peer.Close()
+	if err := ctEcho(ctShortWriter{c}, false); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write: %v", err)
+	}
+}
+
+func TestConnTestEchoCloseOwnsActiveAndLateSockets(t *testing.T) {
+	e := &ctEchoes{}
+	a, peer := net.Pipe()
+	defer peer.Close()
+	e.add(a)
+	e.close()
+	if _, err := peer.Write([]byte("x")); err == nil {
+		t.Fatal("active socket remained open")
+	}
+	late, other := net.Pipe()
+	defer other.Close()
+	e.add(late)
+	if _, err := other.Write([]byte("x")); err == nil {
+		t.Fatal("late socket remained open")
+	}
+}
+
+func TestConnTestCoordinatorCancellationAndManagedSkip(t *testing.T) {
+	c, err := startCTCoordinator(ctPickPort(map[int]bool{}, true), "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	if c.answer("skip wrong naive", "127.0.0.1") != "" || c.answer("carrier wrong naive", "127.0.0.1") != "" {
+		t.Fatal("managed commands accepted the wrong token")
+	}
+	if c.answer("skip secret naive", "127.0.0.1") != "ok" || !c.skipped["naive"] {
+		t.Fatal("managed unavailability was not recorded")
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		peer, err := l.Accept()
+		if err == nil {
+			defer peer.Close()
+			_, _ = io.Copy(io.Discard, peer)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := ctAskContext(ctx, "127.0.0.1", l.Addr().(*net.TCPAddr).Port, "hello x"); err == nil {
+		t.Fatal("silent coordinator answered")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("coordinator ignored cancellation")
+	}
+	<-done
+}
+
+func TestConnTestStopsAllUnresponsiveEnginesWithinOneDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts real shell processes")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "stubborn")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntrap '' TERM\necho ready\nwhile :; do sleep 30; done\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	previous, wait := connTestBinary, connTestStopWait
+	connTestBinary = func() (string, error) { return bin, nil }
+	connTestStopWait = 100 * time.Millisecond
+	defer func() { connTestBinary, connTestStopWait = previous, wait }()
+	var engines []*ctEngine
+	defer func() { ctStopAll(engines) }()
+	for i := 0; i < 3; i++ {
+		e, err := startCTEngine(dir, fmt.Sprintf("stubborn-%d", i), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		engines = append(engines, e)
+		until := time.Now().Add(time.Second)
+		for ctLastLine(e.log) != "ready" && time.Now().Before(until) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if ctLastLine(e.log) != "ready" {
+			t.Fatal("stubborn engine did not initialize")
+		}
+	}
+	start := time.Now()
+	ctStopAll(engines)
+	if time.Since(start) > time.Second {
+		t.Fatal("cleanup waited per engine instead of sharing the deadline")
+	}
+	engines = nil
 }

@@ -119,7 +119,7 @@ func ctPMTUProbe(addr, tok string, size int) bool {
 func ctKharejPMTU(ctx context.Context, link ConnTestLink) {
 	p := ctProbePMTU(ctx, link.Host, link.Coord, link.Tok)
 	for i := 0; i < 8 && ctx.Err() == nil; i++ {
-		if reply, err := ctAsk(link.Host, link.Coord, fmt.Sprintf("pmtu %s %d", link.Tok, p)); err == nil && reply == "ok" {
+		if reply, err := ctAskContext(ctx, link.Host, link.Coord, fmt.Sprintf("pmtu %s %d", link.Tok, p)); err == nil && reply == "ok" {
 			return
 		}
 		ctSleep(ctx, 2*time.Second)
@@ -138,7 +138,7 @@ func ctComputeBest(results []ConnTestResult, cases []*connTestCase, pmtu int, lo
 	// else the one that carried the most.
 	best := -1
 	for i, r := range results {
-		if r.Kind == "spoof" || r.Status == ctSkipped || r.Tried == 0 {
+		if r.Kind == "spoof" || r.Status == ctSkipped || r.Tried == 0 || r.OK == 0 {
 			continue
 		}
 		if best < 0 {
@@ -148,6 +148,8 @@ func ctComputeBest(results []ConnTestResult, cases []*connTestCase, pmtu int, lo
 		cur := results[best]
 		switch {
 		case r.Status == ctOK && cur.Status != ctOK:
+			best = i
+		case r.Status == ctUnstable && cur.Status == ctDown:
 			best = i
 		case r.Status == cur.Status && r.Status == ctOK && r.Mbps > cur.Mbps:
 			best = i

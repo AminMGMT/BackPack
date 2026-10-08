@@ -30,6 +30,7 @@ var ctTransportNames = map[string]string{
 	"tcp": "TCP", "tcpmux": "TCP MUX", "stealth": "Stealth", "pck": "PCK",
 	"ws": "WS", "wss": "WSS", "wsmux": "WS MUX", "wssmux": "WSS MUX",
 	"kcp": "KCP FEC", "quic": "QUIC", "udp": "UDP", "xdi": "xDi", "sni": "SNI",
+	"naive": "Naive / HTTP2", "xhttp": "XHTTP / TLS", "reality": "REALITY / Vision",
 	ctSpoofToKharej: "Iran→Kharej", ctSpoofToIran: "Kharej→Iran",
 }
 
@@ -69,7 +70,7 @@ func ctEmoji(status string) string {
 }
 
 // Every emoji here takes two columns; the rest of the RESULT column is spaces.
-const ctRowFormat = "%s       %-9s %-11s %-11s %-8s %s"
+const ctRowFormat = "%s       %-9s %-16s %-11s %-8s %s"
 
 const ctHeader = "RESULT   KIND      NAME        STATUS      ECHOES   TESTING"
 

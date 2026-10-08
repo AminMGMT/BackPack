@@ -66,3 +66,15 @@ func TestTheRecommendationFollowsWhatWasMeasured(t *testing.T) {
 		}
 	}
 }
+
+func TestConnTestBestUsesTrafficRatherThanTheFirstFailedRow(t *testing.T) {
+	cases := []*connTestCase{{}, {rtts: []time.Duration{20 * time.Millisecond}}}
+	rows := []ConnTestResult{
+		{Kind: "reverse", Transport: "tcp", Status: ctDown, Tried: 60},
+		{Kind: "reverse", Transport: "xhttp", Status: ctUnstable, Tried: 60, OK: 40},
+	}
+	b := ctComputeBest(rows, cases, 0, t.TempDir())
+	if b.Transport != "" || b.RTTms != 20 || b.LossPct != 33.3 {
+		t.Fatalf("recommendation ignored partial traffic or recommended an unstable tunnel: %+v", b)
+	}
+}
