@@ -419,7 +419,9 @@ func (s *WsTransport) keepAlive(g *wsGen, conn *TunnelChannel) {
 				return
 			}
 
-			if err := conn.conn.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Ping}); err != nil {
+			// A stalled idle ping must not hold the pairing writer lock
+			// indefinitely; use the same bound as the control channel.
+			if err := controlwire.WS(conn.conn).Send(utils.SG_Ping); err != nil {
 				conn.mu.Unlock()
 				conn.conn.Close()
 				return
