@@ -1,11 +1,15 @@
 package manage
 
 import (
+	"encoding/base64"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/backpack/backpack/config"
 )
 
 // The link exists to remove the one failure this system is worst at: two ends
@@ -283,13 +287,16 @@ func TestManagedHTTPSLinksRejectPrivateOrMalformedTrust(t *testing.T) {
 	_, cert, key := managedWizardFixture(t)
 	public, _ := os.ReadFile(cert)
 	private, _ := os.ReadFile(key)
-	for _, body := range []string{"", "garbage" + string(public), string(private), string(public) + string(private), strings.Repeat("x", 16<<10+1)} {
+	for _, body := range []string{"", "garbage" + string(public), string(private), string(public) + string(private), "-----BEGIN CERTIFICATE-----\ninvalid!\n-----END CERTIFICATE-----\n" + string(public), "-----BEGIN CERTIFICATE-----\n" + string(public), strings.Repeat("x", 16<<10+1)} {
 		if _, err := managedLinkCertificates(body); err == nil {
 			t.Fatal("invalid or private certificate content accepted")
 		}
 	}
 	if _, err := managedLinkCertificates(string(public)); err != nil {
 		t.Fatal(err)
+	}
+	if certs, err := managedLinkCertificates(strings.ReplaceAll(string(public), "\n", "\r\n") + "\n" + string(public)); err != nil || len(certs) != 2 {
+		t.Fatalf("valid certificate chain rejected: %v", err)
 	}
 	path := managedLinkCAPath(string(public))
 	if filepath.Base(path) == "" || !strings.HasPrefix(filepath.Base(path), "https-peer-") || path != managedLinkCAPath(string(public)) {
@@ -302,6 +309,7 @@ func TestManagedHTTPSLinksRejectPrivateOrMalformedTrust(t *testing.T) {
 	}{
 		{"missing internal port", func(l *ShareLink) { l.InnerPort = "" }},
 		{"same port", func(l *ShareLink) { l.InnerPort = "443" }},
+		{"same numeric port", func(l *ShareLink) { l.InnerPort = "0443" }},
 		{"UDP forwarding", func(l *ShareLink) { l.AcceptUDP = true }},
 		{"fallbacks", func(l *ShareLink) { l.Hosts = []string{"backup.example.org"} }},
 		{"wrong side", func(l *ShareLink) { l.From = "kharej" }},
@@ -334,5 +342,63 @@ func TestManagedHTTPSSetupInstructionsRequireMatchingBuild(t *testing.T) {
 	form := MirrorForPeer(link)
 	if form.ManagedLink == nil || form.ManagedLink.Tr != link.Tr {
 		t.Fatal("terminal form discarded managed settings")
+	}
+}
+
+func TestManagedHTTPSRealityExportRequiresTheServerPrivateKey(t *testing.T) {
+	cfg := config.Config{Server: config.ServerConfig{BindAddr: "127.0.0.1:3080", Token: "secret", Transport: config.TCP,
+		Xray: config.XrayServerConfig{Binary: "/usr/local/lib/backpack/xray", Mode: "reality", Listen: "0.0.0.0:443"}}}
+	for _, key := range []string{"", "   ", "invalid"} {
+		cfg.Server.Xray.PrivateKey = key
+		if raw, err := shareLinkOf("test", "127.0.0.1", cfg); err == nil || raw != "" {
+			t.Fatalf("REALITY export accepted missing or invalid identity: %q %v", raw, err)
+		}
+	}
+	private, public, err := managedRealityKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Server.Xray.PrivateKey = private
+	raw, err := shareLinkOf("test", "127.0.0.1", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := DecodeShareLink(raw)
+	if err != nil || link.HelperPublicKey != public {
+		t.Fatalf("export changed server identity: %+v %v", link, err)
+	}
+}
+
+func TestShareLinkRefusalsReturnNoPartialSettings(t *testing.T) {
+	good, err := sampleLink().Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := strings.TrimPrefix(good, shareScheme+shareVersion2+".")
+	b, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append(b[:len(b)-3], 255) // A newer field after valid paired settings.
+	sum := crc32.ChecksumIEEE(body)
+	newer := shareScheme + shareVersion2 + "." + base64.RawURLEncoding.EncodeToString(append(body, byte(sum>>16), byte(sum>>8), byte(sum)))
+	missing, err := (ShareLink{Kind: "reverse", Tr: "tcp"}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	validJSON := []byte(`{"k":"reverse","t":"secret","tr":"tcp"}`)
+	legacy := shareScheme + shareVersion + "."
+	compressed, err := base64.RawURLEncoding.DecodeString(gzipB64(validJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed[len(compressed)-8] ^= 1 // Corrupt the gzip checksum.
+	for _, raw := range []string{newer, missing,
+		legacy + gzipB64([]byte(`{"k":"reverse","t":"secret","tr":123}`)),
+		legacy + gzipB64(append(validJSON, []byte(strings.Repeat(" ", 64<<10))...)),
+		legacy + base64.RawURLEncoding.EncodeToString(compressed)} {
+		if link, err := DecodeShareLink(raw); err == nil || !reflect.DeepEqual(link, ShareLink{}) {
+			t.Fatalf("rejected link retained partial settings: %+v %v", link, err)
+		}
 	}
 }

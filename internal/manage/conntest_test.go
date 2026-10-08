@@ -538,6 +538,12 @@ func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
 	if target != "" || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled selection succeeded: %q %v", target, err)
 	}
+	if target, err := ctFindRealityCover(context.Background(), []string{"expired"}, func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return nil
+	}); err == nil || target != "" {
+		t.Fatal("expired cover probe was accepted")
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

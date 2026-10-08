@@ -603,6 +603,9 @@ func ctFindRealityCover(ctx context.Context, targets []string, probe func(contex
 		}
 		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
 		err := probe(attempt, target)
+		if err == nil {
+			err = attempt.Err()
+		}
 		cancel()
 		if err == nil && ctx.Err() == nil {
 			return target, nil
@@ -1007,7 +1010,7 @@ func ctKharejSpoof(ctx context.Context, link ConnTestLink, root bool) {
 			ctSleep(ctx, 2*time.Second)
 			_ = spooftest.RunSender(spooftest.SenderConfig{
 				Context: ctx,
-				Token:   link.Tok, TargetIP: net.ParseIP(ctIPv4(link.Host)), DstPort: uint16(link.SpoofI),
+				Token:   link.Tok, TargetIP: net.ParseIP(ctIPv4Context(ctx, link.Host)), DstPort: uint16(link.SpoofI),
 				Attempts: n, Delay: time.Second, IPs: []net.IP{forged},
 			})
 		}()
@@ -1944,13 +1947,22 @@ func ctServeUDPEcho(l net.PacketConn) {
 
 // ctIPv4 is host as an IPv4 address, resolving a name; empty when there is none.
 func ctIPv4(host string) string {
+	return ctIPv4Context(context.Background(), host)
+}
+
+func ctIPv4Context(ctx context.Context, host string) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if ctx.Err() != nil {
+		return ""
+	}
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.To4() != nil {
 			return ip.String()
 		}
 		return ""
 	}
-	ips, _ := net.LookupIP(host)
+	ips, _ := net.DefaultResolver.LookupIP(ctx, "ip4", host)
 	for _, ip := range ips {
 		if ip.To4() != nil {
 			return ip.String()

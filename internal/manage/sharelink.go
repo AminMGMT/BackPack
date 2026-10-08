@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -197,8 +198,12 @@ func (l ShareLink) Encode() (string, error) {
 // them it was: the wrong kind of string, a version this build does not know, or
 // a link that arrived damaged — which is nearly always a copy that stopped
 // short.
-func DecodeShareLink(s string) (ShareLink, error) {
-	var out ShareLink
+func DecodeShareLink(s string) (out ShareLink, err error) {
+	defer func() {
+		if err != nil {
+			out = ShareLink{}
+		}
+	}()
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return out, fmt.Errorf("paste the setup link from the other server")
@@ -239,9 +244,12 @@ func DecodeShareLink(s string) (ShareLink, error) {
 	defer zr.Close()
 	// Bounded: a link is a few hundred bytes, and a decompressor should never be
 	// handed an unbounded read from something pasted in.
-	raw, err := io.ReadAll(io.LimitReader(zr, 64<<10))
+	raw, err := io.ReadAll(io.LimitReader(zr, (64<<10)+1))
 	if err != nil {
 		return out, fmt.Errorf("the setup link is incomplete — copy the whole of it, including the end")
+	}
+	if len(raw) > 64<<10 {
+		return out, fmt.Errorf("the setup link exceeds 64 KiB")
 	}
 	// A Connection Test link has the same shape and other fields; it is told
 	// apart before the rest is read, so it is named rather than called damaged.
@@ -654,6 +662,9 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 			l.HelperUUID, l.HelperSNI, l.HelperPath, l.HelperHost = x.UUID, x.ServerName, x.Path, x.Host
 			cert = x.Certificate
 			if x.Mode == "reality" {
+				if strings.TrimSpace(x.PrivateKey) == "" {
+					return "", fmt.Errorf("REALITY server has no private key; repair its configuration before exporting a setup link")
+				}
 				_, public, err := managedRealityKey(x.PrivateKey)
 				if err != nil {
 					return "", err
@@ -693,8 +704,19 @@ func managedLinkCertificates(body string) ([]*x509.Certificate, error) {
 		if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
 			return nil, fmt.Errorf("HTTPS setup links accept only public PEM certificates")
 		}
-		block, tail := pem.Decode(rest)
-		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+		// Decode one block at a time: pem.Decode otherwise skips a damaged
+		// leading block and can silently accept the later certificate.
+		endMark := []byte("-----END CERTIFICATE-----")
+		end := bytes.Index(rest, endMark)
+		if end < 0 {
+			return nil, fmt.Errorf("invalid public HTTPS certificate block")
+		}
+		end += len(endMark)
+		if bytes.Contains(rest[len("-----BEGIN CERTIFICATE-----"):end], []byte("-----BEGIN ")) {
+			return nil, fmt.Errorf("invalid public HTTPS certificate block")
+		}
+		block, tail := pem.Decode(rest[:end])
+		if block == nil || len(bytes.TrimSpace(tail)) != 0 || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
 			return nil, fmt.Errorf("HTTPS setup links accept only public PEM certificates")
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
@@ -702,7 +724,7 @@ func managedLinkCertificates(body string) ([]*x509.Certificate, error) {
 			return nil, fmt.Errorf("invalid public HTTPS certificate: %w", err)
 		}
 		certs = append(certs, cert)
-		rest = []byte(strings.TrimSpace(string(tail)))
+		rest = bytes.TrimSpace(rest[end:])
 	}
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("missing public HTTPS certificate")
@@ -723,7 +745,9 @@ func prepareManagedLink(s TunnelSpec, link ShareLink) error {
 	if !managedTransport(link.Tr) {
 		return nil
 	}
-	if link.Kind != "reverse" || link.From != "iran" || !validPort(link.InnerPort) || !validPort(link.Port) || link.InnerPort == link.Port || link.AcceptUDP || len(link.Fallbacks) != 0 || len(link.Hosts) != 0 {
+	inner, _ := strconv.Atoi(link.InnerPort)
+	outer, _ := strconv.Atoi(link.Port)
+	if link.Kind != "reverse" || link.From != "iran" || !validPort(link.InnerPort) || !validPort(link.Port) || inner == outer || link.AcceptUDP || len(link.Fallbacks) != 0 || len(link.Hosts) != 0 {
 		return fmt.Errorf("invalid managed HTTPS setup link; generate a new link on Iran")
 	}
 	if link.HelperCA != "" {

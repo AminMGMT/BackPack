@@ -58,10 +58,14 @@ const (
 // side's coordinator without being fragmented, found by halving; 0 if nothing
 // came back at all.
 func ctProbePMTU(ctx context.Context, host string, port int, tok string) int {
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	ip := ctIPv4Context(ctx, host)
+	if ip == "" || ctx.Err() != nil {
+		return 0
+	}
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
 	fits := func(size int) bool {
 		for try := 0; try < 2 && ctx.Err() == nil; try++ {
-			if ctPMTUProbe(addr, tok, size) {
+			if ctPMTUProbe(ctx, addr, tok, size) {
 				return true
 			}
 		}
@@ -82,21 +86,23 @@ func ctProbePMTU(ctx context.Context, host string, port int, tok string) int {
 			hi = mid
 		}
 	}
+	if ctx.Err() != nil {
+		return 0
+	}
 	return lo
 }
 
 // ctPMTUProbe sends one unfragmentable datagram making an IPv4 packet of size
 // bytes, from a socket of its own, and reports whether it was answered.
-func ctPMTUProbe(addr, tok string, size int) bool {
-	raddr, err := net.ResolveUDPAddr("udp4", addr)
+func ctPMTUProbe(ctx context.Context, addr, tok string, size int) bool {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp4", addr)
 	if err != nil {
 		return false
 	}
-	c, err := net.DialUDP("udp4", nil, raddr)
-	if err != nil {
-		return false
-	}
+	c := conn.(*net.UDPConn)
 	defer c.Close()
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
 	if ctDontFragment(c) != nil {
 		return false
 	}
@@ -112,7 +118,7 @@ func ctPMTUProbe(addr, tok string, size int) bool {
 	}
 	buf := make([]byte, 64)
 	n, err := c.Read(buf)
-	return err == nil && strings.TrimSpace(string(buf[:n])) == fmt.Sprintf("pm %d", size)
+	return err == nil && ctx.Err() == nil && strings.TrimSpace(string(buf[:n])) == fmt.Sprintf("pm %d", size)
 }
 
 // ctKharejPMTU measures the path MTU and hands it to the Iran side.
