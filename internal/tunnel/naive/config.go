@@ -1,4 +1,4 @@
-// Package naive manages optional HTTP/2 helpers under the existing reverse
+// Package naive manages optional Naive and Xray helpers under the existing reverse
 // tunnel's context. All reverse protocol semantics remain in the TCP engine.
 package naive
 

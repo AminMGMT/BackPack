@@ -325,7 +325,7 @@ func (s Spec) Render() string {
 		}
 		b.WriteString("]\n")
 		s.writeFallbackChain(p, &b)
-		s.writeNaive(&b)
+		s.writeHelpers(&b)
 		return b.String()
 	}
 
@@ -397,11 +397,11 @@ func (s Spec) Render() string {
 		p("web_port = %d\n", s.WebPort)
 		p("web_bind = %q\n", monitorBind(s.WebBind))
 	}
-	s.writeNaive(&b)
+	s.writeHelpers(&b)
 	return b.String()
 }
 
-func (s Spec) writeNaive(b *strings.Builder) {
+func (s Spec) writeHelpers(b *strings.Builder) {
 	if s.Role == "server" && s.NaiveServer.Enabled() {
 		b.WriteString("\n[server.naive]\n")
 		_ = toml.NewEncoder(b).Encode(s.NaiveServer) // string fields into an infallible strings.Builder
