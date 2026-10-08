@@ -306,7 +306,11 @@ func TestQUICDialDNSStopsWithContext(t *testing.T) {
 		}
 		done := make(chan error, 1)
 		go func() {
-			conn, err := QUICDial(ctx, "stalled-quic-dns.invalid:443", QUICSettings{})
+			settings := QUICSettings{}
+			if kind == "configured-timeout" {
+				settings.DialTimeout = 80 * time.Millisecond
+			}
+			conn, err := QUICDial(ctx, "stalled-quic-dns.invalid:443", settings)
 			if conn != nil {
 				conn.CloseWithError(0, "test finished")
 			}
@@ -323,7 +327,7 @@ func TestQUICDialDNSStopsWithContext(t *testing.T) {
 		select {
 		case err := <-done:
 			want := context.Canceled
-			if kind == "timeout" {
+			if kind != "cancel" {
 				want = context.DeadlineExceeded
 			}
 			if !errors.Is(err, want) {
@@ -341,7 +345,7 @@ func TestQUICDialDNSStopsWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"cancel", "timeout"} {
+	for _, kind := range []string{"cancel", "timeout", "configured-timeout"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
@@ -351,5 +355,76 @@ func TestQUICDialDNSStopsWithContext(t *testing.T) {
 				t.Fatalf("isolated %s lookup: %v\n%s", kind, err, output)
 			}
 		})
+	}
+}
+
+func TestQUICAddressResolutionPreservesLiteralAddresses(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:443", "[::1]:443", "[fe80::1%test-zone]:443", ":443", "localhost:domain"} {
+		t.Run(address, func(t *testing.T) {
+			want, err := net.ResolveUDPAddr("udp", address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := resolveQUICAddr(context.Background(), address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.String() != want.String() {
+				t.Fatalf("resolved %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestQUICConnectionOutlivesItsSetupBudget(t *testing.T) {
+	listener, err := QUICListen("127.0.0.1:0", QUICSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverCtx, stopServer := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stopServer()
+	served := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept(serverCtx)
+		if err != nil {
+			served <- err
+			return
+		}
+		defer conn.CloseWithError(0, "finished")
+		stream, err := conn.AcceptStream(serverCtx)
+		if err != nil {
+			served <- err
+			return
+		}
+		_ = stream.SetDeadline(time.Now().Add(2 * time.Second))
+		var value [1]byte
+		_, err = io.ReadFull(stream, value[:])
+		served <- err
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := QUICDial(ctx, listener.Addr().String(), QUICSettings{DialTimeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseWithError(0, "finished")
+	cancel()
+	time.Sleep(350 * time.Millisecond)
+	stream, err := conn.OpenStreamSync(serverCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.SetWriteDeadline(time.Now().Add(time.Second))
+	if _, err := stream.Write([]byte{42}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-serverCtx.Done():
+		t.Fatal("established connection did not survive setup cancellation")
 	}
 }

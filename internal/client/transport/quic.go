@@ -57,6 +57,7 @@ type QuicConfig struct {
 
 func (c *QuicConfig) settings() network.QUICSettings {
 	return network.QUICSettings{
+		DialTimeout:     c.DialTimeOut,
 		KeepAlivePeriod: c.KeepAlive,
 		MaxIdleTimeout:  quicIdleTimeout(c.KeepAlive),
 		SO_RCVBUF:       c.SO_RCVBUF,
