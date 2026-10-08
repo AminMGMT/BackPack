@@ -8,6 +8,8 @@
 # /root/BackPack and installs the binary, verifying it against the checksum
 # published with the release. If run inside a source checkout and the download
 # fails, it builds from source as a last resort.
+# BP_BUILD_FROM_SOURCE=1 deliberately installs this checkout's build instead
+# of the latest release, for features not present in a published release yet.
 #
 # A server that cannot reach GitHub at all installs offline instead: download
 # the archive on a machine that can, copy it over, and follow the offline steps
@@ -59,6 +61,15 @@ if [[ -f "$SCRIPT_DIR/go.mod" ]]; then
 fi
 
 if [[ $EUID -ne 0 ]]; then err "Please run as root (sudo)."; exit 1; fi
+
+case "${BP_BUILD_FROM_SOURCE:-0}" in
+  0|1) ;;
+  *) err 'BP_BUILD_FROM_SOURCE must be 0 or 1'; exit 2 ;;
+esac
+if [[ "${BP_BUILD_FROM_SOURCE:-0}" == 1 ]] && ! [[ -f "$SCRIPT_DIR/go.mod" && -f "$SCRIPT_DIR/main.go" ]]; then
+  err 'BP_BUILD_FROM_SOURCE=1 requires a source checkout beside install.sh'
+  exit 1
+fi
 
 # One thing may follow the script: a setup link to apply once Backpack is in.
 #
@@ -487,7 +498,12 @@ build_from_source() {
   echo "$INSTALL_DIR" > /etc/backpack/install_path
 }
 
-if install_release; then
+# Select the engine build independently of optional helper installation.
+if [[ "${BP_BUILD_FROM_SOURCE:-0}" == 1 ]]; then
+  trusted_dir "$SCRIPT_DIR" || { err 'The requested source directory is not trusted'; exit 1; }
+  build_from_source
+  info "Built requested source checkout -> ${BIN_PATH}"
+elif install_release; then
   install_binary_from_tar
   info "Installed release binary -> ${BIN_PATH}"
 elif [[ -f "$SCRIPT_DIR/go.mod" && -f "$SCRIPT_DIR/main.go" ]] && trusted_dir "$SCRIPT_DIR"; then
@@ -503,6 +519,7 @@ else
   err "offline steps in the README. Or clone the repo and run install.sh inside it."
   exit 1
 fi
+# End engine build selection.
 
 install_helpers || { err "Optional helper installation failed; no helper was started"; exit 1; }
 

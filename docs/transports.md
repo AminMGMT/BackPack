@@ -17,6 +17,11 @@ require a Backpack build that implements the managed Xray wrapper.
 
 ## Managed HTTPS carriers
 
+Use a build containing these changes on both machines. From its source checkout,
+`BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash install.sh` builds that checkout
+and installs the pinned helpers. Without the source flag the installer prefers
+the latest published BackPack release, which may predate these carriers.
+
 These optional Linux helpers carry the existing **TCP reverse engine**. Keep
 `transport = "tcp"` and use the same literal loopback `server.bind_addr` and
 `client.remote_addr` on both machines. The Iran helper's public listener must
