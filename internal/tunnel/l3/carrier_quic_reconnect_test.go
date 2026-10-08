@@ -7,9 +7,91 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestL3UDPDNSStopsWithItsGeneration(t *testing.T) {
+	if mode := os.Getenv("BACKPACK_L3_UDP_DNS_AUDIT"); mode != "" {
+		parts := strings.Split(mode, ":")
+		started, release := make(chan struct{}, 2), make(chan struct{})
+		defer close(release)
+		net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-release:
+				return nil, errors.New("resolver released")
+			}
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if parts[1] == "timeout" {
+			ctx, cancel = context.WithTimeout(ctx, 80*time.Millisecond)
+			defer cancel()
+		}
+		done := make(chan error, 1)
+		go func() {
+			cfg := Config{Mode: ModeDial, Carrier: CarrierUDP, Addr: "stalled-l3-udp-dns.invalid:443", Token: "dns-generation"}
+			if parts[0] == "rekey" {
+				tun := &Tunnel{cfg: cfg, log: quietLogger()}
+				done <- tun.negotiate(ctx)
+				return
+			}
+			if parts[0] == "multipath" {
+				cfg.Multipath.Paths = 4
+			}
+			carrier, _, err := openCarrierContext(ctx, cfg)
+			if carrier != nil {
+				carrier.Close()
+			}
+			done <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("DNS lookup never started")
+		}
+		if parts[1] == "cancel" {
+			cancel()
+		}
+		select {
+		case err := <-done:
+			want := context.Canceled
+			if parts[1] == "timeout" {
+				want = context.DeadlineExceeded
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("DNS returned %v, want %v", err, want)
+			}
+		case <-time.After(400 * time.Millisecond):
+			t.Fatal("L3 UDP DNS ignored generation cancellation or deadline")
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"startup", "multipath", "rekey"} {
+		for _, kind := range []string{"cancel", "timeout"} {
+			t.Run(stage+"/"+kind, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, executable, "-test.run=^TestL3UDPDNSStopsWithItsGeneration$", "-test.timeout=6s")
+				cmd.Env = append(os.Environ(), "BACKPACK_L3_UDP_DNS_AUDIT="+stage+":"+kind)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("isolated %s %s: %v\n%s", stage, kind, err, out)
+				}
+			})
+		}
+	}
+}
 
 func openQuicPair(t *testing.T, token, addr string) (listener *quicCarrier) {
 	t.Helper()
