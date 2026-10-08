@@ -464,59 +464,82 @@ func TestEdgeReconnectsAfterTheOriginRestarts(t *testing.T) {
 // Several mux sessions must all be used, so a shaped single connection is not
 // the whole tunnel.
 func TestEdgeSpreadsAcrossSessions(t *testing.T) {
-	backend := echoBackend(t, "S:")
+	for _, count := range []int{2, 4} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			targetA, targetB := echoBackend(t, "A:"), echoBackend(t, "B:")
+			origin, err := NewOrigin(Config{
+				Role: RoleOrigin, Addr: "127.0.0.1:0", Token: "token",
+			}, quietLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			originDone := make(chan struct{})
+			go func() { defer close(originDone); _ = origin.Run(ctx) }()
+			t.Cleanup(func() { cancel(); <-originDone })
 
-	origin, err := NewOrigin(Config{
-		Role: RoleOrigin, Addr: "127.0.0.1:0", Token: "token",
-	}, quietLogger())
-	if err != nil {
-		t.Fatalf("NewOrigin: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	originDone := make(chan struct{})
-	go func() { defer close(originDone); _ = origin.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-originDone })
+			port := freePort(t)
+			edge, err := NewEdge(Config{
+				Role: RoleEdge, Addr: awaitBind(t, origin).String(), Token: "token", Sessions: count,
+				Ports:      []string{fmt.Sprintf("127.0.0.1:%d=%s|%s", port, targetA, targetB)},
+				RetryDelay: 200 * time.Millisecond,
+			}, quietLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			edgeDone := make(chan struct{})
+			go func() { defer close(edgeDone); _ = edge.Run(ctx) }()
+			t.Cleanup(func() { cancel(); <-edgeDone })
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+				if edge.Stats().Sessions == int64(count) && origin.Stats().Sessions == int64(count) {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if edge.Stats().Sessions != int64(count) || origin.Stats().Sessions != int64(count) {
+				t.Fatal("not all sessions authenticated")
+			}
 
-	var bound net.Addr
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
-		if bound = origin.LocalAddr(); bound != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	port := freePort(t)
-	edge, err := NewEdge(Config{
-		Role: RoleEdge, Addr: bound.String(), Token: "token", Sessions: 4,
-		Ports:      []string{fmt.Sprintf("127.0.0.1:%d=%s", port, backend)},
-		RetryDelay: 200 * time.Millisecond,
-	}, quietLogger())
-	if err != nil {
-		t.Fatalf("NewEdge: %v", err)
-	}
-	edgeDone := make(chan struct{})
-	go func() { defer close(edgeDone); _ = edge.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-edgeDone })
-
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		if edge.Stats().Sessions == 4 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := edge.Stats().Sessions; got != 4 {
-		t.Fatalf("edge holds %d sessions, want 4", got)
-	}
-	if got := origin.Stats().Sessions; got != 4 {
-		t.Fatalf("origin holds %d sessions, want 4", got)
-	}
-
-	tn := &tunnel{edge: edge, port: port}
-	for i := 0; i < 8; i++ {
-		if got, want := tn.roundTrip(t, "x"), "S:x"; got != want {
-			t.Fatalf("round trip %d = %q, want %q", i, got, want)
-		}
+			// Keep eight user flows open so the actual mux streams reveal which
+			// sessions carried them; merely establishing sessions proves nothing.
+			peers := make([]net.Conn, 0, 8)
+			t.Cleanup(func() {
+				for _, peer := range peers {
+					peer.Close()
+				}
+			})
+			backends := map[string]int{}
+			for i := 0; i < 8; i++ {
+				peer, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				peers = append(peers, peer)
+				_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+				if _, err := peer.Write([]byte("x")); err != nil {
+					t.Fatal(err)
+				}
+				var reply [3]byte
+				if _, err := io.ReadFull(peer, reply[:]); err != nil {
+					t.Fatal(err)
+				}
+				backends[string(reply[:])]++
+			}
+			seen := make(map[*tunnelSession]bool)
+			for i := 0; i < count; i++ {
+				session := edge.pickSession()
+				if session == nil || seen[session] {
+					t.Fatal("session rotation skipped a live session")
+				}
+				seen[session] = true
+				if got := session.NumStreams(); got != 8/count {
+					t.Errorf("session carries %d streams, want %d", got, 8/count)
+				}
+			}
+			if backends["A:x"] != 4 || backends["B:x"] != 4 {
+				t.Errorf("backend choices %v, want four flows on each", backends)
+			}
+		})
 	}
 }
 

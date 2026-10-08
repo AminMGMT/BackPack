@@ -54,7 +54,8 @@ type Edge struct {
 	mu       sync.RWMutex
 	sessions []*tunnelSession
 
-	cursor atomic.Uint64
+	sessionCursor atomic.Uint64
+	backendCursor atomic.Uint64
 
 	stats struct {
 		sessions atomic.Int64
@@ -225,7 +226,7 @@ func (e *Edge) pickSession() *tunnelSession {
 	if len(sessions) == 0 {
 		return nil
 	}
-	start := int(e.cursor.Add(1)-1) % len(sessions)
+	start := int((e.sessionCursor.Add(1) - 1) % uint64(len(sessions)))
 	for i := range sessions {
 		if s := sessions[(start+i)%len(sessions)]; s.Usable() {
 			return s
@@ -299,7 +300,7 @@ func (e *Edge) openFor(kind byte, m portmap.Mapping) (net.Conn, error) {
 	}
 
 	var lastErr error
-	start := int(e.cursor.Add(1)-1) % len(m.Targets)
+	start := int((e.backendCursor.Add(1) - 1) % uint64(len(m.Targets)))
 	for i := range m.Targets {
 		target := m.Targets[(start+i)%len(m.Targets)]
 		stream, err := openStream(session, kind, target, e.cfg.DialTimeout)
