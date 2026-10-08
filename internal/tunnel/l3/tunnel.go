@@ -336,7 +336,7 @@ func New(cfg Config, log *logrus.Logger) (*Tunnel, error) {
 // Run opens the device and the carrier and serves the tunnel until ctx ends.
 // It always cleans up what it opened, including on the error paths.
 func (t *Tunnel) Run(ctx context.Context) error {
-	carrier, peer, err := openCarrier(t.cfg)
+	carrier, peer, err := openCarrierContext(ctx, t.cfg)
 	if err != nil {
 		return err
 	}
@@ -365,6 +365,9 @@ func (t *Tunnel) Run(ctx context.Context) error {
 	t.localAddr = carrier.LocalAddr()
 	t.localAddrMu.Unlock()
 	defer carrier.Close()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	open := t.openDevice
 	if open == nil {

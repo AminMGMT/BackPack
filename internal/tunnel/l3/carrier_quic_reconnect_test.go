@@ -2,6 +2,7 @@ package l3
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -216,4 +217,42 @@ func TestAClosedQuicPeerIsRetiredWithAFullInbox(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("the closed peer is retained while its reader waits on a full inbox")
+}
+
+// A stalled initial handshake must end with Run, before any device is opened.
+func TestQuicInitialDialStopsWithItsParent(t *testing.T) {
+	sink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	tun, err := New(Config{Mode: ModeDial, Addr: sink.LocalAddr().String(), Token: "cancel-initial-quic", Carrier: CarrierQuic, LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1300}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tun.openDevice = func(deviceSpec) (packetDevice, error) {
+		t.Error("TUN opened before QUIC handshake completed")
+		return newFakeDevice(1300), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- tun.Run(ctx) }()
+	if err := sink.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sink.ReadFromUDP(make([]byte, 4096)); err != nil {
+		t.Fatalf("QUIC dial never sent its initial packet: %v", err)
+	}
+	begin := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("unexpected cancellation result: %v", err)
+		}
+		t.Logf("QUIC initial dial cancelled after %s", time.Since(begin))
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Tunnel.Run ignores parent cancellation while QUIC initial handshake waits up to 12 seconds")
+	}
 }

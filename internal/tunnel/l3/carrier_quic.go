@@ -70,10 +70,14 @@ const quicHandshakeTimeout = 12 * time.Second
 
 // openQuic builds the QUIC carrier for either side.
 func openQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
+	return openQuicContext(context.Background(), cfg)
+}
+
+func openQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
 	if cfg.Mode == ModeListen {
 		return listenQuic(cfg)
 	}
-	return dialQuic(cfg)
+	return dialQuicContext(ctx, cfg)
 }
 
 // How quickly a dead QUIC connection is given up on.
@@ -124,7 +128,11 @@ func quicResetKey(token string) *quic.StatelessResetKey {
 }
 
 func dialQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), quicHandshakeTimeout)
+	return dialQuicContext(context.Background(), cfg)
+}
+
+func dialQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
+	ctx, cancel := context.WithTimeout(ctx, quicHandshakeTimeout)
 	defer cancel()
 
 	conn, err := quic.DialAddr(ctx, cfg.Addr, &tls.Config{
