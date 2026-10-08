@@ -223,6 +223,7 @@ func warnIgnoredProxyProtocol(cfg *config.Config) {
 func validateConfig(cfg *config.Config) error {
 	for _, check := range []func(*config.Config) error{
 		checkNaive,
+		checkXray,
 		checkOutbound,
 		checkXdi,
 		checkSpoof,
@@ -248,6 +249,19 @@ func checkNaive(cfg *config.Config) error {
 	}
 	if err := naive.Validate(cfg); err != nil {
 		return fmt.Errorf("Naive configuration: %w", err)
+	}
+	return nil
+}
+
+func checkXray(cfg *config.Config) error {
+	if !cfg.Client.Xray.Enabled() && !cfg.Server.Xray.Enabled() {
+		return nil
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("managed Xray transports currently support Linux only")
+	}
+	if err := naive.ValidateXray(cfg); err != nil {
+		return fmt.Errorf("Xray configuration: %w", err)
 	}
 	return nil
 }

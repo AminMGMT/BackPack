@@ -554,6 +554,9 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 	if cfg.Server.Naive.Enabled() || cfg.Client.Naive.Enabled() {
 		return "", fmt.Errorf("experimental Naive helper settings are not encoded in setup links; configure both files manually")
 	}
+	if cfg.Server.Xray.Enabled() || cfg.Client.Xray.Enabled() {
+		return "", fmt.Errorf("managed Xray helper settings are not encoded in setup links; configure both files manually")
+	}
 	l := ShareLink{Name: name, Host: strings.TrimSpace(host)}
 
 	switch {

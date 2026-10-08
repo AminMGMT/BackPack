@@ -73,9 +73,9 @@ func fileFingerprint(path string) (fingerprint, error) {
 // A renewed helper certificate is not a TOML edit. Compare contents so an
 // identical rewrite does not interrupt traffic, and validate a replacement
 // before stopping the current generation. No helper means no extra file reads.
-func helperTLSIdentity(cfg *config.Config) ([3][sha256.Size]byte, error) {
-	var identity [3][sha256.Size]byte
-	paths := [3]string{cfg.Server.Naive.Certificate, cfg.Server.Naive.Key, cfg.Client.Naive.CAFile}
+func helperTLSIdentity(cfg *config.Config) ([6][sha256.Size]byte, error) {
+	var identity [6][sha256.Size]byte
+	paths := [6]string{cfg.Server.Naive.Certificate, cfg.Server.Naive.Key, cfg.Client.Naive.CAFile, cfg.Server.Xray.Certificate, cfg.Server.Xray.Key, cfg.Client.Xray.CAFile}
 	for i, path := range paths {
 		if path == "" {
 			continue
@@ -127,7 +127,7 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 	lastTLS, _ := helperTLSIdentity(current)
 	var lastComplaint struct {
 		config fingerprint
-		tls    [3][sha256.Size]byte
+		tls    [6][sha256.Size]byte
 	}
 
 	ticker := time.NewTicker(configPollInterval)
@@ -151,7 +151,7 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 		last = fp
 		complaint := struct {
 			config fingerprint
-			tls    [3][sha256.Size]byte
+			tls    [6][sha256.Size]byte
 		}{fp, tlsIdentity}
 
 		next, err := loadConfig(path)
@@ -260,6 +260,9 @@ func portsInUse(cfg *config.Config) []listenerBinding {
 	if cfg.Server.BindAddr != "" {
 		if cfg.Server.Naive.Enabled() {
 			bindings = append(bindings, listenerBinding{network: "tcp", address: cfg.Server.Naive.Listen})
+		}
+		if cfg.Server.Xray.Enabled() {
+			bindings = append(bindings, listenerBinding{network: "tcp", address: cfg.Server.Xray.Listen})
 		}
 		// An empty network means the transport has no ordinary listener to
 		// probe, so the bind address is left out rather than guessed at.

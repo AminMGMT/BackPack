@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,46 @@ func StartServer(ctx context.Context, c *config.ServerConfig, log *logrus.Logger
 	return startManaged(ctx, c.Naive.Binary, "server", body, c.Naive.Listen, os.Environ(), log, l.Close)
 }
 
+func StartXrayClient(ctx context.Context, c *config.ClientConfig, log *logrus.Logger) (*Helper, error) {
+	if err := ValidateXrayClient(c); err != nil {
+		return nil, err
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	defer l.Close()
+	addr := l.Addr().String()
+	body, err := XrayClientJSON(c, addr)
+	if err != nil {
+		return nil, err
+	}
+	return startManaged(ctx, c.Xray.Binary, "xray-client", body, addr, os.Environ(), log, l.Close)
+}
+
+func StartXrayServer(ctx context.Context, c *config.ServerConfig, log *logrus.Logger) (*Helper, error) {
+	if err := ValidateXrayServer(c); err != nil {
+		return nil, err
+	}
+	body, err := XrayServerJSON(c)
+	if err != nil {
+		return nil, err
+	}
+	l, err := net.Listen("tcp", c.Xray.Listen)
+	if err != nil {
+		return nil, fmt.Errorf("reserve Xray server listener: %w", err)
+	}
+	defer l.Close()
+	return startManaged(ctx, c.Xray.Binary, "xray-server", body, c.Xray.Listen, os.Environ(), log, l.Close)
+}
+
+func helperLabel(mode string) string {
+	if strings.HasPrefix(mode, "xray-") {
+		return "Xray"
+	}
+	return "Naive"
+}
+
 func replaceEnv(env []string, key, value string) []string {
 	prefix := key + "="
 	out := make([]string, 0, len(env)+1)
@@ -87,7 +128,11 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 	if parent.Err() != nil {
 		return nil, parent.Err()
 	}
-	dir, err := os.MkdirTemp("", "backpack-naive-")
+	label := helperLabel(mode)
+	if log == nil {
+		log = logrus.StandardLogger()
+	}
+	dir, err := os.MkdirTemp("", "backpack-"+strings.ToLower(label)+"-")
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +143,13 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 	}
 	ctx, cancel := context.WithCancel(parent)
 	h := &Helper{cancel: cancel, done: make(chan struct{}), addr: addr, dir: dir}
-	if mode == "server" {
+	if mode == "server" || strings.HasPrefix(mode, "xray-") {
 		checkCtx, stop := context.WithTimeout(ctx, 10*time.Second)
-		cmd := exec.CommandContext(checkCtx, binary, "check", "-c", file)
+		args := []string{"check", "-c", file}
+		if label == "Xray" {
+			args = []string{"run", "-test", "-c", file}
+		}
+		cmd := exec.CommandContext(checkCtx, binary, args...)
 		configureProcess(cmd)
 		cmd.Cancel = func() error { return killProcess(cmd.Process) }
 		cmd.Env = env
@@ -114,7 +163,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 		if err != nil {
 			cancel()
 			os.RemoveAll(dir)
-			return nil, fmt.Errorf("Naive server configuration check failed: %w", err)
+			return nil, fmt.Errorf("%s %s configuration check failed: %w", label, mode, err)
 		}
 	}
 	if release != nil {
@@ -131,7 +180,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 		first := true
 		for ctx.Err() == nil {
 			args := []string{file}
-			if mode == "server" {
+			if mode == "server" || label == "Xray" {
 				args = []string{"run", "-c", file}
 			}
 			cmd := exec.Command(binary, args...)
@@ -141,10 +190,10 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 			// keep Wait blocked and prevent restart after the leader exits.
 			if err := cmd.Start(); err != nil {
 				if first {
-					ready <- fmt.Errorf("starting Naive %s helper: %w", mode, err)
+					ready <- fmt.Errorf("starting %s %s helper: %w", label, mode, err)
 					return
 				}
-				log.Warnf("Naive %s helper could not restart; retrying", mode)
+				log.Warnf("%s %s helper could not restart; retrying", label, mode)
 				if !sleep(ctx, time.Second) {
 					return
 				}
@@ -162,7 +211,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 				first = false
 				ready <- nil
 			}
-			log.Infof("Naive %s helper started (PID %d)", mode, cmd.Process.Pid)
+			log.Infof("%s %s helper started (PID %d)", label, mode, cmd.Process.Pid)
 			select {
 			case <-ctx.Done():
 				stopChild(cmd, exited)
@@ -173,7 +222,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 				if ctx.Err() != nil {
 					return
 				}
-				log.Warnf("Naive %s helper exited; restarting in one second", mode)
+				log.Warnf("%s %s helper exited; restarting in one second", label, mode)
 			}
 			if !sleep(ctx, time.Second) {
 				return
@@ -224,7 +273,7 @@ func waitReady(ctx context.Context, addr, mode string, exited <-chan error) erro
 		select {
 		case err := <-exited:
 			// Put no helper output or credentials in the tunnel log.
-			return fmt.Errorf("Naive %s helper exited before readiness: %v", mode, err)
+			return fmt.Errorf("%s %s helper exited before readiness: %v", helperLabel(mode), mode, err)
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
@@ -232,7 +281,7 @@ func waitReady(ctx context.Context, addr, mode string, exited <-chan error) erro
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
-			if mode == "client" {
+			if mode == "client" || mode == "xray-client" {
 				_, err = conn.Write([]byte{5, 1, 0})
 				if err == nil {
 					var reply [2]byte
@@ -251,7 +300,7 @@ func waitReady(ctx context.Context, addr, mode string, exited <-chan error) erro
 			return ctx.Err()
 		}
 	}
-	return fmt.Errorf("Naive %s helper did not become ready within 10 seconds", mode)
+	return fmt.Errorf("%s %s helper did not become ready within 10 seconds", helperLabel(mode), mode)
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

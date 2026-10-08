@@ -156,6 +156,10 @@ func sectionOf(name string) string {
 		return "[client.naive]"
 	case "NaiveServerConfig":
 		return "[server.naive]"
+	case "XrayClientConfig":
+		return "[client.xray]"
+	case "XrayServerConfig":
+		return "[server.xray]"
 	case "SpoofConfig":
 		return "[l3] — the spoof carrier"
 	case "KCPConfig":

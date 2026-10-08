@@ -47,10 +47,16 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 }
 
 func (s *Server) Start() {
-	if s.config.Naive.Enabled() {
-		helper, err := naive.StartServer(s.ctx, s.config, s.logger)
+	if s.config.Naive.Enabled() || s.config.Xray.Enabled() {
+		var helper *naive.Helper
+		var err error
+		if s.config.Xray.Enabled() {
+			helper, err = naive.StartXrayServer(s.ctx, s.config, s.logger)
+		} else {
+			helper, err = naive.StartServer(s.ctx, s.config, s.logger)
+		}
 		if err != nil {
-			s.logger.Errorf("Naive helper could not start; tunnel remains stopped: %v", err)
+			s.logger.Errorf("managed transport helper could not start; tunnel remains stopped: %v", err)
 			<-s.ctx.Done()
 			return
 		}

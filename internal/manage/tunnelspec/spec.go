@@ -22,6 +22,8 @@ type Spec struct {
 	// They include credentials and must not enter generic JSON responses.
 	NaiveServer config.NaiveServerConfig `json:"-"`
 	NaiveClient config.NaiveClientConfig `json:"-"`
+	XrayServer  config.XrayServerConfig  `json:"-"`
+	XrayClient  config.XrayClientConfig  `json:"-"`
 
 	// Preset is the performance profile every tuning field was filled from:
 	// balance, turbo or aggressive. Empty means the values were set by hand or
@@ -407,6 +409,28 @@ func (s Spec) writeNaive(b *strings.Builder) {
 		b.WriteString("\n[client.naive]\n")
 		_ = toml.NewEncoder(b).Encode(s.NaiveClient)
 	}
+	if s.Role == "server" && s.XrayServer.Enabled() {
+		b.WriteString("\n[server.xray]\n")
+		_ = toml.NewEncoder(b).Encode(s.XrayServer)
+	} else if s.Role == "client" && s.XrayClient.Enabled() {
+		b.WriteString("\n[client.xray]\n")
+		_ = toml.NewEncoder(b).Encode(s.XrayClient)
+	}
+}
+
+func (s Spec) validateXray() error {
+	if !s.XrayServer.Enabled() && !s.XrayClient.Enabled() {
+		return nil
+	}
+	if !((s.Role == "server" && s.XrayServer.Enabled() && !s.XrayClient.Enabled()) ||
+		(s.Role == "client" && s.XrayClient.Enabled() && !s.XrayServer.Enabled())) {
+		return fmt.Errorf("Xray helper settings do not match the tunnel role")
+	}
+	var cfg config.Config
+	if _, err := toml.Decode(s.Render(), &cfg); err != nil {
+		return err
+	}
+	return naive.ValidateXray(&cfg)
 }
 
 func (s Spec) validateNaive() error {
@@ -431,6 +455,9 @@ func (s Spec) validateNaive() error {
 func (s Spec) Save() (string, error) {
 	if err := s.validateNaive(); err != nil {
 		return "", fmt.Errorf("Naive configuration: %w", err)
+	}
+	if err := s.validateXray(); err != nil {
+		return "", fmt.Errorf("Xray configuration: %w", err)
 	}
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return "", err

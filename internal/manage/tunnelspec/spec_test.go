@@ -1,10 +1,12 @@
 package tunnelspec
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -166,6 +168,102 @@ func TestNaiveIncompatibleEditPreservesExistingConfig(t *testing.T) {
 	}
 	if err := (Spec{Role: "client", Transport: "tcp"}).validateNaive(); err != nil {
 		t.Fatalf("ordinary reverse tunnel needs no helper: %v", err)
+	}
+}
+
+func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
+	binary, certificate, key := naiveSpecFiles(t)
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"xhttp", "reality"} {
+		for _, role := range []string{"server", "client"} {
+			t.Run(mode+"/"+role, func(t *testing.T) {
+				s := Spec{Role: role, Transport: "tcp", BindAddr: "127.0.0.1:62001", RemoteAddr: "127.0.0.1:62001", Token: "reverse-token", Ports: []string{"62003=127.0.0.1:62004"}, KeepAlive: 15}
+				if role == "server" {
+					s.XrayServer = config.XrayServerConfig{Binary: binary, Listen: "0.0.0.0:62002", Mode: mode, UUID: "12345678-1234-4234-8234-123456789abc", ServerName: "example.org"}
+					if mode == "xhttp" {
+						s.XrayServer.Path, s.XrayServer.Certificate, s.XrayServer.Key = "/private-route", certificate, key
+					} else {
+						s.XrayServer.PrivateKey = base64.RawURLEncoding.EncodeToString(private.Bytes())
+						s.XrayServer.Target, s.XrayServer.ShortID = "example.org:443", "abcdef0123456789"
+					}
+				} else {
+					s.XrayClient = config.XrayClientConfig{Binary: binary, Server: "example.org:62002", Mode: mode, UUID: "12345678-1234-4234-8234-123456789abc", ServerName: "example.org"}
+					if mode == "xhttp" {
+						s.XrayClient.Path, s.XrayClient.CAFile = "/private-route", certificate
+					} else {
+						s.XrayClient.PublicKey = base64.RawURLEncoding.EncodeToString(private.PublicKey().Bytes())
+						s.XrayClient.ShortID = "abcdef0123456789"
+					}
+				}
+				if err := s.validateXray(); err != nil {
+					t.Fatal(err)
+				}
+				file, err := os.CreateTemp(app.ConfigDir, "xray-edit-*.toml")
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := file.Name()
+				t.Cleanup(func() { os.Remove(path) })
+				original := s.Render()
+				if _, err := file.WriteString(original); err != nil {
+					file.Close()
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+				s.Name = strings.TrimSuffix(filepath.Base(path), ".toml")
+				loaded, err := Load(s.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if loaded.XrayServer != s.XrayServer || loaded.XrayClient != s.XrayClient {
+					t.Fatal("load dropped Xray settings")
+				}
+				loaded.KeepAlive = 45
+				if err := loaded.validateXray(); err != nil {
+					t.Fatal(err)
+				}
+				var cfg config.Config
+				if _, err := toml.Decode(loaded.Render(), &cfg); err != nil {
+					t.Fatal(err)
+				}
+				if cfg.Server.Xray != s.XrayServer || cfg.Client.Xray != s.XrayClient {
+					t.Fatal("ordinary edit changed Xray settings")
+				}
+				encoded, err := json.Marshal(loaded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, secret := range []string{s.XrayServer.UUID, s.XrayClient.UUID, s.XrayServer.PrivateKey} {
+					if secret != "" && strings.Contains(string(encoded), secret) {
+						t.Fatal("generic JSON exposed helper credentials")
+					}
+				}
+				for _, edit := range []func(*Spec){
+					func(s *Spec) { s.Transport = "udp" },
+					func(s *Spec) { s.Role = "direct" },
+					func(s *Spec) { s.FallbackTransports = []string{"tcpmux"} },
+					func(s *Spec) { s.BindAddr, s.RemoteAddr = "192.0.2.1:62001", "192.0.2.1:62001" },
+				} {
+					invalid := s
+					edit(&invalid)
+					if _, err := invalid.Save(); err == nil || !strings.Contains(err.Error(), "Xray configuration") {
+						t.Fatalf("invalid edit reached mutation: %v", err)
+					}
+					got, err := os.ReadFile(path)
+					if err != nil || string(got) != original {
+						t.Fatal("invalid edit changed existing config")
+					}
+				}
+			})
+		}
 	}
 }
 

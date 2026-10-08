@@ -437,6 +437,10 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 			// remote_addr belongs to Iran behind CONNECT; a direct dial on
 			// this machine would inspect an unrelated local service.
 			out = append(out, naiveReachability(g, spec.NaiveClient.Server))
+		case spec.XrayClient.Enabled():
+			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckInfo,
+				Detail: "managed Xray " + spec.XrayClient.Mode + " via " + spec.XrayClient.Server + "; remote_addr is the loopback target on Iran",
+				Fix:    "use the live engine state and verified traffic through the forwarded entry port"})
 		case isDatagram(spec.Transport):
 			// There is no connect step to test on UDP: a silent port and a
 			// working one look identical from outside. Say so plainly
@@ -468,6 +472,9 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 	}
 	if t.Role == "server" && spec.NaiveServer.Enabled() {
 		out = append(out, certCheck(g, spec.NaiveServer.Certificate))
+	}
+	if t.Role == "server" && spec.XrayServer.Enabled() && spec.XrayServer.Mode == "xhttp" {
+		out = append(out, certCheck(g, spec.XrayServer.Certificate))
 	}
 
 	// Token sanity — a default/short token is a real security problem.
