@@ -226,12 +226,6 @@ func relayConn(c net.Conn) net.Conn {
 	return nil
 }
 
-// Plain sockets remain the only candidates for kernel splice.
-func plainTCP(c net.Conn) *net.TCPConn {
-	tcp, _ := relayConn(c).(*net.TCPConn)
-	return tcp
-}
-
 // TCP and QUIC both carry directional EOF without changing the tunnel wire.
 // Other transports retain their existing full-close behavior.
 func halfCloser(c net.Conn) interface{ CloseWrite() error } {
