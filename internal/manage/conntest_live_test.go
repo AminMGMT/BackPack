@@ -73,6 +73,10 @@ func TestTheConnectionTestAcrossARealPath(t *testing.T) {
 				t.Errorf("the kharej did not print the verdict\n%s", out)
 			}
 			for _, r := range results {
+				if managedTransport(r.Transport) && r.Status == ctSkipped {
+					t.Logf("optional %s skipped: %s", r.Transport, r.Detail)
+					continue
+				}
 				// pck, sni, xdi and the spoofing probes write below netfilter, where
 				// the filter here cannot always reach them; every other carrier
 				// is an ordinary socket the filter sees.

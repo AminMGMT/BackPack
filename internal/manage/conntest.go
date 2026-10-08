@@ -393,6 +393,9 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 		Until: time.Now().Add(connTestJoinWait + connTestConnectWait + time.Duration(connTestSoak)*time.Second + connTestSlack).Unix(),
 	}
 	s.link.Coord = ctPickPort(used, true)
+	if s.link.TCP == 0 || s.link.UDP == 0 || s.link.L3 == 0 || s.link.Coord == 0 {
+		return fail(errors.New("no free ports for the connection test"))
+	}
 	if s.coord, err = startCTCoordinator(s.link.Coord, s.link.Tok); err != nil {
 		return fail(fmt.Errorf("could not open the test coordinator on port %d: %w", s.link.Coord, err))
 	}
@@ -411,6 +414,9 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 		}
 		port := ctPickPort(used, true)
 		c.entry = ctPickPort(used, true)
+		if port == 0 || c.entry == 0 {
+			return fail(fmt.Errorf("no free ports for the %s test", tr))
+		}
 		target := s.link.TCP
 		if c.udp {
 			target = s.link.UDP
@@ -1348,6 +1354,8 @@ type ctCoordinator struct {
 	fetched  chan struct{}
 	joinOne  sync.Once
 	fetchOn  sync.Once
+	sockets  ctEchoes
+	slots    chan struct{}
 	// spoofArrived is the kharej's count of the Iran server's forged probes.
 	spoofArrived chan int
 	spoofOnce    sync.Once
@@ -1357,7 +1365,7 @@ type ctCoordinator struct {
 }
 
 func startCTCoordinator(port int, tok string) (*ctCoordinator, error) {
-	c := &ctCoordinator{tok: tok, joined: make(chan struct{}), fetched: make(chan struct{}),
+	c := &ctCoordinator{tok: tok, joined: make(chan struct{}), fetched: make(chan struct{}), slots: make(chan struct{}, 128),
 		spoofArrived: make(chan int, 1), pmtu: make(chan int, 1)}
 	var err error
 	if c.tcp, err = net.Listen("tcp", fmt.Sprintf(":%d", port)); err != nil {
@@ -1378,7 +1386,15 @@ func (c *ctCoordinator) serveTCP() {
 		if err != nil {
 			return
 		}
+		select {
+		case c.slots <- struct{}{}:
+		default:
+			conn.Close()
+			continue
+		}
+		c.sockets.add(conn)
 		go func() {
+			defer func() { <-c.slots; c.sockets.remove(conn) }()
 			defer conn.Close()
 			_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 			line, err := bufio.NewReader(io.LimitReader(conn, 512)).ReadString('\n')
@@ -1534,6 +1550,7 @@ func (c *ctCoordinator) publish(results []ConnTestResult, best ConnTestBest) {
 func (c *ctCoordinator) close() {
 	c.tcp.Close()
 	c.udp.Close()
+	c.sockets.close()
 }
 
 // ctAsk puts one question to the coordinator, over TCP and then UDP.

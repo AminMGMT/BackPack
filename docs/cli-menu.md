@@ -28,6 +28,16 @@ long form. For *how to set a tunnel up*, use the
 | 9 | **Uninstall** | Removes everything Backpack installed. |
 | 10 | **Exit** | |
 
+Connection Test includes **Naive / HTTP2**, **XHTTP / TLS** and **REALITY / Vision**.
+Install the optional pinned helpers on both servers (`BP_HELPERS=naive,xray`);
+a missing helper is shown as **SKIPPED** with its reason. Iran's terminal asks
+for the REALITY cover endpoint: a reachable TLS 1.3/H2 **hostname:port**. Leaving
+it empty skips that test. Naive and XHTTP use a temporary certificate verified
+by the peer; private keys remain on Iran and all temporary files are removed
+when the test ends. Use matching Backpack builds on both sides. An **OK** row
+requires every scheduled echo and the checked bulk transfer to complete;
+interruption, corruption and setup failures cannot pass as steady traffic.
+
 A red banner above the menu appears when a newer release exists. It reads a
 cached answer, so a slow or blocked GitHub never delays the menu.
 

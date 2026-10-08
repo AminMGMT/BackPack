@@ -364,6 +364,29 @@ func TestConnTestCoordinatorCancellationAndManagedSkip(t *testing.T) {
 	<-done
 }
 
+func TestConnTestCoordinatorCloseReleasesPartialRequests(t *testing.T) {
+	c, err := startCTCoordinator(ctPickPort(map[int]bool{}, true), "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	peer, err := net.Dial("tcp", c.tcp.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	_, _ = peer.Write([]byte("hello"))
+	c.close()
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = peer.Read(make([]byte, 1))
+	if err == nil {
+		t.Fatal("partial request survived coordinator shutdown")
+	}
+	if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("coordinator left a request waiting for its timeout")
+	}
+}
+
 func TestConnTestStopsAllUnresponsiveEnginesWithinOneDeadline(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts real shell processes")

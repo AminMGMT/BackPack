@@ -124,15 +124,14 @@ func ConnTestTable(results []ConnTestResult) string {
 		}
 	}
 	if steady == 0 {
-		b.WriteString("Nothing carried traffic steadily between these two servers. The path is\n" +
-			"filtered for every transport tried; another Iran or kharej server (another\n" +
-			"provider, another IP) is the fix, not a setting.\n")
+		b.WriteString("Nothing carried traffic steadily between these two servers. See the\n" +
+			"statuses and notes for setup errors, interruption or path failures.\n")
 	}
 	// Why, where the table alone cannot say: a spoofing check that failed, and
 	// anything that was not run.
 	var notes []string
 	for _, r := range results {
-		if r.Detail != "" && ((r.Kind == "spoof" && r.Status != ctOK) || r.Status == ctSkipped) {
+		if r.Detail != "" && r.Status != ctOK {
 			notes = append(notes, fmt.Sprintf("%s %s %s: %s", ctEmoji(r.Status), ctKind(r.Kind), ctName(r.Transport), r.Detail))
 		}
 	}

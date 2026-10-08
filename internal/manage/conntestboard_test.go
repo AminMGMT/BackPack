@@ -67,6 +67,22 @@ func TestTheVerdictIsGroupedAndListsWhatWorks(t *testing.T) {
 	}
 }
 
+func TestConnTestTableExplainsLocalFailuresWithoutClaimingFiltering(t *testing.T) {
+	table := ConnTestTable([]ConnTestResult{
+		{Kind: "reverse", Transport: "naive", Status: ctSkipped, Detail: "helper unavailable"},
+		{Kind: "reverse", Transport: "xhttp", Status: ctDown, Detail: "test stopped"},
+		{Kind: "reverse", Transport: "reality", Status: ctUnstable, Detail: "bulk transfer failed"},
+	})
+	for _, want := range []string{"Naive / HTTP2", "XHTTP / TLS", "REALITY / Vision", "helper unavailable", "test stopped", "bulk transfer failed"} {
+		if !strings.Contains(table, want) {
+			t.Errorf("table is missing %q", want)
+		}
+	}
+	if strings.Contains(table, "filtered for every transport") {
+		t.Fatal("local failures were reported as route filtering")
+	}
+}
+
 // Only the rows that changed are written again.
 func TestTheLiveTableRewritesOnlyWhatChanged(t *testing.T) {
 	var out bytes.Buffer
