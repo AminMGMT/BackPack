@@ -181,6 +181,29 @@ func clientJSON(n config.NaiveClientConfig, socksAddr string) ([]byte, error) {
 
 func serverJSON(c *config.ServerConfig) ([]byte, error) {
 	n := c.Naive
+	// sing-box watches certificate/key paths itself and accepts matched but
+	// expired replacements. Freeze the validated material for this generation
+	// so only BackPack's certificate watcher can replace it.
+	certificate, err := os.ReadFile(n.Certificate)
+	if err != nil {
+		return nil, err
+	}
+	key, err := os.ReadFile(n.Key)
+	if err != nil {
+		return nil, err
+	}
+	pair, err := tls.X509KeyPair(certificate, key)
+	if err != nil {
+		return nil, fmt.Errorf("Naive TLS certificate/key: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("Naive TLS certificate: %w", err)
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+		return nil, errors.New("Naive TLS certificate is expired or not yet valid")
+	}
 	host, port, err := hostPort(n.Listen, false)
 	if err != nil {
 		return nil, err
@@ -195,7 +218,7 @@ func serverJSON(c *config.ServerConfig) ([]byte, error) {
 	}
 	return json.Marshal(map[string]any{
 		"log":       map[string]any{"level": "warn"},
-		"inbounds":  []any{map[string]any{"type": "naive", "listen": host, "listen_port": port, "network": "tcp", "users": []any{map[string]any{"username": n.Username, "password": n.Password}}, "tls": map[string]any{"enabled": true, "certificate_path": n.Certificate, "key_path": n.Key, "alpn": []string{"h2"}}}},
+		"inbounds":  []any{map[string]any{"type": "naive", "listen": host, "listen_port": port, "network": "tcp", "users": []any{map[string]any{"username": n.Username, "password": n.Password}}, "tls": map[string]any{"enabled": true, "certificate": []string{string(certificate)}, "key": []string{string(key)}, "alpn": []string{"h2"}}}},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "tunnel"}},
 		"route":     map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{target + bits}, "port": []int{targetPort}, "network": "tcp", "action": "route", "outbound": "tunnel"}, map[string]any{"action": "reject"}}},
 	})
