@@ -34,7 +34,18 @@ func Dial(proxyAddr, user, pass, targetHost string, targetPort int) (net.Conn, e
 // net.Dial here would have none of them. The handshake is the same either way,
 // so only the dialling differs.
 func Negotiate(conn net.Conn, user, pass, host string, port int) error {
-	conn.SetDeadline(time.Now().Add(20 * time.Second))
+	return NegotiateWithin(conn, user, pass, host, port, 20*time.Second)
+}
+
+// NegotiateWithin bounds the handshake by the caller's remaining dial budget.
+func NegotiateWithin(conn net.Conn, user, pass, host string, port int, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	defer conn.SetDeadline(time.Time{})
 
 	// With no credentials, offer no-auth; otherwise offer username/password.
 	// A proxy that binds loopback behind an authenticated tunnel takes no-auth,
@@ -116,7 +127,6 @@ func Negotiate(conn net.Conn, user, pass, host string, port int) error {
 	if _, err := io.ReadFull(conn, make([]byte, skip)); err != nil {
 		return fmt.Errorf("socks5: reading the bound address: %w", err)
 	}
-	conn.SetDeadline(time.Time{})
 	return nil
 }
 
