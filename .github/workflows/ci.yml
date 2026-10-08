@@ -25,6 +25,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Configuration round-trip tests exercise the real /etc/backpack paths.
+      # The ephemeral runner owns their private fixture directory; production
+      # configuration permissions remain unchanged.
+      - name: Prepare configuration test fixtures
+        run: sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" /etc/backpack
+
       # The panel's own tests are plain `node --test` with no dependencies, and
       # `go test ./internal/webui` runs them. That test skips when node is
       # missing rather than failing — a Go toolchain is the only thing this
