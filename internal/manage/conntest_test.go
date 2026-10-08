@@ -244,6 +244,25 @@ func TestConnTestUnavailableHelpersAreSkipped(t *testing.T) {
 	}
 }
 
+func TestConnTestCancellationDuringStartupCleansEarlierEngines(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	previous, helper := connTestBinary, connTestHelperBinary
+	connTestBinary = func() (string, error) { return "/bin/true", nil }
+	connTestHelperBinary = func(string) (string, error) { cancel(); return "", errors.New("unavailable") }
+	defer func() { connTestBinary, connTestHelperBinary = previous, helper }()
+	s, link, err := StartConnTestIran(ConnTestOptions{Context: ctx, Host: "127.0.0.1"})
+	if s != nil || link != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled startup returned a live test: %v %q %v", s, link, err)
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("cancelled startup left temporary files: %v %v", files, err)
+	}
+}
+
 func TestConnTestCancellationCannotPassAPartialSoak(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

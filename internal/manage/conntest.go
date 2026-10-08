@@ -331,8 +331,9 @@ type ConnTestIran struct {
 
 // ConnTestOptions are what the Iran operator answers.
 type ConnTestOptions struct {
-	Host      string // this server's address, as the kharej dials it
-	SNIDomain string // what the sni carrier announces
+	Context   context.Context // optional cancellation, including startup
+	Host      string          // this server's address, as the kharej dials it
+	SNIDomain string          // what the sni carrier announces
 	// RealityTarget is an explicit reachable TLS 1.3/H2 hostname:port used
 	// for the REALITY cover handshake. Empty reports REALITY as skipped.
 	RealityTarget string
@@ -358,6 +359,13 @@ const (
 // StartConnTestIran starts the Iran end of every tunnel under test and the
 // coordinator, and returns the link to give the kharej.
 func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
+	ctx := o.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	host := strings.Trim(strings.TrimSpace(o.Host), "[]")
 	if host == "" {
 		return nil, "", fmt.Errorf("this server's address is needed: it is what the kharej dials")
@@ -401,6 +409,9 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 	}
 
 	for _, tr := range connTestReverse {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
 		c := &connTestCase{kind: "reverse", tr: tr, name: "ct-" + id + "-" + tr, udp: tr == "udp"}
 		if managedTransport(tr) {
 			s.startManagedCase(c, used, o)
@@ -447,6 +458,9 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 			sni = "www.speedtest.net"
 		}
 		for i, carrier := range connTestDirect {
+			if err := ctx.Err(); err != nil {
+				return fail(err)
+			}
 			c := &connTestCase{kind: "direct", tr: carrier, name: fmt.Sprintf("ct-%s-d%s", id, carrier)}
 			if !s.root {
 				c.skip = "needs root on both servers"
@@ -501,6 +515,9 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
 	s.coord.setConfig(ctConfig(s.link))
 	return s, s.link.Short(), nil
 }
