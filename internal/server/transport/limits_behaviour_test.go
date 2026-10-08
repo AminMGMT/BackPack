@@ -208,9 +208,10 @@ type fakeConn struct{ net.Conn }
 
 type pacingProbeConn struct {
 	net.Conn
-	writes  atomic.Int32
-	entered chan struct{}
-	readEOF bool
+	writes    atomic.Int32
+	entered   chan struct{}
+	readReady chan struct{}
+	readEOF   bool
 }
 
 func (c *pacingProbeConn) Write(p []byte) (int, error) {
@@ -220,6 +221,7 @@ func (c *pacingProbeConn) Write(p []byte) (int, error) {
 
 func (c *pacingProbeConn) Read(p []byte) (int, error) {
 	close(c.entered)
+	<-c.readReady
 	copy(p, "tail")
 	if c.readEOF {
 		return 4, io.EOF
@@ -279,7 +281,7 @@ func TestPacingReadKeepsBytesAndReportsCancellation(t *testing.T) {
 			socket, peer := net.Pipe()
 			defer socket.Close()
 			defer peer.Close()
-			plain := &pacingProbeConn{Conn: socket, entered: make(chan struct{}), readEOF: eof}
+			plain := &pacingProbeConn{Conn: socket, entered: make(chan struct{}), readReady: make(chan struct{}), readEOF: eof}
 			l := newLimiter(Limits{BandwidthMbps: 1})
 			l.waitBytes(ctx, 125000)
 			c := l.wrap(ctx, plain)
@@ -295,6 +297,7 @@ func TestPacingReadKeepsBytesAndReportsCancellation(t *testing.T) {
 			}()
 			<-plain.entered
 			cancel()
+			close(plain.readReady)
 			select {
 			case err := <-done:
 				want := error(context.Canceled)
