@@ -123,3 +123,90 @@ func TestUDPHandleLoopPairsAFreshFlow(t *testing.T) {
 		t.Error("a flow that had only just arrived was discarded")
 	}
 }
+
+// A fresh flow must expire while the tunnel pool stays empty, without restarting
+// the generation. Its payload channel and admission slot must be released too.
+func TestUDPHandleLoopExpiresFreshFlowWithoutTunnel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lim := newLimiter(Limits{MaxConnections: 1})
+	s := &UdpTransport{config: &UdpConfig{}, limits: lim, lifecycle: lifecycle{logger: quietLogger()}}
+	g := &udpGen{ctx: ctx, tunnelChannel: make(chan *TunnelUDPConn, 1)}
+	peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+	flow := &LocalUDPConn{timeCreated: nowMillis(), payload: make(chan []byte, 1), remoteAddr: "127.0.0.1:8080", addr: peer}
+	active := map[string]*LocalUDPConn{peer.String(): flow}
+	mu := &sync.Mutex{}
+	queue := make(chan *LocalUDPConn, 1)
+	if !lim.acquire() {
+		t.Fatal("slot acquisition failed")
+	}
+	queue <- flow
+	done := make(chan struct{})
+	go func() { defer close(done); s.handleLoop(g, queue, &active, mu) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("pairing worker leaked")
+		}
+		until := time.Now().Add(time.Second)
+		for lim.active.Load() != 0 && time.Now().Before(until) {
+			time.Sleep(time.Millisecond)
+		}
+		if lim.active.Load() != 0 {
+			t.Error("forwarded flow did not release its slot on cancellation")
+		}
+	})
+	until := time.Now().Add(pairingTimeout + 500*time.Millisecond)
+	for time.Now().Before(until) {
+		mu.Lock()
+		remaining := len(active)
+		mu.Unlock()
+		if remaining == 0 && lim.active.Load() == 0 {
+			select {
+			case _, open := <-flow.payload:
+				if open {
+					t.Fatal("expired payload channel left open")
+				}
+			default:
+				t.Fatal("expired payload channel not closed")
+			}
+			if !lim.acquire() {
+				t.Fatal("timed-out flow exhausted limit")
+			}
+			if ctx.Err() != nil {
+				t.Fatal("timeout required canceling generation")
+			}
+			pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				lim.release()
+				t.Fatal(err)
+			}
+			defer pc.Close()
+			next := &LocalUDPConn{timeCreated: nowMillis(), payload: make(chan []byte, 1), remoteAddr: "127.0.0.1:8081", addr: peer, listener: pc}
+			mu.Lock()
+			active[peer.String()] = next
+			mu.Unlock()
+			queue <- next
+			g.tunnelChannel <- &TunnelUDPConn{payload: make(chan []byte, 1), addr: pc.LocalAddr().(*net.UDPAddr), listener: pc, ping: make(chan struct{}), mu: &sync.Mutex{}}
+			if err := pc.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			buf := make([]byte, 64)
+			n, _, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				t.Fatalf("pairing worker did not serve the next flow: %v", err)
+			}
+			if string(buf[:n]) != next.remoteAddr {
+				t.Fatalf("next flow target = %q, want %q", buf[:n], next.remoteAddr)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	remaining := len(active)
+	mu.Unlock()
+	t.Fatalf("fresh flow timeout did not expire: remaining=%d slots=%d", remaining, lim.active.Load())
+}

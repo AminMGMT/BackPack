@@ -201,6 +201,12 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 
 		loop:
 			for {
+				// A failed tunnel announcement retries this same flow, so keep
+				// its original deadline rather than starting another wait.
+				if nowMillis()-localConn.timeCreated >= pairingTimeout.Milliseconds() {
+					s.dropLocalFlow(localConn, activeConnections, mu)
+					break loop
+				}
 				// The timeout runs on a timer, so it fires whether or not a
 				// tunnel connection ever arrives. The check above used to be the
 				// only one and the select below blocks, so on a pool that had
@@ -217,7 +223,8 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 					return
 
 				case <-timer.C:
-					continue loop
+					s.dropLocalFlow(localConn, activeConnections, mu)
+					break loop
 
 				case tunnelConn := <-g.tunnelChannel:
 					timer.Stop()
