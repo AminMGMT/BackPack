@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative, dirname, resolve } from 'node:path';
+import { basename, join, relative, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +58,8 @@ test('every module is imported by another, except the entry point', () => {
   for (const file of files) {
     if (file === entry) continue;
     const spec = relative(JS, file);
-    const base = spec.split('/').pop();
+    // relative() uses backslashes on Windows; imports use forward slashes.
+    const base = basename(file);
     const used = [...sources].some(([other, src]) =>
       other !== file && new RegExp(`from\\s+['"][^'"]*${base.replace('.', '\\.')}['"]`).test(src));
     assert.ok(used, `${spec} is imported by nothing — it is either dead or the import was lost`);
