@@ -3,7 +3,10 @@ package l3
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"os"
+	"syscall"
 	"time"
 )
 
@@ -91,6 +94,9 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 				t.log.Debugf("l3: not forwarding a packet off %s: %v", t.cfg.Iface, err)
 				continue
 			}
+			// AutoMTU can raise the packet size beyond the configured initial
+			// capacity. Keep the grown scratch instead of allocating per packet.
+			frame = wrapped[:0]
 			out, err := sess.seal(sealed[k][:0], wrapped)
 			if err != nil {
 				t.stats.dropped.Add(1)
@@ -125,24 +131,30 @@ func (t *Tunnel) send(ctx context.Context, writer batchWriter, ready [][]byte,
 
 	if writer != nil && len(ready) > 1 {
 		sent, err := writer.WriteBatch(ready, peer)
+		sent = min(max(sent, 0), len(ready))
 		if err == nil {
-			t.account(ready, sent, payload)
+			t.account(ready, sent, payloads, payload)
 			return true
 		}
 		if !errors.Is(err, errNoBatch) {
+			t.account(ready, sent, payloads, payload)
 			if ctx.Err() != nil {
 				return false
 			}
-			t.stats.dropped.Add(uint64(len(ready)))
 			t.log.Debugf("l3: sending a batch to %s: %v", peer, err)
 			return true
 		}
-		// The carrier declined to batch after all; fall through and write them
-		// one at a time rather than dropping a round over an optimisation.
+		// A fallback must not replay a prefix already accepted by the carrier.
+		t.recordSent(payloads, sent, payload)
+		ready, payloads = ready[sent:], payloads[sent:]
 	}
 
 	for i, p := range ready {
-		if _, err := t.carrier.WriteTo(p, peer); err != nil {
+		n, err := t.carrier.WriteTo(p, peer)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
 			if ctx.Err() != nil {
 				return false
 			}
@@ -158,24 +170,24 @@ func (t *Tunnel) send(ctx context.Context, writer batchWriter, ready [][]byte,
 	return true
 }
 
-// account records a batch that went out.
-//
-// payload is the inner bytes the round carried, which is what the counter has
-// always meant — not the sealed size, which includes the tunnel's own overhead
-// and would make a tunnel look like it was carrying more than it was.
-func (t *Tunnel) account(ready [][]byte, sent, payload int) {
-	if sent < len(ready) {
-		// The socket buffer filled. The rest are gone, which is what happens to
-		// a UDP datagram there is no room for either way.
-		t.stats.dropped.Add(uint64(len(ready) - sent))
-	}
+// account counts exactly the accepted prefix, even when the batch also failed.
+func (t *Tunnel) account(ready [][]byte, sent int, payloads []int, payload int) {
+	t.stats.dropped.Add(uint64(len(ready) - sent))
+	t.recordSent(payloads, sent, payload)
+}
+
+func (t *Tunnel) recordSent(payloads []int, sent, payload int) {
 	if sent <= 0 {
 		return
 	}
-	// Apportioned, because a short write does not say which ones left. Over a
-	// round of packets that are all about the same size this is exact enough
-	// for a throughput figure, and the packet count is not approximated at all.
-	t.stats.bytesOut.Add(uint64(payload * sent / len(ready)))
+	if sent < len(payloads) {
+		payload = 0
+		for _, n := range payloads[:sent] {
+			payload += n
+		}
+	}
+	// Bytes precede packets, matching the ordering used by Stats.
+	t.stats.bytesOut.Add(uint64(payload))
 	t.stats.packetsOut.Add(uint64(sent))
 }
 
@@ -251,27 +263,43 @@ func (t *Tunnel) pumpFromCarrier(ctx context.Context) {
 				pending = append(pending, inner)
 			}
 		}
-		t.writeToDevice(pending)
+		if err := t.writeToDevice(pending); err != nil {
+			if ctx.Err() == nil {
+				t.log.Errorf("l3: writing to %s: %v", t.cfg.Iface, err)
+			}
+			return
+		}
 	}
 }
 
 // writeToDevice hands a batch of authenticated inner packets to the interface.
 // They were counted as received when they were opened; any the device refuses
 // are counted again as drops.
-func (t *Tunnel) writeToDevice(pending [][]byte) {
-	if len(pending) == 0 {
-		return
+func (t *Tunnel) writeToDevice(pending [][]byte) error {
+	for len(pending) > 0 {
+		n, err := t.tun.Write(pending)
+		if n < 0 || n > len(pending) {
+			n, err = 0, io.ErrShortWrite
+		}
+		pending = pending[n:]
+		if err != nil {
+			t.stats.dropped.Add(uint64(len(pending)))
+			// Packet rejection or a full queue is a drop. A broken device must
+			// end the receive pump so Run closes and rebuilds the generation.
+			if errors.Is(err, os.ErrClosed) || errors.Is(err, io.EOF) ||
+				errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EBADF) ||
+				errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EIO) {
+				return err
+			}
+			t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
+			return nil
+		}
+		if n == 0 {
+			t.stats.dropped.Add(uint64(len(pending)))
+			return nil
+		}
 	}
-	n, err := t.tun.Write(pending)
-	if err != nil {
-		t.stats.dropped.Add(uint64(len(pending)))
-		t.log.Debugf("l3: writing to %s: %v", t.cfg.Iface, err)
-		return
-	}
-	if n > 0 && n < len(pending) {
-		// More than the staging buffer holds in one call: the rest go now.
-		t.writeToDevice(pending[n:])
-	}
+	return nil
 }
 
 // receive takes the next datagram, or the next several. It is the only place

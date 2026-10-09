@@ -137,7 +137,9 @@ func (c *udpCarrier) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	}
 
 	if c.v4 != nil {
-		return c.v4.WriteBatch(msgs, 0)
+		n, err := c.v4.WriteBatch(msgs, 0)
+		return done + n, err
 	}
-	return c.v6.WriteBatch([]ipv6.Message(msgs), 0)
+	n, err := c.v6.WriteBatch([]ipv6.Message(msgs), 0)
+	return done + n, err
 }
