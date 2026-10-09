@@ -24,6 +24,7 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [IP Spoofing](ip-spoofing.md) — the forged-source carrier, setting by setting
 - [Decoy site (WSS camouflage)](camouflage.md)
 - [When a server is filtered, blocked, or dirty](filtered-or-dirty-ip.md)
+- [Checking a heavily filtered path](filtered-paths.md) — when the Connection Test coordinator cannot get through
 
 ### Per-tunnel settings
 - [Configuration reference](config-reference.md) — every key Backpack reads, generated from the declarations.

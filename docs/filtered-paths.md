@@ -91,10 +91,21 @@ If xDi also fails, compare packet arrival at both public interfaces, verify
 matching tokens and direction, and inspect the engine logs before concluding
 that a new protocol is needed.
 
-## فارسی
+<div dir="rtl">
+
+## خلاصهٔ فارسی
 
 خطای ارتباط با هماهنگ‌کنندهٔ Connection Test فقط یعنی ارتباط کنترل تست روی
 TCP/UDP برقرار نشده است؛ نتیجهٔ همهٔ پروتکل‌ها نیست. روی مسیرهایی که ICMP
 عبور می‌کند، xDi را از بخش Direct جداگانه تست کنید. توکن دو طرف باید یکی باشد.
 برای بررسی مستقل، از رابط و subnet آزاد استفاده کنید و تونل فعلی را نگه دارید.
 موفقیت چند دقیقه تست، تضمین پایداری دائمی در برابر تغییرات مسیر یا فیلترینگ نیست.
+
+</div>
+
+---
+[← Back to the docs index](README.md)
+
+---
+
+*Last verified against Backpack v1.9.0.*
