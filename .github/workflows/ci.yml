@@ -125,6 +125,23 @@ jobs:
           check internal/manage/host    60 "this machine's addresses, ports and certificates"
           check internal/manage/health  40 "tunnel health, the watchdog and the Health Check"
 
+  managed:
+    name: Managed HTTPS carriers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install the verified pinned helpers
+        run: sudo env "PATH=$PATH" BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash ./install.sh
+      - name: Authenticate REALITY cover fallback and exercise the real reverse carriers
+        env:
+          BP_CONNTEST_HELPERS: '1'
+        run: go test ./internal/manage -run '^(TestRealityCoverSelectionAuthenticatesWithThePinnedHelper|TestAConnectionTestOverLoopbackPassesEveryReverseTransport)$' -race -count=1 -v -timeout 8m
+
   audit:
     name: Vulnerabilities and static analysis
     runs-on: ubuntu-latest

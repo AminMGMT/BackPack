@@ -448,3 +448,12 @@ UDP را می‌بندد ولی ICMP را نه) و *IP Spoofing* که مبدأ �
 ---
 
 *Last verified against Backpack v1.8.5.*
+
+
+Connection Test checks each automatic REALITY cover with the pinned Xray
+Chrome/Vision helper pair and an authenticated echo before selecting it. A
+successful ordinary TLS 1.3/H2 connection alone is insufficient: the pinned
+REALITY parser can reject a cover's handshake records. Failed candidates are
+skipped in order; when none work, the skipped row includes each candidate's
+failure instead of treating it as an Iran/Kharej route failure. Each candidate
+has an eight-second startup/handshake budget and temporary helpers are stopped.

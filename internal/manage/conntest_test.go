@@ -3,8 +3,11 @@ package manage
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
@@ -516,6 +519,9 @@ func TestConnTestRealityCoverVerifiesTLSAndHTTP2(t *testing.T) {
 }
 
 func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
+	previousWait := connTestCoverWait
+	connTestCoverWait = 100 * time.Millisecond
+	defer func() { connTestCoverWait = previousWait }()
 	tried := []string{}
 	target, err := ctFindRealityCover(context.Background(), []string{"blocked", "compatible", "unused"}, func(ctx context.Context, target string) error {
 		tried = append(tried, target)
@@ -567,5 +573,97 @@ func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("cancelled probe left its connection open")
+	}
+}
+
+// The real pinned helper must reject a cover that ordinary TLS accepts, fall
+// back to a working cover and release every process and socket on cancellation.
+func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
+	binary, err := connTestHelperBinary("xray")
+	if override := os.Getenv("BP_REALITY_TEST_BINARY"); override != "" {
+		binary, err = override, nil
+	}
+	if err != nil {
+		if os.Getenv("BP_CONNTEST_HELPERS") == "1" {
+			t.Fatal(err)
+		}
+		t.Skip(err)
+	}
+	small := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	small.EnableHTTP2 = true
+	small.TLS = &tls.Config{MinVersion: tls.VersionTLS13}
+	small.StartTLS()
+	defer small.Close()
+	pair := small.TLS.Certificates[0]
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf.ExtraExtensions = []pkix.Extension{{Id: []int{1, 3, 6, 1, 4, 1, 55555, 1}, Value: make([]byte, 9000)}}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, leaf, pair.PrivateKey.(crypto.Signer).Public(), pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair.Certificate = [][]byte{der}
+	large := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	large.EnableHTTP2 = true
+	large.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pair}}
+	large.StartTLS()
+	defer large.Close()
+	roots := x509.NewCertPool()
+	largeLeaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(largeLeaf)
+	roots.AddCert(small.Certificate())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := ctProbeRealityCover(ctx, large.Listener.Addr().String(), roots); err != nil {
+		t.Fatalf("large cover must pass ordinary TLS verification: %v", err)
+	}
+	target := func(s *httptest.Server) string {
+		_, port, _ := net.SplitHostPort(s.Listener.Addr().String())
+		return net.JoinHostPort("localhost", port)
+	}
+	previousWait := connTestCoverWait
+	connTestCoverWait = 3 * time.Second
+	defer func() { connTestCoverWait = previousWait }()
+	selected, err := ctFindRealityCover(ctx, []string{target(large), target(small)}, func(ctx context.Context, target string) error {
+		return ctProbeRealityTransport(ctx, target, binary)
+	})
+	if err != nil || selected != target(small) {
+		t.Fatalf("TLS-compatible but REALITY-incompatible cover was selected: %q %v", selected, err)
+	}
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		peer, err := silent.Accept()
+		if err != nil {
+			return
+		}
+		defer peer.Close()
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	attempt, stop := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer stop()
+	start := time.Now()
+	_, port, _ := net.SplitHostPort(silent.Addr().String())
+	if err := ctProbeRealityTransport(attempt, "localhost:"+port, binary); err == nil {
+		t.Fatal("silent cover passed authenticated probe")
+	}
+	if time.Since(start) > 4*time.Second {
+		t.Fatal("cancelled helper probe waited beyond shutdown budget")
+	}
+	silent.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled helper probe retained its cover connection")
 	}
 }
