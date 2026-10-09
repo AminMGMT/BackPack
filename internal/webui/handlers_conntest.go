@@ -37,17 +37,19 @@ const (
 
 // conntestRow is one tunnel under test, as the browser draws it.
 type conntestRow struct {
-	Kind    string  `json:"kind"`
-	Tr      string  `json:"tr"`
-	Name    string  `json:"name"`
-	Status  string  `json:"status"`
-	Detail  string  `json:"detail,omitempty"`
-	OK      int     `json:"ok"`
-	Tried   int     `json:"tried"`
-	Total   int     `json:"total"`
-	RTTms   int     `json:"rtt,omitempty"`
-	Mbps    float64 `json:"mbps,omitempty"`
-	Connect float64 `json:"connect,omitempty"`
+	Kind       string  `json:"kind"`
+	Tr         string  `json:"tr"`
+	Name       string  `json:"name"`
+	Status     string  `json:"status"`
+	Detail     string  `json:"detail,omitempty"`
+	OK         int     `json:"ok"`
+	Tried      int     `json:"tried"`
+	Total      int     `json:"total"`
+	RTTms      int     `json:"rtt,omitempty"`
+	Mbps       float64 `json:"mbps,omitempty"`
+	UploadMbps float64 `json:"uploadMbps,omitempty"`
+	Phase      string  `json:"phase,omitempty"`
+	Connect    float64 `json:"connect,omitempty"`
 }
 
 // conntestView is the whole state, as GET /api/conntest answers it.
@@ -122,6 +124,7 @@ func rowOf(r manage.ConnTestResult) conntestRow {
 		Kind: r.Kind, Tr: r.Transport, Name: manage.ConnTestName(r.Transport),
 		Status: r.Status, Detail: r.Detail, OK: r.OK, Tried: r.Tried, Total: r.Total,
 		RTTms: r.RTTms, Mbps: r.Mbps, Connect: r.Connect,
+		UploadMbps: r.UploadMbps, Phase: r.Phase,
 	}
 }
 
@@ -182,6 +185,15 @@ func (c *conntestRunner) start(parent context.Context, host, preset string) erro
 					v.Rows = append(v.Rows, conntestRow{})
 				}
 				v.Rows[i] = rowOf(r)
+				if r.Phase == "speed" {
+					pending := 0
+					for _, row := range v.Rows {
+						if row.Phase == "speed" || row.Phase == "speed-queued" {
+							pending++
+						}
+					}
+					v.Ends = time.Now().Add(manage.ConnTestSpeedTime(pending) + 15*time.Second).Unix()
+				}
 			})
 		})
 		best := s.Best()

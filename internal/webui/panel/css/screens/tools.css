@@ -234,6 +234,7 @@ body[data-accent] .panel .ct-steps li.on .n{background:var(--ac);border-color:va
 .panel .ct-row.run .bar i{background:linear-gradient(90deg,var(--ac),color-mix(in srgb,var(--ac) 55%,transparent))}
 .panel .ct-row .ec{font-size:11.5px;color:var(--mu);font-variant-numeric:tabular-nums;text-align:right}
 .panel .ct-row .fg{display:flex;gap:9px;font-size:11.5px;color:var(--dim);white-space:nowrap;justify-content:flex-end}
+.panel .ct-row.has-speed .fg{flex-direction:column;align-items:flex-end;gap:2px}
 .panel .ct-row .fg b{color:var(--tx);font-weight:620;font-variant-numeric:tabular-nums}
 .panel .ct-row .st{font-size:10px;font-weight:660;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);text-align:right}
 .panel .ct-row.ok .st{color:var(--ok)} .panel .ct-row.wr .st{color:var(--wr)} .panel .ct-row.er .st{color:var(--er)}

@@ -1,5 +1,9 @@
 # Setting up an xDi (ICMP) tunnel
 
+If Connection Test cannot reach its TCP/UDP coordinator, xDi can still work.
+See [Checking a heavily filtered path](../docs/filtered-paths.md) for an isolated
+manual check that keeps existing tunnels running.
+
 The tunnel rides inside **ping packets**. It is the [KCP](udp-kcp-fec.md)
 transport with its packets in ICMP echo requests and replies instead of UDP
 datagrams — everything above the packet layer (reliability, error correction,

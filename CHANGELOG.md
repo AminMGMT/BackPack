@@ -26,6 +26,21 @@ All notable changes to Backpack are documented here.
 
 ### Changed
 
+- **Connection Test measures sustained speed, in each direction, and only on
+  tunnels that held up** (#95). Speed used to be one 1 MiB echo on a fresh
+  connection while other transports competed for the same bandwidth, so a fast
+  tunnel could report far less than it carries, and download and upload were
+  one number. The five-minute stability probes still run in parallel; then
+  only the tunnels that answered every echo are measured, one at a time, with
+  four streams and separate download and upload figures counted from verified
+  bytes at the receiver. Each direction skips two seconds of warm-up and
+  samples for two to four, stopping early once the readings settle — typically
+  eight to twelve seconds per healthy tunnel, never more than twenty — and an
+  unstable tunnel costs no speed-test time at all. The menu and the panel show
+  both directions and the speed phase as it runs. Both servers need this
+  version for the speed test; against an older one it says so plainly, and the
+  stability probes still work.
+
 - **Connection Test keeps REALITY helper output off the screen** (#92). Probing
   covers printed Xray banners, successful configuration checks and generic
   deployment warnings straight into the menu, where they read as failures and
@@ -67,6 +82,17 @@ All notable changes to Backpack are documented here.
 
 ### Fixed
 
+- **Connection Test picked the kharej's listener ports on the Iran server**
+  (#94). Direct test tunnels listen on the kharej, but the port came from Iran,
+  so on a busy kharej an unrelated service — often Xray, with many UDP
+  sockets — could already hold it and the row read DOWN before any traffic was
+  measured. The kharej now picks free ports itself and tells Iran over the
+  authenticated test coordinator before joining; the choice is frozen once it
+  has checked in, a local setup failure shows as skipped on both machines, and
+  an older peer keeps the old behaviour. When the coordinator itself cannot be
+  reached, the message now says that no tunnel has been measured yet and that
+  ICMP and raw carriers may still pass — see the new [Checking a heavily
+  filtered path](docs/filtered-paths.md).
 - **A stalled resolver could hold a tunnel open past cancellation.** DNS ran
   outside the owning context on most dial paths, so a reconnect worker,
   endpoint failover or restart could wait on it indefinitely while the

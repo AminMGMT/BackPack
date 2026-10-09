@@ -96,14 +96,13 @@ func connTestIranMenu() {
 		tui.PressEnter()
 		return
 	case <-time.After(connTestJoinWait):
-		tui.Error("The kharej never checked in — nothing reached port " +
-			fmt.Sprint(s.link.Coord) + " — neither over TCP nor UDP.")
+		tui.Error("The Kharej never checked in. " + ctCoordinatorFailure(s.link.Host, s.link.Coord).Error())
 		tui.PressEnter()
 		return
 	}
 
 	fmt.Println()
-	ctMenuStage(os.Stdout, "3", "Testing the connection", "Kharej "+s.Kharej()+" joined. Measuring echo delivery, latency and speed.")
+	ctMenuStage(os.Stdout, "3", "Testing the connection", "Kharej "+s.Kharej()+" joined. Five minutes of stability, then download/upload for healthy tunnels (about 8–12 seconds each).")
 	fmt.Println()
 	board := newCTBoard(os.Stdout, s.Kharej())
 	results := s.Run(ctx, board.set)

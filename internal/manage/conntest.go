@@ -95,7 +95,8 @@ var (
 	connTestStopWait = 8 * time.Second
 )
 
-// connTestBulk is the transfer that measures speed.
+// connTestBulk is the legacy echo payload, retained for compatibility checks.
+// Run measures sustained directional goodput with ctSpeed instead.
 const connTestBulk = 1 << 20
 
 // connTestBinary is the engine to run; a variable so a test can point it at a
@@ -129,6 +130,9 @@ type ConnTestLink struct {
 	// Preset is the performance preset every tunnel under test was built
 	// with, for the kharej's report; each case carries it too.
 	Preset string `json:"pr,omitempty"`
+	// New peers may choose a direct listener port on the machine that binds it.
+	// An older peer keeps the port picked on Iran, as before.
+	DirectPorts bool `json:"dp,omitempty"`
 	// The spoofing check: the forged source, and the UDP port each side's
 	// receiver counts probes on. Empty SpoofSrc is no check.
 	SpoofSrc string `json:"ss,omitempty"`
@@ -256,11 +260,19 @@ func fetchConnTestLink(ctx context.Context, a connTestAddr) (ConnTestLink, error
 			return out, nil
 		}
 		if ctx.Err() != nil {
-			return out, fmt.Errorf("the Iran server's test coordinator (%s port %d, TCP and UDP) never answered — "+
-				"nothing at all gets through from here to there, or the test there has ended", a.Host, a.Coord)
+			return out, ctCoordinatorFailure(a.Host, a.Coord)
 		}
 		ctSleep(ctx, 3*time.Second)
 	}
+}
+
+// The coordinator uses ordinary TCP/UDP sockets. Failure to reach it cannot
+// establish whether ICMP or the raw carriers pass the same path.
+func ctCoordinatorFailure(host string, port int) error {
+	return fmt.Errorf("the Iran server's test coordinator (%s port %d, TCP/UDP) did not answer. "+
+		"Check the address, control port and that the Iran test is still open. "+
+		"Tunnel protocols have not been measured; ICMP/raw carriers may still work. "+
+		"On an ICMP-only path, try a Direct xDi tunnel separately", host, port)
 }
 
 func gzipB64(raw []byte) string {
@@ -286,15 +298,18 @@ func unGzipB64(s string) ([]byte, error) {
 
 // ConnTestResult is one tunnel's verdict.
 type ConnTestResult struct {
-	Kind      string  `json:"k"` // "reverse" or "direct"
-	Transport string  `json:"t"`
-	Status    string  `json:"s"` // ok, unstable, down, skipped
-	Detail    string  `json:"d,omitempty"`
-	Connect   float64 `json:"c,omitempty"` // seconds to the first echo
-	OK        int     `json:"o"`           // echoes that came back
-	Tried     int     `json:"n"`           // echoes sent
-	RTTms     int     `json:"r,omitempty"`
-	Mbps      float64 `json:"m,omitempty"`
+	Kind        string  `json:"k"` // "reverse" or "direct"
+	Transport   string  `json:"t"`
+	Status      string  `json:"s"` // ok, unstable, down, skipped
+	Detail      string  `json:"d,omitempty"`
+	Connect     float64 `json:"c,omitempty"` // seconds to the first echo
+	OK          int     `json:"o"`           // echoes that came back
+	Tried       int     `json:"n"`           // echoes sent
+	RTTms       int     `json:"r,omitempty"`
+	Mbps        float64 `json:"m,omitempty"`
+	UploadMbps  float64 `json:"upload_mbps,omitempty"`
+	SpeedStable bool    `json:"speed_stable,omitempty"`
+	Phase       string  `json:"phase,omitempty"`
 	// Total is how many echoes the test sends each tunnel.
 	Total int `json:"z,omitempty"`
 }
@@ -404,7 +419,8 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 	s.link = ConnTestLink{
 		ID: id, Host: host, Tok: ctNewSecret(), Preset: preset,
 		TCP: ctPickPort(used, false), UDP: ctPickPort(used, false), L3: ctPickPort(used, false),
-		Until: time.Now().Add(connTestJoinWait + connTestConnectWait + time.Duration(connTestSoak)*time.Second + connTestSlack).Unix(),
+		Until:       time.Now().Add(connTestJoinWait + ConnTestRunTime() + connTestSlack).Unix(),
+		DirectPorts: true,
 	}
 	s.link.Coord = ctPickPort(used, true)
 	if s.link.TCP == 0 || s.link.UDP == 0 || s.link.L3 == 0 || s.link.Coord == 0 {
@@ -901,6 +917,9 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 		if c.skip == "" && s.coord.skipped[c.tr] {
 			c.skip = "managed helper could not start on kharej; see its local diagnostic"
 		}
+		if c.skip == "" && s.coord.skipped[c.kind+"/"+c.tr] {
+			c.skip = "test could not start on Kharej; see its local diagnostic"
+		}
 	}
 	s.coord.mu.Unlock()
 	for _, c := range s.cases {
@@ -908,6 +927,7 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 			continue
 		}
 		_, port, _ := net.SplitHostPort(c.l3.Addr)
+		port = s.coord.directPort(c.tr, port)
 		c.l3.Addr = net.JoinHostPort(kharej, port)
 		_, body, err := directBodyFromSpec(c.l3)
 		if err == nil {
@@ -925,6 +945,14 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 
 	results := make([]ConnTestResult, len(s.cases))
 	var mu sync.Mutex
+	reportRow := func(i int, r ConnTestResult) {
+		mu.Lock()
+		results[i] = r
+		mu.Unlock()
+		if progress != nil {
+			progress(i, r)
+		}
+	}
 	for i, c := range s.cases {
 		results[i] = ConnTestResult{Kind: c.kind, Transport: c.tr, Status: ctTesting, Total: connTestSoak}
 		if c.skip != "" {
@@ -952,12 +980,7 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 		go func(i int, c *connTestCase) {
 			defer wg.Done()
 			report := func(r ConnTestResult) {
-				mu.Lock()
-				results[i] = r
-				mu.Unlock()
-				if progress != nil {
-					progress(i, r)
-				}
+				reportRow(i, r)
 			}
 			if c.kind == "spoof" {
 				s.spoofProbe(ctx, c, kharej, report)
@@ -967,6 +990,32 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 		}(i, c)
 	}
 	wg.Wait()
+	// Stability probes finish before any bandwidth test starts. Heavy traffic
+	// must not change another tunnel's loss/RTT or share its speed measurement.
+	for i, c := range s.cases {
+		r := results[i]
+		if r.Phase != "speed-queued" {
+			continue
+		}
+		if ctx.Err() != nil {
+			r.Status, r.Detail, r.Phase = ctUnstable, "stopped before speed test", ""
+			reportRow(i, r)
+			continue
+		}
+		r.Phase, r.Detail = "speed", "measuring download and upload"
+		reportRow(i, r)
+		speed, err := ctSpeed(ctx, func() (net.Conn, error) { return ctDial(ctx, c, s.link.L3) })
+		r.Phase, r.Detail = "", ""
+		if err != nil {
+			r.Status, r.Detail = ctUnstable, "speed test failed ("+ctShortErr(err)+")"
+		} else {
+			r.Status, r.Mbps, r.UploadMbps, r.SpeedStable = ctOK, speed.download, speed.upload, speed.stable
+			if !speed.stable {
+				r.Detail = "speed varied during the sample; repeat to confirm"
+			}
+		}
+		reportRow(i, r)
+	}
 
 	// The kharej's path-MTU measurement, which it has usually sent long before.
 	pmtu := 0
@@ -1158,15 +1207,8 @@ func ctProbe(ctx context.Context, c *connTestCase, l3Echo int, report func(ConnT
 			report(r)
 		}
 	}
-	network, addr := "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(c.entry))
-	if c.udp {
-		network = "udp"
-	}
-	if c.kind == "direct" {
-		addr = net.JoinHostPort(c.peerIP, strconv.Itoa(l3Echo))
-	}
 	dial := func() (net.Conn, error) {
-		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, network, addr)
+		return ctDial(ctx, c, l3Echo)
 	}
 
 	// Up: the first echo that comes back.
@@ -1245,17 +1287,14 @@ func ctProbe(ctx context.Context, c *connTestCase, l3Echo int, report func(ConnT
 		c.rtts = append(c.rtts, took)
 		say("")
 	}
+	if r.Tried == connTestSoak {
+		ctSleep(ctx, time.Until(soakStart.Add(time.Duration(connTestSoak)*time.Second)))
+	}
 	if conn != nil {
 		conn.Close()
 	}
 	if r.OK > 0 {
 		r.RTTms = int((rtt / time.Duration(r.OK)).Milliseconds())
-	}
-
-	// Speed, over a fresh connection, for the tunnels that carry TCP.
-	bulkErr := error(nil)
-	if !c.udp && ctx.Err() == nil {
-		r.Mbps, bulkErr = ctBulkContext(ctx, dial)
 	}
 
 	switch {
@@ -1264,8 +1303,12 @@ func ctProbe(ctx context.Context, c *connTestCase, l3Echo int, report func(ConnT
 		if r.OK == 0 {
 			r.Status = ctDown
 		}
-	case r.OK == connTestSoak && r.Tried == connTestSoak && bulkErr == nil:
-		r.Status = ctOK
+	case r.OK == connTestSoak && r.Tried == connTestSoak:
+		if c.udp {
+			r.Status = ctOK
+		} else {
+			r.Phase, r.Detail = "speed-queued", "stability passed; waiting for speed test"
+		}
 	case r.OK == 0:
 		r.Status = ctDown
 		r.Detail = fmt.Sprintf("came up, then carried nothing (lost after %.0fs)", firstLoss.Seconds())
@@ -1274,12 +1317,20 @@ func ctProbe(ctx context.Context, c *connTestCase, l3Echo int, report func(ConnT
 		if firstLoss > 0 {
 			r.Detail = fmt.Sprintf("first loss after %.0fs", firstLoss.Seconds())
 		}
-		if bulkErr != nil {
-			r.Detail = strings.TrimPrefix(r.Detail+"; bulk transfer failed ("+ctShortErr(bulkErr)+")", "; ")
-		}
 	}
 	say("done: " + r.Status)
 	return r
+}
+
+func ctDial(ctx context.Context, c *connTestCase, l3Echo int) (net.Conn, error) {
+	network, addr := "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(c.entry))
+	if c.udp {
+		network = "udp"
+	}
+	if c.kind == "direct" {
+		addr = net.JoinHostPort(c.peerIP, strconv.Itoa(l3Echo))
+	}
+	return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, network, addr)
 }
 
 // connectWaitFor is how long a tunnel is given to come up. The direct ones
@@ -1318,8 +1369,8 @@ func ctEcho(c net.Conn, udp bool) error {
 	return nil
 }
 
-// ctBulk sends connTestBulk bytes through a fresh connection and reads them
-// back, and reports the speed.
+// ctBulk exercises the legacy echo transfer for compatibility checks.
+// Production speed measurements use ctSpeed after all stability probes finish.
 func ctBulk(dial func() (net.Conn, error)) (float64, error) {
 	return ctBulkContext(context.Background(), dial)
 }
@@ -1531,22 +1582,23 @@ func ctLastLine(path string) string {
 //	hello <token>   → ok          the kharej is in; its address is noted
 //	result <token>  → wait | done <verdict>
 type ctCoordinator struct {
-	tok      string
-	tcp      net.Listener
-	udp      net.PacketConn
-	mu       sync.Mutex
-	peer     string
-	verdict  string
-	config   string            // the answer to "config"; see ctConfig
-	carriers map[string]string // public helper settings, fetched one small packet at a time
-	skipped  map[string]bool   // managed cases unavailable on kharej
-	live     func() []ConnTestResult
-	joined   chan struct{}
-	fetched  chan struct{}
-	joinOne  sync.Once
-	fetchOn  sync.Once
-	sockets  ctEchoes
-	slots    chan struct{}
+	tok         string
+	tcp         net.Listener
+	udp         net.PacketConn
+	mu          sync.Mutex
+	peer        string
+	verdict     string
+	config      string            // the answer to "config"; see ctConfig
+	carriers    map[string]string // public helper settings, fetched one small packet at a time
+	skipped     map[string]bool   // managed cases unavailable on kharej
+	directPorts map[string]string // direct listener ports selected on Kharej
+	live        func() []ConnTestResult
+	joined      chan struct{}
+	fetched     chan struct{}
+	joinOne     sync.Once
+	fetchOn     sync.Once
+	sockets     ctEchoes
+	slots       chan struct{}
 	// spoofArrived is the kharej's count of the Iran server's forged probes.
 	spoofArrived chan int
 	spoofOnce    sync.Once
@@ -1632,7 +1684,26 @@ func (c *ctCoordinator) answer(line, from string) string {
 	if len(f) > 3 {
 		return ""
 	}
-	if f[0] == "skip" && len(f) == 3 && managedTransport(f[2]) {
+	if f[0] == "port" && len(f) == 3 {
+		tr, port, ok := strings.Cut(f[2], ":")
+		n, err := strconv.Atoi(port)
+		if !ok || err != nil || n < 1 || n > 65535 || !ctPortCarrier(tr) {
+			return ""
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// Once the peer has checked in, an old/replayed request must not move
+		// the endpoint underneath the running measurement.
+		if c.peer != "" && c.directPorts[tr] != port {
+			return ""
+		}
+		if c.directPorts == nil {
+			c.directPorts = make(map[string]string)
+		}
+		c.directPorts[tr] = port
+		return "ok"
+	}
+	if f[0] == "skip" && len(f) == 3 && ctSkippableCase(f[2]) {
 		c.mu.Lock()
 		if c.skipped == nil {
 			c.skipped = make(map[string]bool)
@@ -1708,6 +1779,62 @@ func (c *ctCoordinator) peerAddr() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.peer
+}
+
+func (c *ctCoordinator) directPort(tr, fallback string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if port := c.directPorts[tr]; port != "" {
+		return port
+	}
+	return fallback
+}
+
+func ctPortCarrier(tr string) bool {
+	return tr == "udp" || tr == "quic" || tr == "pck" || tr == "sni"
+}
+
+func ctSkippableCase(value string) bool {
+	if managedTransport(value) {
+		return true
+	} // old managed-helper command
+	kind, tr, ok := strings.Cut(value, "/")
+	if !ok {
+		return false
+	}
+	var cases []string
+	switch kind {
+	case "direct":
+		cases = connTestDirect
+	case "reverse":
+		cases = connTestReverse
+	default:
+		return false
+	}
+	for _, candidate := range cases {
+		if tr == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// Check both protocols on the receiving machine. Iran's random port can be
+// occupied by a completely unrelated service on Kharej, especially one with
+// many UDP sockets. This check changes only the temporary test's endpoint.
+func ctKharejDirectPort(ctx context.Context, link ConnTestLink, tr string, used map[int]bool) (string, error) {
+	port := ctPickPort(used, true)
+	if port == 0 {
+		return "", errors.New("no free local listener port")
+	}
+	line := fmt.Sprintf("port %s %s:%d", link.Tok, tr, port)
+	for attempt := 0; attempt < 3 && ctx.Err() == nil; attempt++ {
+		if reply, err := ctAskContext(ctx, link.Host, link.Coord, line); err == nil && reply == "ok" {
+			return strconv.Itoa(port), nil
+		}
+		ctSleep(ctx, time.Second)
+	}
+	return "", errors.New("could not announce the free Kharej listener port to Iran")
 }
 
 // setConfig sets what the kharej is told the test is.
@@ -1827,6 +1954,7 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 	defer func() { ctStopAll(engines) }()
 	local := map[string]string{}  // kind/transport → why this side could not run it
 	caseOf := map[string]string{} // engine name → kind/transport
+	usedDirectPorts := map[int]bool{link.TCP: true, link.UDP: true, link.L3: true}
 	for i, c := range link.Cases {
 		name := c.Name
 		caseOf[name] = c.Kind + "/" + c.Tr
@@ -1860,6 +1988,14 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 			}
 			form := MirrorForPeer(c)
 			form.Name = name
+			if link.DirectPorts && ctPortCarrier(c.Tr) {
+				port, err := ctKharejDirectPort(ctx, link, c.Tr, usedDirectPorts)
+				if err != nil {
+					local[c.Kind+"/"+c.Tr] = err.Error()
+					continue
+				}
+				form.TunnelPort = port
+			}
 			spec, err := form.ToNewDirectTunnel().spec()
 			if err != nil {
 				local[c.Kind+"/"+c.Tr] = err.Error()
@@ -1884,6 +2020,15 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 	}
 	fmt.Fprintf(out, "Started %d test tunnels to %s (preset %s). Checking in with the Iran server...\n",
 		len(engines), link.Host, link.Preset)
+	// Setup failures belong in skipped rows on both machines. Older Iran
+	// versions understand only the managed-helper skip command.
+	if link.DirectPorts {
+		for key := range local {
+			if ctSkippableCase(key) {
+				_, _ = ctAskContext(ctx, link.Host, link.Coord, "skip "+link.Tok+" "+key)
+			}
+		}
+	}
 
 	// Checking in: every few seconds until the Iran side hears it.
 	for {
@@ -1892,8 +2037,7 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 			break
 		}
 		if ctx.Err() != nil {
-			return nil, ConnTestBest{}, fmt.Errorf("the Iran server's test coordinator (port %d, TCP and UDP) never answered — "+
-				"nothing at all gets through from here to there, or the test there has ended", link.Coord)
+			return nil, ConnTestBest{}, ctCoordinatorFailure(link.Host, link.Coord)
 		}
 		ctSleep(ctx, 3*time.Second)
 	}
@@ -1908,8 +2052,7 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 		ctKharejSpoof(ctx, link, root)
 	}
 	go ctKharejPMTU(ctx, link)
-	fmt.Fprintf(out, "The Iran server has started the test. It takes about %d minutes...\n",
-		int((connTestConnectWait+30*time.Second+time.Duration(connTestSoak)*time.Second+time.Minute).Minutes())+1)
+	fmt.Fprintln(out, "The Iran server has started the test: five minutes of stability, then download/upload for each healthy tunnel (about 8–12 seconds each).")
 
 	// The verdict, and the rows as they fill until it comes.
 	for {
@@ -2041,7 +2184,7 @@ func ctServeTCPEcho(l net.Listener, owners ...*ctEchoes) {
 					owner.remove(c)
 				}
 			}()
-			_, _ = io.Copy(c, c)
+			ctServeSpeedOrEcho(c)
 		}()
 	}
 }
