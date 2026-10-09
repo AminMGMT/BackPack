@@ -15,6 +15,7 @@ import (
 	"github.com/backpack/backpack/internal/server"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
+	"github.com/backpack/backpack/internal/utils/network"
 
 	"github.com/BurntSushi/toml"
 )
@@ -183,6 +184,14 @@ func Run(configPath string, ctx context.Context) {
 
 // runEngine runs one tunnel until ctx ends.
 func runEngine(cfg *config.Config, ctx context.Context, configPath string, applyTuning bool) {
+	cleanupPck := func() {
+		network.CleanupPckGuards(cfg.Server.Token, cfg.Client.Token, cfg.Direct.Token, cfg.L3.Token)
+	}
+	// Recover orphaned tags even if an earlier tunnel was deleted or its token
+	// was replaced. The ownership checks preserve every live PCK carrier.
+	network.CleanupPckGuards()
+	defer cleanupPck()
+
 	// A layer-3 tunnel is a different thing from a port forwarder and shares
 	// none of the machinery below. It is dispatched here, before any of it, so
 	// that the reverse path is reached by exactly the configurations that

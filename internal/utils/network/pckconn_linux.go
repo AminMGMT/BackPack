@@ -106,7 +106,8 @@ type pckConn struct {
 	tsBase  uint32
 	tsStart time.Time
 
-	guard *pckGuard
+	guard       *pckGuard
+	reservation *os.File // bound TCP port; never listens or connects
 	// tunnelID is pckTunnelID of the token: which tunnel's source range the
 	// port came from, so closing the last carrier gives the range up.
 	tunnelID string
@@ -239,20 +240,23 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	}
 	if server {
 		c.local = listenPort
+		c.reservation, err = reservePckPort(egress.LocalIP, c.local)
 	} else {
 		base := pckClientPortBase(carrier.Token)
-		port, err := nextPckClientPort(base)
-		if err != nil {
-			return nil, err
-		}
-		c.local = port
-		c.holdsPort = true
+		c.local, c.reservation, err = reservePckClientPort(c.tunnelID, base, egress.LocalIP)
+		c.holdsPort = err == nil
 		guardLo, guardHi = base, base+pckPortSpan-1
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// From here the port is claimed, so every path out has to give it back or
 	// the range leaks one on each failed dial and eventually fills.
 	release := func() {
+		if c.reservation != nil {
+			c.reservation.Close()
+		}
 		if c.holdsPort {
 			releasePckClientPort(c.tunnelID, c.local)
 			c.holdsPort = false
@@ -270,8 +274,59 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	}
 	// One rule set covers the whole range and is shared by every carrier in this
 	// process, so a pool of sixteen does not install sixteen sets of rules.
-	c.guard = installPckGuard(pckTunnelID(carrier.Token), legacy, guardLo, guardHi)
+	peerScope := ""
+	if peer != nil {
+		peerScope = peer.String()
+	}
+	rules := scopedPckRules(c.tunnelID, guardLo, guardHi, egress.Iface.Name, egress.LocalIP.String(), peerScope, carrier.Port)
+	c.guard, err = installPckGuard(c.tunnelID, legacy, rules)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
 	return c, nil
+}
+
+// Binding without listen keeps this port out of the kernel's TCP allocator,
+// while leaving the raw carrier and the kernel's RST behaviour unchanged.
+func reservePckPort(ip net.IP, port uint16) (*os.File, error) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, unix.IPPROTO_TCP)
+	if err != nil {
+		return nil, err
+	}
+	addr := &unix.SockaddrInet4{Port: int(port)}
+	copy(addr.Addr[:], ip.To4())
+	if err := unix.Bind(fd, addr); err != nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("pck: cannot reserve TCP source port %d: %w", port, err)
+	}
+	return os.NewFile(uintptr(fd), "pck-port"), nil
+}
+
+func reservePckClientPort(id string, base uint16, ip net.IP) (uint16, *os.File, error) {
+	// Keep occupied candidates claimed until the search finishes, so the
+	// allocator advances instead of retrying the same kernel-owned port.
+	var rejected []uint16
+	defer func() {
+		for _, port := range rejected {
+			releasePckClientPort(id, port)
+		}
+	}()
+	for i := 0; i < pckPortSpan; i++ {
+		port, err := nextPckClientPort(base)
+		if err != nil {
+			return 0, nil, err
+		}
+		f, err := reservePckPort(ip, port)
+		if err == nil {
+			return port, f, nil
+		}
+		rejected = append(rejected, port)
+		if !errors.Is(err, unix.EADDRINUSE) {
+			return 0, nil, err
+		}
+	}
+	return 0, nil, fmt.Errorf("pck: no available TCP source port in range %d-%d", base, base+pckPortSpan-1)
 }
 
 // openRx opens the AF_PACKET receive socket and filters it down to this
@@ -682,9 +737,6 @@ func (c *pckConn) Close() error {
 		return nil
 	}
 	c.guard.remove()
-	if c.holdsPort {
-		releasePckClientPort(c.tunnelID, c.local)
-	}
 	if c.rx != nil {
 		_ = c.rx.Close()
 	}
@@ -696,6 +748,12 @@ func (c *pckConn) Close() error {
 	}
 	if c.txRawPC != nil {
 		_ = c.txRawPC.Close()
+	}
+	if c.reservation != nil {
+		_ = c.reservation.Close()
+	}
+	if c.holdsPort {
+		releasePckClientPort(c.tunnelID, c.local)
 	}
 	return nil
 }
