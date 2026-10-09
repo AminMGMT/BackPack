@@ -177,6 +177,17 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		connTestBinary, connTestSoak = prev, soak
 	}(connTestBinary, connTestSoak)
 	connTestBinary = func() (string, error) { return bin, nil }
+	if root := os.Getenv("BP_CONNTEST_HELPERS_ROOT"); root != "" {
+		previous := connTestHelperBinary
+		connTestHelperBinary = func(tool string) (string, error) {
+			path := filepath.Join(root, tool)
+			if _, err := os.Stat(path); err != nil {
+				return "", err
+			}
+			return path, nil
+		}
+		defer func() { connTestHelperBinary = previous }()
+	}
 	connTestSoak = 8
 	cover := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
