@@ -395,13 +395,13 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 	defer judge(false)
 
 	if err := stream.SetReadDeadline(time.Now().Add(controlClaimTimeout)); err != nil {
-		stream.Close()
+		wrapped.Close()
 		return
 	}
 	token, signal, err := utils.ReceiveBinaryTransportString(wrapped)
 	if err != nil {
 		s.logger.Debugf("no announcement from %s: %v", conn.RemoteAddr(), err)
-		stream.Close()
+		wrapped.Close()
 		return
 	}
 	stream.SetReadDeadline(time.Time{})
@@ -433,14 +433,14 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 			proof, err := network.QUICServerProof(conn, s.config.Token)
 			if err != nil {
 				s.logger.Errorf("could not bind the answer to the QUIC session: %v", err)
-				stream.Close()
+				wrapped.Close()
 				return
 			}
 			answer = proof
 		}
 		if err := utils.SendBinaryTransportString(wrapped, answer, utils.SG_Chan); err != nil {
 			s.logger.Errorf("failed to send security token: %v", err)
-			stream.Close()
+			wrapped.Close()
 			return
 		}
 
@@ -458,32 +458,32 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 		case handshake <- quicClaim{ctrl: wrapped, conn: conn}:
 		default:
 			s.logger.Warnf("control channel handshake already in progress, discarding duplicate")
-			stream.Close()
+			wrapped.Close()
 		}
 
 	case utils.SG_TCP:
 		// A data stream is useless without a control channel to drive it.
 		if !s.controlChannel.IsSet() {
 			s.logger.Debugf("data stream from %s arrived before a control channel, discarding", conn.RemoteAddr())
-			stream.Close()
+			wrapped.Close()
 			return
 		}
 		// Only the seated client's connection carries its data streams.
 		if c := g.client.Load(); c != nil && c != conn {
 			s.logger.Debugf("data stream from %s on a connection that is no longer the client's, discarding", conn.RemoteAddr())
-			stream.Close()
+			wrapped.Close()
 			return
 		}
 		select {
 		case g.tunnelChannel <- wrapped:
 		default:
 			s.logger.Warnf("tunnel channel is full, discarding data stream from %s", conn.RemoteAddr())
-			stream.Close()
+			wrapped.Close()
 		}
 
 	default:
 		s.logger.Warnf("unexpected announcement signal %v from %s", signal, conn.RemoteAddr())
-		stream.Close()
+		wrapped.Close()
 	}
 }
 
