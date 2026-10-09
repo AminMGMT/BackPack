@@ -1,6 +1,7 @@
 package l3
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -157,11 +158,19 @@ func newFECCarrier(below DatagramCarrier, cfg FECConfig) (DatagramCarrier, error
 	if err != nil {
 		return nil, fmt.Errorf("l3: fec %d/%d: %w", cfg.Data, cfg.Parity, err)
 	}
+	// The receiver keeps recent groups across peer reconnects. Restarting at
+	// zero could therefore make its delivered bitmap discard a fresh handshake
+	// as an old shard. Start in a fresh part of the existing wire ID space.
+	var first [4]byte
+	if _, err := rand.Read(first[:]); err != nil {
+		return nil, fmt.Errorf("l3: choosing the initial FEC group: %w", err)
+	}
 	return &fecCarrier{
-		below:  below,
-		cfg:    cfg,
-		enc:    enc,
-		groups: make(map[uint32]*fecGroup),
+		sendGrp: binary.BigEndian.Uint32(first[:]),
+		below:   below,
+		cfg:     cfg,
+		enc:     enc,
+		groups:  make(map[uint32]*fecGroup),
 	}, nil
 }
 
