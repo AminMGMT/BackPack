@@ -167,6 +167,17 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the engine; skipped under -short")
 	}
+	// PCK emits Ethernet frames on a real egress interface; IPv4 loopback
+	// cannot carry it, even when the test happens to run as root. Its live
+	// coverage uses separate network namespaces in e2e/l3live_test.go.
+	previousReverse := connTestReverse
+	connTestReverse = nil
+	for _, tr := range previousReverse {
+		if !connTestNeedsRoot(tr) {
+			connTestReverse = append(connTestReverse, tr)
+		}
+	}
+	defer func() { connTestReverse = previousReverse }()
 	bin := filepath.Join(t.TempDir(), "backpack")
 	build := exec.Command("go", "build", "-o", bin, "../..")
 	build.Stderr = os.Stderr
