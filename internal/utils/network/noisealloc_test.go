@@ -1,7 +1,7 @@
 package network
 
 import (
-	"io"
+	"net"
 	"testing"
 )
 
@@ -24,16 +24,19 @@ func TestTheRecordLayerDoesNotAllocatePerRecord(t *testing.T) {
 	defer a.Close()
 	defer b.Close()
 
-	// Drained in the background, or Write blocks once the socket buffer fills.
-	go io.Copy(io.Discard, b)
+	// AllocsPerRun counts allocations on every goroutine. A background peer
+	// therefore charges its decryption nonce and growing receive buffers to
+	// this writer, and makes this guard depend on scheduling. Complete the real
+	// handshake, then discard this direction's encrypted wire records locally.
+	// TestStealthRoundTrip separately verifies their decryption over TCP.
+	w := a.(*noiseConn)
+	w.Conn = noiseAllocationSink{Conn: w.Conn}
 
 	payload := make([]byte, 8*1024)
 	// Warm: the first records size the reused buffers, which is an allocation
 	// this test is not about.
-	for i := 0; i < 8; i++ {
-		if _, err := a.Write(payload); err != nil {
-			t.Fatalf("write: %v", err)
-		}
+	if _, err := a.Write(make([]byte, noisePaddedMaxPayload+noiseMaxPad)); err != nil {
+		t.Fatalf("warm write: %v", err)
 	}
 
 	got := testing.AllocsPerRun(50, func() {
@@ -41,11 +44,15 @@ func TestTheRecordLayerDoesNotAllocatePerRecord(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 	})
-	// Slack for whatever the socket and the cipher do internally; what must not
-	// be there is a fresh buffer for the record itself, twice.
-	if got > 2 {
+	// The cipher's nonce currently costs one allocation. A fresh frame or
+	// padding buffer per record must fail this guard, rather than hiding in it.
+	if got > 1 {
 		t.Errorf("a record costs %.1f allocations — the record buffer is being rebuilt "+
 			"for every one", got)
 	}
 	t.Logf("%.1f allocations per record", got)
 }
+
+type noiseAllocationSink struct{ net.Conn }
+
+func (noiseAllocationSink) Write(p []byte) (int, error) { return len(p), nil }
