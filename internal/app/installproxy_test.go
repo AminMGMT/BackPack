@@ -21,7 +21,7 @@ func TestInstallerModuleProxyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignment := regexp.MustCompile(`(?m)^\s*export GOPROXY=.*$`).FindString(string(src))
+	assignment := strings.TrimSpace(regexp.MustCompile(`(?m)^\s*export GOPROXY=.*$`).FindString(string(src)))
 	if assignment == "" {
 		t.Fatal("installer module proxy assignment missing")
 	}
