@@ -144,6 +144,7 @@ func (c *WsTransport) control() controlLoop {
 
 func (c *WsTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new websocket tunnel connection to address %s", c.config.RemoteAddr)
+	ctx := c.state.Ctx()
 
 	// Dial to the tunnel server
 	// Next() rather than Current(): with load balancing enabled the pool
@@ -189,7 +190,7 @@ func (c *WsTransport) tunnelDialer() {
 			// websocket, read back as one stream: the relay on the other end
 			// splits the frames across messages wherever it likes, so a
 			// message is not a datagram and must not be treated as one.
-			if dialForwardedUDP(&wsStream{conn: tunnelConn}, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer) {
+			if dialForwardedUDP(ctx, c.config.DialTimeOut, &wsStream{conn: tunnelConn}, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer) {
 				return
 			}
 

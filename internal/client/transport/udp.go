@@ -167,17 +167,12 @@ func (c *UdpTransport) control() controlLoop {
 
 func (c *UdpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
+	ctx := c.state.Ctx()
 
 	// Next() rather than Current(): with load balancing enabled the pool
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
-	remoteAddr, err := net.ResolveUDPAddr("udp", c.config.Endpoints.Next())
-	if err != nil {
-		c.logger.Error("failed to resolve tunnel address:", err)
-		return
-	}
-
-	tunConn, err := net.DialUDP("udp", nil, remoteAddr)
+	tunConn, err := dialUDPContext(ctx, c.config.DialTimeOut, c.config.Endpoints.Next())
 	if err != nil {
 		c.logger.Error("failed to connect to server:", err)
 		return
@@ -250,21 +245,12 @@ func (c *UdpTransport) handleTunnelConn(tunConn *net.UDPConn) {
 }
 
 func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDPConn) {
+	ctx := c.state.Ctx()
 	// UDP backends cannot be health-checked with a TCP probe, so the pool does
 	// not load-balance them; a configured list just uses the first entry.
 	remoteAddr = firstBackend(remoteAddr)
-	remoteResolvedAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
+	remoteConn, err := dialUDPContext(ctx, c.config.DialTimeOut, remoteAddr)
 	if err != nil {
-		c.logger.Error("failed to resolve remote address:", err)
-		return
-	}
-
-	// Dial the remote UDP server
-	remoteConn, err := net.DialUDP("udp", nil, remoteResolvedAddr)
-	if err != nil {
-		// Falling through here dereferenced a nil remoteConn one line later and
-		// took the whole client down with it; there is nothing to forward to, so
-		// stop.
 		c.logger.Errorf("failed to dial remote UDP address: %v", err)
 		return
 	}
@@ -274,6 +260,11 @@ func (c *UdpTransport) localDialer(remoteAddr string, port int, tunConn *net.UDP
 	defer remoteConn.Close()
 
 	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		tunConn.Close()
+		remoteConn.Close()
+	})
+	defer stop()
 	c.logger.Debugf("start to copy from tunnel %s to local %s", tunConn.LocalAddr(), remoteAddr)
 	go func() {
 		c.udpCopy(remoteConn, tunConn, port, true)

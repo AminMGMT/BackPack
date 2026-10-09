@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -23,15 +25,24 @@ import (
 // descriptors and stopped accepting anything at all, which looks exactly like
 // "UDP stops working after a while".
 
+// UDPForward pipes a tunnel stream carrying framed datagrams to a UDP backend.
+// It returns when either side ends, having closed both.
+func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
+	udpForwardContext(context.Background(), udpBackendDialTimeout, stream, target, logger, usage, port, sniffer)
+}
+
 // udpBackendIdle bounds a flow whose tunnel side has gone quiet without
 // closing. It matches the server's mapping lifetime, so the two ends give up on
 // a silent flow at about the same time.
 const udpBackendIdle = 60 * time.Second
 
+// udpBackendDialTimeout also bounds DNS for callers without a configured budget.
+const udpBackendDialTimeout = 10 * time.Second
+
 // dialForwardedUDP takes a flow whose target is marked as UDP, reporting
 // whether it was one. Every transport calls it before resolving the target the
 // ordinary way, so recognising a datagram flow is one thing in one place.
-func dialForwardedUDP(stream net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, sniffer bool) bool {
+func dialForwardedUDP(ctx context.Context, timeout time.Duration, stream net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, sniffer bool) bool {
 	target, isUDP := network.SplitUDPTarget(remoteAddr)
 	if !isUDP {
 		return false
@@ -42,25 +53,18 @@ func dialForwardedUDP(stream net.Conn, remoteAddr string, logger *logrus.Logger,
 		stream.Close()
 		return true
 	}
-	UDPForward(stream, resolved, logger, usage, port, sniffer)
+	udpForwardContext(ctx, timeout, stream, resolved, logger, usage, port, sniffer)
 	return true
 }
 
-// UDPForward pipes a tunnel stream carrying framed datagrams to a UDP backend.
-// It returns when either side ends, having closed both.
-func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
+// udpForwardContext binds backend lookup and the flow to its generation.
+func udpForwardContext(ctx context.Context, timeout time.Duration, stream net.Conn, target string, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
 	// A UDP backend cannot be health-checked the way a TCP one is — there is
 	// nothing to connect to — so a multi-backend list takes its first entry
 	// rather than being handed to the resolver as one nonsense address.
 	target = firstUDPBackend(target)
 
-	addr, err := net.ResolveUDPAddr("udp", target)
-	if err != nil {
-		logger.Errorf("failed to resolve UDP target %q: %v", target, err)
-		stream.Close()
-		return
-	}
-	backend, err := net.DialUDP("udp", nil, addr)
+	backend, err := dialUDPContext(ctx, timeout, target)
 	if err != nil {
 		logger.Errorf("failed to dial UDP backend %q: %v", target, err)
 		stream.Close()
@@ -79,6 +83,8 @@ func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *we
 		})
 	}
 	defer shutdown()
+	stop := context.AfterFunc(ctx, shutdown)
+	defer stop()
 
 	done := make(chan struct{})
 	go func() {
@@ -90,6 +96,23 @@ func UDPForward(stream net.Conn, target string, logger *logrus.Logger, usage *we
 	tunnelToBackend(stream, backend, logger, usage, port, sniffer)
 	shutdown()
 	<-done
+}
+
+// dialUDPContext gives endpoint and backend DNS the same budget as socket setup.
+func dialUDPContext(ctx context.Context, timeout time.Duration, target string) (*net.UDPConn, error) {
+	if timeout <= 0 {
+		timeout = udpBackendDialTimeout
+	}
+	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "udp", target)
+	if err != nil {
+		return nil, err
+	}
+	backend, ok := conn.(*net.UDPConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("unexpected UDP connection type %T", conn)
+	}
+	return backend, nil
 }
 
 // tunnelToBackend unpacks datagrams from the tunnel and sends them on.

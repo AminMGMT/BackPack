@@ -259,6 +259,7 @@ func (c *TcpTransport) control() controlLoop {
 // Dialing to the tunnel server, chained functions, without retry
 func (c *TcpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
+	ctx := c.state.Ctx()
 
 	// Dial to the tunnel server
 	// Next() rather than Current(): with load balancing enabled the pool
@@ -306,7 +307,7 @@ func (c *TcpTransport) tunnelDialer() {
 	// A forwarded UDP flow says so in the target address, on this transport as
 	// on every other one, so there is one thing to recognise rather than a
 	// signal byte here and a marked address everywhere else.
-	if dialForwardedUDP(tcpConn, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer) {
+	if dialForwardedUDP(ctx, c.config.DialTimeOut, tcpConn, remoteAddr, c.logger, c.state.Usage(), c.config.Sniffer) {
 		return
 	}
 
