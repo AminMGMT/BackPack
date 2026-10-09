@@ -1,5 +1,7 @@
 # Checking a heavily filtered path
 
+Last verified against Backpack v1.9.0 · 2026-10-09.
+
 A failed **Connection Test coordinator** is not a verdict on every tunnel.
 The coordinator fetches settings and results over a temporary TCP/UDP port.
 If that port is blocked, the two sides cannot start the measurement even when
@@ -91,10 +93,14 @@ If xDi also fails, compare packet arrival at both public interfaces, verify
 matching tokens and direction, and inspect the engine logs before concluding
 that a new protocol is needed.
 
-## فارسی
+## خلاصهٔ فارسی
+
+<div dir="rtl">
 
 خطای ارتباط با هماهنگ‌کنندهٔ Connection Test فقط یعنی ارتباط کنترل تست روی
 TCP/UDP برقرار نشده است؛ نتیجهٔ همهٔ پروتکل‌ها نیست. روی مسیرهایی که ICMP
 عبور می‌کند، xDi را از بخش Direct جداگانه تست کنید. توکن دو طرف باید یکی باشد.
 برای بررسی مستقل، از رابط و subnet آزاد استفاده کنید و تونل فعلی را نگه دارید.
 موفقیت چند دقیقه تست، تضمین پایداری دائمی در برابر تغییرات مسیر یا فیلترینگ نیست.
+
+</div>
