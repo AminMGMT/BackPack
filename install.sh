@@ -48,7 +48,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/tmp}")" 2>/dev/null && pwd || ec
 # the ones least able to do anything else. The values below are the fallback for
 # a standalone `curl | bash`, where there is no go.mod to read and no source
 # build to do either.
-GO_VERSION="1.26.6"
+GO_VERSION="1.26.9"
 GO_MIN_MINOR=26
 if [[ -f "$SCRIPT_DIR/go.mod" ]]; then
   gomod_go="$(grep -m1 -E '^go[[:space:]]+[0-9]+\.[0-9]+' "$SCRIPT_DIR/go.mod" | awk '{print $2}' || true)"
@@ -388,12 +388,12 @@ install_binary_from_tar() {
 # worse, be quietly changed to skip the check. It fails loudly and says exactly
 # what to update instead. Values come from
 # https://go.dev/dl/?mode=json&include=all.
-GO_SHA_VERSION="1.26.6"
-GO_SHA256_amd64="708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89"
-GO_SHA256_arm64="d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e"
-GO_SHA256_386="f09a71029fc5cd2940fbe36b0eb1fb2d8f3407cd6adb6b7b4de3eaf04007f8c4"
-GO_SHA256_s390x="958757933d38172dd544085d253c8738cf09793d24c8bc0422e5e1e1fffa4fde"
-GO_SHA256_armv6l="e1379a2fe77bd30fa29833074388247e7c65416e09279f746f20de2d5cf4dfea"
+GO_SHA_VERSION="1.26.9"
+GO_SHA256_amd64="42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d"
+GO_SHA256_arm64="4a97373d49fcacdcf3694fea368a500b00ee3e963974f3e7514132717632f052"
+GO_SHA256_386="dea88a548986e02d02f6f24f7ea8a886cd5d6e583419247955a140cd84a74d77"
+GO_SHA256_s390x="4cea4b77caedc8869a4f1f9301ec42b526e09020f72235d019acacd2c4441550"
+GO_SHA256_armv6l="4e7427224d6200800b8c8b9b05b2cb1868df0fb950f57843cf51b1060d91a0c8"
 
 # go_arch maps this script's asset architecture onto the one Go names its
 # toolchain with.
