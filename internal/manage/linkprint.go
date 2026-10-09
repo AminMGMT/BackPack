@@ -19,6 +19,11 @@ import (
 // the tunnel in link there. It is run as root on the kharej; install.sh hands
 // what follows it to the installed binary (see the end of install.sh).
 func InstallCommand(link string) string {
+	// The published release may predate managed HTTPS link support. Installing
+	// it here would replace the matching test build and lose the optional helpers.
+	if l, err := DecodeShareLink(link); err == nil && managedTransport(l.Tr) {
+		return ""
+	}
 	return fmt.Sprintf("bash <(curl -fsSL https://raw.githubusercontent.com/%s/%s/main/install.sh) link apply '%s'",
 		app.RepoOwner, app.RepoName, link)
 }
@@ -26,12 +31,21 @@ func InstallCommand(link string) string {
 // printLinkBlock prints the two ways to build the kharej from link. menuPath
 // is where the Setup Link answer is in the kharej's menu, for the first.
 func printLinkBlock(link, menuPath string) {
+	command := InstallCommand(link)
+	if command == "" {
+		menuPath = "sudo backpack → Setup Kharej → Reverse → HTTPS → Same Protocol → Setup Link"
+	}
 	fmt.Println()
 	tui.Info("Setup Link (" + menuPath + "):")
 	fmt.Println(tui.Color(tui.Bold+tui.White, link))
 	fmt.Println()
-	tui.Info("Install BackPack And Set Up This Tunnel (Kharej Without BackPack, As Root):")
-	fmt.Println(tui.Color(tui.Bold+tui.White, InstallCommand(link)))
+	if command == "" {
+		tui.Info("Install The Same BackPack Build On Kharej With BP_HELPERS=naive,xray, Then Apply:")
+		fmt.Println(tui.Color(tui.Bold+tui.White, "sudo backpack link apply '"+link+"'"))
+	} else {
+		tui.Info("Install BackPack And Set Up This Tunnel (Kharej Without BackPack, As Root):")
+		fmt.Println(tui.Color(tui.Bold+tui.White, command))
+	}
 }
 
 // askLinkBackupHosts asks for this server's other addresses, which the setup

@@ -1,5 +1,192 @@
 # Transports
 
+The optional managed Naive HTTP/2 wrapper runs with the existing TCP Reverse
+engine, configured using `[server.naive]` and `[client.naive]`. Install its pinned
+official helpers with `BP_HELPERS=naive bash install.sh` on Linux glibc amd64 or
+arm64; the installer prints their versioned absolute paths. Certificate/key
+renewal remains external, and valid file replacements reload the tunnel without
+a TOML edit. Invalid or incomplete replacements keep the current generation.
+The terminal's Reverse setup and Edit → Transport menus offer an HTTPS family
+with Naive / HTTP2, XHTTP / TLS and REALITY / Vision. The wizard collects helper
+settings on each machine; these remain outside automatic transport selection.
+Each side owns its helper under the tunnel context; TCP forwarding
+and one endpoint are currently supported.
+
+`BP_HELPERS=xray` installs the pinned official Xray helper in a versioned
+directory; `BP_HELPERS=naive,xray` installs both sets. Existing helper directories
+are retained. No helper is started by the installer. Xray transport settings
+require a Backpack build that implements the managed Xray wrapper.
+
+## Managed HTTPS carriers
+
+Use a build containing these changes on both machines. From its source checkout,
+`BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash install.sh` builds that checkout
+and installs the pinned helpers. Without the source flag the installer prefers
+the latest published BackPack release, which may predate these carriers.
+
+These optional Linux helpers carry the existing **TCP reverse engine**. Keep
+`transport = "tcp"` and use the same literal loopback `server.bind_addr` and
+`client.remote_addr` on both machines. The Iran helper's public listener must
+use a different port. The outside client initiates the encrypted connection
+toward Iran. Only TCP forwarding with one endpoint is supported; UDP forwarding,
+transport/address fallbacks, other outbound proxies, Direct and L3 are refused.
+Choose one helper per tunnel. The terminal wizard configures it, and Edit →
+HTTPS Settings changes the public endpoint, internal port and credentials in
+one restart. Ordinary edits preserve it. Iran exports a Setup Link carrying
+the peer credentials, public endpoint and private-certificate trust for
+Kharej; server private keys and binary paths remain local. Use the terminal
+or `backpack link apply` with matching updated builds. The web wizard does
+not collect managed-helper credentials.
+
+Set up Iran first, then choose the same HTTPS protocol on Kharej. The internal
+reverse port, security token and helper account must match; the Setup Link
+copies them. Existing PEM files
+can be used for Naive and XHTTP. The private-certificate option generates a
+certificate for the chosen hostname or IP; its public PEM travels in the
+Setup Link. For manual setup, copy only the public PEM to Kharej and enter
+that file as the CA file. REALITY generates its private key on Iran
+when left empty and prints the corresponding public key for Kharej. It also
+requires an explicit reachable TLS 1.3/H2 cover endpoint. UDP forwarding, proxy
+and routing bindings, address and transport fallbacks are excluded from this
+wizard because these wrappers cannot carry them. The helper binaries must be
+installed on both machines; the wizard suggests their pinned installer paths.
+
+The engine owns each helper, stores generated configuration with owner-only
+permissions, restarts a crashed process, and removes its process group and
+temporary directory when the generation ends. Local listener readiness is
+distinct from tunnel health: verify traffic through a forwarded entry port.
+Runtime startup failures also retry with a cancellable one-second backoff;
+invalid generated configuration is rejected before launching the supervisor.
+Existing flows can fail during a crash or reload; new flows recover after the
+reverse control connection and pool reconnect. Start with a modest pool and
+measure memory/CPU and verified throughput before increasing it: each reverse
+pool connection adds work in the helper as well as the TCP engine.
+
+Both engines must run the same managed-carrier build. Managed connections now
+carry bounded data records and an explicit EOF marker inside the encrypted
+helper stream, because a physical TCP half-close can make a proxy helper close
+the response direction as well. The adapter preserves delayed backend replies
+and closes the physical stream once both directions finish or the generation
+is cancelled. Ordinary TCP connections keep their existing wire format. The
+record header adds four bytes per at-most-64KiB chunk; vectored TCP writes avoid
+a separate header syscall. There is no automatic fallback to older unframed
+managed peers. Deploy the matching build to both sides together.
+
+### Naive HTTP/2
+
+Install with `BP_HELPERS=naive bash install.sh`. The pinned versions are
+NaiveProxy `v154.0.8037.49-4` and sing-box `v1.14.2`. On amd64, for example:
+
+```toml
+# Iran; the ordinary [server] table still owns token, ports and pool tuning.
+[server]
+bind_addr = "127.0.0.1:3080"
+transport = "tcp"
+token = "REPLACE-WITH-A-RANDOM-SHARED-TOKEN"
+ports = ["8080=127.0.0.1:8081"]
+accept_udp = false
+[server.naive]
+binary = "/usr/local/lib/backpack/helpers/sing-box/v1.14.2-amd64/sing-box"
+listen = "0.0.0.0:443"
+username = "REPLACE-WITH-A-PRIVATE-USERNAME"
+password = "REPLACE-WITH-A-RANDOM-PASSWORD"
+certificate = "/etc/letsencrypt/live/tunnel.example.com/fullchain.pem"
+key = "/etc/letsencrypt/live/tunnel.example.com/privkey.pem"
+```
+
+```toml
+# Outside; 8081 is the local backend named by the Iran forwarding rule above.
+[client]
+remote_addr = "127.0.0.1:3080"
+transport = "tcp"
+token = "REPLACE-WITH-A-RANDOM-SHARED-TOKEN"
+[client.naive]
+binary = "/usr/local/lib/backpack/helpers/naive/v154.0.8037.49-4-amd64/naive"
+server = "tunnel.example.com:443"
+username = "REPLACE-WITH-A-PRIVATE-USERNAME"
+password = "REPLACE-WITH-A-RANDOM-PASSWORD"
+# ca_file = "/absolute/path/to/private-ca.pem"  # only for your own CA
+```
+
+Use a valid certificate for the outer hostname. This sing-box inbound does not
+include a complete website frontend or an active-probe camouflage guarantee.
+
+### XHTTP over TLS
+
+Install with `BP_HELPERS=xray bash install.sh`; the tested contract uses official
+Xray `v26.3.27`. Keep the ordinary reverse tables from the example above and
+replace the Naive tables with these, using a fresh UUID (`xray uuid`) and a
+random private path shared by both helpers:
+
+The wrapper fixes XHTTP to HTTP/2 `stream-up`, with a streaming upload and a
+separate download request. The pinned helper's `auto`/`packet-up` path has a
+reproduced buffer-ownership race that can report a short write after accepting
+the data. Streaming bypasses that path and its per-POST batching delay. Any
+frontend must forward streaming request bodies without buffering; CDN and Iran
+route compatibility must be tested on the intended deployment.
+
+```toml
+[server.xray]
+binary = "/usr/local/lib/backpack/helpers/xray/v26.3.27-amd64/xray"
+listen = "0.0.0.0:443"
+mode = "xhttp"
+uuid = "REPLACE-WITH-A-CANONICAL-UUID"
+server_name = "tunnel.example.com"
+path = "/REPLACE-WITH-A-RANDOM-PRIVATE-PATH"
+certificate = "/etc/letsencrypt/live/tunnel.example.com/fullchain.pem"
+key = "/etc/letsencrypt/live/tunnel.example.com/privkey.pem"
+```
+
+```toml
+[client.xray]
+binary = "/usr/local/lib/backpack/helpers/xray/v26.3.27-amd64/xray"
+server = "tunnel.example.com:443"
+mode = "xhttp"
+uuid = "REPLACE-WITH-A-CANONICAL-UUID"
+server_name = "tunnel.example.com"
+path = "/REPLACE-WITH-A-RANDOM-PRIVATE-PATH"
+# ca_file = "/absolute/path/to/private-ca.pem"
+```
+
+TLS verification remains enabled and HTTP/2 is selected. Optional `host` sets
+the HTTP host and must match on both sides; empty uses `server_name`. A CDN must
+support the selected XHTTP requests, response streaming, timeouts and origin
+TLS configuration. CDN deployment is route/provider dependent and has not been
+validated by the local integration tests. This first wrapper does not expose
+H3, split download settings, raw JSON overrides, or a website frontend.
+
+### RAW / REALITY / Vision
+
+Use `mode = "reality"` on both sides, the same UUID and a fresh 16-character
+hexadecimal `short_id`. Generate an X25519 pair with the installed `xray x25519`;
+put its private key only on Iran and its corresponding public value on the
+outside client (the pinned CLI names that value `Password`). Both are unpadded
+base64url strings encoding 32 bytes.
+
+In `[server.xray]`, replace `path`, `certificate`, and `key` with `private_key`,
+`short_id`, and an explicit `target = "cover.example.com:443"`. In `[client.xray]`,
+replace `path` with `public_key` and the same `short_id`. Set `server_name` on
+both sides to the DNS name accepted by the cover endpoint's certificate. Choose
+a reachable TLS 1.3 endpoint with HTTP/2 that you control; it must differ from
+the helper and reverse listeners. There is no `ca_file` or HTTP `host` in this
+mode. The generated VLESS account uses Vision and the client uses the Chrome
+fingerprint. REALITY uses a direct outer connection and is not a CDN transport.
+
+The Xray SOCKS listener permits only the reverse target, and authenticated Iran
+traffic can reach only that target. The REALITY unauthenticated cover behavior
+uses the explicitly configured cover endpoint. None of these carriers promises
+availability on every filtered network; validate your own Iran/outside route.
+
+For XHTTP and Naive, certificate renewal is external. Valid changes to the
+certificate/key files or a configured CA file reload the tunnel without a TOML
+edit. Identical file rewrites do not restart it; missing files, invalid pairs,
+and expired certificates keep the running generation.
+Naive server and Xray configurations embed validated TLS material so a helper
+cannot reread those files after validation or install a rejected renewal.
+Protect both TOML files and the helper binaries from untrusted writes. The
+installer verifies pinned
+archive hashes and never replaces an existing version directory.
+
 Backpack carries every tunnel over one transport, chosen when you create the
 tunnel and changeable later from **Edit → Change transport**. They all move the
 same traffic between the two engines — they differ only in what they put on the
@@ -56,6 +243,16 @@ setting, off by default, and independent of the transport. See
 [Forwarded UDP](forwarded-udp.md).
 
 ---
+
+
+Connection Test checks each automatic REALITY cover with the pinned Xray
+Chrome/Vision helper pair and an authenticated echo before selecting it. A
+successful ordinary TLS 1.3/H2 connection alone is insufficient: the pinned
+REALITY parser can reject a cover's handshake records. Failed candidates are
+skipped in order; when none work, the skipped row includes each candidate's
+failure instead of treating it as an Iran/Kharej route failure. Each candidate
+has an eight-second startup/handshake budget and temporary helpers are stopped.
+
 
 ## TCP family
 

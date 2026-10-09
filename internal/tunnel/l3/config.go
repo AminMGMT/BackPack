@@ -347,3 +347,49 @@ func CheckTunnelEnds(localIP, peerIP string) error {
 	}
 	return nil
 }
+
+// ConfigFromTable maps the on-disk table to the settings used at startup and validation.
+func ConfigFromTable(table config.L3Config) (Config, error) {
+	tunnelCfg := Config{
+		Mode:           table.Mode,
+		Addr:           table.Addr,
+		Token:          table.Token,
+		Carrier:        table.Carrier,
+		Encap:          table.Encap,
+		GREKey:         table.GREKey,
+		Iface:          table.Iface,
+		LocalIP:        table.LocalIP,
+		PeerIP:         table.PeerIP,
+		MTU:            table.MTU,
+		SockBuf:        table.SockBuf,
+		TxQueueLen:     table.TxQueueLen,
+		Qdisc:          table.Qdisc,
+		MSSClamp:       table.MSSClamp,
+		AutoMTU:        table.AutoMTUEnabled(),
+		Ports:          table.Ports,
+		AcceptUDP:      table.AcceptUDP,
+		MaxConnections: table.MaxConnections,
+		BandwidthMbps:  table.BandwidthMbps,
+		// Read only by the carrier they belong to; both are ignored otherwise.
+		FEC:       FECConfig{Data: table.FECData, Parity: table.FECParity},
+		Multipath: MultipathConfig{Paths: table.Paths},
+		Spoof:     table.SpoofConfig,
+		SNIDomain: table.SNIDomain,
+		Pck: network.PcapCarrier{
+			Interface:  table.PckInterface,
+			GatewayMAC: table.PckGatewayMAC,
+		},
+	}
+
+	// Parsed rather than passed through, so a typo in the flag cycle is
+	// reported here instead of becoming an empty cycle the carrier silently
+	// replaces with its default.
+	if len(table.PckFlags) > 0 {
+		flags, err := network.ParseTCPFlagList(table.PckFlags)
+		if err != nil {
+			return Config{}, fmt.Errorf("pck_flags: %w", err)
+		}
+		tunnelCfg.Pck.Flags = flags
+	}
+	return tunnelCfg, nil
+}

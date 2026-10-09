@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/internal/client/transport"
 	"github.com/backpack/backpack/internal/debugserver"
 	"github.com/backpack/backpack/internal/tunnel/chain"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
@@ -93,6 +94,27 @@ func (c *Client) Start() {
 	if err != nil {
 		c.logger.Errorf("ignoring the configured outbound settings and dialling directly: %v", err)
 		outbound = nil
+	}
+	if c.config.Naive.Enabled() || c.config.Xray.Enabled() {
+		var helper *naive.Helper
+		var err error
+		if c.config.Xray.Enabled() {
+			helper, err = naive.StartXrayClient(c.ctx, c.config, c.logger)
+		} else {
+			helper, err = naive.StartClient(c.ctx, c.config, c.logger)
+		}
+		if err != nil {
+			c.logger.Errorf("managed transport helper could not start; tunnel remains stopped: %v", err)
+			<-c.ctx.Done()
+			return
+		}
+		defer helper.Close()
+		proxy, err := network.ParseProxy(helper.ProxyURL())
+		if err != nil {
+			c.logger.Error("invalid managed transport proxy")
+			return
+		}
+		outbound = &network.Outbound{Proxy: proxy}
 	}
 	if outbound.IsSet() {
 		c.logger.Infof("reaching the tunnel server %s", outbound)
@@ -191,7 +213,8 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			Outbound:       outbound,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth: tr == config.STEALTH,
+			Stealth:       tr == config.STEALTH,
+			ManagedHelper: c.config.Naive.Enabled() || c.config.Xray.Enabled(),
 		}
 		tcpClient := transport.NewTCPClient(ctx, tcpConfig, c.logger)
 		go tcpClient.Start()

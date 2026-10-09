@@ -1,8 +1,11 @@
 package spooftest
 
 import (
+	"context"
+	"errors"
 	"net"
 	"testing"
+	"time"
 )
 
 func TestExpandSpec(t *testing.T) {
@@ -22,6 +25,21 @@ func TestExpandSpec(t *testing.T) {
 	// invalid
 	if _, err := ExpandSpec("not-an-ip"); err == nil {
 		t.Fatal("invalid spec should error")
+	}
+}
+
+func TestSpoofProbesRespectCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := RunSender(SenderConfig{Context: ctx, TargetIP: net.ParseIP("127.0.0.1")}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled sender opened a raw socket: %v", err)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := RunReceiver(ReceiverConfig{Context: ctx, Window: time.Minute})
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Fatalf("receiver waited for its window after cancellation: %v", err)
 	}
 }
 

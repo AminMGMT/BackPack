@@ -1,6 +1,7 @@
 package spooftest
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -48,11 +49,12 @@ func decodeProbe(magic uint32, b []byte) (seq uint32, ok bool) {
 
 // SenderConfig drives one direction's probe run.
 type SenderConfig struct {
-	Iface    string // NIC to send from
-	Token    string // shared secret → probe magic (must match the receiver)
-	TargetIP net.IP // the receiver node's REAL IPv4
-	DstPort  uint16 // the receiver's listen port
-	Attempts int    // probes per candidate
+	Context  context.Context // optional cancellation of this run
+	Iface    string          // NIC to send from
+	Token    string          // shared secret → probe magic (must match the receiver)
+	TargetIP net.IP          // the receiver node's REAL IPv4
+	DstPort  uint16          // the receiver's listen port
+	Attempts int             // probes per candidate
 	Delay    time.Duration
 	IPs      []net.IP // candidate forged sources (already expanded)
 	// Progress, if set, is called after each candidate with (done, total).
@@ -62,6 +64,13 @@ type SenderConfig struct {
 // RunSender emits Attempts probes from each candidate forged source toward the
 // target. Results are observed on the receiver side, not here.
 func RunSender(cfg SenderConfig) error {
+	ctx := cfg.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if cfg.TargetIP.To4() == nil {
 		return fmt.Errorf("target must be a real IPv4 address")
 	}
@@ -78,11 +87,20 @@ func RunSender(cfg SenderConfig) error {
 	const srcPort = 40000 // cosmetic; the forged source IP is what matters
 	for i, ip := range cfg.IPs {
 		for seq := 0; seq < cfg.Attempts; seq++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := sender.SendUDP(ip, cfg.TargetIP, srcPort, cfg.DstPort, encodeProbe(magic, uint32(seq))); err != nil {
 				return fmt.Errorf("sending from %v: %w", ip, err)
 			}
 			if cfg.Delay > 0 {
-				time.Sleep(cfg.Delay)
+				timer := time.NewTimer(cfg.Delay)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				}
 			}
 		}
 		if cfg.Progress != nil {
@@ -113,16 +131,24 @@ func (r Result) LossPercent() float64 {
 
 // ReceiverConfig drives the capture side.
 type ReceiverConfig struct {
-	Token    string        // shared secret → probe magic (must match the sender)
-	Port     uint16        // UDP port to listen on
-	Attempts int           // probes the sender emits per IP (the loss denominator)
-	Window   time.Duration // how long to capture
+	Context  context.Context // optional cancellation, closes the receive socket
+	Token    string          // shared secret → probe magic (must match the sender)
+	Port     uint16          // UDP port to listen on
+	Attempts int             // probes the sender emits per IP (the loss denominator)
+	Window   time.Duration   // how long to capture
 }
 
 // RunReceiver captures probes for the window and returns a per-source tally,
 // sorted by loss then address. It counts distinct sequence numbers per source,
 // so a duplicated probe is not mistaken for two arrivals.
 func RunReceiver(cfg ReceiverConfig) ([]Result, error) {
+	ctx := cfg.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cfg.Attempts <= 0 {
 		cfg.Attempts = 5
 	}
@@ -131,6 +157,8 @@ func RunReceiver(cfg ReceiverConfig) ([]Result, error) {
 		return nil, fmt.Errorf("listening on udp/%d: %w", cfg.Port, err)
 	}
 	defer conn.Close()
+	stopClose := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopClose()
 
 	magic := Magic(cfg.Token)
 	seen := make(map[string]map[uint32]struct{}) // src IP -> set of seqs
@@ -144,7 +172,7 @@ func RunReceiver(cfg ReceiverConfig) ([]Result, error) {
 			break // deadline or closed
 		}
 		seq, ok := decodeProbe(magic, buf[:n])
-		if !ok {
+		if !ok || seq >= uint32(cfg.Attempts) {
 			continue
 		}
 		key := addr.IP.String()
@@ -168,7 +196,7 @@ func RunReceiver(cfg ReceiverConfig) ([]Result, error) {
 		}
 		return bytesLess(results[i].IP, results[j].IP)
 	})
-	return results, nil
+	return results, ctx.Err()
 }
 
 // Passing returns the addresses whose loss is at or below maxLoss.

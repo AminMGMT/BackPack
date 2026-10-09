@@ -25,6 +25,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Configuration round-trip tests exercise the real /etc/backpack paths.
+      # The ephemeral runner owns their private fixture directory; production
+      # configuration permissions remain unchanged.
+      - name: Prepare configuration test fixtures
+        run: sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" /etc/backpack
+
       # The panel's own tests are plain `node --test` with no dependencies, and
       # `go test ./internal/webui` runs them. That test skips when node is
       # missing rather than failing — a Go toolchain is the only thing this
@@ -118,6 +124,23 @@ jobs:
           check internal/manage/tunnelspec 70 "a tunnel's configuration: render, load, apply with revert"
           check internal/manage/host    60 "this machine's addresses, ports and certificates"
           check internal/manage/health  40 "tunnel health, the watchdog and the Health Check"
+
+  managed:
+    name: Managed HTTPS carriers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install the verified pinned helpers
+        run: sudo env "PATH=$PATH" BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash ./install.sh
+      - name: Authenticate REALITY cover fallback and exercise the real reverse carriers
+        env:
+          BP_CONNTEST_HELPERS: '1'
+        run: go test ./internal/manage -run '^(TestRealityCoverSelectionAuthenticatesWithThePinnedHelper|TestAConnectionTestOverLoopbackPassesEveryReverseTransport)$' -race -count=1 -v -timeout 8m
 
   audit:
     name: Vulnerabilities and static analysis

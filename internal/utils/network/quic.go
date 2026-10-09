@@ -228,6 +228,12 @@ func NewQUICStreamConn(stream *quic.Stream, conn *quic.Conn) net.Conn {
 	return &QUICStreamConn{Stream: stream, conn: conn}
 }
 
+// CloseWrite sends directional EOF while leaving replies readable. As with
+// quic.Stream.Close, the caller must finish its writes before calling this.
+// The relay has exactly one writer per direction and calls this after its
+// final Write has returned.
+func (q *QUICStreamConn) CloseWrite() error { return q.Stream.Close() }
+
 func (q *QUICStreamConn) LocalAddr() net.Addr  { return q.conn.LocalAddr() }
 func (q *QUICStreamConn) RemoteAddr() net.Addr { return q.conn.RemoteAddr() }
 

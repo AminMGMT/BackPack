@@ -171,18 +171,41 @@ func updateReverseFromLink(link ShareLink, o LinkApplyOptions, existing string) 
 	if host == "" {
 		return LinkApplied{}, ErrLinkNeedsHost
 	}
-	s := reverseClientFromLink(link, host)
-	s.Name = existing
-	if why := portClash(s.Role, s.RemoteAddr, s.Name); why != "" {
+	paired := reverseClientFromLink(link, host)
+	s, err := LoadSpec(existing)
+	if err != nil {
+		return LinkApplied{}, err
+	}
+	if s.Role != "client" {
+		return LinkApplied{}, fmt.Errorf("%q is not a client tunnel", existing)
+	}
+	// Only the peer-owned wire settings come from the link. Local routing,
+	// retry timing, monitoring and capacity tuning belong to this machine.
+	s.Transport, s.RemoteAddr, s.Token = paired.Transport, paired.RemoteAddr, paired.Token
+	s.FallbackAddrs, s.FallbackTransports, s.FallbackDwell = paired.FallbackAddrs, paired.FallbackTransports, paired.FallbackDwell
+	s.MSS, s.SimpleAuth = paired.MSS, paired.SimpleAuth
+	s.MuxVersion = paired.MuxVersion
+	s.KCPDataShards, s.KCPParityShards = paired.KCPDataShards, paired.KCPParityShards
+	clearManagedTransport(&s)
+	s.NaiveClient, s.XrayClient = paired.NaiveClient, paired.XrayClient
+	if managedTransport(link.Tr) {
+		managedClientFromLink(&s, link, host)
+		s.Proxy, s.LocalAddr, s.Interface, s.EdgeIP = "", "", "", ""
+		s.SOMark, s.LoadBalance = 0, false
+	}
+	if why := reverseLinkClash(s); why != "" {
 		return LinkApplied{}, errors.New(why)
+	}
+	if err := prepareManagedLink(s, link); err != nil {
+		return LinkApplied{}, err
 	}
 	if err := applySpec(s); err != nil {
 		return LinkApplied{}, fmt.Errorf("could not bring %s into step with the Iran side: %w", existing, err)
 	}
 	service := app.ServiceName(existing)
 	return LinkApplied{
-		Name: existing, Service: service, Kind: "reverse", Transport: s.Transport,
-		Dials: s.RemoteAddr, Backups: s.FallbackAddrs, Active: IsActive(service), Updated: true,
+		Name: existing, Service: service, Kind: "reverse", Transport: selectedTransport(s),
+		Dials: managedEndpoint(s), Backups: s.FallbackAddrs, Active: IsActive(service), Updated: true,
 	}, nil
 }
 
@@ -191,8 +214,11 @@ func applyReverseLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {
 	if err != nil {
 		return LinkApplied{}, err
 	}
-	if why := portClash(s.Role, s.RemoteAddr, s.Name); why != "" {
+	if why := reverseLinkClash(s); why != "" {
 		return LinkApplied{}, errors.New(why)
+	}
+	if err := prepareManagedLink(s, link); err != nil {
+		return LinkApplied{}, err
 	}
 	optimize.ApplyQuiet(ReservedPorts())
 	service, err := s.Save()
@@ -200,9 +226,16 @@ func applyReverseLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {
 		return LinkApplied{}, err
 	}
 	return LinkApplied{
-		Name: s.Name, Service: service, Kind: "reverse", Transport: s.Transport,
-		Dials: s.RemoteAddr, Backups: s.FallbackAddrs, Active: IsActive(service),
+		Name: s.Name, Service: service, Kind: "reverse", Transport: selectedTransport(s),
+		Dials: managedEndpoint(s), Backups: s.FallbackAddrs, Active: IsActive(service),
 	}, nil
+}
+
+func reverseLinkClash(s TunnelSpec) string {
+	if managedTransport(selectedTransport(s)) {
+		return managedEndpointClash(s)
+	}
+	return portClash(s.Role, s.RemoteAddr, s.Name)
 }
 
 func applyDirectLink(link ShareLink, o LinkApplyOptions) (LinkApplied, error) {

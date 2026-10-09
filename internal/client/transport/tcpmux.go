@@ -214,6 +214,7 @@ func (c *TcpMuxTransport) channelDialer() {
 // shared with every other client transport — see poolmaintain.go.
 func (c *TcpMuxTransport) poolMaintainer() {
 	poolSizer{
+		mux:        true,
 		ctx:        c.state.Ctx(),
 		log:        c.logger,
 		size:       c.config.ConnPoolSize,

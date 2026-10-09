@@ -56,7 +56,7 @@ func TestTheVerdictIsGroupedAndListsWhatWorks(t *testing.T) {
 		{Kind: "direct", Transport: "quic", Status: ctDown, Total: 60},
 	})
 	order := []string{"Direct    PCK", "Direct    UDP", "Reverse   TCP", "Reverse   KCP FEC", "Direct    QUIC", "Works Steadily:",
-		"🟢 Direct PCK          69ms    29.9 Mbps", "🟢 Direct UDP          73ms    28.0 Mbps"}
+		"🟢 Direct PCK                 69ms    29.9 Mbps", "🟢 Direct UDP                 73ms    28.0 Mbps"}
 	at := 0
 	for _, want := range order {
 		i := strings.Index(table[at:], want)
@@ -64,6 +64,22 @@ func TestTheVerdictIsGroupedAndListsWhatWorks(t *testing.T) {
 			t.Fatalf("%q missing or out of order in\n%s", want, table)
 		}
 		at += i + len(want)
+	}
+}
+
+func TestConnTestTableExplainsLocalFailuresWithoutClaimingFiltering(t *testing.T) {
+	table := ConnTestTable([]ConnTestResult{
+		{Kind: "reverse", Transport: "naive", Status: ctSkipped, Detail: "helper unavailable"},
+		{Kind: "reverse", Transport: "xhttp", Status: ctDown, Detail: "test stopped"},
+		{Kind: "reverse", Transport: "reality", Status: ctUnstable, Detail: "bulk transfer failed"},
+	})
+	for _, want := range []string{"Naive / HTTP2", "XHTTP / TLS", "REALITY / Vision", "helper unavailable", "test stopped", "bulk transfer failed"} {
+		if !strings.Contains(table, want) {
+			t.Errorf("table is missing %q", want)
+		}
+	}
+	if strings.Contains(table, "filtered for every transport") {
+		t.Fatal("local failures were reported as route filtering")
 	}
 }
 
@@ -86,5 +102,52 @@ func TestTheLiveTableRewritesOnlyWhatChanged(t *testing.T) {
 	b.draw()
 	if n := strings.Count(out.String(), "\033[2K"); n != 1 || !strings.Contains(out.String(), "1/60") {
 		t.Errorf("one row changed; %d lines rewritten: %q", n, out.String())
+	}
+}
+
+func TestConnTestManagedNamesKeepColumnsAligned(t *testing.T) {
+	rows := []ConnTestResult{}
+	for _, tr := range []string{"tcp", "naive", "xhttp", "reality"} {
+		rows = append(rows, ConnTestResult{Kind: "reverse", Transport: tr, Status: ctOK, RTTms: 26, Mbps: 60.3})
+	}
+	table := ConnTestTable(rows)
+	steady := strings.Split(table, "Works Steadily:")[1]
+	column := -1
+	for _, line := range strings.Split(steady, "\n") {
+		if !strings.Contains(line, "26ms") {
+			continue
+		}
+		at := strings.Index(line, "26ms")
+		if column < 0 {
+			column = at
+		}
+		if at != column {
+			t.Fatalf("RTT column moved: %q", line)
+		}
+		if !strings.Contains(line, "  26ms") {
+			t.Fatalf("name touches RTT: %q", line)
+		}
+	}
+	for _, r := range rows {
+		line := strings.Replace(ctRow(r), "🟢", "  ", 1)
+		if strings.Index(line, "OK") != strings.Index(ctHeader, "STATUS") {
+			t.Fatalf("header drifted: %q / %q", ctHeader, line)
+		}
+	}
+	measured := -1
+	for _, tr := range []string{"tcp", "naive", "xhttp", "reality"} {
+		table := ConnTestBestTable(ConnTestBest{Transport: "reverse " + tr, Mbps: 60.3})
+		for _, line := range strings.Split(table, "\n") {
+			if !strings.HasPrefix(line, "Transport") {
+				continue
+			}
+			at := strings.Index(line, "60.3 Mbps")
+			if measured < 0 {
+				measured = at
+			}
+			if measured != at {
+				t.Fatalf("best settings column moved: %q", line)
+			}
+		}
 	}
 }

@@ -44,6 +44,31 @@ them both ends have to agree on. This says what exists.
 | `pck_gateway_mac` | `string` | PckGatewayMAC is the next hop's hardware address, used when frames are injected at the link layer. Empty means read it from the kernel's neighbour table, which is where it already is. Set it only where that lookup is wrong — some virtualised networks answer ARP with an address the hypervisor then rewrites. |
 | `pck_interface` | `string` | PckInterface pins the carrier to a named egress device. Empty — the normal case — lets the route to the peer choose, which is right on every host with one uplink and on most with several. |
 
+## [client.naive]
+
+| Key | Type | Description |
+|---|---|---|
+| `binary` | `string` | Binary is the absolute path to the official NaiveProxy client binary; Backpack never downloads or replaces it. |
+| `ca_file` | `string` | CAFile optionally trusts a PEM CA for this helper alone; empty uses the official client's normal certificate verification. |
+| `password` | `string` | Password is the HTTP/2 proxy secret; keep the tunnel configuration readable only by its owner. |
+| `server` | `string` | Server is the HTTP/2 proxy's host:port, reached from the outside client toward the Iran server. |
+| `username` | `string` | Username authenticates the HTTP/2 proxy independently of the reverse tunnel token. |
+
+## [client.xray]
+
+| Key | Type | Description |
+|---|---|---|
+| `binary` | `string` | Binary is the absolute path to official Xray; the managed contract is tested with v26.3.27. |
+| `ca_file` | `string` | CAFile optionally adds a PEM trust anchor for XHTTP; normal TLS verification remains enabled. |
+| `host` | `string` | Host optionally overrides the XHTTP HTTP host; empty uses server_name. |
+| `mode` | `string` | Mode selects xhttp (verified TLS/HTTP2) or reality (RAW, REALITY and Vision). |
+| `path` | `string` | Path is an explicit non-root private XHTTP path shared by both helpers; unused by REALITY. |
+| `public_key` | `string` | PublicKey is the server's 32-byte unpadded base64url X25519 public key for REALITY. |
+| `server` | `string` | Server is the outer Xray host:port; client.remote_addr remains the Iran loopback reverse listener. |
+| `server_name` | `string` | ServerName is the explicit DNS name for TLS verification or REALITY authentication. |
+| `short_id` | `string` | ShortID is the shared 16-character hexadecimal REALITY identifier. |
+| `uuid` | `string` | UUID is one canonical UUID shared by the two helper accounts, separate from the reverse token. |
+
 ## [client]
 
 | Key | Type | Description |
@@ -68,6 +93,7 @@ them both ends have to agree on. This says what exists.
 | `mux_session` | `int` | MuxSession is how many multiplexed sessions the tunnel keeps open. Only the mux transports read it; a preset fills it in. |
 | `mux_streambuffer` | `int` | MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a preset. |
 | `mux_version` | `int` | MuxVersion is the smux protocol version. Negotiated with the peer, so the two ends may differ and the lower wins. |
+| `naive` | `NaiveClientConfig` | Naive optionally reaches the loopback reverse target through a tunnel-owned official Chromium Naive helper; experimental and disabled when empty. |
 | `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and a bulk transfer does not notice. |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on loopback. Off by default, and loopback-only on purpose: its heap dump contains this tunnel's token. |
 | `preset` | `string` | Preset records which performance profile the tuning values came from — balance, turbo or aggressive. A label: the engine reads the values, never this. |
@@ -86,6 +112,7 @@ them both ends have to agree on. This says what exists.
 | `transport` | `TransportType` | Transport is the carrier this tunnel uses. Both ends must name the same one; see docs/transports.md for what each is for. |
 | `web_bind` | `string` | WebBind is the address the sniffer/monitor page listens on. It has no authentication of any kind and reports the host's CPU, memory, disk and network along with the tunnel's status and per-port traffic, so it defaults to 127.0.0.1 and is reached over an SSH tunnel: ssh -L 2060:127.0.0.1:2060 root@server Set it to 0.0.0.0 to serve it on every interface as it used to be, or to one address to serve it on a private network only. |
 | `web_port` | `int` | WebPort is the port the per-tunnel monitor page listens on. 0 turns it off. |
+| `xray` | `XrayClientConfig` | Xray optionally reaches the loopback reverse target through a restricted tunnel-owned XHTTP/TLS or RAW/REALITY helper. |
 | `zero_copy` | `bool` | ZeroCopy lets the kernel move the bytes of forwarded connections directly between the two sockets, without them passing through this process. It is faster and it is the least proven path here, so it is off by default and turned on per tunnel. |
 
 ## [direct]
@@ -171,6 +198,34 @@ them both ends have to agree on. This says what exists.
 | `spoof_uplink` | `string` | SpoofUplink and SpoofDownlink set the profile per direction, for a path whose filtering is not symmetric — e.g. ICMP survives client→server while UDP survives server→client. Uplink is client→server, downlink is server→client; both ends must set the same pair. Empty falls back to SpoofProfile, which is the symmetric case. |
 | `spoof_xdp_interface` | `string` | SpoofXDPInterface, when set to a NIC name (e.g. "eth0"), attaches an XDP/eBPF program to that device to receive the tunnel's forged-source packets in the kernel fast path, before the normal socket stack — higher throughput and lower CPU under load than the default raw-socket receive. Pure Go (no clang or libbpf), opt-in, and best-effort: if the kernel is too old or the attach or verifier fails, the carrier logs it and silently falls back to the ordinary raw/UDP receive, so a working tunnel is never lost to it. Empty disables it. Linux only; needs CAP_BPF/CAP_NET_ADMIN in addition to the carrier's CAP_NET_RAW. |
 
+## [server.naive]
+
+| Key | Type | Description |
+|---|---|---|
+| `binary` | `string` | Binary is the absolute path to the compatible sing-box server binary; the initial integration is tested with v1.14.2. |
+| `certificate` | `string` | Certificate is the absolute path to the PEM certificate chain. Renew externally; validated certificate/key replacements reload the tunnel automatically. |
+| `key` | `string` | Key is the absolute path to the certificate's PEM private key. |
+| `listen` | `string` | Listen is the public TCP host:port for HTTP/2, separate from the loopback server.bind_addr. |
+| `password` | `string` | Password is the proxy account's secret, separate from server.token. |
+| `username` | `string` | Username is the proxy account accepted from the official Naive client. |
+
+## [server.xray]
+
+| Key | Type | Description |
+|---|---|---|
+| `binary` | `string` | Binary is the absolute path to official Xray, tested with v26.3.27. |
+| `certificate` | `string` | Certificate is the XHTTP PEM chain; externally renewed valid replacements reload automatically. |
+| `host` | `string` | Host is the optional shared XHTTP HTTP host; empty uses server_name. |
+| `key` | `string` | Key is the XHTTP PEM private key paired with certificate. |
+| `listen` | `string` | Listen is the public TCP host:port, separate from the loopback server.bind_addr. |
+| `mode` | `string` | Mode selects xhttp or reality and must match the client. |
+| `path` | `string` | Path is the private XHTTP path shared with the client; unused by REALITY. |
+| `private_key` | `string` | PrivateKey is the secret 32-byte unpadded base64url X25519 REALITY key. |
+| `server_name` | `string` | ServerName is the DNS name in the XHTTP certificate or REALITY target's TLS identity. |
+| `short_id` | `string` | ShortID is the shared 16-character hexadecimal REALITY identifier. |
+| `target` | `string` | Target is an explicit reachable TLS1.3/H2 host:port used as the REALITY cover endpoint; choose one you control. |
+| `uuid` | `string` | UUID is the canonical VLESS account UUID shared with the client. |
+
 ## [server]
 
 | Key | Type | Description |
@@ -195,6 +250,7 @@ them both ends have to agree on. This says what exists.
 | `mux_session` | `int` | MuxSession is how many multiplexed sessions the tunnel keeps open. Only the mux transports read it; a preset fills it in. |
 | `mux_streambuffer` | `int` | MaxStreamBuffer is the per-stream receive window, in bytes. Filled from a preset. |
 | `mux_version` | `int` | MuxVersion is the smux protocol version. Negotiated with the peer, so the two ends may differ and the lower wins. |
+| `naive` | `NaiveServerConfig` | Naive optionally wraps the loopback TCP reverse listener in HTTP/2 with a tunnel-owned sing-box helper; experimental and disabled when empty. |
 | `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and what a bulk transfer does not notice. |
 | `ports` | `[]string` | Ports are the forwarded ports this server exposes, as "443", "8080=127.0.0.1:80", "443-450" or "10.0.0.5:443". See docs/port-mappings.md for every form. |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on 127.0.0.1:6060. Off by default and loopback-only: its heap dump contains this tunnel's token. |
@@ -213,6 +269,7 @@ them both ends have to agree on. This says what exists.
 | `transport` | `TransportType` | Transport is the carrier this tunnel uses. Both ends must name the same one; see docs/transports.md for what each is for. |
 | `web_bind` | `string` | WebBind is the address the sniffer/monitor page listens on. It has no authentication of any kind and reports the host's CPU, memory, disk and network along with the tunnel's status and per-port traffic, so it defaults to 127.0.0.1 and is reached over an SSH tunnel: ssh -L 2060:127.0.0.1:2060 root@server Set it to 0.0.0.0 to serve it on every interface as it used to be, or to one address to serve it on a private network only. |
 | `web_port` | `int` | WebPort is the port the per-tunnel monitor page listens on. 0 turns it off. |
+| `xray` | `XrayServerConfig` | Xray optionally wraps the loopback reverse TCP listener in XHTTP/TLS or RAW/REALITY using a tunnel-owned official helper. |
 | `zero_copy` | `bool` | ZeroCopy lets the kernel move the bytes of forwarded connections directly between the two sockets, without them passing through this process. It is faster and it is the least proven path here, so it is off by default and turned on per tunnel. |
 
 ---
@@ -238,4 +295,4 @@ them both ends have to agree on. This says what exists.
 
 ---
 
-*Generated from `config/` on 2026-09-27. Last verified against Backpack v1.8.5.*
+*Generated from `config/` on 2026-10-08. Last verified against Backpack v1.8.5.*

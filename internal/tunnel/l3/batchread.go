@@ -20,7 +20,7 @@ import "net"
 // which is why this is the one batching change worth making here.
 //
 // It is a capability, not a requirement. Only the plain UDP carrier has a
-// socket recvmmsg can be pointed at; the obfuscated, QUIC, SNI and multipath
+// socket recvmmsg can be pointed at; the obfuscated, QUIC and SNI
 // carriers each do their own work per datagram and are left reading one at a
 // time, which is what they did before.
 //

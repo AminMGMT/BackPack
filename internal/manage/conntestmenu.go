@@ -57,6 +57,7 @@ func connTestIranMenu() {
 		return
 	}
 	preset := presets[pick]
+	tui.StopIfInputGone()
 
 	// Every transport is tested; what needs root is left out only without it.
 	// IP spoofing is checked as the IP Spoofing Tester checks it, both ways,
@@ -67,8 +68,10 @@ func connTestIranMenu() {
 		tui.Warn("Not Root — Direct, PCK And IP Spoofing Are Left Out.")
 	}
 
+	ctx, stop := connTestContext()
+	defer stop()
 	tui.Info("Starting The Test Tunnels...")
-	s, link, err := StartConnTestIran(ConnTestOptions{Host: host, Direct: direct,
+	s, link, err := StartConnTestIran(ConnTestOptions{Context: ctx, Host: host, Direct: direct,
 		Preset: preset, SpoofSrc: spoof})
 	if err != nil {
 		tui.Error(err.Error())
@@ -76,6 +79,9 @@ func connTestIranMenu() {
 		return
 	}
 	defer s.Close()
+	if s.realityTarget != "" {
+		tui.Info("REALITY Cover Selected: " + s.realityTarget)
+	}
 
 	fmt.Println()
 	tui.Info("Test Link (On The Kharej: sudo backpack → 0 → Kharej):")
@@ -83,8 +89,6 @@ func connTestIranMenu() {
 	fmt.Println()
 	tui.Warn(fmt.Sprintf("Waiting For The Kharej (Up To %d Min, Ctrl+C Stops).", int(connTestJoinWait.Minutes())))
 
-	ctx, stop := connTestContext()
-	defer stop()
 	select {
 	case <-s.Joined():
 	case <-ctx.Done():

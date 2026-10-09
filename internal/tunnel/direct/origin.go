@@ -273,14 +273,15 @@ func relayDatagrams(ctx context.Context, stream net.Conn, backend net.Conn) {
 	// stream -> socket
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buf := make([]byte, maxDatagram)
+		var buf []byte
 		for {
-			n, err := network.ReadDatagram(stream, buf)
+			var err error
+			buf, err = network.ReadDatagramInto(stream, buf)
 			if err != nil {
 				return
 			}
 			// The socket is connected, so a plain write reaches the backend.
-			if _, err := backend.Write(buf[:n]); err != nil {
+			if _, err := backend.Write(buf); err != nil {
 				return
 			}
 		}

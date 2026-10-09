@@ -100,7 +100,7 @@ func FileLocations() {
 
 // transportLabel returns a friendly "TCP — plain & fast" style label.
 func transportLabel(value string) string {
-	for _, g := range transportGroups {
+	for _, g := range cliTransportGroups() {
 		for _, e := range g.entries {
 			if e.value == value {
 				return e.label

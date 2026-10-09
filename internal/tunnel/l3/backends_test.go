@@ -2,8 +2,10 @@ package l3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -168,5 +170,43 @@ func TestTheRotationSurvivesTheCounterWrapping(t *testing.T) {
 		if got := len(p.order()); got != 3 {
 			t.Fatalf("order has %d members, want 3", got)
 		}
+	}
+}
+
+func TestUDPBackendCooldownUsesOnlyExplicitReadFailures(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		cool bool
+	}{
+		{"refused backend", context.Background(), &net.OpError{Op: "read", Net: "udp", Err: errors.New("connection refused")}, true},
+		{"silence or idle", context.Background(), os.ErrDeadlineExceeded, false},
+		{"closed socket", context.Background(), &net.OpError{Op: "read", Net: "udp", Err: net.ErrClosed}, false},
+		{"canceled read", context.Background(), context.Canceled, false},
+		{"expired read", context.Background(), context.DeadlineExceeded, false},
+		{"canceled parent", canceled, errors.New("backend error"), false},
+		{"expired parent", expired, errors.New("backend error"), false},
+		{"no error", context.Background(), nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			member := &backendMember{}
+			flow := &udpFlow{member: member}
+			before := time.Now()
+			flow.noteBackendReadError(tc.ctx, tc.err)
+			down := member.downUntil.Load()
+			if tc.cool {
+				if down < before.Add(backendCooldown).UnixNano() || down > time.Now().Add(backendCooldown).UnixNano() {
+					t.Fatal("explicit read failure did not use the backend cooldown")
+				}
+			} else if down != 0 {
+				t.Fatal("silence or shutdown cooled a UDP backend")
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/handlers"
 	"github.com/backpack/backpack/internal/utils/network"
@@ -72,6 +73,8 @@ type TcpConfig struct {
 	// Stealth wraps every accepted tunnel connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// ManagedHelper requires explicit directional-EOF framing from the peer.
+	ManagedHelper bool
 }
 
 func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -243,6 +246,9 @@ func (s *TcpTransport) tunnelPort(g *tcpGen) tcpTunnelPort {
 // connection.
 func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 	conn := raw
+	if s.config.ManagedHelper {
+		conn = naive.WrapDuplex(conn)
+	}
 
 	// In stealth mode the Noise handshake is completed first, so everything
 	// after it — the announcement, the control channel, the data conns — reads

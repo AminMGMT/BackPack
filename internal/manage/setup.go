@@ -1,13 +1,21 @@
 package manage
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net"
+	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/tui"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 	"github.com/backpack/backpack/internal/utils/network"
 )
 
@@ -28,10 +36,12 @@ type transportEntry struct {
 // by. They were offered here long after they had stopped being able to carry
 // traffic in this shape. They are chosen under Direct, where the single session
 // is what they can actually serve.
-var transportGroups = []struct {
+type transportGroup struct {
 	label, desc string
 	entries     []transportEntry
-}{
+}
+
+var transportGroups = []transportGroup{
 	{"TCP", "reliable and simple — the safe default", []transportEntry{
 		{"TCP", "plain & fast — start here if unsure", "tcp"},
 		{"TCP Mux", "many streams over few connections — multiplexed", "tcpmux"},
@@ -51,19 +61,337 @@ var transportGroups = []struct {
 	}},
 }
 
+// The terminal collects helper credentials; the web form cannot collect them.
+// Keep these selections out of the ordinary transport API until it can.
+func cliTransportGroups() []transportGroup {
+	return append(append([]transportGroup(nil), transportGroups...), transportGroup{
+		"HTTPS", "encrypted reverse TCP — Linux, matching versions on both sides", []transportEntry{
+			{"Naive / HTTP2", "HTTPS proxy — certificate or a private trust file", "naive"},
+			{"XHTTP / TLS", "HTTP/2 streaming — certificate or a private trust file", "xhttp"},
+			{"REALITY / Vision", "TLS cover endpoint — no local certificate required", "reality"},
+		},
+	})
+}
+
+func managedTransport(value string) bool {
+	return value == "naive" || value == "xhttp" || value == "reality"
+}
+
+func selectedTransport(s TunnelSpec) string {
+	if s.NaiveServer.Enabled() || s.NaiveClient.Enabled() {
+		return "naive"
+	}
+	if s.XrayServer.Enabled() {
+		return s.XrayServer.Mode
+	}
+	if s.XrayClient.Enabled() {
+		return s.XrayClient.Mode
+	}
+	return s.Transport
+}
+
+func managedEndpoint(s TunnelSpec) string {
+	if s.Role == "server" {
+		if s.NaiveServer.Enabled() {
+			return s.NaiveServer.Listen
+		}
+		if s.XrayServer.Enabled() {
+			return s.XrayServer.Listen
+		}
+		return s.BindAddr
+	}
+	if s.NaiveClient.Enabled() {
+		return s.NaiveClient.Server
+	}
+	if s.XrayClient.Enabled() {
+		return s.XrayClient.Server
+	}
+	return s.RemoteAddr
+}
+
+func clearManagedTransport(s *TunnelSpec) {
+	s.NaiveServer, s.NaiveClient = config.NaiveServerConfig{}, config.NaiveClientConfig{}
+	s.XrayServer, s.XrayClient = config.XrayServerConfig{}, config.XrayClientConfig{}
+}
+
+func managedHelperPath(tool string) string {
+	version := map[string]string{"naive": "v154.0.8037.49-4", "sing-box": "v1.14.2", "xray": "v26.3.27"}[tool]
+	return filepath.Join("/usr/local/lib/backpack/helpers", tool, version+"-"+runtime.GOARCH, tool)
+}
+
+func defaultString(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+func managedSecret(label, current, suggested string) string {
+	if current != "" {
+		value := tui.Prompt(label + " (Empty = Keep Current): ")
+		if value == "" {
+			return current
+		}
+		return value
+	}
+	if suggested != "" {
+		return tui.PromptDefault(label, suggested)
+	}
+	return tui.Prompt(label + ": ")
+}
+
+func managedCertificate(s TunnelSpec, host string, cert, key string) (string, string, bool) {
+	choice := tui.ChooseOpt("HTTPS Certificate", []tui.Option{
+		{Title: "Existing Certificate And Key", Desc: "use PEM files, including an existing Let's Encrypt certificate"},
+		{Title: "Generate Private Certificate", Desc: "copy its public PEM to Kharej and set the CA file there"},
+	})
+	switch choice {
+	case 0:
+		cert = tui.PromptDefault("Certificate File (fullchain.pem)", cert)
+		key = tui.PromptDefault("Private Key File (privkey.pem)", key)
+	case 1:
+		host = tui.PromptDefault("Certificate Hostname Or IP (What Kharej Dials)", host)
+		if host == "" {
+			tui.Error("A certificate hostname or IP is required.")
+			return "", "", false
+		}
+		var err error
+		cert, key, err = EnsureSelfSignedCert(s.Name+"-https", host)
+		if err != nil {
+			tui.Error(err.Error())
+			return "", "", false
+		}
+		tui.Info("Copy Only The Public Certificate To Kharej: " + cert)
+	default:
+		return "", "", false
+	}
+	return cert, key, true
+}
+
+func managedUUID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", err
+	}
+	id[6], id[8] = id[6]&15|64, id[8]&63|128
+	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]), nil
+}
+
+func managedRealityKey(current string) (string, string, error) {
+	var key *ecdh.PrivateKey
+	var err error
+	if current == "" {
+		key, err = ecdh.X25519().GenerateKey(rand.Reader)
+	} else {
+		var raw []byte
+		raw, err = base64.RawURLEncoding.DecodeString(current)
+		if err == nil {
+			key, err = ecdh.X25519().NewPrivateKey(raw)
+		}
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("invalid REALITY private key: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(key.Bytes()), base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), nil
+}
+
+func validateManagedSpec(s TunnelSpec) error {
+	var c config.Config
+	if _, err := toml.Decode(s.Render(), &c); err != nil {
+		return err
+	}
+	if err := naive.Validate(&c); err != nil {
+		return err
+	}
+	return naive.ValidateXray(&c)
+}
+
+func managedEndpointClash(s TunnelSpec) string {
+	for _, t := range List() {
+		if t.Role != s.Role || strings.EqualFold(t.Name, s.Name) {
+			continue
+		}
+		other, err := LoadSpec(t.Name)
+		if err != nil {
+			continue
+		}
+		if s.Role == "client" && strings.EqualFold(managedEndpoint(s), managedEndpoint(other)) {
+			return fmt.Sprintf("Tunnel %q already connects to this HTTPS endpoint; choose another endpoint.", t.Name)
+		}
+	}
+	return ""
+}
+
+// setupManagedCarrier collects a complete role-specific configuration before
+// modifying the caller. The public endpoint and private reverse port are distinct.
+func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
+	if !managedTransport(chosen) || (s.Role != "server" && s.Role != "client") {
+		tui.Error("Invalid managed HTTPS transport or tunnel role.")
+		return false
+	}
+	if runtime.GOOS != "linux" {
+		tui.Error("Managed HTTPS transports require Linux.")
+		return false
+	}
+	n := *s
+	wasManaged := managedTransport(selectedTransport(n))
+	internal := "3080"
+	if wasManaged {
+		if n.Role == "server" {
+			internal = addrPort(n.BindAddr)
+		} else {
+			internal = addrPort(n.RemoteAddr)
+		}
+	}
+	tui.Info("TCP Forwarding Only. Set The Same Internal Port And Security Token On Both Sides.")
+	internal = strings.TrimSpace(tui.PromptDefault("Internal Reverse Port On Iran (Must Match Kharej)", internal))
+	if !validPort(internal) || internal == addrPort(public) {
+		tui.Error("The internal port must be valid and differ from the public HTTPS port.")
+		return false
+	}
+	n.Transport = "tcp"
+	n.AcceptUDP, n.SimpleAuth, n.LoadBalance, n.HealthFailover = false, false, false, false
+	n.FallbackAddrs, n.FallbackTransports = nil, nil
+	n.FallbackDwell, n.SOMark = 0, 0
+	n.Proxy, n.LocalAddr, n.Interface, n.EdgeIP = "", "", "", ""
+	n.ACMEDomain, n.ACMEEmail = "", ""
+	if n.Role == "server" {
+		n.BindAddr = net.JoinHostPort("127.0.0.1", internal)
+	} else {
+		n.RemoteAddr = net.JoinHostPort("127.0.0.1", internal)
+	}
+	clearManagedTransport(&n)
+	if chosen == "naive" {
+		if n.Role == "server" {
+			x := s.NaiveServer
+			x.Binary = tui.PromptDefault("Sing-Box Binary", defaultString(x.Binary, managedHelperPath("sing-box")))
+			x.Listen = public
+			x.Username = tui.PromptDefault("Naive Username (Same On Kharej)", defaultString(x.Username, "backpack"))
+			x.Password = managedSecret("Naive Password (Same On Kharej)", x.Password, randomToken(32))
+			var ok bool
+			x.Certificate, x.Key, ok = managedCertificate(n, host, x.Certificate, x.Key)
+			if !ok {
+				return false
+			}
+			n.NaiveServer = x
+		} else {
+			x := s.NaiveClient
+			x.Binary = tui.PromptDefault("NaiveProxy Binary", defaultString(x.Binary, managedHelperPath("naive")))
+			x.Server = public
+			x.Username = tui.PromptDefault("Naive Username (From Iran)", defaultString(x.Username, "backpack"))
+			x.Password = managedSecret("Naive Password (From Iran)", x.Password, "")
+			x.CAFile = tui.PromptDefault("CA File (Required For A Private Certificate; Empty For Public TLS)", x.CAFile)
+			n.NaiveClient = x
+		}
+	} else {
+		id, serverName, path, shortID := "", host, "", ""
+		if n.Role == "server" {
+			id, serverName, path, shortID = s.XrayServer.UUID, defaultString(s.XrayServer.ServerName, host), s.XrayServer.Path, s.XrayServer.ShortID
+		} else {
+			id, serverName, path, shortID = s.XrayClient.UUID, defaultString(s.XrayClient.ServerName, host), s.XrayClient.Path, s.XrayClient.ShortID
+		}
+		if id == "" && n.Role == "server" {
+			var err error
+			id, err = managedUUID()
+			if err != nil {
+				tui.Error(err.Error())
+				return false
+			}
+		}
+		id = tui.PromptDefault("VLESS UUID (Same On Both Sides)", id)
+		serverName = tui.PromptDefault("TLS Server Name (REALITY: Cover Hostname)", serverName)
+		if chosen == "xhttp" {
+			if path == "" && n.Role == "server" {
+				path = "/" + randomToken(24)
+			}
+			path = tui.PromptDefault("XHTTP Path (Same On Both Sides)", path)
+		} else {
+			if shortID == "" && n.Role == "server" {
+				var raw [8]byte
+				if _, err := rand.Read(raw[:]); err != nil {
+					tui.Error(err.Error())
+					return false
+				}
+				shortID = hex.EncodeToString(raw[:])
+			}
+			shortID = tui.PromptDefault("REALITY Short ID (Same On Both Sides)", shortID)
+		}
+		if n.Role == "server" {
+			x := config.XrayServerConfig{Listen: public, Mode: chosen, UUID: id, ServerName: serverName, Path: path}
+			x.Binary = tui.PromptDefault("Xray Binary", defaultString(s.XrayServer.Binary, managedHelperPath("xray")))
+			if chosen == "xhttp" {
+				x.Host = tui.PromptDefault("HTTP Host (Optional; Same On Kharej)", s.XrayServer.Host)
+				var ok bool
+				x.Certificate, x.Key, ok = managedCertificate(n, serverName, s.XrayServer.Certificate, s.XrayServer.Key)
+				if !ok {
+					return false
+				}
+			} else {
+				x.ShortID = shortID
+				x.Target = tui.PromptDefault("REALITY Cover Endpoint (Reachable TLS 1.3/H2 Host:Port)", s.XrayServer.Target)
+				key := managedSecret("REALITY Private Key (Empty = Generate On First Setup)", s.XrayServer.PrivateKey, "")
+				var pub string
+				var err error
+				x.PrivateKey, pub, err = managedRealityKey(key)
+				if err != nil {
+					tui.Error(err.Error())
+					return false
+				}
+				tui.Info("REALITY Public Key For Kharej: " + pub)
+			}
+			n.XrayServer = x
+		} else {
+			x := config.XrayClientConfig{Server: public, Mode: chosen, UUID: id, ServerName: serverName, Path: path}
+			x.Binary = tui.PromptDefault("Xray Binary", defaultString(s.XrayClient.Binary, managedHelperPath("xray")))
+			if chosen == "xhttp" {
+				x.Host = tui.PromptDefault("HTTP Host (Optional; From Iran)", s.XrayClient.Host)
+				x.CAFile = tui.PromptDefault("CA File (Required For A Private Certificate; Empty For Public TLS)", s.XrayClient.CAFile)
+			} else {
+				x.ShortID = shortID
+				x.PublicKey = tui.PromptDefault("REALITY Public Key (From Iran)", s.XrayClient.PublicKey)
+			}
+			n.XrayClient = x
+		}
+	}
+	tui.StopIfInputGone()
+	if err := validateManagedSpec(n); err != nil {
+		tui.Error("HTTPS configuration: " + err.Error())
+		return false
+	}
+	if why := managedEndpointClash(n); why != "" {
+		tui.Error(why)
+		return false
+	}
+	if n.Role == "server" && !fileExists(app.ConfigPath(n.Name)) {
+		for _, addr := range []string{public, n.BindAddr} {
+			if busy := reverseBusyPorts(n.Ports, addr, "tcp"); len(busy) > 0 {
+				tui.Error("HTTPS ports conflict with forwarded ports: " + strings.Join(busy, ", "))
+				return false
+			}
+			if portHeld(addr) {
+				tui.Error("Listener already in use: " + addr)
+				return false
+			}
+		}
+	}
+	*s = n
+	return true
+}
+
 // chooseTransport walks the family menu and then the variant menu. It returns
 // an empty string when the user backs out at either level.
 func chooseTransport() string {
+	groups := cliTransportGroups()
 	for {
-		groupOpts := make([]tui.Option, len(transportGroups))
-		for i, g := range transportGroups {
+		groupOpts := make([]tui.Option, len(groups))
+		for i, g := range groups {
 			groupOpts[i] = tui.Option{Title: g.label, Desc: g.desc}
 		}
 		gi := tui.ChooseOpt("Select Transport Family", groupOpts)
 		if gi < 0 {
 			return ""
 		}
-		group := transportGroups[gi]
+		group := groups[gi]
 
 		entryOpts := make([]tui.Option, len(group.entries))
 		for i, e := range group.entries {
@@ -153,7 +481,7 @@ func applyManualTuning(s *TunnelSpec) {
 	// transport would take the setting and quietly ignore it. It is the
 	// fastest path and the least proven one; nothing about it reaches the
 	// wire, so the two ends need not agree.
-	if s.Transport == "tcp" {
+	if s.Transport == "tcp" && !managedTransport(selectedTransport(*s)) {
 		s.ZeroCopy = tui.Confirm("Zero-Copy Forwarding (Experimental)", s.ZeroCopy)
 	}
 

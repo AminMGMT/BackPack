@@ -31,9 +31,13 @@ func ManageTunnels() {
 		tui.Clear()
 		opts := make([]tui.Option, len(tunnels))
 		for i, t := range tunnels {
+			transport := t.Transport
+			if spec, err := LoadSpec(t.Name); err == nil {
+				transport = selectedTransport(spec)
+			}
 			opts[i] = tui.Option{
 				Title: t.Name,
-				Desc:  fmt.Sprintf("%s %s — %s", t.Role, t.Transport, plainState(t.Service)),
+				Desc:  fmt.Sprintf("%s %s — %s", t.Role, transportLabel(transport), plainState(t.Service)),
 			}
 		}
 
@@ -143,6 +147,12 @@ func editPortsMenu(name string) {
 		tui.Clear()
 		tui.Title("Edit — " + name)
 		fmt.Println()
+		if managedTransport(selectedTransport(spec)) {
+			if !editManagedTunnelMenu(name, spec) {
+				return
+			}
+			continue
+		}
 
 		if spec.Role == "server" {
 			// Shown with its address when the control port is pinned to one,
@@ -388,14 +398,19 @@ func fallbackSummary(addrs []string) string {
 // and ports. Both ends must match, so the user is reminded to switch the peer.
 func changeTunnelTransport(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Info("Current: " + transportLabel(spec.Transport) + " (The Other Side Must Match)")
+	tui.Info("Current: " + transportLabel(selectedTransport(spec)) + " (The Other Side Must Match)")
 	fmt.Println()
 
 	newTransport := chooseTransport()
 	if newTransport == "" {
 		return
 	}
-	if newTransport == spec.Transport {
+	if managedTransport(newTransport) {
+		editManagedSettings(name, spec, newTransport)
+		return
+	}
+	wasManaged := managedTransport(selectedTransport(spec))
+	if newTransport == spec.Transport && !wasManaged {
 		tui.Info("Already In Use.")
 		tui.PressEnter()
 		return
@@ -406,7 +421,23 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 		return
 	}
 
-	if err := ChangeTransport(name, newTransport); err != nil {
+	var err error
+	if wasManaged {
+		endpoint := managedEndpoint(spec)
+		clearManagedTransport(&spec)
+		if spec.Role == "server" {
+			spec.BindAddr = endpoint
+		} else {
+			spec.RemoteAddr = endpoint
+		}
+		err = switchTransport(&spec, newTransport)
+		if err == nil {
+			err = applySpec(spec)
+		}
+	} else {
+		err = ChangeTransport(name, newTransport)
+	}
+	if err != nil {
 		tui.Error("Failed: " + err.Error())
 		tui.PressEnter()
 		return
@@ -414,6 +445,81 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 	tui.Success("Transport: " + transportLabel(newTransport) + " — Restarted.")
 	tui.Warn("Switch The Other Side Too.")
 	tui.PressEnter()
+}
+
+func editManagedSettings(name string, spec TunnelSpec, chosen string) {
+	label := "Public HTTPS Listen Address (IP:Port)"
+	if spec.Role == "client" {
+		label = "Iran HTTPS Address (Hostname Or IP:Port)"
+	}
+	public := tui.PromptDefault(label, managedEndpoint(spec))
+	host := addrHost(public, "")
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		host = ""
+	}
+	if spec.AcceptUDP || len(spec.FallbackAddrs) > 0 || len(spec.FallbackTransports) > 0 ||
+		spec.Proxy != "" || spec.Interface != "" || spec.LocalAddr != "" || spec.SOMark != 0 || spec.LoadBalance || spec.HealthFailover {
+		tui.Warn("This HTTPS Transport Supports TCP Only; UDP, Proxies, Routing Bindings And Fallbacks Will Be Disabled.")
+		if !tui.Confirm("Continue With TCP Forwarding Only", false) {
+			return
+		}
+	}
+	if !setupManagedCarrier(&spec, chosen, public, host) {
+		tui.PressEnter()
+		return
+	}
+	summariseReverse(spec, "", "")
+	if !tui.Confirm("Save HTTPS Settings And Restart This Side", true) {
+		return
+	}
+	tui.StopIfInputGone()
+	if err := applySpec(spec); err != nil {
+		tui.Error("Failed: " + err.Error())
+	} else {
+		tui.Success("HTTPS Settings Saved — Restarted.")
+		tui.Warn("Configure The Other Side With The Matching Settings.")
+	}
+	tui.PressEnter()
+}
+
+// Managed carriers keep the internal target private. Their public endpoint,
+// certificate and credentials are edited together so one restart applies them.
+func editManagedTunnelMenu(name string, spec TunnelSpec) bool {
+	chosen := selectedTransport(spec)
+	tui.Info("Transport       : " + transportLabel(chosen))
+	tui.Info("HTTPS Endpoint  : " + managedEndpoint(spec))
+	internal := spec.BindAddr
+	if spec.Role == "client" {
+		internal = spec.RemoteAddr
+	}
+	tui.Info("Internal Target : " + internal)
+	opts := []tui.Option{
+		{Title: "HTTPS Settings", Desc: "public endpoint, internal port, certificate and credentials"},
+		{Title: "Transport", Desc: "change the protocol on both sides"},
+		{Title: "Preset", Desc: "tune the TCP engine"},
+		{Title: "TCP MSS Clamp", Desc: "for a path that drops full-size packets"},
+	}
+	actions := []func(){
+		func() { editManagedSettings(name, spec, chosen) },
+		func() { changeTunnelTransport(name, spec) },
+		func() { changeTunnelPreset(name, spec) },
+		func() { editMSS(name, spec) },
+	}
+	if spec.Role == "server" {
+		tui.Info("Forwarded Ports : " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))
+		opts = append(opts, tui.Option{Title: "Forwarded Ports", Desc: "TCP services on Kharej"}, tui.Option{Title: "Limits", Desc: "connections and bandwidth"})
+		actions = append(actions, func() { changeForwardedPorts(name, spec) }, func() { editLimits(name, spec) })
+	}
+	if len(ConfigHistory(name)) > 0 {
+		opts = append(opts, tui.Option{Title: "Undo A Change", Desc: "restore an earlier config"})
+		actions = append(actions, func() { editConfigHistory(name) })
+	}
+	idx := tui.ChooseOpt("Edit HTTPS Tunnel", opts)
+	if idx < 0 || idx >= len(actions) {
+		return false
+	}
+	actions[idx]()
+	return true
 }
 
 // onOff renders a boolean the way the rest of the menus read.

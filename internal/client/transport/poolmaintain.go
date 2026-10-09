@@ -58,6 +58,8 @@ type poolSizer struct {
 	size int
 	// aggressive selects the tighter factors: grow sooner, shrink later.
 	aggressive bool
+	// mux says open includes traffic-carrying physical sessions.
+	mux bool
 
 	// open counts connections sitting in the pool right now.
 	open *int32
@@ -86,6 +88,7 @@ func (p poolSizer) launch() {
 
 // maintain fills the pool and then keeps it the right size until ctx ends.
 func (p poolSizer) maintain() {
+	var quietSince time.Time
 	for i := 0; i < p.size; i++ { // initial pool filling
 		p.launch()
 	}
@@ -133,6 +136,7 @@ func (p poolSizer) maintain() {
 			}
 
 		case <-tickerLoad.C:
+			load.spare = !p.mux
 			// The load over the last ten seconds, and the average pool size
 			// over the same window. +9 before the divide is a ceiling: a pool
 			// that was needed at all should not round down to "not needed".
@@ -149,6 +153,13 @@ func (p poolSizer) maintain() {
 			// the same place — through CountedConn or through AddBytes.
 			mbps := load.mbps()
 
+			quiet := float64(taken+x) < float64(openAvg)*y && mbps < max(openAvg, 1)*(poolScaleMbpsPerConn/2)
+			if !quiet {
+				quietSince = time.Time{}
+			} else if quietSince.IsZero() {
+				quietSince = time.Now()
+			}
+
 			// The pool is allowed to outgrow its configured size, which from
 			// outside is indistinguishable from a leak. Publish what it is
 			// doing and why, so the panel can say "8 configured, 19 open,
@@ -160,12 +171,14 @@ func (p poolSizer) maintain() {
 
 			switch {
 			case grow:
+				quietSince = time.Time{}
 				p.log.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s",
 					newPoolSize, newPoolSize+1, openAvg, taken, mbps)
 				newPoolSize++
 				p.launch()
 
-			case float64(taken+x) < float64(openAvg)*y && newPoolSize > p.size:
+			case quiet && time.Since(quietSince) >= 30*time.Second && newPoolSize > p.size:
+				quietSince = time.Now()
 				p.log.Debugf("decreasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d",
 					newPoolSize, newPoolSize-1, openAvg, taken)
 				newPoolSize--

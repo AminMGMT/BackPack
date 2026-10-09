@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -162,4 +163,46 @@ func waitFor(t *testing.T, captured *capturedLog, want, complaint string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("%s\nlog was:\n%s", complaint, captured.String())
+}
+
+func TestUDPClientsSkipAnExplicitlyRefusedBackend(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux UDP port-unreachable delivery")
+	}
+	held, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := held.LocalAddr().String()
+	held.Close()
+	live := echoUDP(t, "L:")
+	port := freePort(t)
+	front := fmt.Sprintf("127.0.0.1:%d", port)
+	startForwarder(t, []string{front + "=" + dead + "|" + live}, true)
+	missed := 0
+	for i := range 12 {
+		client, err := net.Dial("udp", front)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.SetDeadline(time.Now().Add(150 * time.Millisecond))
+		_, err = client.Write([]byte("healthy-fallback"))
+		if err != nil {
+			client.Close()
+			t.Fatal(err)
+		}
+		buf := make([]byte, 128)
+		n, err := client.Read(buf)
+		client.Close()
+		if err != nil {
+			missed++
+			t.Logf("client%d lost: %v", i, err)
+		} else if string(buf[:n]) != "L:healthy-fallback" {
+			t.Fatalf("unexpected echo %q", buf[:n])
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if missed > 1 {
+		t.Fatalf("%d/12 new UDP clients lost on refused backend despite healthy alternate; after first ECONNREFUSED it should cool down", missed)
+	}
 }

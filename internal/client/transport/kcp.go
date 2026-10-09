@@ -291,6 +291,7 @@ func (c *KcpTransport) channelDialer() {
 // shared with every other client transport — see poolmaintain.go.
 func (c *KcpTransport) poolMaintainer() {
 	poolSizer{
+		mux:        true,
 		ctx:        c.state.Ctx(),
 		log:        c.logger,
 		size:       c.config.ConnPoolSize,

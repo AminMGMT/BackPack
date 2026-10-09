@@ -1,7 +1,9 @@
 package webui
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/backpack/backpack/internal/manage"
@@ -17,7 +19,7 @@ import (
 
 // confChange is one entry as the panel sees it: when, and what was being done.
 type confChange struct {
-	At   int64  `json:"at"`
+	At   string `json:"at"`
 	When string `json:"when"`
 	Note string `json:"note,omitempty"`
 }
@@ -33,7 +35,7 @@ func (s *server) handleConfHistory(w http.ResponseWriter, r *http.Request) {
 	out := make([]confChange, 0, len(hist))
 	for _, c := range hist {
 		out = append(out, confChange{
-			At:   c.At.UnixNano(),
+			At:   strconv.FormatInt(c.At.UnixNano(), 10),
 			When: c.At.Format("2 Jan 15:04"),
 			Note: c.Note,
 		})
@@ -51,15 +53,24 @@ func (s *server) handleConfRestore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Name string `json:"name"`
-		At   int64  `json:"at"`
+	var input struct {
+		Name string          `json:"name"`
+		At   json.RawMessage `json:"at"`
 	}
-	if err := decodeJSON(w, r, &req); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" || req.At == 0 {
+	var moment string
+	if err := json.Unmarshal(input.At, &moment); err != nil {
+		moment = string(input.At)
+	}
+	at, err := strconv.ParseInt(moment, 10, 64)
+	req := struct {
+		Name string
+		At   int64
+	}{input.Name, at}
+	if req.Name == "" || err != nil || req.At == 0 {
 		http.Error(w, "missing name or moment", http.StatusBadRequest)
 		return
 	}

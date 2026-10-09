@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils/network"
@@ -86,14 +87,16 @@ func udpForwardContext(ctx context.Context, timeout time.Duration, stream net.Co
 	stop := context.AfterFunc(ctx, shutdown)
 	defer stop()
 
+	var activity atomic.Int64
+	activity.Store(time.Now().UnixNano())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer shutdown()
-		backendToTunnel(stream, backend, logger, usage, port, sniffer)
+		backendToTunnel(stream, backend, logger, usage, port, sniffer, &activity)
 	}()
 
-	tunnelToBackend(stream, backend, logger, usage, port, sniffer)
+	tunnelToBackend(stream, backend, logger, usage, port, sniffer, &activity)
 	shutdown()
 	<-done
 }
@@ -116,26 +119,31 @@ func dialUDPContext(ctx context.Context, timeout time.Duration, target string) (
 }
 
 // tunnelToBackend unpacks datagrams from the tunnel and sends them on.
-func tunnelToBackend(stream net.Conn, backend *net.UDPConn, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
-	buf := make([]byte, network.MaxDatagram)
+func tunnelToBackend(stream net.Conn, backend *net.UDPConn, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool, activity ...*atomic.Int64) {
+	var buf []byte
 	for {
-		n, err := network.ReadDatagram(stream, buf)
+		var err error
+		buf, err = network.ReadDatagramInto(stream, buf)
 		if err != nil {
 			logger.Tracef("UDP flow to %s ended: %v", backend.RemoteAddr(), err)
 			return
 		}
-		if _, err := backend.Write(buf[:n]); err != nil {
+		if _, err := backend.Write(buf); err != nil {
 			logger.Debugf("failed to write to UDP backend %s: %v", backend.RemoteAddr(), err)
 			return
 		}
+		if len(activity) > 0 {
+			activity[0].Store(time.Now().UnixNano())
+			_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
+		}
 		if sniffer {
-			usage.AddOrUpdatePort(port, uint64(n))
+			usage.AddOrUpdatePort(port, uint64(len(buf)))
 		}
 	}
 }
 
 // backendToTunnel frames the backend's replies and writes them to the tunnel.
-func backendToTunnel(stream net.Conn, backend *net.UDPConn, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool) {
+func backendToTunnel(stream net.Conn, backend *net.UDPConn, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool, activity ...*atomic.Int64) {
 	buf := make([]byte, network.MaxDatagram)
 	for {
 		// The deadline is what ends a flow the far side abandoned without
@@ -144,12 +152,19 @@ func backendToTunnel(stream net.Conn, backend *net.UDPConn, logger *logrus.Logge
 		_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
 		n, err := backend.Read(buf)
 		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() && len(activity) > 0 && time.Since(time.Unix(0, activity[0].Load())) < udpBackendIdle {
+				continue
+			}
 			logger.Tracef("UDP backend %s ended: %v", backend.RemoteAddr(), err)
 			return
 		}
 		if err := network.WriteDatagram(stream, buf[:n]); err != nil {
 			logger.Debugf("failed to write a datagram to the tunnel: %v", err)
 			return
+		}
+		if len(activity) > 0 {
+			activity[0].Store(time.Now().UnixNano())
+			_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
 		}
 		if sniffer {
 			usage.AddOrUpdatePort(port, uint64(n))

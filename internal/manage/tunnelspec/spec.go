@@ -5,8 +5,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage/core"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 )
 
 // Spec is the full description of a tunnel used to render a TOML config.
@@ -14,6 +17,13 @@ type Spec struct {
 	Name      string
 	Role      string // "server" (Iran/edge that exposes ports) or "client" (kharej/origin)
 	Transport string // tcp, tcpmux, udp, kcp, ws, wss, wsmux, wssmux
+
+	// Preserve experimental helper settings across ordinary tunnel edits.
+	// They include credentials and must not enter generic JSON responses.
+	NaiveServer config.NaiveServerConfig `json:"-"`
+	NaiveClient config.NaiveClientConfig `json:"-"`
+	XrayServer  config.XrayServerConfig  `json:"-"`
+	XrayClient  config.XrayClientConfig  `json:"-"`
 
 	// Preset is the performance profile every tuning field was filled from:
 	// balance, turbo or aggressive. Empty means the values were set by hand or
@@ -57,6 +67,9 @@ type Spec struct {
 	KeepAlive      int
 	ChannelSize    int
 	ConnectionPool int
+	DialTimeout    int
+	RetryInterval  int
+	SOPinTCP       bool
 	AggressivePool bool
 	AcceptUDP      bool
 	LogLevel       string
@@ -157,6 +170,9 @@ func monitorBind(configured string) string {
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
 func (s Spec) writeTuning(p func(string, ...any)) {
+	if s.SOPinTCP {
+		p("so_pin_tcp = true\n")
+	}
 	if s.MSS > 0 {
 		p("mss = %d\n", s.MSS)
 	}
@@ -315,6 +331,7 @@ func (s Spec) Render() string {
 		}
 		b.WriteString("]\n")
 		s.writeFallbackChain(p, &b)
+		s.writeHelpers(&b)
 		return b.String()
 	}
 
@@ -344,8 +361,12 @@ func (s Spec) Render() string {
 	if s.HealthFailover {
 		p("health_failover = true\n")
 	}
-	p("retry_interval = %d\n", 3)
-	p("dial_timeout = %d\n", 10)
+	if s.RetryInterval != 0 {
+		p("retry_interval = %d\n", s.RetryInterval)
+	}
+	if s.DialTimeout != 0 {
+		p("dial_timeout = %d\n", s.DialTimeout)
+	}
 	p("log_level = %q\n", s.LogLevel)
 	if s.LogFormat != "" {
 		p("log_format = %q\n", s.LogFormat)
@@ -386,12 +407,75 @@ func (s Spec) Render() string {
 		p("web_port = %d\n", s.WebPort)
 		p("web_bind = %q\n", monitorBind(s.WebBind))
 	}
+	s.writeHelpers(&b)
 	return b.String()
+}
+
+func (s Spec) writeHelpers(b *strings.Builder) {
+	if s.Role == "server" && s.NaiveServer.Enabled() {
+		b.WriteString("\n[server.naive]\n")
+		_ = toml.NewEncoder(b).Encode(s.NaiveServer) // string fields into an infallible strings.Builder
+	} else if s.Role == "client" && s.NaiveClient.Enabled() {
+		b.WriteString("\n[client.naive]\n")
+		_ = toml.NewEncoder(b).Encode(s.NaiveClient)
+	}
+	if s.Role == "server" && s.XrayServer.Enabled() {
+		b.WriteString("\n[server.xray]\n")
+		_ = toml.NewEncoder(b).Encode(s.XrayServer)
+	} else if s.Role == "client" && s.XrayClient.Enabled() {
+		b.WriteString("\n[client.xray]\n")
+		_ = toml.NewEncoder(b).Encode(s.XrayClient)
+	}
+}
+
+func (s Spec) validateXray() error {
+	if !s.XrayServer.Enabled() && !s.XrayClient.Enabled() {
+		return nil
+	}
+	if !((s.Role == "server" && s.XrayServer.Enabled() && !s.XrayClient.Enabled()) ||
+		(s.Role == "client" && s.XrayClient.Enabled() && !s.XrayServer.Enabled())) {
+		return fmt.Errorf("Xray helper settings do not match the tunnel role")
+	}
+	var cfg config.Config
+	if _, err := toml.Decode(s.Render(), &cfg); err != nil {
+		return err
+	}
+	return naive.ValidateXray(&cfg)
+}
+
+func (s Spec) validateNaive() error {
+	if !s.NaiveServer.Enabled() && !s.NaiveClient.Enabled() {
+		return nil
+	}
+	var cfg config.Config
+	if _, err := toml.Decode(s.Render(), &cfg); err != nil {
+		return err
+	}
+	if s.Role == "server" && s.NaiveServer.Enabled() && !s.NaiveClient.Enabled() {
+		return naive.ValidateServer(&cfg.Server)
+	}
+	if s.Role == "client" && s.NaiveClient.Enabled() && !s.NaiveServer.Enabled() {
+		return naive.ValidateClient(&cfg.Client)
+	}
+	return fmt.Errorf("Naive helper settings do not match the tunnel role")
+}
+
+func (s Spec) validateHelpers() error {
+	if err := s.validateNaive(); err != nil {
+		return fmt.Errorf("Naive configuration: %w", err)
+	}
+	if err := s.validateXray(); err != nil {
+		return fmt.Errorf("Xray configuration: %w", err)
+	}
+	return nil
 }
 
 // Save writes the config file, the systemd unit, reloads systemd and starts
 // the tunnel. It returns the service name on success.
 func (s Spec) Save() (string, error) {
+	if err := s.validateHelpers(); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		return "", err
 	}

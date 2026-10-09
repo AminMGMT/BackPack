@@ -2,15 +2,140 @@ package cmd
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/backpack/backpack/config"
 	"github.com/sirupsen/logrus"
 )
+
+func TestHelperCertificateRenewalValidatesBeforeReload(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed helpers support Linux")
+	}
+	for _, helper := range []string{"naive", "xhttp"} {
+		t.Run(helper, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			makePair := func(serial int64) ([]byte, []byte) {
+				t.Helper()
+				public, private, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cert := &x509.Certificate{SerialNumber: big.NewInt(serial), DNSNames: []string{"localhost"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+				if serial == 3 {
+					cert.DNSNames = []string{"wrong.example.org"}
+				}
+				if serial == 4 {
+					cert.NotBefore, cert.NotAfter = time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+				}
+				der, err := x509.CreateCertificate(rand.Reader, cert, cert, public, private)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := x509.MarshalPKCS8PrivateKey(private)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
+			}
+			write := func(path string, body []byte) {
+				t.Helper()
+				if err := os.WriteFile(path, body, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			oldCert, oldKey := makePair(1)
+			newCert, newKey := makePair(2)
+			write(certPath, oldCert)
+			write(keyPath, oldKey)
+			cfg := config.Config{Server: config.ServerConfig{BindAddr: "127.0.0.1:62001", Transport: config.TCP, Token: "renewal-test", Ports: []string{"62003"}, Naive: config.NaiveServerConfig{Binary: binary, Listen: "127.0.0.1:62002", Username: "u", Password: "p", Certificate: certPath, Key: keyPath}}}
+			if helper == "xhttp" {
+				cfg.Server.Naive = config.NaiveServerConfig{}
+				cfg.Server.Xray = config.XrayServerConfig{Binary: binary, Listen: "127.0.0.1:62002", Mode: "xhttp", UUID: "12345678-1234-4234-8234-123456789abc", ServerName: "localhost", Path: "/renewal", Certificate: certPath, Key: keyPath}
+			}
+			path := filepath.Join(dir, "tunnel.toml")
+			file, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := toml.NewEncoder(file).Encode(cfg); err != nil {
+				file.Close()
+				t.Fatal(err)
+			}
+			file.Close()
+			current := loadFixture(t, path)
+			if err := validateConfig(current); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 12*configPollInterval)
+			defer cancel()
+			type result struct {
+				next   *config.Config
+				reason wakeReason
+			}
+			resultC := make(chan result, 1)
+			go func() {
+				next, reason := awaitConfigChange(ctx, context.Background(), path, current)
+				resultC <- result{next, reason}
+			}()
+			// Let the watcher snapshot the original pair, then exercise several polls.
+			time.Sleep(configPollInterval / 2)
+			unchanged := func() {
+				t.Helper()
+				select {
+				case got := <-resultC:
+					t.Fatalf("unusable or identical certificate restarted the generation: %v", got.reason)
+				case <-time.After(configPollInterval + configPollInterval/2):
+				}
+			}
+			write(certPath, oldCert)
+			unchanged()
+			write(certPath, newCert) // key replacement is not complete yet
+			unchanged()
+			write(certPath, oldCert) // abandoned renewal restores the still-running pair
+			unchanged()
+			badCert, badKey := makePair(4)
+			write(certPath, badCert)
+			write(keyPath, badKey)
+			unchanged() // matched but expired replacement must keep the old generation
+			if helper == "xhttp" {
+				wrongCert, wrongKey := makePair(3)
+				write(certPath, wrongCert)
+				write(keyPath, wrongKey)
+				unchanged() // paired and valid dates, but wrong authenticated hostname
+			}
+			write(certPath, newCert)
+			write(keyPath, newKey)
+			select {
+			case got := <-resultC:
+				if got.reason != wakeConfig || got.next == nil || !reflect.DeepEqual(got.next, current) {
+					t.Fatalf("renewal did not reload the same tunnel configuration: %+v", got)
+				}
+			case <-ctx.Done():
+				t.Fatal("valid renewed certificate did not reload without a TOML edit")
+			}
+		})
+	}
+}
 
 func TestMain(m *testing.M) {
 	// These tests deliberately feed the loader broken files, and the complaints

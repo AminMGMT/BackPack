@@ -2,6 +2,11 @@ package network
 
 import (
 	"bytes"
+	"context"
+	"net"
+	"time"
+
+	"github.com/backpack/backpack/internal/tunnel/limits"
 	"io"
 	"testing"
 )
@@ -99,4 +104,123 @@ func (t *iotest) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	return t.r.Read(p[:1])
+}
+
+func TestAdaptiveDatagramsPreserveEverySizeAndFrame(t *testing.T) {
+	sizes := []int{0, 1, 1200, 8192, 16384, 16385, MaxDatagram, 0, 7}
+	var wire bytes.Buffer
+	for _, size := range sizes {
+		if err := WriteDatagram(&wire, bytes.Repeat([]byte{byte(size)}, size)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &iotest{r: &wire}
+	var buf []byte
+	for _, size := range sizes {
+		var err error
+		buf, err = ReadDatagramInto(r, buf)
+		if err != nil || !bytes.Equal(buf, bytes.Repeat([]byte{byte(size)}, size)) {
+			t.Fatalf("payload size %d: got %d bytes, %v", size, len(buf), err)
+		}
+		if cap(buf) > MaxDatagram {
+			t.Fatalf("receive buffer exceeds the wire limit: %d", cap(buf))
+		}
+	}
+	for _, truncated := range [][]byte{{1}, {0, 5, 1, 2}} {
+		got, err := ReadDatagramInto(bytes.NewReader(truncated), buf)
+		if len(got) != 0 || err != io.ErrUnexpectedEOF {
+			t.Fatalf("incomplete frame returned %d bytes and %v", len(got), err)
+		}
+	}
+}
+
+func TestDatagramReceiveBuffersDoNotAllocateAfterWarmup(t *testing.T) {
+	var wire bytes.Buffer
+	if err := WriteDatagram(&wire, bytes.Repeat([]byte{7}, 1200)); err != nil {
+		t.Fatal(err)
+	}
+	r := bytes.NewReader(wire.Bytes())
+	buf, err := ReadDatagramInto(r, nil)
+	if err != nil || cap(buf) != 2048 {
+		t.Fatalf("MTU-sized flow retained %d bytes, error %v", cap(buf), err)
+	}
+	for _, adaptive := range []bool{false, true} {
+		allocs := testing.AllocsPerRun(1000, func() {
+			r.Reset(wire.Bytes())
+			if adaptive {
+				buf, err = ReadDatagramInto(r, buf)
+			} else {
+				_, err = ReadDatagram(r, buf)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		if allocs != 0 {
+			t.Fatalf("adaptive=%t: %.1f allocations per warmed frame", adaptive, allocs)
+		}
+	}
+}
+
+func TestAdaptiveDatagramsKeepConnectionPacing(t *testing.T) {
+	var wire bytes.Buffer
+	for i := 0; i < 2; i++ {
+		if err := WriteDatagram(&wire, bytes.Repeat([]byte{9}, 65000)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn := limits.New(limits.Config{BandwidthMbps: 1}).Wrap(ctx, &datagramMemoryConn{Reader: bytes.NewReader(wire.Bytes())})
+	start := time.Now()
+	var buf []byte
+	for i := 0; i < 2; i++ {
+		var err error
+		buf, err = ReadDatagramInto(conn, buf)
+		if err != nil || len(buf) != 65000 || buf[0] != 9 || buf[len(buf)-1] != 9 {
+			t.Fatalf("paced frame length=%d, error=%v", len(buf), err)
+		}
+	}
+	if time.Since(start) < 20*time.Millisecond {
+		t.Fatal("adaptive framing bypassed the connection's bandwidth limit")
+	}
+}
+
+type datagramMemoryConn struct {
+	net.Conn
+	*bytes.Reader
+}
+
+func (c *datagramMemoryConn) Read(p []byte) (int, error) { return c.Reader.Read(p) }
+
+func BenchmarkDatagramReceiveBuffer(b *testing.B) {
+	var wire bytes.Buffer
+	if err := WriteDatagram(&wire, bytes.Repeat([]byte{1}, 1200)); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("new-flow", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			r := bytes.NewReader(wire.Bytes())
+			buf, err := ReadDatagramInto(r, nil)
+			if err != nil || len(buf) != 1200 {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("warmed-flow", func(b *testing.B) {
+		r := bytes.NewReader(wire.Bytes())
+		buf := make([]byte, 2048)
+		b.ReportAllocs()
+		b.SetBytes(1200)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			r.Reset(wire.Bytes())
+			var err error
+			buf, err = ReadDatagramInto(r, buf)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

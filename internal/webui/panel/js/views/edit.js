@@ -381,6 +381,13 @@ const field = (name, label, hint = '') => `<div class="f"><label>${label}</label
 
 function directMarkup(set) {
   const ports = !!set.holdsPorts;
+  if (set.layer === 4) return `<div class="pane" data-tab="Direct">` + (ports ?
+    field("addr", "Kharej address", "Host and port.") + field("ports", "Forwarded ports") +
+    sw("acceptUdp", "Accept UDP") +
+    `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo<span class="sp"></span></div></div>` +
+    `<div class="two">${field("sessions", "Sessions")}${field("mss", "TCP MSS", "0 is auto.")}</div>` +
+    `<div class="two">${field("maxConnections", "Max connections")}${field("bandwidthMbps", "Bandwidth (Mbit/s)")}</div>` :
+    `<div class="hint">Forwarded ports and tuning are set on the Iran server.</div>`) + `</div>`;
   return `<div class="pane" data-tab="Direct">` +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. Blank leaves a plain TUN tunnel.') +
       sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
@@ -396,7 +403,9 @@ function directMarkup(set) {
     `</div>`;
 }
 
-const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps']);
+const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps', 'sessions', 'mss']);
+
+const directBaseline = new WeakMap();
 
 function readDirect(root) {
   const out = {};
@@ -407,7 +416,9 @@ function readDirect(root) {
     if (typeof v === 'number' && Number.isNaN(v)) return;
     out[n.name] = v;
   });
-  return out;
+  const original = directBaseline.get(root);
+  return original ? Object.fromEntries(Object.entries(out)
+    .filter(([key, value]) => value !== original[key])) : out;
 }
 
 export async function editView(ctx) {
@@ -441,7 +452,7 @@ export async function editView(ctx) {
         if (panes) panes.innerHTML = directMarkup(settings);
         let dopts = { presets: [] };
         try { dopts = await api.directOptions(); } catch (e) { /* the menu stays empty */ }
-        await wireControls(root, { families: [], presets: dopts.presets || [] });
+        await wireControls(root, { families: [], presets: settings.presets || dopts.presets || [] });
         fill(root, settings);
         syncControls(root);
       } else {
@@ -473,6 +484,8 @@ export async function editView(ctx) {
         selectFamilyFor(root, wireControls.opts, settings.transport);
         syncControls(root);
       }
+
+      if (direct) directBaseline.set(root, readDirect(root));
 
       /* Tabs and drawers are the preview's own handlers, rebound in screen.js. */
 

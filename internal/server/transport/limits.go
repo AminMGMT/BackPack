@@ -300,3 +300,6 @@ func waitFor(ctx context.Context, bucket *rate.Limiter, n int) error {
 	}
 	return nil
 }
+
+// UnderlyingConn exposes the socket for directional EOF, without bypassing pacing.
+func (c *limitedConn) UnderlyingConn() net.Conn { return c.Conn }

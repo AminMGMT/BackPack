@@ -1,16 +1,236 @@
 package manage
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"math/big"
 	"net"
 	"os"
+	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/tui"
 )
+
+func TestManagedHTTPSChoicesReachBothReverseWizards(t *testing.T) {
+	for i, want := range []string{"naive", "xhttp", "reality"} {
+		restore := tui.SetInput(strings.NewReader(fmt.Sprintf("%d\n%d\n", len(transportGroups)+1, i+1)))
+		var got string
+		capture(t, func() { got = chooseTransport() })
+		restore()
+		if got != want {
+			t.Fatalf("HTTPS choice %d selected %q, want %s", i+1, got, want)
+		}
+		if transportLabel(got) == strings.ToUpper(got) {
+			t.Fatalf("missing display label for %s", got)
+		}
+	}
+}
+
+func managedWizardFixture(t *testing.T) (binary, cert, key string) {
+	t.Helper()
+	dir := t.TempDir()
+	binary, cert, key = filepath.Join(dir, "helper"), filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(binary, []byte("fixture: configuration validation only\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(11), DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, data := range map[string][]byte{cert: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), key: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: raw})} {
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return
+}
+
+func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("managed helpers require Linux")
+	}
+	binary, cert, key := managedWizardFixture(t)
+	_, pub, err := managedRealityKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "6bf7a33e-7833-4e72-9219-506585657345"
+	port := func() string {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		return addrPort(ln.Addr().String())
+	}
+	for _, role := range []string{"server", "client"} {
+		for _, chosen := range []string{"naive", "xhttp", "reality"} {
+			t.Run(role+"/"+chosen, func(t *testing.T) {
+				internal, outer, entry := port(), port(), port()
+				s := TunnelSpec{Name: "https-menu-proof", Role: role, Transport: "tcp", Token: "shared-token", Ports: []string{"127.0.0.1:" + entry + "=127.0.0.1:8081"}}
+				ApplyPreset(&s, PresetBalance)
+				s.AcceptUDP = true
+				s.FallbackAddrs = []string{"203.0.113.1:443"}
+				s.Proxy = "socks5://127.0.0.1:1080"
+				public := "127.0.0.1:" + outer
+				var input []string
+				if chosen == "naive" {
+					input = []string{internal, binary, "user", "private-password"}
+					if role == "server" {
+						input = append(input, "1", cert, key)
+					} else {
+						input = append(input, cert)
+					}
+				} else if chosen == "xhttp" {
+					input = []string{internal, id, "localhost", "/private-path", binary, ""}
+					if role == "server" {
+						input = append(input, "1", cert, key)
+					} else {
+						input = append(input, cert)
+					}
+				} else {
+					input = []string{internal, id, "cover.example.com", "0123456789abcdef", binary}
+					if role == "server" {
+						input = append(input, "cover.example.com:443", "")
+					} else {
+						input = append(input, pub)
+					}
+				}
+				restore := tui.SetInput(strings.NewReader(strings.Join(input, "\n") + "\n"))
+				var ok bool
+				out := capture(t, func() { ok = setupManagedCarrier(&s, chosen, public, "localhost") })
+				restore()
+				if !ok {
+					t.Fatalf("wizard rejected valid answers:\n%s", out)
+				}
+				if s.Transport != "tcp" || selectedTransport(s) != chosen || managedEndpoint(s) != public || s.AcceptUDP || len(s.FallbackAddrs) != 0 || s.Proxy != "" {
+					t.Fatalf("wizard left incompatible or incorrect settings: %s", s.Render())
+				}
+				var cfg config.Config
+				if _, err := toml.Decode(s.Render(), &cfg); err != nil {
+					t.Fatal(err)
+				}
+				if role == "server" && cfg.Server.BindAddr != "127.0.0.1:"+internal || role == "client" && cfg.Client.RemoteAddr != "127.0.0.1:"+internal {
+					t.Fatal("internal target was not kept private")
+				}
+				if err := validateManagedSpec(s); err != nil {
+					t.Fatal(err)
+				}
+				raw := pendingReverseLink(s, "localhost", linkExtras{})
+				if role == "server" {
+					link, err := DecodeShareLink(raw)
+					if err != nil || link.Tr != chosen || link.Port != outer || link.InnerPort != internal {
+						t.Fatalf("managed setup link: %v %+v", err, link)
+					}
+					peer, err := kharejFromLink(link, LinkApplyOptions{})
+					if err != nil || peer.RemoteAddr != "127.0.0.1:"+internal || managedEndpoint(peer) != "localhost:"+outer || selectedTransport(peer) != chosen {
+						t.Fatalf("managed peer: %v %s", err, peer.Render())
+					}
+					_, expectedPublic, _ := managedRealityKey(s.XrayServer.PrivateKey)
+					if peer.XrayClient.PublicKey != expectedPublic && chosen == "reality" {
+						t.Fatal("REALITY public key changed")
+					}
+					if link.HelperCA == "" && chosen != "reality" {
+						t.Fatal("private certificate trust was omitted")
+					}
+					if link.HelperPublicKey == s.XrayServer.PrivateKey && chosen == "reality" || peer.XrayServer.PrivateKey != "" || strings.Contains(link.HelperCA, "PRIVATE KEY") {
+						t.Fatal("private server key escaped")
+					}
+				} else if raw != "" {
+					t.Fatal("Kharej cannot generate Iran private settings")
+				}
+				summary := capture(t, func() { summariseReverse(s, "localhost", "") })
+				if !strings.Contains(summary, public) || !strings.Contains(summary, transportLabel(chosen)) || strings.Contains(summary, "private-password") || s.XrayServer.PrivateKey != "" && strings.Contains(summary, s.XrayServer.PrivateKey) {
+					t.Fatalf("incorrect or secret-bearing summary:\n%s", summary)
+				}
+			})
+		}
+	}
+}
+
+func TestManagedHTTPSRefusalKeepsTheCurrentSpec(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux helper wizard")
+	}
+	for _, input := range []string{"443\n", "3080\n/nonexistent/helper\nuser\npassword\n\n"} {
+		s := TunnelSpec{Name: "https-menu-refusal", Role: "client", Transport: "wss", RemoteAddr: "203.0.113.1:443", Token: "keep-token", FallbackAddrs: []string{"203.0.113.2:443"}}
+		before := s
+		restore := tui.SetInput(strings.NewReader(input))
+		var ok bool
+		capture(t, func() { ok = setupManagedCarrier(&s, "naive", "203.0.113.1:443", "203.0.113.1") })
+		restore()
+		if ok || !reflect.DeepEqual(before, s) {
+			t.Fatal("invalid HTTPS answers changed the existing spec")
+		}
+	}
+}
+
+func TestManagedHTTPSClientWizardCanBeCancelledBeforeSaving(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux helper wizard")
+	}
+	binary, cert, _ := managedWizardFixture(t)
+	name := "https-menu-cancel-" + randomToken(10)
+	input := []string{"4", "2", "2", "127.0.0.1", "8443", name, "shared-token", "3080", "6bf7a33e-7833-4e72-9219-506585657345", "localhost", "/private-path", binary, "", cert, "1", "n", "n"}
+	restore := tui.SetInput(strings.NewReader(strings.Join(input, "\n") + "\n"))
+	defer restore()
+	out := capture(t, SetupClient)
+	if !strings.Contains(out, "Reverse XHTTP / TLS (Kharej)") || !strings.Contains(out, "127.0.0.1:8443") || strings.Contains(out, "Optional Connection Settings") || !strings.Contains(out, "How Do You Want To Set Up This Side?") {
+		t.Fatalf("incorrect managed wizard flow:\n%s", out)
+	}
+	if _, err := os.Stat("/etc/backpack/" + name + ".toml"); !os.IsNotExist(err) {
+		t.Fatal("cancelled wizard wrote a tunnel config")
+	}
+}
+
+func TestManagedHTTPSInputLossDoesNotReplaceTheSpec(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux helper wizard")
+	}
+	binary, _, _ := managedWizardFixture(t)
+	_, pub, err := managedRealityKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := TunnelSpec{Name: "https-input-loss", Role: "client", Transport: "tcp", RemoteAddr: "127.0.0.1:3080"}
+	s.XrayClient = config.XrayClientConfig{Binary: binary, Mode: "reality", Server: "203.0.113.1:443", UUID: "6bf7a33e-7833-4e72-9219-506585657345", ServerName: "cover.example.com", ShortID: "0123456789abcdef", PublicKey: pub}
+	before := s
+	// All defaults would be valid, but input ends before the last answer.
+	restore := tui.SetInput(strings.NewReader("\n\n\n\n\n"))
+	defer restore()
+	stopped := make(chan struct{})
+	defer tui.OnInputEnd(func() { close(stopped); runtime.Goexit() })()
+	go func() { setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com") }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wizard did not stop after input loss")
+	}
+	if !reflect.DeepEqual(before, s) {
+		t.Fatal("input loss changed the managed spec")
+	}
+}
 
 // The link the Iran summary shows, before anything is written, builds the
 // kharej that matches it: same transport, token and port, the Iran address to

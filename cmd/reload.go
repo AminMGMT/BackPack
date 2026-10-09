@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"net"
 	"os"
 	"reflect"
@@ -69,6 +70,25 @@ func fileFingerprint(path string) (fingerprint, error) {
 	return fingerprint{size: fi.Size(), modTime: fi.ModTime()}, nil
 }
 
+// A renewed helper certificate is not a TOML edit. Compare contents so an
+// identical rewrite does not interrupt traffic, and validate a replacement
+// before stopping the current generation. No helper means no extra file reads.
+func helperTLSIdentity(cfg *config.Config) ([6][sha256.Size]byte, error) {
+	var identity [6][sha256.Size]byte
+	paths := [6]string{cfg.Server.Naive.Certificate, cfg.Server.Naive.Key, cfg.Client.Naive.CAFile, cfg.Server.Xray.Certificate, cfg.Server.Xray.Key, cfg.Client.Xray.CAFile}
+	for i, path := range paths {
+		if path == "" {
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return identity, err
+		}
+		identity[i] = sha256.Sum256(body)
+	}
+	return identity, nil
+}
+
 // wakeReason says why the wait ended.
 type wakeReason int
 
@@ -104,7 +124,11 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 	// Remembering the last fingerprint that was refused — because it did not
 	// parse, or parsed and could not run — keeps a broken file from being
 	// reported once every poll for as long as it stays broken.
-	var lastComplaint fingerprint
+	lastTLS, _ := helperTLSIdentity(current)
+	var lastComplaint struct {
+		config fingerprint
+		tls    [6][sha256.Size]byte
+	}
 
 	ticker := time.NewTicker(configPollInterval)
 	defer ticker.Stop()
@@ -119,15 +143,21 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 		}
 
 		fp, err := fileFingerprint(path)
-		if err != nil || fp == last {
+		tlsIdentity, tlsErr := helperTLSIdentity(current)
+		tlsChanged := tlsErr == nil && tlsIdentity != lastTLS
+		if err != nil || (fp == last && !tlsChanged) {
 			continue
 		}
 		last = fp
+		complaint := struct {
+			config fingerprint
+			tls    [6][sha256.Size]byte
+		}{fp, tlsIdentity}
 
 		next, err := loadConfig(path)
 		if err != nil {
-			if fp != lastComplaint {
-				lastComplaint = fp
+			if complaint != lastComplaint {
+				lastComplaint = complaint
 				logger.Errorf("the configuration file changed but does not parse, so the tunnel keeps running the previous one: %v", err)
 			}
 			continue
@@ -137,14 +167,14 @@ func awaitConfigChange(ctx, gen context.Context, path string, current *config.Co
 		// not parse is: loudly, once per version of the file, and without
 		// touching the tunnel that is running.
 		if err := validateConfig(next); err != nil {
-			if fp != lastComplaint {
-				lastComplaint = fp
+			if complaint != lastComplaint {
+				lastComplaint = complaint
 				logger.Errorf("the configuration file changed but cannot be used, so the tunnel keeps running the previous one: %v", err)
 			}
 			continue
 		}
 
-		if reflect.DeepEqual(current, next) {
+		if reflect.DeepEqual(current, next) && !tlsChanged {
 			logger.Debug("the configuration file changed but means the same thing; leaving the tunnel alone")
 			continue
 		}
@@ -228,6 +258,12 @@ func bindingIsFree(binding listenerBinding) bool {
 func portsInUse(cfg *config.Config) []listenerBinding {
 	var bindings []listenerBinding
 	if cfg.Server.BindAddr != "" {
+		if cfg.Server.Naive.Enabled() {
+			bindings = append(bindings, listenerBinding{network: "tcp", address: cfg.Server.Naive.Listen})
+		}
+		if cfg.Server.Xray.Enabled() {
+			bindings = append(bindings, listenerBinding{network: "tcp", address: cfg.Server.Xray.Listen})
+		}
 		// An empty network means the transport has no ordinary listener to
 		// probe, so the bind address is left out rather than guessed at.
 		if network := tunnelNetwork(cfg.Server.Transport); network != "" {

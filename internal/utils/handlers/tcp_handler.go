@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 	"github.com/sirupsen/logrus"
 )
@@ -43,7 +44,11 @@ func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn
 		done <- struct{}{}
 	}()
 
-	awaitRelay(ctx, done, from, to)
+	if halfCloser(from) != nil && halfCloser(to) != nil {
+		awaitDirectionalRelay(ctx, done, from, to)
+	} else {
+		awaitRelay(ctx, done, from, to)
+	}
 }
 
 // awaitRelay waits for a two-directional copy to finish, or for the context to
@@ -116,8 +121,7 @@ func transferData(from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.
 			} else {
 				logger.Trace("unable to read from the connection: ", err)
 			}
-			from.Close()
-			to.Close()
+			finishDirection(from, to, err)
 			return
 		}
 	}
@@ -206,7 +210,70 @@ func spliceTransfer(from net.Conn, to net.Conn, logger *logrus.Logger, usage *we
 		logger.Trace("zero-copy transfer ended: ", err)
 	}
 
+	finishDirection(from, to, err)
+	return true
+}
+
+// Unwrapping here only identifies capabilities; copies still use the original
+// connections so pacing and usage accounting stay on the data path.
+func relayConn(c net.Conn) net.Conn {
+	for range 8 {
+		raw, counted := metrics.Uncount(c)
+		if counted {
+			c = raw
+			continue
+		}
+		if wrapper, ok := c.(interface{ UnderlyingConn() net.Conn }); ok {
+			c = wrapper.UnderlyingConn()
+			continue
+		}
+		return c
+	}
+	return nil
+}
+
+// TCP and QUIC both carry directional EOF without changing the tunnel wire.
+// Other transports retain their existing full-close behavior.
+func halfCloser(c net.Conn) interface{ CloseWrite() error } {
+	switch conn := relayConn(c).(type) {
+	case *net.TCPConn:
+		return conn
+	case *network.QUICStreamConn:
+		return conn
+	case interface {
+		CloseWrite() error
+		PreservesDirectionalEOF()
+	}:
+		return conn
+	default:
+		return nil
+	}
+}
+func finishDirection(from, to net.Conn, err error) {
+	if (err == nil || errors.Is(err, io.EOF)) && halfCloser(from) != nil {
+		if conn := halfCloser(to); conn != nil && conn.CloseWrite() == nil {
+			return
+		}
+	}
 	from.Close()
 	to.Close()
-	return true
+}
+func awaitDirectionalRelay(ctx context.Context, done <-chan struct{}, from, to net.Conn) {
+	finished := 0
+	for finished < 2 {
+		select {
+		case <-done:
+			finished++
+		case <-ctx.Done():
+			from.Close()
+			to.Close()
+			for finished < 2 {
+				<-done
+				finished++
+			}
+			return
+		}
+	}
+	from.Close()
+	to.Close()
 }

@@ -256,6 +256,7 @@ func (c *QuicTransport) channelDialer() {
 // shared with every other client transport — see poolmaintain.go.
 func (c *QuicTransport) poolMaintainer() {
 	poolSizer{
+		mux:        true,
 		ctx:        c.state.Ctx(),
 		log:        c.logger,
 		size:       c.config.ConnPoolSize,

@@ -351,15 +351,34 @@ func (f *Forwarder) noteBackend(m portmap.Mapping, err error) {
 // udpFlow is one client's conversation with a backend. UDP has no connection,
 // so a flow is recognised by its source address and ends when it goes quiet.
 type udpFlow struct {
-	backend  *net.UDPConn
-	member   *backendMember // counted against it while the flow lives
-	lastSeen atomic.Int64   // unix nanoseconds
+	backend  net.Conn
+	member   *backendMember     // counted against it while the flow lives
+	cancel   context.CancelFunc // releases pacing when this flow closes
+	lastSeen atomic.Int64       // unix nanoseconds
+}
+
+func (f *udpFlow) close() {
+	f.cancel()
+	_ = f.backend.Close()
 }
 
 func (f *udpFlow) touch() { f.lastSeen.Store(time.Now().UnixNano()) }
 
 func (f *udpFlow) idle(now time.Time, limit time.Duration) bool {
 	return now.Sub(time.Unix(0, f.lastSeen.Load())) > limit
+}
+
+// UDP dial succeeds even when nothing listens. An explicit backend read error
+// is the failure signal; silence, idle reaping and shutdown say nothing about
+// the backend and must not keep a one-way UDP service out of rotation.
+func (f *udpFlow) noteBackendReadError(ctx context.Context, err error) {
+	var netErr net.Error
+	if err == nil || ctx.Err() != nil || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) {
+		return
+	}
+	f.member.downUntil.Store(time.Now().Add(backendCooldown).UnixNano())
 }
 
 func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func()) error {
@@ -377,7 +396,7 @@ func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func(
 	var flows sync.Map // client address string -> *udpFlow
 	defer func() {
 		flows.Range(func(_, v any) bool {
-			v.(*udpFlow).backend.Close()
+			v.(*udpFlow).close()
 			return true
 		})
 	}()
@@ -445,14 +464,15 @@ func (f *Forwarder) udpFlowFor(
 		return nil, errors.New("udp backend did not yield a UDP socket")
 	}
 
-	flow := &udpFlow{backend: udpConn, member: member}
+	flowCtx, cancelFlow := context.WithCancel(ctx)
+	flow := &udpFlow{backend: f.limiter.Wrap(flowCtx, udpConn), member: member, cancel: cancelFlow}
 	flow.touch()
 
 	// Two goroutines could reach here for the same client at once; only one
 	// flow may survive, or the loser's reply reader would write into a socket
 	// nobody is tracking.
 	if actual, loaded := flows.LoadOrStore(key, flow); loaded {
-		udpConn.Close()
+		flow.close()
 		member.done()
 		f.limiter.Release()
 		return actual.(*udpFlow), nil
@@ -476,7 +496,7 @@ func (f *Forwarder) pumpUDPReplies(
 ) {
 	defer func() {
 		flows.Delete(key)
-		flow.backend.Close()
+		flow.close()
 		flow.member.done()
 		f.stats.active.Add(-1)
 		// Paired with the Acquire in udpFlowFor. This pump is where a flow ends
@@ -499,6 +519,7 @@ func (f *Forwarder) pumpUDPReplies(
 			if errors.As(err, &netErr) && netErr.Timeout() && !flow.idle(time.Now(), udpFlowIdle) {
 				continue // the client is still sending; keep waiting for a reply
 			}
+			flow.noteBackendReadError(ctx, err)
 			return
 		}
 		flow.touch()
@@ -520,7 +541,7 @@ func (f *Forwarder) reapUDPFlows(ctx context.Context, flows *sync.Map) {
 			flows.Range(func(_, v any) bool {
 				if flow := v.(*udpFlow); flow.idle(now, udpFlowIdle) {
 					// Closing wakes the reply pump, which does the removal.
-					flow.backend.Close()
+					flow.close()
 				}
 				return true
 			})
