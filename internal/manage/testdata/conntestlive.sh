@@ -46,8 +46,20 @@ IP=$!
 for i in $(seq 60); do [ -s "$W/link" ] && break; sleep 1; done
 if [ ! -s "$W/link" ]; then echo "RESULT FAIL the Iran side printed no link"; cat "$W/iran.out"; exit 1; fi
 
+HP=""
+if [ -n "${HOLD_DIRECT_PORT:-}" ]; then
+  ip netns exec kharej python3 "$(dirname "$0")/conntestportholder.py" "$W/link" "$W/heldport" > "$W/holder.out" 2>&1 &
+  HP=$!
+  for i in $(seq 20); do [ -s "$W/heldport" ] && break; sleep 0.1; done
+  if [ ! -s "$W/heldport" ]; then
+    kill "$HP" "$IP" 2>/dev/null
+    echo "RESULT FAIL could not occupy the original Kharej port"; cat "$W/holder.out"; exit 1
+  fi
+fi
+
 ip netns exec kharej "$BIN" link apply "$(cat "$W/link")" > "$W/kharej.out" 2>&1
 KC=$?
+if [ -n "$HP" ]; then kill "$HP" 2>/dev/null; wait "$HP" 2>/dev/null; fi
 wait $IP
 IC=$?
 echo "--- iran"; cat "$W/iran.out"

@@ -96,8 +96,7 @@ func connTestIranMenu() {
 		tui.PressEnter()
 		return
 	case <-time.After(connTestJoinWait):
-		tui.Error("The kharej never checked in — nothing reached port " +
-			fmt.Sprint(s.link.Coord) + " — neither over TCP nor UDP.")
+		tui.Error("The Kharej never checked in. " + ctCoordinatorFailure(s.link.Host, s.link.Coord).Error())
 		tui.PressEnter()
 		return
 	}
