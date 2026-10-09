@@ -428,7 +428,17 @@ func TestTunnelStatsCountTraffic(t *testing.T) {
 	packet := ipv4Packet(1, 2, 3, 4)
 	across(t, p.dialDev, p.listenDev, packet)
 
+	// The listener counts a packet before handing it on, so its figures are
+	// settled by the time across returns. The dialler can only count once the
+	// carrier has accepted the write, and the far end may deliver before that
+	// goroutine runs again — a reading is allowed to be behind (see
+	// TestStatsAreNeverInternallyImpossible). Wait for it, then require the
+	// exact figures.
 	out := p.dialer.Stats()
+	for deadline := time.Now().Add(5 * time.Second); out.PacketsOut == 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+		out = p.dialer.Stats()
+	}
 	if out.PacketsOut != 1 || out.BytesOut != uint64(len(packet)) {
 		t.Fatalf("dialler sent %d packets / %d bytes, want 1 / %d",
 			out.PacketsOut, out.BytesOut, len(packet))
