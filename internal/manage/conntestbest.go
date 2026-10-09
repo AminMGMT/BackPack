@@ -29,22 +29,23 @@ import (
 
 // ConnTestBest is the recommendation table's content.
 type ConnTestBest struct {
-	Transport string  `json:"tr,omitempty"` // "direct pck"
-	Mbps      float64 `json:"mb,omitempty"`
-	RTTms     int     `json:"rt,omitempty"`
-	JitterMs  int     `json:"ji,omitempty"`
-	WorstMs   int     `json:"wo,omitempty"`
-	LossPct   float64 `json:"lo,omitempty"`
-	Preset    string  `json:"pr,omitempty"`
-	BDPKB     int     `json:"bd,omitempty"`
-	PathMTU   int     `json:"pm,omitempty"` // 0: not measured
-	MSS       int     `json:"ms,omitempty"` // 0: automatic
-	DirectMTU int     `json:"dm,omitempty"` // measured by the best direct tunnel; 0: none
-	DirectBy  string  `json:"db,omitempty"`
-	KeepAlive int     `json:"ka,omitempty"`
-	Heartbeat int     `json:"hb,omitempty"`
-	FECData   int     `json:"fd,omitempty"`
-	FECParity int     `json:"fp,omitempty"`
+	Transport  string  `json:"tr,omitempty"` // "direct pck"
+	Mbps       float64 `json:"mb,omitempty"`
+	UploadMbps float64 `json:"upload_mb,omitempty"`
+	RTTms      int     `json:"rt,omitempty"`
+	JitterMs   int     `json:"ji,omitempty"`
+	WorstMs    int     `json:"wo,omitempty"`
+	LossPct    float64 `json:"lo,omitempty"`
+	Preset     string  `json:"pr,omitempty"`
+	BDPKB      int     `json:"bd,omitempty"`
+	PathMTU    int     `json:"pm,omitempty"` // 0: not measured
+	MSS        int     `json:"ms,omitempty"` // 0: automatic
+	DirectMTU  int     `json:"dm,omitempty"` // measured by the best direct tunnel; 0: none
+	DirectBy   string  `json:"db,omitempty"`
+	KeepAlive  int     `json:"ka,omitempty"`
+	Heartbeat  int     `json:"hb,omitempty"`
+	FECData    int     `json:"fd,omitempty"`
+	FECParity  int     `json:"fp,omitempty"`
 }
 
 // The path-MTU probe's bounds: 576 is what every IPv4 path must carry, 1500 an
@@ -169,6 +170,7 @@ func ctComputeBest(results []ConnTestResult, cases []*connTestCase, pmtu int, lo
 		if r.Status == ctOK {
 			b.Transport = r.Kind + " " + r.Transport
 			b.Mbps = r.Mbps
+			b.UploadMbps = r.UploadMbps
 		}
 		q = ctQuality(r, cases[best].rtts)
 		b.RTTms = int(q.Avg.Milliseconds())
@@ -181,7 +183,7 @@ func ctComputeBest(results []ConnTestResult, cases []*connTestCase, pmtu int, lo
 	// buffers hold, Aggressive's are worth their memory.
 	b.Preset = PresetTurbo
 	if b.Mbps > 0 && b.RTTms > 0 {
-		bdp := b.Mbps * 1e6 / 8 * float64(b.RTTms) / 1000
+		bdp := math.Max(b.Mbps, b.UploadMbps) * 1e6 / 8 * float64(b.RTTms) / 1000
 		b.BDPKB = int(bdp / 1024)
 		if bdp > 4<<20 {
 			b.Preset = PresetAggressive
@@ -287,6 +289,10 @@ func ConnTestBestTable(b ConnTestBest) string {
 	if b.Transport != "" {
 		kind, tr, _ := strings.Cut(b.Transport, " ")
 		row("Transport", ctKind(kind)+" "+ctName(tr), fmt.Sprintf("%.1f Mbps, %s", b.Mbps, link))
+		if b.UploadMbps > 0 {
+			row("Download", fmt.Sprintf("%.1f Mbps", b.Mbps), "4 streams, verified receiver bytes")
+			row("Upload", fmt.Sprintf("%.1f Mbps", b.UploadMbps), "4 streams, verified receiver bytes")
+		}
 	} else {
 		row("Transport", "-", "nothing carried traffic steadily")
 	}

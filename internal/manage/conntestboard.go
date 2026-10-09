@@ -86,7 +86,17 @@ func ctRow(r ConnTestResult) string {
 		done = r.Tried
 	}
 	return fmt.Sprintf(ctRowFormat, ctEmoji(r.Status), ctKind(r.Kind), ctName(r.Transport),
-		strings.ToUpper(r.Status), fmt.Sprintf("%d/%d", done, total), ctBar(float64(done)/float64(total)))
+		ctStatusLabel(r), fmt.Sprintf("%d/%d", done, total), ctBar(float64(done)/float64(total)))
+}
+
+func ctStatusLabel(r ConnTestResult) string {
+	if r.Phase == "speed" {
+		return "SPEED"
+	}
+	if r.Phase == "speed-queued" {
+		return "QUEUED"
+	}
+	return strings.ToUpper(r.Status)
 }
 
 func ctRule() string { return strings.Repeat("─", 60) }
@@ -119,6 +129,9 @@ func ConnTestTable(results []ConnTestResult) string {
 			}
 			if r.Mbps > 0 {
 				speed = fmt.Sprintf("%.1f Mbps", r.Mbps)
+				if r.UploadMbps > 0 {
+					speed = fmt.Sprintf("↓ %.1f / ↑ %.1f Mbps (4 streams)", r.Mbps, r.UploadMbps)
+				}
 			}
 			fmt.Fprintf(&b, "%s %-26s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)
 		}
