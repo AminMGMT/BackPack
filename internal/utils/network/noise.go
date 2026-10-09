@@ -253,6 +253,12 @@ type noiseConn struct {
 	readMu  sync.Mutex
 	recv    *noise.CipherState
 	readBuf []byte // decrypted plaintext not yet handed to the caller
+	// inBuf is the record as it comes off the wire, read and then decrypted in
+	// place. The read side had the write side's problem in reverse: a fresh
+	// buffer for every frame and another for the cipher's output. readBuf
+	// always points into inBuf, and the next record is only read once readBuf
+	// is empty, so reusing it never overwrites plaintext still owed to a caller.
+	inBuf []byte
 }
 
 // Write encrypts p and sends it as one or more Noise records. It honours
@@ -348,11 +354,12 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 	// carry no payload at all, and returning (0, nil) from Read is the kind of
 	// answer callers are entitled not to expect.
 	for len(c.readBuf) == 0 {
-		frame, err := readNoiseFrame(c.Conn)
+		frame, err := readNoiseFrameInto(c.Conn, c.inBuf)
 		if err != nil {
 			return 0, err
 		}
-		plain, err := c.recv.Decrypt(nil, nil, frame)
+		c.inBuf = frame
+		plain, err := c.recv.Decrypt(frame[:0], nil, frame)
 		if err != nil {
 			// A record that does not authenticate is not a short read to paper
 			// over — the stream's integrity is gone. Surface it.
@@ -396,17 +403,31 @@ func writeNoiseFrame(w io.Writer, msg []byte) error {
 	return nil
 }
 
-// readNoiseFrame reads one length-prefixed message.
+// readNoiseFrame reads one length-prefixed message into a fresh buffer.
 func readNoiseFrame(r io.Reader) ([]byte, error) {
-	var hdr [2]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+	return readNoiseFrameInto(r, nil)
+}
+
+// readNoiseFrameInto reads one length-prefixed message into buf, growing it
+// only when the message does not fit, and returns the message. The length
+// header is read through buf as well: a local array handed to io.ReadFull
+// escapes, which is an allocation per record of its own.
+func readNoiseFrameInto(r io.Reader, buf []byte) ([]byte, error) {
+	if cap(buf) < noiseLenPrefix {
+		buf = make([]byte, noiseLenPrefix, 4096)
+	}
+	hdr := buf[:noiseLenPrefix]
+	if _, err := io.ReadFull(r, hdr); err != nil {
 		return nil, err
 	}
-	n := binary.BigEndian.Uint16(hdr[:])
+	n := int(binary.BigEndian.Uint16(hdr))
 	if n == 0 {
 		return nil, fmt.Errorf("noise: empty frame")
 	}
-	buf := make([]byte, n)
+	if cap(buf) < n {
+		buf = make([]byte, n)
+	}
+	buf = buf[:n]
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
 	}
