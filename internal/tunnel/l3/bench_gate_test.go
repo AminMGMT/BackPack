@@ -52,12 +52,15 @@ type hotPath struct {
 	run    func(b *testing.B)
 }
 
+// The send header now uses spare destination capacity; sealing allocates only
+// the Noise nonce. Opening reuses a header under recvMu and also allocates
+// only its nonce.
 func hotPaths() []hotPath {
 	return []hotPath{
-		{"seal a full-MTU packet", 3 * time.Microsecond, 2, BenchmarkSealFullMTU},
-		{"seal an interactive packet", 1500 * time.Nanosecond, 2, BenchmarkSealInteractive},
-		{"a full-MTU packet round trip", 6 * time.Microsecond, 4, BenchmarkPacketRoundTripFullMTU},
-		{"an interactive packet round trip", 3 * time.Microsecond, 4, BenchmarkPacketRoundTripInteractive},
+		{"seal a full-MTU packet", 3 * time.Microsecond, 1, BenchmarkSealFullMTU},
+		{"seal an interactive packet", 1500 * time.Nanosecond, 1, BenchmarkSealInteractive},
+		{"a full-MTU packet round trip", 6 * time.Microsecond, 2, BenchmarkPacketRoundTripFullMTU},
+		{"an interactive packet round trip", 3 * time.Microsecond, 2, BenchmarkPacketRoundTripInteractive},
 		{"parse a header", 20 * time.Nanosecond, 0, BenchmarkParseHeader},
 		{"consult the replay window", 20 * time.Nanosecond, 0, BenchmarkReplayWindow},
 	}
