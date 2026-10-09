@@ -43,23 +43,40 @@ func TcpDialerVia(ctx context.Context, out *Outbound, remoteAddress string, time
 	backoff := 1 * time.Second // Initial backoff duration
 
 	for i := 0; i < retries; i++ {
-		// Attempt to establish a TCP connection
-		tcpConn, err = attemptTcpDialer(ctx, dialAddress, out, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// DNS, socket setup and proxy negotiation share one attempt budget.
+		attemptCtx := ctx
+		cancelAttempt := func() {}
+		if timeout > 0 {
+			attemptCtx, cancelAttempt = context.WithTimeout(ctx, timeout)
+		}
+		tcpConn, err = attemptTcpDialer(attemptCtx, dialAddress, out, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
 		if err == nil && proxy != nil {
 			proxyConn := tcpConn
-			stop := context.AfterFunc(ctx, func() { proxyConn.Close() })
-			if err = connectThrough(tcpConn, proxy, remoteAddress, timeout); err != nil {
-				tcpConn.Close()
-				err = fmt.Errorf("via %s: %w", proxy, err)
+			stop := context.AfterFunc(attemptCtx, func() { proxyConn.Close() })
+			remaining := timeout
+			if deadline, ok := attemptCtx.Deadline(); ok {
+				remaining = time.Until(deadline)
+			}
+			if err = attemptCtx.Err(); err == nil {
+				err = connectThrough(tcpConn, proxy, remoteAddress, remaining)
 			}
 			stop()
+			if err != nil {
+				tcpConn.Close()
+				tcpConn = nil
+				err = fmt.Errorf("via %s: %w", proxy, err)
+			}
 		}
+		if err == nil && attemptCtx.Err() != nil {
+			tcpConn.Close()
+			err = attemptCtx.Err()
+		}
+		cancelAttempt()
 		if err == nil {
 			// Connection successful
-			if ctx.Err() != nil {
-				tcpConn.Close()
-				return nil, ctx.Err()
-			}
 			return tcpConn, nil
 		}
 
@@ -68,7 +85,8 @@ func TcpDialerVia(ctx context.Context, out *Outbound, remoteAddress string, time
 			break
 		}
 
-		// Log retry attempt and wait before retrying
+		// A cancelled generation must release its retry worker immediately,
+		// including time spent waiting between refused TCP or proxy dials.
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
@@ -113,7 +131,7 @@ func attemptTcpDialer(
 	// host with an AAAA record that does not actually route no longer costs the
 	// whole connection. This is what rathole and gost both do, by dialling the
 	// name rather than an address.
-	localTCPAddr, err := out.localTCPAddr()
+	localTCPAddr, err := out.localTCPAddrContext(ctx)
 	if err != nil {
 		return nil, err
 	}

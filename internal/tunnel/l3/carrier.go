@@ -228,17 +228,13 @@ func openBareCarrier(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr
 	}
 }
 
-// openUDPPaths opens the plain UDP carrier — one socket, or several spread over
-// consecutive ports when the configuration asks for them. See multipath.go for
-// why several, and why only this carrier gets the option.
-func openUDPPaths(cfg Config) (DatagramCarrier, net.Addr, error) {
-	return openUDPPathsContext(context.Background(), cfg)
-}
-
 // Bound DNS before allocating sockets. Resolve the host once for all paths so
 // a rotating DNS answer cannot send different paths to different tunnel peers.
 const carrierResolveTimeout = 12 * time.Second
 
+// openUDPPathsContext opens the plain UDP carrier — one socket, or several
+// spread over consecutive ports when the configuration asks for them. See
+// multipath.go for why several, and why only this carrier gets the option.
 func openUDPPathsContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
 	ctx, cancel := context.WithTimeout(ctx, carrierResolveTimeout)
 	defer cancel()

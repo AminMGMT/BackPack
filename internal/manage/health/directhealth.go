@@ -47,6 +47,11 @@ func directHealthy(t core.Tunnel, pairs [][2]string) (healthy, known bool) {
 	if !strings.HasPrefix(t.Transport, "direct/") {
 		return false, false
 	}
+	// Authenticated sessions outrank sockets, which may belong to a stranger
+	// or remain established long after the mux stopped carrying traffic.
+	if connected, known := engineSaysConnected(t.Name); known {
+		return connected, true
+	}
 
 	if t.Role == "kharej" {
 		// It listens, so it is up when something has connected to its port.
