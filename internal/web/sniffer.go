@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,11 +31,9 @@ type Usage struct {
 	logger      *logrus.Logger
 	sniffer     bool
 	snifferLog  string
-	// mu guards the per-port accounting only. AddOrUpdatePort runs once per
-	// read on every forwarded connection, so nothing slow may ever be done
-	// while holding it — the file writing and the stat collection below have
-	// their own locks for exactly that reason.
-	mu sync.Mutex
+	// Stable per-port atomic counters keep traffic accounting off a shared
+	// mutex. Entries live for this generation and are never detached from
+	// writers during a save; keys are the configured service ports.
 	// Written by the save loop, read by the stats endpoint: two goroutines, no
 	// lock between them, on a plain uint64. Atomic is the cheap fix and does
 	// not put disk work behind the counter's lock.
@@ -186,20 +185,11 @@ func (m *Usage) statsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Usage) AddOrUpdatePort(port int, usage uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Retrieve current usage data for the port
 	value, ok := m.dataStore.Load(port)
-	if ok {
-		// Port exists, update usage
-		portUsage := value.(PortUsage)
-		portUsage.Usage += usage
-		m.dataStore.Store(port, portUsage)
-	} else {
-		// Port does not exist, create new entry
-		m.dataStore.Store(port, PortUsage{Port: port, Usage: usage})
+	if !ok {
+		value, _ = m.dataStore.LoadOrStore(port, &atomic.Uint64{})
 	}
+	value.(*atomic.Uint64).Add(usage)
 }
 
 func (m *Usage) saveUsageData() {
@@ -216,8 +206,8 @@ func (m *Usage) saveUsageData() {
 	file, err := os.Open(m.snifferLog)
 	if err == nil {
 		// If the file exists, decode the JSON data into existingUsageData
-		defer file.Close()
 		err = json.NewDecoder(file).Decode(&existingUsageData)
+		_ = file.Close()
 		if err != nil {
 			m.logger.Errorf("error decoding JSON data: %v", err)
 			return
@@ -230,6 +220,16 @@ func (m *Usage) saveUsageData() {
 
 	// Step 2: Get current usage data from sync.Map
 	currentUsageData := m.collectUsageDataFromSyncMap()
+	committed := false
+	defer func() {
+		if !committed {
+			// Swap separated this snapshot from concurrent additions. Put it
+			// back on any failure so a later save can retry every byte.
+			for _, usage := range currentUsageData {
+				m.AddOrUpdatePort(usage.Port, usage.Usage)
+			}
+		}
+	}()
 
 	// Step 3: Merge the existing and current usage data into a map to avoid duplicates
 	usageMap := make(map[int]PortUsage)
@@ -258,11 +258,6 @@ func (m *Usage) saveUsageData() {
 		mergedUsageData = append(mergedUsageData, usage)
 		total += usage.Usage
 	}
-	// Published once, at the end. Zeroing the counter and adding the ports
-	// back one at a time meant the stats endpoint could read a total that was
-	// part-way through being rebuilt — and, on the tick that reset it, read
-	// zero and report the tunnel as having carried nothing.
-	m.totalTraffic.Store(total)
 
 	// Step 5: Convert merged data to JSON
 	data, err := json.MarshalIndent(mergedUsageData, "", "  ")
@@ -272,10 +267,17 @@ func (m *Usage) saveUsageData() {
 	}
 
 	// Step 6: Write JSON data to file
-	err = os.WriteFile(m.snifferLog, data, 0644)
+	err = m.writeUsageData(data)
 	if err != nil {
 		m.logger.Errorf("error writing usage data to file: %v", err)
+		return
 	}
+	committed = true
+	// Published once, at the end. Zeroing the counter and adding the ports
+	// back one at a time meant the stats endpoint could read a total that was
+	// part-way through being rebuilt — and, on the tick that reset it, read
+	// zero and report the tunnel as having carried nothing.
+	m.totalTraffic.Store(total)
 }
 
 func (m *Usage) getUsageFromFile() []PortUsage {
@@ -353,20 +355,63 @@ func (m *Usage) usageDataWithReadableUsage(usageData []PortUsage) []struct {
 	return result
 }
 
-// collectUsageDataFromSyncMap gathers data from sync.Map
+// collectUsageDataFromSyncMap atomically takes each port's pending usage.
+// A writer may have loaded the counter before this pass, so keep its entry and
+// reset only the value. Deleting it would orphan that writer's next addition.
 func (m *Usage) collectUsageDataFromSyncMap() []PortUsage {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	var usageData []PortUsage
 	m.dataStore.Range(func(key, value interface{}) bool {
-		if portUsage, ok := value.(PortUsage); ok {
-			usageData = append(usageData, portUsage)
-			m.dataStore.Delete(key)
+		if usage := value.(*atomic.Uint64).Swap(0); usage > 0 {
+			usageData = append(usageData, PortUsage{Port: key.(int), Usage: usage})
 		}
 		return true
 	})
 	return usageData
+}
+
+// writeUsageData replaces the log only once a complete new document is ready.
+// A failed write must leave the previous committed totals readable for retry.
+func (m *Usage) writeUsageData(data []byte) error {
+	path := m.snifferLog
+	mode := os.FileMode(0644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		// The old writer followed symlinks. Replace the resolved target,
+		// retaining the configured link and writing in the target directory.
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	} else if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		// A dangling link must not be silently replaced with a regular log.
+		// Keep the pending counters until its destination becomes available.
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".usage-*")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	defer os.Remove(tmp)
+	defer file.Close()
+	if err := file.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // ConvertBytesToReadable converts bytes into a human-readable format (KB, MB, GB)
