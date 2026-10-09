@@ -275,14 +275,13 @@ func ctServeSpeedOrEcho(c net.Conn) {
 	}
 	var total uint64
 	var ack [8]byte
-	err := ctSpeedReceive(c, payload, func(n uint64) error {
+	_ = ctSpeedReceive(c, payload, func(n uint64) error {
 		total += n
 		binary.BigEndian.PutUint64(ack[:], total)
 		_, err := io.Copy(c, bytes.NewReader(ack[:]))
 		return err
 	})
-	if err != nil {
-		binary.BigEndian.PutUint64(ack[:], math.MaxUint64)
-		_, _ = c.Write(ack[:])
-	}
+	// The receive loop only returns on failure or stream closure.
+	binary.BigEndian.PutUint64(ack[:], math.MaxUint64)
+	_, _ = c.Write(ack[:])
 }
