@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,6 +48,9 @@ const QUICInitialPacketSize = 1232
 // timeout, the keepalive that holds a NAT mapping open, and the datagram socket
 // buffers.
 type QUICSettings struct {
+	// DialTimeout bounds name resolution and the initial QUIC handshake as one
+	// attempt. Zero leaves the budget to the caller's context.
+	DialTimeout time.Duration
 	// KeepAlivePeriod sends a PING often enough to keep a NAT/firewall mapping
 	// alive on an otherwise idle tunnel. Zero disables it.
 	KeepAlivePeriod time.Duration
@@ -185,14 +189,23 @@ func QUICListen(bindAddr string, s QUICSettings) (*QUICListener, error) {
 // QUICDial opens a QUIC connection to remoteAddr with the tuning applied. The
 // socket it rides in is bound locally so its buffers can be sized to match.
 func QUICDial(ctx context.Context, remoteAddr string, s QUICSettings) (*quic.Conn, error) {
+	if s.DialTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.DialTimeout)
+		defer cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Resolve before allocating a socket, using the same cancellation and
+	// deadline as the handshake. ResolveUDPAddr uses a background context.
+	remoteUDPAddr, err := resolveQUICAddr(ctx, remoteAddr)
+	if err != nil {
+		return nil, fmt.Errorf("quic: resolve %s: %w", remoteAddr, err)
+	}
 	udpConn, err := bindUDP(":0", s)
 	if err != nil {
 		return nil, err
-	}
-	remoteUDPAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
-	if err != nil {
-		udpConn.Close()
-		return nil, fmt.Errorf("quic: resolve %s: %w", remoteAddr, err)
 	}
 	conn, err := quic.Dial(ctx, udpConn, remoteUDPAddr, quicClientTLS(), s.quicConfig())
 	if err != nil {
@@ -206,6 +219,38 @@ func QUICDial(ctx context.Context, remoteAddr string, s QUICSettings) (*quic.Con
 		udpConn.Close()
 	}()
 	return conn, nil
+}
+
+func resolveQUICAddr(ctx context.Context, address string) (*net.UDPAddr, error) {
+	host, service, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := net.DefaultResolver.LookupPort(ctx, "udp", service)
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return &net.UDPAddr{Port: port}, nil
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, &net.AddrError{Err: "no suitable address found", Addr: address}
+	}
+	// Match ResolveUDPAddr's selection: prefer IPv4 unless the host is in
+	// brackets. Preserve zones for scoped IPv6 literals.
+	chosen := addresses[0]
+	want6 := strings.HasPrefix(address, "[")
+	for _, candidate := range addresses {
+		if (candidate.IP.To4() == nil) == want6 {
+			chosen = candidate
+			break
+		}
+	}
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
 }
 
 // QUICStreamConn adapts a QUIC stream to net.Conn. A stream carries Read, Write,

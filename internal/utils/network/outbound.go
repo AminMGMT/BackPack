@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -58,6 +59,10 @@ type Outbound struct {
 // localTCPAddr resolves the configured source address, or nil when there is
 // none.
 func (o *Outbound) localTCPAddr() (*net.TCPAddr, error) {
+	return o.localTCPAddrContext(context.Background())
+}
+
+func (o *Outbound) localTCPAddrContext(ctx context.Context) (*net.TCPAddr, error) {
 	if o == nil || o.LocalAddr == "" {
 		return nil, nil
 	}
@@ -74,11 +79,41 @@ func (o *Outbound) localTCPAddr() (*net.TCPAddr, error) {
 		}
 		addr = net.JoinHostPort(host, "0")
 	}
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	host, service, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("local_addr %q: %w", o.LocalAddr, err)
 	}
-	return tcpAddr, nil
+	port, err := net.DefaultResolver.LookupPort(ctx, "tcp", service)
+	if err != nil {
+		return nil, fmt.Errorf("local_addr %q: %w", o.LocalAddr, err)
+	}
+	if host == "" {
+		return &net.TCPAddr{Port: port}, nil
+	}
+	// Literal addresses, including scoped IPv6, need no DNS lookup.
+	zone := ""
+	if i := strings.LastIndexByte(host, '%'); i >= 0 {
+		host, zone = host[:i], host[i+1:]
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return &net.TCPAddr{IP: ip, Port: port, Zone: zone}, nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("local_addr %q: %w", o.LocalAddr, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("local_addr %q: no addresses found", o.LocalAddr)
+	}
+	// Match ResolveTCPAddr's IPv4 preference for a multi-address source name.
+	chosen := ips[0]
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			chosen = ip
+			break
+		}
+	}
+	return &net.TCPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
 }
 
 // control applies the options that live on the socket itself. It runs inside

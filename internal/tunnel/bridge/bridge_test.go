@@ -55,6 +55,14 @@ func TestJoinCarriesBothWaysAndPassesTheEnd(t *testing.T) {
 	if _, err := backend.Read(buf); err != io.EOF {
 		t.Fatalf("the user's end did not reach the backend as an end: %v", err)
 	}
+	// The backend may need the upload's EOF before producing its response.
+	time.Sleep(20 * time.Millisecond)
+	if _, err := backend.Write([]byte("tail")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(user, buf); err != nil || string(buf) != "tail" {
+		t.Fatalf("response after upload EOF: %q, %v", buf, err)
+	}
 	backend.Close()
 	select {
 	case <-done:
