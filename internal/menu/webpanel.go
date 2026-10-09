@@ -242,7 +242,7 @@ func panelCertMenu(cfg webui.Config) {
 		return
 	}
 
-	if err := webui.Save(cfg); err != nil {
+	if err := webui.SaveTLS(cfg); err != nil {
 		tui.Error("Failed: " + err.Error())
 		tui.PressEnter()
 		return

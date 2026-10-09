@@ -59,7 +59,7 @@ func usedSoFar(configPath string) uint64 {
 func quotaReached(configPath string) bool {
 	dir, name := quotaDir(configPath)
 	q, err := quota.Load(dir, name)
-	return err == nil && q.Reached(usedSoFar(configPath))
+	return err != nil || q.Reached(usedSoFar(configPath))
 }
 
 // awaitQuota holds a tunnel that has used its limit up until the limit is
@@ -70,9 +70,13 @@ func awaitQuota(ctx context.Context, configPath string) (ok, waited bool) {
 		return true, false
 	}
 	dir, name := quotaDir(configPath)
-	q, _ := quota.Load(dir, name)
-	logger.Warnf("traffic limit reached: %s of %s used — the tunnel stays offline until its limit is raised",
-		humanBytes(usedSoFar(configPath)), humanBytes(q.Limit))
+	q, err := quota.Load(dir, name)
+	if err != nil {
+		logger.Warnf("could not read traffic quota: %v — the tunnel stays offline until it can be read", err)
+	} else {
+		logger.Warnf("traffic limit reached: %s of %s used — the tunnel stays offline until its limit is raised",
+			humanBytes(usedSoFar(configPath)), humanBytes(q.Limit))
+	}
 	t := time.NewTicker(every(&quotaReread))
 	defer t.Stop()
 	for {
@@ -91,7 +95,12 @@ func awaitQuota(ctx context.Context, configPath string) (ok, waited bool) {
 // watchQuota ends the generation when the running total reaches the limit.
 func watchQuota(gen context.Context, configPath string, end func()) {
 	dir, name := quotaDir(configPath)
-	q, _ := quota.Load(dir, name)
+	q, err := quota.Load(dir, name)
+	if err != nil {
+		logger.Warnf("could not read traffic quota: %v — taking the tunnel offline", err)
+		end()
+		return
+	}
 	check := time.NewTicker(every(&quotaCheck))
 	defer check.Stop()
 	reread := time.NewTicker(every(&quotaReread))

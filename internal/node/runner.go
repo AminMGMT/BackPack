@@ -163,8 +163,11 @@ func (r *SSHRunner) exec(ctx context.Context, name string, t SSHTarget, req Requ
 		}
 	}
 
-	stdout, err := execRequest(c, raw)
+	stdout, err := execRequest(ctx, c, raw)
 	if err != nil {
+		if ctx.Err() != nil {
+			return Response{}, ctx.Err()
+		}
 		// A connection that has gone stale looks exactly like a server that has
 		// gone away, so the connection is dropped and the call tried once more
 		// on a fresh one. Only once: a second failure is the server.
@@ -173,7 +176,7 @@ func (r *SSHRunner) exec(ctx context.Context, name string, t SSHTarget, req Requ
 		if derr != nil {
 			return Response{}, err
 		}
-		stdout, err = execRequest(c, raw)
+		stdout, err = execRequest(ctx, c, raw)
 		if err != nil {
 			return Response{}, backpackMissing(err)
 		}
@@ -421,11 +424,11 @@ func upgradeCommand(url, bin string) string {
 // tunnel's token. A server too old to read stdin says its argument is not
 // base64; it gets the request the old way, as the argument, which is no worse
 // than it always was — and upgrading it ends that.
-func execRequest(c *ssh.Client, raw []byte) ([]byte, error) {
+func execRequest(ctx context.Context, c *ssh.Client, raw []byte) ([]byte, error) {
 	bin := quote(app.BinPath)
-	out, err := runOver(c, bin+" node exec -", []byte(b64(raw)+"\n"))
+	out, err := runOver(ctx, c, bin+" node exec -", []byte(b64(raw)+"\n"))
 	if err != nil && strings.Contains(err.Error(), "not valid base64") {
-		return runOver(c, bin+" node exec "+quote(b64(raw)), nil)
+		return runOver(ctx, c, bin+" node exec "+quote(b64(raw)), nil)
 	}
 	return out, err
 }

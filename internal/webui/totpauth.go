@@ -1,7 +1,10 @@
 package webui
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -32,9 +35,10 @@ const twoFactorTTL = 3 * time.Minute
 const pendingMaxFails = 3
 
 type pendingEntry struct {
-	ip      string
-	expires time.Time
-	fails   int // code attempts reserved against this sign-in so far
+	ip          string
+	expires     time.Time
+	fails       int // code attempts reserved against this sign-in so far
+	credentials string
 }
 
 // pendingStore holds the tokens that have passed the password and not the code.
@@ -47,7 +51,11 @@ func newPendingStore() *pendingStore {
 	return &pendingStore{entries: map[string]pendingEntry{}}
 }
 
-func (p *pendingStore) create(ip string) string {
+func (p *pendingStore) create(ip string, credentials ...string) string {
+	fingerprint := authFingerprint()
+	if len(credentials) > 0 {
+		fingerprint = credentials[0]
+	}
 	tok := randomHex(24)
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -57,7 +65,7 @@ func (p *pendingStore) create(ip string) string {
 			delete(p.entries, t)
 		}
 	}
-	p.entries[tok] = pendingEntry{ip: ip, expires: now.Add(twoFactorTTL)}
+	p.entries[tok] = pendingEntry{ip: ip, expires: now.Add(twoFactorTTL), credentials: fingerprint}
 	return tok
 }
 
@@ -68,13 +76,14 @@ func (p *pendingStore) create(ip string) string {
 // a token that could be presented from anywhere would be a password bypass with
 // a three-minute window.
 func (p *pendingStore) valid(tok, ip string) bool {
+	fingerprint := authFingerprint()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[tok]
 	if !ok {
 		return false
 	}
-	if time.Now().After(e.expires) {
+	if time.Now().After(e.expires) || e.credentials != fingerprint {
 		delete(p.entries, tok)
 		return false
 	}
@@ -87,10 +96,11 @@ func (p *pendingStore) valid(tok, ip string) bool {
 // that against one password entry; a sign-in whose attempts are used up has
 // ended (valid reports false), and a right code destroys it.
 func (p *pendingStore) attempt(tok, ip string) bool {
+	fingerprint := authFingerprint()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[tok]
-	if !ok || e.ip != ip || time.Now().After(e.expires) || e.fails >= pendingMaxFails {
+	if !ok || e.ip != ip || time.Now().After(e.expires) || e.fails >= pendingMaxFails || e.credentials != fingerprint {
 		return false
 	}
 	e.fails++
@@ -104,6 +114,36 @@ func (p *pendingStore) destroy(tok string) {
 	p.mu.Unlock()
 }
 
+// reserved rechecks a previously reserved attempt after it obtains the auth
+// lock. The last allowed attempt is still usable, but a revoked token is not.
+func (p *pendingStore) reserved(tok, ip string) bool {
+	fingerprint := authFingerprint()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[tok]
+	return ok && e.ip == ip && time.Now().Before(e.expires) && e.fails > 0 &&
+		e.fails <= pendingMaxFails && e.credentials == fingerprint
+}
+
+func (p *pendingStore) clear() {
+	p.mu.Lock()
+	p.entries = map[string]pendingEntry{}
+	p.mu.Unlock()
+}
+
+func credentialFingerprint(c Config) string {
+	sum := sha256.Sum256([]byte(c.Password + "\x00" + c.TOTPSecret))
+	return hex.EncodeToString(sum[:])
+}
+
+func authFingerprint() string {
+	c, err := readConfig()
+	if err != nil {
+		return ""
+	}
+	return credentialFingerprint(c)
+}
+
 // twoFactorOn reports whether this panel demands a code.
 func twoFactorOn() bool { return Load().TOTPSecret != "" }
 
@@ -114,24 +154,23 @@ func twoFactorOn() bool { return Load().TOTPSecret != "" }
 // operator who has already lost the phone; telling them to use a different
 // field for it is one more thing to get wrong while locked out.
 func checkSecondFactor(given string) bool {
-	c := Load()
-	if c.TOTPSecret == "" {
-		return false
-	}
-	if totpValid(c.TOTPSecret, given, time.Now()) {
-		return true
-	}
-	remaining, ok := useRecoveryCode(c.RecoveryHashes, given)
-	if !ok {
-		return false
-	}
-	c.RecoveryHashes = remaining
-	// A recovery code that is spent and not recorded as spent is a code that
-	// works twice, so a failed write refuses the login rather than allowing it.
-	if err := Save(c); err != nil {
-		return false
-	}
-	return true
+	accepted := false
+	_, err := UpdateConfig(func(c *Config) error {
+		if c.TOTPSecret == "" {
+			return nil
+		}
+		if totpValid(c.TOTPSecret, given, time.Now()) {
+			accepted = true
+			return nil
+		}
+		remaining, ok := useRecoveryCode(c.RecoveryHashes, given)
+		if ok {
+			c.RecoveryHashes = remaining
+			accepted = true
+		}
+		return nil
+	})
+	return accepted && err == nil
 }
 
 // TwoFactorStatus is what the Security pane reads.
@@ -173,6 +212,8 @@ func (s *server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
 	switch r.FormValue("action") {
 	case "start":
 		secret, err := newTOTPSecret()
@@ -206,16 +247,15 @@ func (s *server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		c := Load()
-		c.TOTPSecret = secret
-		c.RecoveryHashes = hashes
-		if err := Save(c); err != nil {
+		_, err = UpdateConfig(func(c *Config) error { c.TOTPSecret = secret; c.RecoveryHashes = hashes; return nil })
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		s.enrolMu.Lock()
 		s.enrolling = ""
 		s.enrolMu.Unlock()
+		s.pending.clear()
 		writeJSON(w, map[string]any{"enabled": true, "recovery": codes})
 
 	case "disable":
@@ -226,13 +266,12 @@ func (s *server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "that is not the panel password", http.StatusForbidden)
 			return
 		}
-		c := Load()
-		c.TOTPSecret = ""
-		c.RecoveryHashes = nil
-		if err := Save(c); err != nil {
+		_, err := UpdateConfig(func(c *Config) error { c.TOTPSecret = ""; c.RecoveryHashes = nil; return nil })
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.pending.clear()
 		writeJSON(w, map[string]any{"enabled": false})
 
 	case "recovery":
@@ -250,8 +289,14 @@ func (s *server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		c.RecoveryHashes = hashes
-		if err := Save(c); err != nil {
+		_, err = UpdateConfig(func(current *Config) error {
+			if current.TOTPSecret != c.TOTPSecret {
+				return fmt.Errorf("two-factor settings changed; try again")
+			}
+			current.RecoveryHashes = hashes
+			return nil
+		})
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -264,7 +309,8 @@ func (s *server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 
 // passwordMatches compares a given password with the panel's, in constant time.
 func passwordMatches(given string) bool {
-	return subtle.ConstantTimeCompare([]byte(given), []byte(Load().Password)) == 1
+	c, err := readConfig()
+	return err == nil && c.Password != "" && subtle.ConstantTimeCompare([]byte(given), []byte(c.Password)) == 1
 }
 
 // TwoFactorEnabled reports whether the panel demands a code. It is exported for
@@ -280,10 +326,8 @@ func TwoFactorEnabled() bool { return twoFactorOn() }
 // hand — asking for the panel password would protect nothing and would leave an
 // operator who has forgotten it with no way back at all.
 func DisableTwoFactor() error {
-	c := Load()
-	c.TOTPSecret = ""
-	c.RecoveryHashes = nil
-	return Save(c)
+	_, err := UpdateConfig(func(c *Config) error { c.TOTPSecret = ""; c.RecoveryHashes = nil; return nil })
+	return err
 }
 
 // RecoveryCodesLeft is how many single-use codes are unspent.
