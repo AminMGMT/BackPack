@@ -2,8 +2,12 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -81,7 +85,11 @@ func (l *limiter) wrap(ctx context.Context, conn net.Conn) net.Conn {
 	if l == nil || l.bucket == nil {
 		return conn
 	}
-	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	return &limitedConn{Conn: conn, bucket: l.bucket, ctx: ctx, cancel: cancel}
 }
 
 // waitBytes charges n bytes against the bandwidth cap, blocking for as long as
@@ -95,7 +103,7 @@ func (l *limiter) waitBytes(ctx context.Context, n int) {
 	if l == nil || l.bucket == nil {
 		return
 	}
-	waitFor(ctx, l.bucket, n)
+	_ = waitFor(ctx, l.bucket, n)
 }
 
 // limitedConn paces a connection's reads and writes against a shared token
@@ -106,29 +114,162 @@ type limitedConn struct {
 	bucket *rate.Limiter
 	// ctx ends with the generation. A connection being paced has to stop
 	// waiting when the tunnel is torn down; see wait.
-	ctx context.Context
+	ctx           context.Context
+	cancel        context.CancelFunc
+	deadlineMu    sync.Mutex
+	readDeadline  pacingDeadline
+	writeDeadline pacingDeadline
+}
+
+func (c *limitedConn) Close() error {
+	c.cancel()
+	return c.Conn.Close()
 }
 
 func (c *limitedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
-		c.wait(n)
+		if waitErr := waitWithDeadline(c.ctx, c.bucket, n, &c.readDeadline); err == nil {
+			err = waitErr
+		}
 	}
 	return n, err
 }
 
 func (c *limitedConn) Write(b []byte) (int, error) {
-	c.wait(len(b))
+	if err := waitWithDeadline(c.ctx, c.bucket, len(b), &c.writeDeadline); err != nil {
+		return 0, err
+	}
 	return c.Conn.Write(b)
 }
 
-// wait blocks long enough to keep within the configured rate.
-func (c *limitedConn) wait(n int) { waitFor(c.ctx, c.bucket, n) }
+// pacingDeadline wakes an in-flight token wait when its socket deadline changes.
+// Updating a deadline never cancels or requeues that operation's reservation.
+type pacingDeadline struct {
+	mu      sync.Mutex
+	when    time.Time
+	changed chan struct{}
+}
+
+func (d *pacingDeadline) set(when time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.when = when
+	if d.changed != nil {
+		close(d.changed)
+		d.changed = nil
+	}
+}
+
+func (d *pacingDeadline) value() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.when
+}
+
+func (d *pacingDeadline) snapshot() (time.Time, <-chan struct{}) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.changed == nil {
+		d.changed = make(chan struct{})
+	}
+	return d.when, d.changed
+}
+
+func (c *limitedConn) SetDeadline(when time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if err := c.Conn.SetDeadline(when); err != nil {
+		return err
+	}
+	c.readDeadline.set(when)
+	c.writeDeadline.set(when)
+	return nil
+}
+
+func (c *limitedConn) SetReadDeadline(when time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if err := c.Conn.SetReadDeadline(when); err != nil {
+		return err
+	}
+	c.readDeadline.set(when)
+	return nil
+}
+
+func (c *limitedConn) SetWriteDeadline(when time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if err := c.Conn.SetWriteDeadline(when); err != nil {
+		return err
+	}
+	c.writeDeadline.set(when)
+	return nil
+}
+
+func waitWithDeadline(ctx context.Context, bucket *rate.Limiter, n int, deadline *pacingDeadline) error {
+	burst := bucket.Burst()
+	for n > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		when := deadline.value()
+		now := time.Now()
+		if !when.IsZero() && !now.Before(when) {
+			return os.ErrDeadlineExceeded
+		}
+		chunk := n
+		if burst > 0 && chunk > burst {
+			chunk = burst
+		}
+		reservation := bucket.ReserveN(now, chunk)
+		if !reservation.OK() {
+			return fmt.Errorf("rate: request of %d exceeds burst %d", chunk, burst)
+		}
+		if delay := reservation.DelayFrom(now); delay > 0 {
+			ready := now.Add(delay)
+			timer := time.NewTimer(delay)
+			for {
+				when, changed := deadline.snapshot()
+				now = time.Now()
+				if err := ctx.Err(); err != nil {
+					timer.Stop()
+					reservation.CancelAt(now)
+					return err
+				}
+				if !when.IsZero() && !now.Before(when) {
+					timer.Stop()
+					reservation.CancelAt(now)
+					return os.ErrDeadlineExceeded
+				}
+				if !now.Before(ready) {
+					timer.Stop()
+					break
+				}
+				wake := ready
+				if !when.IsZero() && when.Before(wake) {
+					wake = when
+				}
+				timer.Reset(wake.Sub(now))
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					reservation.CancelAt(time.Now())
+					return ctx.Err()
+				case <-changed:
+				case <-timer.C:
+				}
+			}
+		}
+		n -= chunk
+	}
+	return nil
+}
 
 // waitFor charges n bytes against a bucket. A request larger than the bucket
 // can never be satisfied in one go, so it is charged in bucket-sized pieces
 // rather than failing.
-func waitFor(ctx context.Context, bucket *rate.Limiter, n int) {
+func waitFor(ctx context.Context, bucket *rate.Limiter, n int) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -150,12 +291,12 @@ func waitFor(ctx context.Context, bucket *rate.Limiter, n int) {
 		// over the configured rate, which is small at realistic limits and
 		// unbounded by anything the caller controls.
 		//
-		// An expired context returns an error here, which is the same "give up
-		// and let the bytes through" path a failed reservation already took:
-		// dropping them would corrupt the stream and blocking would hang it.
+		// A failed wait ends this operation. Letting bytes through after
+		// cancellation would turn teardown into an unpaced write.
 		if err := bucket.WaitN(ctx, chunk); err != nil {
-			return
+			return err
 		}
 		n -= chunk
 	}
+	return nil
 }
