@@ -275,14 +275,16 @@ func ctServeSpeedOrEcho(c net.Conn) {
 	}
 	var total uint64
 	var ack [8]byte
-	err := ctSpeedReceive(c, payload, func(n uint64) error {
+	// ctSpeedReceive returns only when the stream ends — a read error, bytes
+	// that came back different, or the deadline — so the failure marker always
+	// follows it. A client that finished measuring has already closed the
+	// connection and stopped counting; one still measuring is told to stop.
+	_ = ctSpeedReceive(c, payload, func(n uint64) error {
 		total += n
 		binary.BigEndian.PutUint64(ack[:], total)
 		_, err := io.Copy(c, bytes.NewReader(ack[:]))
 		return err
 	})
-	if err != nil {
-		binary.BigEndian.PutUint64(ack[:], math.MaxUint64)
-		_, _ = c.Write(ack[:])
-	}
+	binary.BigEndian.PutUint64(ack[:], math.MaxUint64)
+	_, _ = c.Write(ack[:])
 }
