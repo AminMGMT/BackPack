@@ -140,7 +140,10 @@ func writeAll(from, to net.Conn, data []byte, logger *logrus.Logger, usage *web.
 		totalWritten += w
 	}
 
-	logger.Tracef("read data: %d bytes, written data: %d bytes", len(data), totalWritten)
+	// Avoid boxing byte counts when tracing is disabled.
+	if logger.IsLevelEnabled(logrus.TraceLevel) {
+		logger.Tracef("read data: %d bytes, written data: %d bytes", len(data), totalWritten)
+	}
 	if sniffer {
 		usage.AddOrUpdatePort(remotePort, uint64(totalWritten))
 	}
