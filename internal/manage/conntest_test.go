@@ -232,6 +232,12 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		// The test's trust file is disposable; persistent setup uses its hash.
 		production.NaiveClient.CAFile = testPeer.NaiveClient.CAFile
 		production.XrayClient.CAFile = testPeer.XrayClient.CAFile
+		// An isolated fixture changes only the local executable path; Setup
+		// Links deliberately use the installed helper path on their own host.
+		if os.Getenv("BP_CONNTEST_HELPERS_ROOT") != "" {
+			production.NaiveClient.Binary = testPeer.NaiveClient.Binary
+			production.XrayClient.Binary = testPeer.XrayClient.Binary
+		}
 		if production.NaiveClient != testPeer.NaiveClient || production.XrayClient != testPeer.XrayClient || production.RemoteAddr != testPeer.RemoteAddr || production.Token != testPeer.Token {
 			t.Fatalf("%s production Setup Link differs from the tested helper peer", c.tr)
 		}
