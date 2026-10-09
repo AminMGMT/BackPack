@@ -290,6 +290,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 	if !ok {
 		return
 	}
+	defer ln.Close()
 
 	if s.config.Mode == config.WS {
 		go func() {
@@ -339,10 +340,12 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 
 	<-g.ctx.Done()
 
-	// Gracefully shutdown the server
+	// This generation has ended. Close pending HTTP/TLS setup sockets as
+	// well as the listener; graceful shutdown can wait indefinitely on a
+	// slow request, delaying restart even though its tunnel is already gone.
 	s.logger.Infof("shutting down the webSocket server on %s", addr)
-	if err := server.Shutdown(context.Background()); err != nil {
-		s.logger.Errorf("Failed to gracefully shutdown the server: %v", err)
+	if err := server.Close(); err != nil {
+		s.logger.Errorf("failed to close the websocket listener: %v", err)
 	}
 
 	if s.controlChannel.IsSet() {

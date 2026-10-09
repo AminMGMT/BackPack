@@ -2,9 +2,12 @@ package network
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,4 +95,114 @@ func TestAWSSClientStillReachesAnOlderServer(t *testing.T) {
 		t.Fatalf("an older server was refused: %v", err)
 	}
 	c.Close()
+}
+
+func TestWebSocketUpgradeStopsWithItsAttempt(t *testing.T) {
+	for _, mode := range []config.TransportType{config.WS, config.WSMUX, config.WSS, config.WSSMUX} {
+		for _, cancellation := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/cancel=%t", mode, cancellation), func(t *testing.T) {
+				requested := make(chan struct{})
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				unblock := func() { releaseOnce.Do(func() { close(release) }) }
+				srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					close(requested)
+					<-release
+					http.Error(w, "released", http.StatusServiceUnavailable)
+				}))
+				if mode == config.WSS || mode == config.WSSMUX {
+					srv.StartTLS()
+				} else {
+					srv.Start()
+				}
+				defer srv.Close()
+				defer unblock()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				timeout := 150 * time.Millisecond
+				if cancellation {
+					timeout = 5 * time.Second
+				}
+				done := make(chan error, 1)
+				go func() {
+					conn, err := WebSocketDialer(ctx, nil, srv.Listener.Addr().String(), "", "/channel", timeout,
+						time.Second, true, "upgrade-cancellation", mode, true, 1, 0, 0, 0)
+					if conn != nil {
+						conn.Close()
+					}
+					done <- err
+				}()
+				select {
+				case <-requested:
+				case <-time.After(2 * time.Second):
+					t.Fatal("HTTP upgrade request never arrived")
+				}
+				if cancellation {
+					cancel()
+				}
+				select {
+				case err := <-done:
+					want := context.DeadlineExceeded
+					if cancellation {
+						want = context.Canceled
+					}
+					if !errors.Is(err, want) {
+						t.Fatalf("upgrade returned %v, want %v", err, want)
+					}
+				case <-time.After(500 * time.Millisecond):
+					unblock()
+					select {
+					case <-done:
+					case <-time.After(2 * time.Second):
+						t.Fatal("released upgrade did not finish")
+					}
+					t.Fatal("HTTP upgrade ignored attempt cancellation or dial timeout")
+				}
+			})
+		}
+	}
+}
+
+func TestSuccessfulWebSocketOutlivesItsSetupContext(t *testing.T) {
+	for _, mode := range []config.TransportType{config.WS, config.WSS} {
+		t.Run(string(mode), func(t *testing.T) {
+			up := websocket.Upgrader{}
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := up.Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				kind, payload, err := conn.ReadMessage()
+				if err == nil {
+					_ = conn.WriteMessage(kind, payload)
+				}
+			}))
+			if mode == config.WSS {
+				srv.StartTLS()
+			} else {
+				srv.Start()
+			}
+			defer srv.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn, err := WebSocketDialer(ctx, nil, srv.Listener.Addr().String(), "", "/channel", 150*time.Millisecond,
+				time.Second, true, "setup-deadline-cleared", mode, true, 1, 0, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			cancel()
+			time.Sleep(180 * time.Millisecond)
+			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			if err := conn.WriteMessage(websocket.BinaryMessage, []byte("still usable")); err != nil {
+				t.Fatal(err)
+			}
+			_, payload, err := conn.ReadMessage()
+			if err != nil || string(payload) != "still usable" {
+				t.Fatalf("post-setup echo %q: %v", payload, err)
+			}
+		})
+	}
 }
