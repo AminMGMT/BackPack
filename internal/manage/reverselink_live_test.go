@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/backpack/backpack/internal/testport"
 )
 
 // A kharej built from the Iran server's setup link, run for real.
@@ -218,15 +220,13 @@ func tail(b []byte) string {
 	return strings.Join(lines, "\n")
 }
 
+// freeTestPort is a port free for both TCP and UDP and below the ephemeral
+// range: the engines started here bind it from another process, and their
+// clients' own outgoing sockets draw source ports from that range. See
+// internal/testport for why the obvious version fails on CI.
 func freeTestPort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	// The udp transport and kcp/quic need the same number free on UDP too.
-	return l.Addr().(*net.TCPAddr).Port
+	return testport.Free(t)
 }
 
 func writeTestFile(t *testing.T, path, body string) {
