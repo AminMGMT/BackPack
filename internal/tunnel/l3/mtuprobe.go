@@ -116,6 +116,15 @@ func (t *Tunnel) probeLoop(ctx context.Context) {
 	if !t.cfg.AutoMTU {
 		return
 	}
+	// Settle after keys become available. A slow initial handshake otherwise
+	// skips measurement and leaves an unmeasured MTU until probeEvery.
+	for t.sendSession() == nil || t.peerAddr() == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	select {
 	case <-ctx.Done():
 		return
