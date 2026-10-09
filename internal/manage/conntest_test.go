@@ -24,6 +24,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 )
 
 // The link an operator copies is short: where the coordinator is and the
@@ -645,8 +646,14 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	}
 	roots.AddCert(largeLeaf)
 	roots.AddCert(small.Certificate())
+	output, err := os.OpenFile(filepath.Join(t.TempDir(), "reality-cover.log"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	ctx = naive.WithHelperOutput(ctx, output)
 	if err := ctProbeRealityCover(ctx, large.Listener.Addr().String(), roots); err != nil {
 		t.Fatalf("large cover must pass ordinary TLS verification: %v", err)
 	}
@@ -662,6 +669,9 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	})
 	if err != nil || selected != target(small) {
 		t.Fatalf("TLS-compatible but REALITY-incompatible cover was selected: %q %v", selected, err)
+	}
+	if diagnostics, err := os.ReadFile(output.Name()); err != nil || !bytes.Contains(diagnostics, []byte("Xray")) {
+		t.Fatalf("REALITY authentication succeeded but helper diagnostics were lost: %v", err)
 	}
 	silent, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -17,7 +17,7 @@ func TestConnectionTestStartupKeepsSkippedReasonsAndCoverScope(t *testing.T) {
 	ctMenuStage(&out, "1", "Preparing test tunnels", "Checking listeners and covers.")
 	ctMenuStartup(&out, s)
 	for _, want := range []string{"2 configured · 1 skipped", "www.apple.com:443", "two-server test starts after Kharej joins",
-		"Apple fallback", "sing-box helper is not installed", s.realityLog} {
+		"Apple fallback", "sing-box helper is not installed"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing startup information %q:\n%s", want, out.String())
 		}
@@ -27,5 +27,12 @@ func TestConnectionTestStartupKeepsSkippedReasonsAndCoverScope(t *testing.T) {
 	ctMenuStartup(&out, s)
 	if strings.Contains(out.String(), "Apple fallback") {
 		t.Error("Apple warning was shown for another cover")
+	}
+	s.realityTarget = ""
+	s.cases[1].skip = "no compatible REALITY cover"
+	out.Reset()
+	ctMenuStartup(&out, s)
+	if !strings.Contains(out.String(), s.cases[1].skip) || !strings.Contains(out.String(), s.realityLog) {
+		t.Error("failed REALITY cover lost its reason or diagnostic path")
 	}
 }

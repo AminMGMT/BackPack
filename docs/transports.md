@@ -252,6 +252,13 @@ REALITY parser can reject a cover's handshake records. Failed candidates are
 skipped in order; when none work, the skipped row includes each candidate's
 failure instead of treating it as an Iran/Kharej route failure. Each candidate
 has an eight-second startup/handshake budget and temporary helpers are stopped.
+The automatic order is Microsoft, Bing, then Apple as a last fallback. The
+startup screen separates a locally verified cover from the two-server verdict,
+and shows skipped helpers with their reasons. Probe banners and generic Xray
+deployment warnings go to a private `reality-cover.log` in the temporary test
+directory; a failed cover shows that path while the test is open. Apple and
+temporary-port caveats are shown once in the menu instead of repeated helper
+output. These files are removed when the test closes.
 
 
 ## TCP family
