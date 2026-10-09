@@ -26,6 +26,17 @@ All notable changes to Backpack are documented here.
 
 ### Changed
 
+- **Connection Test keeps REALITY helper output off the screen** (#92). Probing
+  covers printed Xray banners, successful configuration checks and generic
+  deployment warnings straight into the menu, where they read as failures and
+  buried the instruction to connect the kharej. That output now goes to a
+  private `reality-cover.log` in the test's temporary directory, whose path is
+  shown only when a cover fails; configuration-check failures still surface as
+  errors. Covers are tried Microsoft, Bing, then Apple as the last fallback, and
+  the startup screen runs in stages — preparing, connecting the kharej,
+  testing — with a cover verified on Iran shown apart from the two-server
+  verdict.
+
 - **Less work on the packet hot paths.** The Noise record layer reuses its read
   buffers instead of rebuilding a frame, header and plaintext buffer per record
   (#52). L3 builds its authenticated header in existing wire-buffer scratch on
@@ -43,6 +54,16 @@ All notable changes to Backpack are documented here.
   symlinks, so a failed write no longer discards pending traffic.
 - **Dependencies** (Dependabot #64): quic-go 0.63.0, gopsutil/v4, smux and
   golang.org/x/net.
+
+### Security
+
+- **Built with Go 1.26.9.** 1.26.6 carried twelve standard-library
+  vulnerabilities that this code reaches — eight in `net/http`, and others in
+  `net/textproto`, `crypto/tls` and `html/template` — on paths through the web
+  panel, setup-link decoding, the updater's checksum download and the Telegram
+  client. All are fixed in 1.26.9; `golang.org/x/net` moves to v0.60.0 for the
+  same advisories. The installer's build-from-source fallback pins 1.26.9 and
+  its published checksums.
 
 ### Fixed
 
