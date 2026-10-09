@@ -2,6 +2,172 @@
 
 All notable changes to Backpack are documented here.
 
+## v1.9.0 — 2026-10-09
+
+### Added
+
+- **Managed Naive carriers: HTTP/2, XHTTP/TLS and REALITY/Vision** (#65, #85).
+  Plain reverse TCP is unavailable on some filtered routes, so the existing
+  reverse TCP engine can now be wrapped in an official NaiveProxy client on the
+  kharej and a restricted sing-box inbound on Iran. Pairing, forwarding, tokens,
+  pool management and metrics stay owned by Backpack; the helper cannot reach
+  any other destination, including through an IPv4-mapped loopback CIDR. The
+  tunnel owns helper startup, private configuration, crash restart and
+  process-group cleanup. Offered in the reverse setup and edit menus, with
+  paired Setup Links for the kharej: public endpoints, credentials and
+  private-certificate trust are shared, while server private keys and local
+  executable paths stay on the machine they belong to. Both ends need matching
+  builds and helpers.
+- **Connection Test proves a REALITY cover through the real helper pair**
+  (#85). It now authenticates and echoes bytes through the actual pinned
+  REALITY/Chrome/Vision helpers before choosing an automatic cover. A
+  certificate-verified TLS 1.3/X25519/H2 handshake on its own could accept a
+  cover the helper then rejects, which made a reachable route look unusable.
+
+### Changed
+
+- **Less work on the packet hot paths.** The Noise record layer reuses its read
+  buffers instead of rebuilding a frame, header and plaintext buffer per record
+  (#52). L3 builds its authenticated header in existing wire-buffer scratch on
+  send and reuses per-session scratch on receive, taking a full round trip from
+  four allocations to two (#79). FEC keeps bounded transmit, parity and read
+  scratch rather than rebuilding it per packet, and retains a grown GRE buffer
+  after AutoMTU raises packets above the initial MTU (#70). The WebSocket relay
+  keeps its reader/writer adapters for the life of the relay, and hot formatted
+  trace calls are guarded before their arguments are built (#75).
+- **Traffic accounting no longer contends on a global lock** (#78). Each
+  service port keeps a stable atomic counter whose value is swapped during
+  serialized saves, and totals are published only once a complete replacement
+  succeeds. A usage document is written to a temporary file in the target
+  directory and atomically replaced, preserving permissions and configured
+  symlinks, so a failed write no longer discards pending traffic.
+- **Dependencies** (Dependabot #64): quic-go 0.63.0, gopsutil/v4, smux and
+  golang.org/x/net.
+
+### Fixed
+
+- **A stalled resolver could hold a tunnel open past cancellation.** DNS ran
+  outside the owning context on most dial paths, so a reconnect worker,
+  endpoint failover or restart could wait on it indefinitely while the
+  configured dial timeout bounded only what came after. Endpoint and backend
+  lookups now share one context-aware budget with the socket setup they
+  precede: reverse QUIC, resolved before its UDP socket and keeping the
+  original hostname for TLS SNI (#87); reverse KCP over UDP, PCK and ICMP,
+  resolved before any carrier socket is allocated (#88); framed and raw reverse
+  UDP, with both flow sides closed on generation cancellation (#82); direct
+  tunnel backends (#72); and TCP setup, where source DNS, the socket and proxy
+  negotiation now share one deadline per attempt and the proxy is handed only
+  the remaining budget (#84). L3 resolves a UDP multipath host once so every
+  path reaches the same peer, and bounds rekey DNS by the generation (#76).
+- **Cancelled work kept running.** A cancelled TCP dial sat out its one-second
+  retry backoff before returning, and an already-cancelled context could start
+  another attempt (#84). A stalled HTTP Upgrade outlived its caller, and an
+  incomplete HTTP request held the old WS/WSMUX generation in graceful shutdown
+  while restart waited for the listener (#86). Closing a bandwidth-limited
+  connection left its token wait and admission slot alive, and cancellation
+  could fall through to an unpaced write; pacing now runs under the
+  connection's own context, honours added, shortened, extended and cleared
+  socket deadlines, and refunds an aborted reservation (#83).
+- **A failed listener or carrier stayed down until the service was restarted.**
+  A fatal L3 forwarding listener error left `Forwarder.Run` waiting on healthy
+  siblings, so a temporary port conflict needed a restart even after the port
+  was free; the generation is now cancelled on the first fatal error and the
+  forwarder runs under its own five-second retry loop (#74). L3 QUIC could stop
+  accepting while receive stayed blocked, and closed or evicted connections
+  with full inboxes retained peer reader workers (#76). Permanent TUN interface
+  errors left a healthy-looking generation alive instead of returning so the
+  supervisor could rebuild it, and write results were counted as packets
+  although NativeTun returns bytes (#70). Direct tunnels could leave a failed
+  forwarded listener down indefinitely and report stale sockets as healthy;
+  each mapping now retries its own listener with a cancellable delay, keeping
+  healthy ports and established mux sessions through a temporary bind conflict
+  (#60).
+- **TCP tunnels could stop recovering under sustained traffic** (#66). Stale
+  generation workers, undercounted concurrent pool dials, retained mux claims
+  and unbounded control and destination writes all blocked recovery until a
+  restart. Generation work is closed and joined before replacement, pools are
+  replenished and accounted accurately, mux capacity is released on every exit,
+  retired queues are drained, and handshake, control and destination writes are
+  bounded. SMUX growth respects the initial pool and a 128 MiB aggregate
+  receive-window budget, and framing handles short writes and rejects oversized
+  frames.
+- **UDP flows expired while still in use, and raw flows never expired at all.**
+  One-way traffic was treated as idle, so flow activity now refreshes from
+  either direction (#69). A fresh raw UDP flow waiting for a tunnel socket
+  retried every millisecond past its deadline forever, holding its
+  source-address entry and admission slot and blocking the flows queued behind
+  it; on timeout the flow is now removed, its payload channel closed and its
+  slot released (#81). Large datagrams were truncated and the opening packet
+  could panic when it raced queue shutdown (#66).
+- **A QUIC stream could keep a relay slot forever** (#71). When a backend
+  closed while its QUIC peer was idle the `net.Conn` adapter sent only FIN, so
+  its blocked reader stayed alive, relay shutdown waited on it and the
+  forwarded connection's admission slot was never returned. Close now cancels
+  the receive direction and interrupts a flow-control-blocked writer, while
+  still delivering FIN for a completed reply when no write is in flight.
+- **FEC reconnects were suppressed as duplicates** (#73). A sender reopening
+  its carrier restarted group numbering at zero while the live receiver still
+  held recently delivered groups, so fresh handshake and data packets were
+  dropped until the receiver restarted too. Each enabled sender now seeds its
+  initial group from a random 32-bit value.
+- **Orphan PCK guards broke backend TCP** (#63). Port-only firewall guards
+  suppressed the resets needed to recover reused loopback connections, and
+  guards left behind after PCK stopped or the tunnel moved to TCPMUX kept
+  timing those connections out. Guard rules are now scoped to the carrier's
+  interface and IPv4 address, and to the known peer and port on diallers, and
+  each active PCK port is reserved with a bound, non-listening socket so the
+  kernel cannot hand it to another connection.
+- **Authentication, quota and SSH lifecycle failures** (#67). Losing runtime
+  panel configuration could admit an empty-password login; authentication now
+  fails closed on absent or invalid credentials and incremental configuration
+  changes are serialized. Pending MFA sign-ins are bound to the credentials
+  that were accepted and invalidated on a password or MFA change, terminals
+  close on session revocation or expiry, and quota bytes and traffic counters
+  survive a rename or a read error.
+- **Edits reset settings they never touched** (#68). An unrelated edit could
+  clear a working route or FEC ratio and leave an invalid direct configuration
+  on disk, and configuration-history restore failed after a JavaScript round
+  trip. Setup-link updates now merge into the existing reverse-client spec,
+  keeping its proxy, edge address, local bind, interface, socket mark and local
+  operating settings, and history timestamps are carried as exact decimal
+  strings.
+- **Direct traffic landed on one session and one backend** (#77). Session and
+  backend selection shared a single round-robin cursor and advanced it twice,
+  so with two sessions and two backends every flow chose the same pair and with
+  four sessions half stayed idle. Each choice now has its own cursor, and the
+  modulo is applied unsigned so a counter overflow cannot produce a negative
+  index.
+- **TCP and QUIC upload EOF could truncate a delayed reply**, failed multipath
+  sockets kept losing traffic, forwarded UDP bypassed the configured shared
+  bandwidth cap, and L3 UDP kept choosing a refused backend because its failed
+  flows made it look least loaded (#69).
+- **AutoMTU never measured the path after a slow first handshake** (#80). The
+  settle timer started at `Tunnel.Run` rather than at session establishment, so
+  a handshake longer than two seconds meant probing ran without keys, failed at
+  once and waited thirty minutes to retry — small packets worked while larger
+  traffic stalled on an unmeasured path.
+- **Installing from source could stop before Backpack built** (#91). A 403 from
+  `proxy.golang.org` stopped the comma-separated proxy list from reaching its
+  mirrors, and `go version` could report an automatically selected toolchain
+  while the bundled compiler was older. The default proxy chain now uses pipe
+  separators and preserves a caller-provided `GOPROXY`, the bundled version is
+  checked with `GOTOOLCHAIN=local`, and the validated compiler is the one
+  invoked for the build.
+- **A manual Release run failed on main** (#51). The tag was read from
+  `GITHUB_REF_NAME`, which is the branch name on a manual run, so the run
+  stopped at "Tag main does not match VERSION". A manual run now publishes the
+  commit it started on under the `tag` input, or under VERSION when the input
+  is blank; tag-push releases are unchanged and the tag must still match
+  VERSION.
+- **Two test guards were measuring the wrong thing.** The Noise allocation
+  guard counted the background peer's decryption and receive buffers as sender
+  allocations, so an unchanged baseline reported three per record on Go 1.26.6;
+  it now replaces only the measured sender's socket writer with an
+  allocation-free sink, warms the largest record, and holds the sender to one
+  allocation (#89). The panel wiring guard split a native relative path on `/`,
+  so on Windows `lib\dom.js` read as a whole filename and an existing module
+  was reported unused (#90).
+
 ## v1.8.5 — 2026-09-30
 
 ### Added
