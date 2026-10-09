@@ -383,10 +383,11 @@ ensure_go() {
 build_from_source() {
   cd "$SCRIPT_DIR"
   ensure_go; export PATH="/usr/local/go/bin:$PATH"
-  # Direct module fetching first, Iran-friendly mirrors as fallback.
-  export GOPROXY="https://proxy.golang.org,https://mirror-go.runflare.com,https://goproxy.cn,direct"
+  # Pipes allow fallback on blocked proxies (403), outages and network errors.
+  # Preserve an explicitly configured proxy, including its fallback policy.
+  export GOPROXY="${GOPROXY:-https://proxy.golang.org|https://mirror-go.runflare.com|https://goproxy.cn|direct}"
   export GOSUMDB=off GOTOOLCHAIN=local
-  info "Building from source (proxy order: direct first, then mirrors)."
+  info "Building from source (module proxy order: ${GOPROXY})."
   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$BIN_PATH" .
   echo "$INSTALL_DIR" > /etc/backpack/install_path
 }
