@@ -81,8 +81,15 @@ func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
 		forwarding.Add(1)
 		go func() {
 			defer forwarding.Done()
-			if err := forwarder.Run(ctx); err != nil {
-				logger.Errorf("layer-3 port forwarding stopped: %v", err)
+			for {
+				if err := forwarder.Run(ctx); err != nil && ctx.Err() == nil {
+					logger.Errorf("layer-3 port forwarding stopped: %v - restarting in %s", err, l3RestartDelay)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(l3RestartDelay):
+				}
 			}
 		}()
 	}

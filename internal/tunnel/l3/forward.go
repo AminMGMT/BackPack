@@ -163,6 +163,8 @@ func (f *Forwarder) Ready() <-chan struct{} { return f.ready }
 
 // Run serves every mapping until ctx ends.
 func (f *Forwarder) Run(ctx context.Context) error {
+	genCtx, endGeneration := context.WithCancel(ctx)
+	defer endGeneration()
 	var wg sync.WaitGroup
 	var firstErr error
 	var errOnce sync.Once
@@ -188,13 +190,16 @@ func (f *Forwarder) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(m portmap.Mapping) {
 			defer wg.Done()
-			if err := f.serveTCP(ctx, m, binding.Done); err != nil && ctx.Err() == nil {
+			if err := f.serveTCP(genCtx, m, binding.Done); err != nil && ctx.Err() == nil {
 				// Said out loud as well as returned. A listener that cannot
 				// bind is the single most likely thing to go wrong here, and
 				// what it looks like from the outside is a port that quietly
 				// does nothing.
 				f.log.Errorf("l3: tcp forwarder for %s stopped: %v", m.Listen, err)
-				errOnce.Do(func() { firstErr = err })
+				errOnce.Do(func() {
+					firstErr = err
+					endGeneration()
+				})
 			}
 		}(mapping)
 
@@ -202,23 +207,21 @@ func (f *Forwarder) Run(ctx context.Context) error {
 			wg.Add(1)
 			go func(m portmap.Mapping) {
 				defer wg.Done()
-				if err := f.serveUDP(ctx, m, binding.Done); err != nil && ctx.Err() == nil {
+				if err := f.serveUDP(genCtx, m, binding.Done); err != nil && ctx.Err() == nil {
 					f.log.Errorf("l3: udp forwarder for %s stopped: %v", m.Listen, err)
-					errOnce.Do(func() { firstErr = err })
+					errOnce.Do(func() {
+						firstErr = err
+						endGeneration()
+					})
 				}
 			}(mapping)
 		}
 	}
 
 	wg.Wait()
-	// firstErr is only ever set while the context was still live, so returning
-	// it directly cannot turn an ordinary shutdown into a failure.
-	//
-	// It used to be discarded whenever the context had since been cancelled,
-	// which is every shutdown — so a UDP listener that could not bind while TCP
-	// bound fine was swallowed completely: Run blocked on the healthy listener
-	// until cancellation, then reported success. The forwarder went on carrying
-	// TCP with nothing anywhere to say the UDP half had never started.
+	// A fatal listener error cancels only this generation, releasing its other
+	// listeners and flows so the supervisor can retry. Keep the original error
+	// even though that cancellation has now reached every worker.
 	return firstErr
 }
 
@@ -234,7 +237,8 @@ func (f *Forwarder) serveTCP(ctx context.Context, m portmap.Mapping, bound func(
 		return err
 	}
 	defer listener.Close()
-	go func() { <-ctx.Done(); listener.Close() }()
+	stopClose := context.AfterFunc(ctx, func() { listener.Close() })
+	defer stopClose()
 
 	f.log.Infof("l3: forwarding tcp %s", m)
 
@@ -365,7 +369,8 @@ func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func(
 		return err
 	}
 	defer conn.Close()
-	go func() { <-ctx.Done(); conn.Close() }()
+	stopClose := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopClose()
 
 	f.log.Infof("l3: forwarding udp %s", m)
 
