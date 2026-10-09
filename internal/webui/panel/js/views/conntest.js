@@ -97,7 +97,8 @@ function startPane(v) {
   return `<div class="ct-l-in fade">
     <span class="ct-kick">New test</span>
     <div class="tl-lede"><b>Every transport, tried for real between this server and one kharej.</b>
-      <span>About three minutes once the kharej joins. The test tunnels run on free ports and are
+      <span>Five minutes of stability checks, then about 8–12 seconds of speed testing per healthy tunnel.
+        Download and upload use four connections and run one tunnel at a time. The test tunnels run on free ports and are
         removed when it ends — nothing is left behind on either server.</span></div>
     <label class="tl-f ct-field"><span>This server's address</span>
       <input id="ctHost" type="text" value="${esc(host)}" placeholder="the IP the kharej dials" autocomplete="off" spellcheck="false"></label>
@@ -148,6 +149,8 @@ function runPane(v) {
 
 function settled(v) {
   const live = (v.rows || []).filter(r => r.status !== 'skipped');
+  const speed = live.find(r => r.phase === 'speed');
+  if (speed) return `Measuring download and upload on ${esc(speed.name)} — ${live.filter(r => r.phase === 'speed-queued').length} healthy tunnels waiting.`;
   const done = live.filter(r => r.status !== 'testing').length;
   return live.length ? `${done} of ${live.length} transports judged — the rest are still carrying their echoes.`
     : 'The kharej is building its end of every test tunnel.';
@@ -177,7 +180,8 @@ function bestPane(v) {
       <div><span class="badge">Best for this path</span><b class="tr">${esc(b.tr)}</b></div>
     </div>
     <div class="ct-bgrid">
-      ${cell('Speed', b.mb ? b.mb.toFixed(b.mb < 10 ? 1 : 0) : '', 'Mb/s')}
+      ${cell('Download', b.mb ? b.mb.toFixed(b.mb < 10 ? 1 : 0) : '', 'Mb/s')}
+      ${cell('Upload', b.upload_mb ? b.upload_mb.toFixed(b.upload_mb < 10 ? 1 : 0) : '', 'Mb/s')}
       ${cell('Round trip', b.rt, 'ms')}
       ${cell('Jitter', b.ji, 'ms')}
       ${cell('Worst', b.wo, 'ms')}
@@ -225,18 +229,19 @@ function fillRow(n, r) {
   const total = r.total || 60;
   const testing = r.status === 'testing';
   const share = Math.max(0, Math.min(1, testing ? (r.tried / total) : (r.ok / total)));
-  n.className = `ct-row ${tone(r.status)}`;
+  n.className = `ct-row ${tone(r.status)}${r.uploadMbps ? ' has-speed' : ''}`;
   n.querySelector('.nm b').textContent = r.name;
   const sm = n.querySelector('.nm small');
-  sm.textContent = r.detail || '';
+  sm.textContent = r.detail || (r.uploadMbps ? '4 connections · download / upload' : '');
   sm.title = r.detail || '';
   n.querySelector('.bar i').style.setProperty('--w', (share * 100).toFixed(1) + '%');
   n.querySelector('.ec').textContent = r.status === 'skipped' ? '—' : `${testing ? r.tried : r.ok}/${total}`;
   n.querySelector('.fg').innerHTML = [
     r.rtt ? `<span><b>${r.rtt}</b> ms</span>` : '',
-    r.mbps ? `<span><b>${r.mbps.toFixed(r.mbps < 10 ? 1 : 0)}</b> Mb/s</span>` : '',
+    r.mbps ? `<span>↓ <b>${r.mbps.toFixed(r.mbps < 10 ? 1 : 0)}</b> Mb/s</span>` : '',
+    r.uploadMbps ? `<span>↑ <b>${r.uploadMbps.toFixed(r.uploadMbps < 10 ? 1 : 0)}</b> Mb/s</span>` : '',
   ].join('');
-  n.querySelector('.st').textContent = statusWord(r.status);
+  n.querySelector('.st').textContent = r.phase === 'speed' ? 'Speed test' : r.phase === 'speed-queued' ? 'Queued' : statusWord(r.status);
 }
 
 function emptyRight(st) {

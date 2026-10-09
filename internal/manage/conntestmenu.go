@@ -102,7 +102,7 @@ func connTestIranMenu() {
 	}
 
 	fmt.Println()
-	ctMenuStage(os.Stdout, "3", "Testing the connection", "Kharej "+s.Kharej()+" joined. Measuring echo delivery, latency and speed.")
+	ctMenuStage(os.Stdout, "3", "Testing the connection", "Kharej "+s.Kharej()+" joined. Five minutes of stability, then download/upload for healthy tunnels (about 8–12 seconds each).")
 	fmt.Println()
 	board := newCTBoard(os.Stdout, s.Kharej())
 	results := s.Run(ctx, board.set)
