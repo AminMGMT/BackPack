@@ -137,7 +137,7 @@ func (t *Tunnel) negotiate(ctx context.Context) error {
 	// Re-resolved each round, so a peer whose address has changed — a dynamic
 	// DNS name, a provider that renumbered — is found again without a
 	// restart.
-	if err := t.resolvePeer(); err != nil {
+	if err := t.resolvePeer(ctx); err != nil {
 		return err
 	}
 	peer := t.peerAddr()
@@ -214,8 +214,13 @@ func (t *Tunnel) drainReplies() {
 }
 
 // resolvePeer refreshes the dialling side's notion of where the peer is.
-func (t *Tunnel) resolvePeer() error {
-	addr, err := net.ResolveUDPAddr("udp", t.cfg.Addr)
+func (t *Tunnel) resolvePeer(ctx context.Context) error {
+	resolveCtx, cancel := context.WithTimeout(ctx, carrierResolveTimeout)
+	defer cancel()
+	addr, _, err := resolveDatagramEndpoint(resolveCtx, t.cfg.Addr)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil {
 		// A resolution failure is not fatal while a previous answer is still
 		// on hand: a brief DNS outage should not take the tunnel down.

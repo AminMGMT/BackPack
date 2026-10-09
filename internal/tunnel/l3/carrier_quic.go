@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,10 +71,14 @@ const quicHandshakeTimeout = 12 * time.Second
 
 // openQuic builds the QUIC carrier for either side.
 func openQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
+	return openQuicContext(context.Background(), cfg)
+}
+
+func openQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
 	if cfg.Mode == ModeListen {
 		return listenQuic(cfg)
 	}
-	return dialQuic(cfg)
+	return dialQuicContext(ctx, cfg)
 }
 
 // How quickly a dead QUIC connection is given up on.
@@ -124,13 +129,22 @@ func quicResetKey(token string) *quic.StatelessResetKey {
 }
 
 func dialQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), quicHandshakeTimeout)
+	return dialQuicContext(context.Background(), cfg)
+}
+
+func dialQuicContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
+	ctx, cancel := context.WithTimeout(ctx, quicHandshakeTimeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(ctx, cfg.Addr, &tls.Config{
+	peer, host, err := resolveDatagramEndpoint(ctx, cfg.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("l3: quic: resolving %s: %w", cfg.Addr, err)
+	}
+	conn, err := quic.DialAddr(ctx, peer.String(), &tls.Config{
 		// See the note above: the certificate proves nothing here and is not
 		// meant to. The token in the Noise handshake is what authenticates.
 		InsecureSkipVerify: true,
+		ServerName:         host,
 		NextProtos:         []string{quicALPN},
 		MinVersion:         tls.VersionTLS13,
 	}, quicConfig())
@@ -144,6 +158,39 @@ func dialQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
 	c := newQuicCarrier()
 	c.conn = conn
 	return c, conn.RemoteAddr(), nil
+}
+
+// Resolve a UDP or QUIC endpoint before opening its socket. The original host
+// is retained for QUIC TLS SNI; lookup uses the caller's cancellation budget.
+func resolveDatagramEndpoint(ctx context.Context, address string) (*net.UDPAddr, string, error) {
+	host, service, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, "", err
+	}
+	port, err := net.DefaultResolver.LookupPort(ctx, "udp", service)
+	if err != nil {
+		return nil, "", err
+	}
+	if host == "" {
+		return &net.UDPAddr{Port: port}, host, nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(ips) == 0 {
+		return nil, "", &net.AddrError{Err: "no suitable address found", Addr: address}
+	}
+	// Match ResolveUDPAddr: IPv4 is preferred except for bracketed addresses.
+	chosen := ips[0]
+	want6 := strings.Contains(address, "[")
+	for _, ip := range ips {
+		if (ip.IP.To4() == nil) == want6 {
+			chosen = ip
+			break
+		}
+	}
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, host, nil
 }
 
 func listenQuic(cfg Config) (DatagramCarrier, net.Addr, error) {
@@ -258,6 +305,9 @@ func (c *quicCarrier) Overhead() int       { return quicOverhead }
 
 // acceptLoop takes every connection the listener is offered.
 func (c *quicCarrier) acceptLoop() {
+	// A failed listener cannot accept a returning peer. Wake the receive pump
+	// and release this carrier so the tunnel generation can be rebuilt.
+	defer c.Close()
 	for {
 		conn, err := c.ln.Accept(context.Background())
 		if err != nil {
@@ -341,18 +391,24 @@ func lessTrusted(a, b *quicPeer) bool {
 // readPeer feeds one connection's datagrams to ReadFrom until it ends.
 func (c *quicCarrier) readPeer(conn *quic.Conn) {
 	from := conn.RemoteAddr()
+	defer func() {
+		c.mu.Lock()
+		if p, ok := c.peers[from.String()]; ok && p.conn == conn {
+			delete(c.peers, from.String())
+		}
+		c.mu.Unlock()
+	}()
 	for {
 		msg, err := conn.ReceiveDatagram(context.Background())
 		if err != nil {
-			c.mu.Lock()
-			if p, ok := c.peers[from.String()]; ok && p.conn == conn {
-				delete(c.peers, from.String())
-			}
-			c.mu.Unlock()
 			return
 		}
 		select {
 		case c.in <- quicDatagram{data: msg, from: from}:
+		case <-conn.Context().Done():
+			// Eviction or peer closure must release a reader even when the
+			// tunnel is not draining its inbox.
+			return
 		case <-c.done:
 			return
 		}

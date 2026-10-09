@@ -1,10 +1,12 @@
 package l3
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -177,8 +179,17 @@ func knownCarrier(name string) bool {
 // the peer to send to, or nil on the listening side of a carrier that learns
 // its peer from the packets that arrive.
 func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
-	carrier, peer, err := openBareCarrier(cfg)
+	return openCarrierContext(context.Background(), cfg)
+}
+
+// openCarrierContext lets Run cancel a pending QUIC handshake at shutdown.
+func openCarrierContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
+	carrier, peer, err := openBareCarrier(ctx, cfg)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		carrier.Close()
 		return nil, nil, err
 	}
 	// Error correction wraps whichever carrier was opened, so the scheme is the
@@ -194,10 +205,10 @@ func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 
 // openBareCarrier builds the carrier the config names, without the layers that
 // wrap it.
-func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
+func openBareCarrier(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Carrier)) {
 	case "", CarrierUDP:
-		return openUDPPaths(cfg)
+		return openUDPPathsContext(ctx, cfg)
 	case CarrierPck:
 		return openPck(cfg)
 	case CarrierXdi:
@@ -205,7 +216,7 @@ func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 	case CarrierSpoof:
 		return openSpoof(cfg)
 	case CarrierQuic:
-		return openQuic(cfg)
+		return openQuicContext(ctx, cfg)
 	case CarrierSNI:
 		return openSNI(cfg)
 	default:
@@ -221,6 +232,24 @@ func openBareCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 // consecutive ports when the configuration asks for them. See multipath.go for
 // why several, and why only this carrier gets the option.
 func openUDPPaths(cfg Config) (DatagramCarrier, net.Addr, error) {
+	return openUDPPathsContext(context.Background(), cfg)
+}
+
+// Bound DNS before allocating sockets. Resolve the host once for all paths so
+// a rotating DNS answer cannot send different paths to different tunnel peers.
+const carrierResolveTimeout = 12 * time.Second
+
+func openUDPPathsContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
+	ctx, cancel := context.WithTimeout(ctx, carrierResolveTimeout)
+	defer cancel()
+	endpoint, _, err := resolveDatagramEndpoint(ctx, cfg.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("l3: resolving the UDP endpoint %q: %w", cfg.Addr, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	cfg.Addr = endpoint.String()
 	n := cfg.Multipath.Paths
 	if n <= 1 {
 		// One socket is handed to the tunnel bare. The tunnel already knows
