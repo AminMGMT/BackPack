@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -649,5 +650,45 @@ func TestTCPDialBudgetIncludesSourceDNS(t *testing.T) {
 				t.Fatalf("shared attempt took %s", elapsed)
 			}
 		})
+	}
+}
+
+func TestTCPRetryBackoffStopsWithItsContext(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close() // Refused connections immediately enter the retry delay.
+	for _, mode := range []string{"direct", "http", "socks5"} {
+		for _, deadline := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/deadline=%v", mode, deadline), func(t *testing.T) {
+				var out *Outbound
+				if mode != "direct" {
+					out = &Outbound{Proxy: &ProxyConfig{Scheme: mode, Address: address}}
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				if deadline {
+					cancel()
+					ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+				} else {
+					timer := time.AfterFunc(50*time.Millisecond, cancel)
+					defer timer.Stop()
+				}
+				defer cancel()
+				start := time.Now()
+				conn, err := TcpDialerVia(ctx, out, address, time.Second, time.Second, true, 2, 0, 0, 0)
+				if conn != nil {
+					conn.Close()
+					t.Fatal("cancelled retry returned a connection")
+				}
+				if !errors.Is(err, ctx.Err()) || ctx.Err() == nil {
+					t.Fatalf("retry cancellation: %v, context: %v", err, ctx.Err())
+				}
+				if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+					t.Fatalf("cancelled TCP retry remained in backoff for %s", elapsed)
+				}
+			})
+		}
 	}
 }
