@@ -125,6 +125,22 @@ func replaceEnv(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
+type helperOutputKey struct{}
+
+// WithHelperOutput routes both preflight and child output to a caller-owned
+// file descriptor. Keep it open until all helpers using this context close.
+// A file avoids copy pipes that surviving descendants could keep open.
+func WithHelperOutput(ctx context.Context, output *os.File) context.Context {
+	return context.WithValue(ctx, helperOutputKey{}, output)
+}
+
+func helperOutput(ctx context.Context) *os.File {
+	if output, ok := ctx.Value(helperOutputKey{}).(*os.File); ok && output != nil {
+		return output
+	}
+	return os.Stderr
+}
+
 func startManaged(parent context.Context, binary, mode string, body []byte, addr string, env []string, log *logrus.Logger, release func() error) (*Helper, error) {
 	if parent.Err() != nil {
 		return nil, parent.Err()
@@ -143,6 +159,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
+	output := helperOutput(ctx)
 	h := &Helper{cancel: cancel, done: make(chan struct{}), addr: addr, dir: dir}
 	if mode == "server" || strings.HasPrefix(mode, "xray-") {
 		checkCtx, stop := context.WithTimeout(ctx, 10*time.Second)
@@ -156,7 +173,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 		cmd.Env = env
 		// Use actual file descriptors so failures remain diagnosable without
 		// copy pipes that descendants could retain after the leader exits.
-		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+		cmd.Stdout, cmd.Stderr = output, output
 		err = cmd.Run()
 		if cmd.Process != nil {
 			_ = killProcess(cmd.Process)
@@ -188,7 +205,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 			cmd := exec.Command(binary, args...)
 			configureProcess(cmd)
 			cmd.Env = env
-			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+			cmd.Stdout, cmd.Stderr = output, output
 			if err := cmd.Start(); err != nil {
 				log.Warnf("%s %s helper could not start: %v; retrying in one second", label, mode, err)
 				if !sleep(ctx, time.Second) {

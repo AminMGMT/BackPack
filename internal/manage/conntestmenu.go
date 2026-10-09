@@ -70,7 +70,7 @@ func connTestIranMenu() {
 
 	ctx, stop := connTestContext()
 	defer stop()
-	tui.Info("Starting The Test Tunnels...")
+	ctMenuStage(os.Stdout, "1", "Preparing test tunnels", "Checking listeners, helpers and REALITY cover compatibility.")
 	s, link, err := StartConnTestIran(ConnTestOptions{Context: ctx, Host: host, Direct: direct,
 		Preset: preset, SpoofSrc: spoof})
 	if err != nil {
@@ -79,15 +79,15 @@ func connTestIranMenu() {
 		return
 	}
 	defer s.Close()
-	if s.realityTarget != "" {
-		tui.Info("REALITY Cover Selected: " + s.realityTarget)
-	}
+	ctMenuStartup(os.Stdout, s)
 
 	fmt.Println()
-	tui.Info("Test Link (On The Kharej: sudo backpack → 0 → Kharej):")
+	ctMenuStage(os.Stdout, "2", "Connect the Kharej", "On Kharej: sudo backpack → 0 → Kharej. Paste the full link below.")
+	fmt.Println()
 	fmt.Println(tui.Color(tui.Bold+tui.White, link))
 	fmt.Println()
-	tui.Warn(fmt.Sprintf("Waiting For The Kharej (Up To %d Min, Ctrl+C Stops).", int(connTestJoinWait.Minutes())))
+	tui.Warn(fmt.Sprintf("  Waiting for Kharej · up to %d min · Ctrl+C stops", int(connTestJoinWait.Minutes())))
+	tui.Warn("  Leave this test open while connecting the other server.")
 
 	select {
 	case <-s.Joined():
@@ -102,8 +102,8 @@ func connTestIranMenu() {
 		return
 	}
 
-	tui.Success(fmt.Sprintf("Kharej %s Joined — Testing (%s, About 3 Min)...",
-		s.Kharej(), preset))
+	fmt.Println()
+	ctMenuStage(os.Stdout, "3", "Testing the connection", "Kharej "+s.Kharej()+" joined. Measuring echo delivery, latency and speed.")
 	fmt.Println()
 	board := newCTBoard(os.Stdout, s.Kharej())
 	results := s.Run(ctx, board.set)
@@ -132,6 +132,7 @@ func RunConnTestKharejTUI(raw string) bool {
 	if a, err := parseConnTestLink(raw); err == nil {
 		title = a.Host
 	}
+	ctMenuStage(os.Stdout, "1", "Connecting to Iran", "Fetching the test settings and starting this side's tunnels.")
 	var board *ctBoard
 	results, best, err := RunConnTestKharej(ctx, raw, os.Stdout, func(rows []ConnTestResult) {
 		if board == nil {

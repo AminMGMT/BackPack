@@ -332,6 +332,7 @@ type ConnTestIran struct {
 	root          bool
 	best          ConnTestBest
 	realityTarget string
+	realityLog    string
 }
 
 // ConnTestOptions are what the Iran operator answers.
@@ -730,8 +731,19 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			coverTarget, err = ctFindRealityCover(ctx, []string{"www.microsoft.com:443", "www.apple.com:443", "www.bing.com:443"},
+			// The temporary loopback helpers emit banners and generic deployment
+			// warnings. Keep them out of the menu without discarding diagnostics.
+			s.realityLog = filepath.Join(s.dir, "reality-cover.log")
+			output, openErr := os.OpenFile(s.realityLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			if openErr != nil {
+				c.skip = "creating REALITY probe diagnostics: " + openErr.Error()
+				return
+			}
+			defer output.Close()
+			ctx = naive.WithHelperOutput(ctx, output)
+			coverTarget, err = ctFindRealityCover(ctx, []string{"www.microsoft.com:443", "www.bing.com:443", "www.apple.com:443"},
 				func(ctx context.Context, target string) error {
+					fmt.Fprintf(output, "\nREALITY cover probe: %s\n", target)
 					if err := ctProbeRealityCover(ctx, target, nil); err != nil {
 						return err
 					}
