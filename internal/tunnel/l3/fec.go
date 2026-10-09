@@ -311,7 +311,9 @@ func (c *fecCarrier) absorb(kind byte, group uint32, index byte, body []byte, ad
 	defer c.recvMu.Unlock()
 
 	total := c.cfg.Data + c.cfg.Parity
-	if int(index) >= total {
+	if int(index) >= total || (kind == fecKindData && int(index) >= c.cfg.Data) ||
+		(kind == fecKindParity && int(index) < c.cfg.Data) ||
+		(kind != fecKindData && kind != fecKindParity) {
 		return nil, false
 	}
 	g := c.groups[group]

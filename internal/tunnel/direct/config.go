@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/tunnel/portmap"
 )
 
@@ -220,4 +221,34 @@ func (c *Config) Validate() error {
 		c.MaxStreamBuffer = defaultMaxStream
 	}
 	return nil
+}
+
+// ConfigFromTable maps the persisted table for startup and edit validation.
+func ConfigFromTable(dc config.DirectConfig) Config {
+	tunnelCfg := Config{
+		Role:             dc.ResolvedRole(),
+		Addr:             dc.Addr,
+		Token:            dc.Token,
+		Transport:        dc.Transport,
+		ServerName:       dc.ServerName,
+		TLSCertFile:      dc.TLSCertFile,
+		TLSKeyFile:       dc.TLSKeyFile,
+		ACMEDomain:       dc.ACMEDomain,
+		ACMEEmail:        dc.ACMEEmail,
+		Ports:            dc.Ports,
+		AcceptUDP:        dc.AcceptUDP,
+		MaxConnections:   dc.MaxConnections,
+		BandwidthMbps:    dc.BandwidthMbps,
+		Sessions:         dc.Sessions,
+		DialTimeout:      time.Duration(dc.DialTimeout) * time.Second,
+		RetryDelay:       time.Duration(dc.RetryInterval) * time.Second,
+		Keepalive:        time.Duration(dc.Keepalive) * time.Second,
+		Nodelay:          dc.Nodelay,
+		MSS:              dc.MSS,
+		MuxVersion:       dc.MuxVersion,
+		MaxFrameSize:     dc.MaxFrameSize,
+		MaxReceiveBuffer: dc.MaxReceiveBuffer,
+		MaxStreamBuffer:  dc.MaxStreamBuffer,
+	}
+	return tunnelCfg
 }

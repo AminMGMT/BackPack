@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/tunnel/l3"
 	"github.com/backpack/backpack/internal/utils"
-	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // The layer-3 tunnel's entry point.
@@ -139,47 +137,4 @@ func l3Role(mode string) string {
 
 // l3ConfigOf turns an [l3] table into the engine's configuration. Shared by the
 // engine and by validateConfig, so a reload is judged by exactly what would run.
-func l3ConfigOf(cfg *config.Config) (l3.Config, error) {
-	tunnelCfg := l3.Config{
-		Mode:           cfg.L3.Mode,
-		Addr:           cfg.L3.Addr,
-		Token:          cfg.L3.Token,
-		Carrier:        cfg.L3.Carrier,
-		Encap:          cfg.L3.Encap,
-		GREKey:         cfg.L3.GREKey,
-		Iface:          cfg.L3.Iface,
-		LocalIP:        cfg.L3.LocalIP,
-		PeerIP:         cfg.L3.PeerIP,
-		MTU:            cfg.L3.MTU,
-		SockBuf:        cfg.L3.SockBuf,
-		TxQueueLen:     cfg.L3.TxQueueLen,
-		Qdisc:          cfg.L3.Qdisc,
-		MSSClamp:       cfg.L3.MSSClamp,
-		AutoMTU:        cfg.L3.AutoMTUEnabled(),
-		Ports:          cfg.L3.Ports,
-		AcceptUDP:      cfg.L3.AcceptUDP,
-		MaxConnections: cfg.L3.MaxConnections,
-		BandwidthMbps:  cfg.L3.BandwidthMbps,
-		// Read only by the carrier they belong to; both are ignored otherwise.
-		FEC:       l3.FECConfig{Data: cfg.L3.FECData, Parity: cfg.L3.FECParity},
-		Multipath: l3.MultipathConfig{Paths: cfg.L3.Paths},
-		Spoof:     cfg.L3.SpoofConfig,
-		SNIDomain: cfg.L3.SNIDomain,
-		Pck: network.PcapCarrier{
-			Interface:  cfg.L3.PckInterface,
-			GatewayMAC: cfg.L3.PckGatewayMAC,
-		},
-	}
-
-	// Parsed rather than passed through, so a typo in the flag cycle is
-	// reported here instead of becoming an empty cycle the carrier silently
-	// replaces with its default.
-	if len(cfg.L3.PckFlags) > 0 {
-		flags, err := network.ParseTCPFlagList(cfg.L3.PckFlags)
-		if err != nil {
-			return l3.Config{}, fmt.Errorf("pck_flags: %w", err)
-		}
-		tunnelCfg.Pck.Flags = flags
-	}
-	return tunnelCfg, nil
-}
+func l3ConfigOf(cfg *config.Config) (l3.Config, error) { return l3.ConfigFromTable(cfg.L3) }

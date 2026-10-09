@@ -67,6 +67,9 @@ type Spec struct {
 	KeepAlive      int
 	ChannelSize    int
 	ConnectionPool int
+	DialTimeout    int
+	RetryInterval  int
+	SOPinTCP       bool
 	AggressivePool bool
 	AcceptUDP      bool
 	LogLevel       string
@@ -167,6 +170,9 @@ func monitorBind(configured string) string {
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
 func (s Spec) writeTuning(p func(string, ...any)) {
+	if s.SOPinTCP {
+		p("so_pin_tcp = true\n")
+	}
 	if s.MSS > 0 {
 		p("mss = %d\n", s.MSS)
 	}
@@ -355,8 +361,12 @@ func (s Spec) Render() string {
 	if s.HealthFailover {
 		p("health_failover = true\n")
 	}
-	p("retry_interval = %d\n", 3)
-	p("dial_timeout = %d\n", 10)
+	if s.RetryInterval != 0 {
+		p("retry_interval = %d\n", s.RetryInterval)
+	}
+	if s.DialTimeout != 0 {
+		p("dial_timeout = %d\n", s.DialTimeout)
+	}
 	p("log_level = %q\n", s.LogLevel)
 	if s.LogFormat != "" {
 		p("log_format = %q\n", s.LogFormat)
