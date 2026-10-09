@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/xtaci/kcp-go/v5"
@@ -335,8 +337,36 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 // KCPDial opens a KCP session to remoteAddr with the tuning applied, over UDP
 // or — when the settings ask for it — over ICMP echo (the xdi transport).
 func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
+	return KCPDialContext(context.Background(), remoteAddr, token, s)
+}
+
+// KCPDialContext bounds endpoint DNS by the caller's setup context. Established
+// sessions retain their normal lifetime after this function hands them off.
+func KCPDialContext(ctx context.Context, remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Resolve before opening raw carrier sockets. kcp-go's string dialer uses
+	// a background resolver; pass it a numeric address to avoid a second lookup.
+	var ipAddr *net.IPAddr
+	var err error
+	if s.UseICMP || s.Pck != nil {
+		ipAddr, err = hostToIPAddrContext(ctx, remoteAddr)
+	} else {
+		var address *net.UDPAddr
+		address, err = resolveKCPUDPAddr(ctx, remoteAddr)
+		if err == nil {
+			remoteAddr = address.String()
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("kcp: resolve endpoint: %w", err)
+	}
 	block, err := kcpCrypt(token)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	s.logSettings("client")
@@ -350,11 +380,6 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 		// ICMP has no ports, so only the host of remoteAddr matters; the port
 		// is dropped. NewConn2 takes the address KCP will send every packet to,
 		// which is the server's IP.
-		ipAddr, err := hostToIPAddr(remoteAddr)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
 		session, err = ownedKCPSession(ipAddr, block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
@@ -363,10 +388,6 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 	} else if s.Pck != nil {
 		// The client addresses its segments to the server's real address and
 		// the tunnel port, and sends from an ephemeral port of its own.
-		ipAddr, err := hostToIPAddr(remoteAddr)
-		if err != nil {
-			return nil, err
-		}
 		carrier := *s.Pck
 		carrier.Token = token
 		carrier.PeerIP = ipAddr.IP.String()
@@ -397,18 +418,68 @@ func KCPDial(remoteAddr, token string, s KCPSettings) (*kcp.UDPSession, error) {
 	}
 
 	ApplyKCPSettings(session, s)
+	if err := ctx.Err(); err != nil {
+		session.Close()
+		return nil, err
+	}
 	return session, nil
+}
+
+func resolveKCPUDPAddr(ctx context.Context, address string) (*net.UDPAddr, error) {
+	host, service, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := net.DefaultResolver.LookupPort(ctx, "udp", service)
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return &net.UDPAddr{Port: port}, nil
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, &net.AddrError{Err: "no suitable address found", Addr: address}
+	}
+	chosen := addresses[0]
+	want6 := strings.HasPrefix(address, "[")
+	for _, candidate := range addresses {
+		if (candidate.IP.To4() == nil) == want6 {
+			chosen = candidate
+			break
+		}
+	}
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
 }
 
 // hostToIPAddr turns a "host" or "host:port" string into the *net.IPAddr the
 // ICMP socket dials, resolving a name if need be. The port, if any, is dropped:
 // ICMP does not have one.
 func hostToIPAddr(remoteAddr string) (*net.IPAddr, error) {
+	return hostToIPAddrContext(context.Background(), remoteAddr)
+}
+
+func hostToIPAddrContext(ctx context.Context, remoteAddr string) (*net.IPAddr, error) {
 	host := remoteAddr
 	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		host = h
 	}
-	return net.ResolveIPAddr("ip4", host)
+	if host == "" {
+		return &net.IPAddr{}, nil
+	}
+	addresses, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range addresses {
+		if ip.To4() != nil {
+			return &net.IPAddr{IP: ip}, nil
+		}
+	}
+	return nil, &net.AddrError{Err: "no suitable IPv4 address found", Addr: remoteAddr}
 }
 
 // portOf returns the port of a "host:port" address, or 0 when there is none.

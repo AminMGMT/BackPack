@@ -160,11 +160,13 @@ func (c *KcpTransport) Restart() {
 // connections take the next one in the rotation, which spreads them over every
 // configured endpoint when load balancing is on.
 func (c *KcpTransport) dial(addr string) (*kcp.UDPSession, error) {
-	session, err := network.KCPDial(addr, c.config.Token, c.kcpSettings)
-	if err != nil {
-		return nil, err
+	ctx := c.state.Ctx()
+	if c.config.DialTimeOut > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.config.DialTimeOut)
+		defer cancel()
 	}
-	return session, nil
+	return network.KCPDialContext(ctx, addr, c.config.Token, c.kcpSettings)
 }
 
 func (c *KcpTransport) channelDialer() {

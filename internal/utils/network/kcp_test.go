@@ -1,7 +1,10 @@
 package network
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -165,6 +168,89 @@ func TestStartupNotesDoNotClaimMTUMustMatch(t *testing.T) {
 func withFEC(s KCPSettings, data, parity int) KCPSettings {
 	s.DataShards, s.ParityShards = data, parity
 	return s
+}
+
+func TestKCPAddressResolutionPreservesUDPAndRawCarrierAddresses(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:443", "[::1]:443", "[fe80::1%test-zone]:443", ":443", "localhost:domain"} {
+		t.Run(address, func(t *testing.T) {
+			want, err := net.ResolveUDPAddr("udp", address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := resolveKCPUDPAddr(context.Background(), address)
+			if err != nil || got.String() != want.String() {
+				t.Fatalf("resolved %v, error %v, want %s", got, err, want)
+			}
+		})
+	}
+	for _, address := range []string{"127.0.0.1", "127.0.0.1:443", "localhost:443", ""} {
+		host := address
+		if h, _, err := net.SplitHostPort(address); err == nil {
+			host = h
+		}
+		want, err := net.ResolveIPAddr("ip4", host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := hostToIPAddrContext(context.Background(), address)
+		if err != nil || got.String() != want.String() {
+			t.Fatalf("resolved raw peer %v, error %v, want %s", got, err, want)
+		}
+	}
+	if _, err := hostToIPAddrContext(context.Background(), "[::1]:443"); err == nil {
+		t.Fatal("IPv6 was accepted for an IPv4-only raw carrier")
+	}
+}
+
+func TestKCPSessionOutlivesItsSetupBudget(t *testing.T) {
+	settings := KCPSettings{MTU: 1350, Interval: 20, NoDelay: 1, SndWnd: 128, RcvWnd: 128,
+		DataShards: 10, ParityShards: 3}
+	listener, carrier, err := KCPListen("127.0.0.1:0", "setup-lifetime", settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	defer carrier.Close()
+	_ = listener.SetReadDeadline(time.Now().Add(3 * time.Second))
+	payload := bytes.Repeat([]byte("KCP with FEC after setup cancellation"), 2048)
+	served := make(chan error, 1)
+	go func() {
+		conn, err := listener.AcceptKCP()
+		if err != nil {
+			served <- err
+			return
+		}
+		defer conn.Close()
+		ApplyKCPSettings(conn, settings)
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		got := make([]byte, len(payload))
+		_, err = io.ReadFull(conn, got)
+		if err == nil && !bytes.Equal(got, payload) {
+			err = fmt.Errorf("KCP payload changed after setup cancellation")
+		}
+		served <- err
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	conn, err := KCPDialContext(ctx, listener.Addr().String(), "setup-lifetime", settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	cancel()
+	time.Sleep(350 * time.Millisecond)
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	if n, err := conn.Write(payload); err != nil || n != len(payload) {
+		t.Fatalf("write after setup: %d, %v", n, err)
+	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("KCP session stopped carrying traffic after setup cancellation")
+	}
 }
 
 // The startup notes are told once a run, not once a session.
