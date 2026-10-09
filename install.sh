@@ -371,23 +371,42 @@ download_go() {
   return 1
 }
 go_new_enough() {
-  local v; v="$("$1" version 2>/dev/null | grep -oE 'go1\.[0-9]+' | head -1)"; v="${v#go1.}"
-  [[ -n "$v" ]] && (( v >= GO_MIN_MINOR ))
+  local v got_major got_minor got_patch want_major want_minor want_patch
+  # Inspect the bundled compiler, not an automatically selected toolchain.
+  v="$(GOTOOLCHAIN=local "$1" version 2>/dev/null | awk '{print $3}')"
+  [[ "$v" =~ ^go([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]] || return 1
+  got_major="${BASH_REMATCH[1]}"; got_minor="${BASH_REMATCH[2]}"; got_patch="${BASH_REMATCH[4]:-0}"
+  IFS=. read -r want_major want_minor want_patch <<< "$GO_VERSION"
+  want_patch="${want_patch:-0}"
+  (( got_major > want_major ||
+     (got_major == want_major && got_minor > want_minor) ||
+     (got_major == want_major && got_minor == want_minor && got_patch >= want_patch) ))
 }
 ensure_go() {
-  command -v go >/dev/null 2>&1 && go_new_enough "$(command -v go)" && { info "Go: $(go version)"; return; }
-  [[ -x /usr/local/go/bin/go ]] && go_new_enough /usr/local/go/bin/go && { export PATH="/usr/local/go/bin:$PATH"; info "Go: $(go version)"; return; }
-  warn "Installing Go ${GO_VERSION}..."; download_go /tmp/go-bp.tgz || { err "Could not obtain Go."; exit 1; }
-  rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go-bp.tgz; export PATH="/usr/local/go/bin:$PATH"; info "$(go version)"
+  local candidate
+  candidate="$(command -v go || true)"
+  if [[ -n "$candidate" ]] && go_new_enough "$candidate"; then
+    GO_BIN="$candidate"
+  elif [[ -x /usr/local/go/bin/go ]] && go_new_enough /usr/local/go/bin/go; then
+    GO_BIN=/usr/local/go/bin/go
+  else
+    warn "Installing Go ${GO_VERSION}..."
+    download_go /tmp/go-bp.tgz || { err "Could not obtain Go."; exit 1; }
+    rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go-bp.tgz
+    GO_BIN=/usr/local/go/bin/go
+    go_new_enough "$GO_BIN" || { err "Installed Go does not satisfy ${GO_VERSION}."; exit 1; }
+  fi
+  info "Go: $(GOTOOLCHAIN=local "$GO_BIN" version) (${GO_BIN})"
 }
 build_from_source() {
   cd "$SCRIPT_DIR"
-  ensure_go; export PATH="/usr/local/go/bin:$PATH"
-  # Direct module fetching first, Iran-friendly mirrors as fallback.
-  export GOPROXY="https://proxy.golang.org,https://mirror-go.runflare.com,https://goproxy.cn,direct"
+  ensure_go
+  # Pipes allow fallback on blocked proxies (403), outages and network errors.
+  # Preserve an explicitly configured proxy, including its fallback policy.
+  export GOPROXY="${GOPROXY:-https://proxy.golang.org|https://mirror-go.runflare.com|https://goproxy.cn|direct}"
   export GOSUMDB=off GOTOOLCHAIN=local
-  info "Building from source (proxy order: direct first, then mirrors)."
-  CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$BIN_PATH" .
+  info "Building from source (module proxy order: ${GOPROXY})."
+  CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "-s -w" -o "$BIN_PATH" .
   echo "$INSTALL_DIR" > /etc/backpack/install_path
 }
 
