@@ -192,6 +192,7 @@ func (s *KcpTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *KcpTransport) start(g *kcpGen) {
+	go sweepTunnelConns(g.ctx, g.tunnelChannel)
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
@@ -222,7 +223,12 @@ func (s *KcpTransport) seatClient(g *kcpGen, control net.Conn) {
 			s.status.set("Connected (" + s.transportLabel() + ")")
 			s.logger.Info("control channel successfully established.")
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.Net(control)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's session is closed and forgotten, and
@@ -239,8 +245,10 @@ func (s *KcpTransport) vacate(g *kcpGen) {
 func (s *KcpTransport) Restart() {
 	s.restart(s.controlChannel.Close, func(ctx context.Context) {
 		s.controlChannel.Clear()
+		s.counterMutex.Lock()
 		atomic.StoreInt32(&s.streamCounter, 0)
 		atomic.StoreInt32(&s.sessionCounter, 0)
+		s.counterMutex.Unlock()
 		go s.start(s.newGen(ctx))
 	})
 }
@@ -410,7 +418,7 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 		}
 		// A peer claiming the control channel. Answering with the token is what
 		// proves to the client that this server knows the secret too.
-		if err := utils.SendBinaryTransportString(session, s.config.Token, utils.SG_Chan); err != nil {
+		if err := utils.SendBinaryTransportStringWithin(session, s.config.Token, utils.SG_Chan, 10*time.Second); err != nil {
 			s.logger.Errorf("failed to send security token: %v", err)
 			session.Close()
 			return
@@ -475,17 +483,15 @@ func (s *KcpTransport) handleLoop(g *kcpGen) {
 			return
 
 		case session := <-g.tunnelChannel:
-			atomic.AddInt32(&s.sessionCounter, 1)
+			if !s.countGeneration(g.ctx, &s.sessionCounter, 1) {
+				session.Close()
+				continue
+			}
 
-			go s.handleSession(g, session)
+			loop := s.session(g)
+			go loop.run(session)
 		}
 	}
-}
-
-// handleSession carries connections over one session. The state machine is
-// muxSession's, shared with the other two mux transports — see muxsession.go.
-func (s *KcpTransport) handleSession(g *kcpGen, session *smux.Session) {
-	s.session(g).run(session)
 }
 
 // session binds this transport's channels, counters and settings to the shared
@@ -505,6 +511,9 @@ func (s *KcpTransport) session(g *kcpGen) muxSession {
 		log:           s.logger,
 		streams:       &s.streamCounter,
 		sessions:      &s.sessionCounter,
+		count: func(counter *int32, delta int32) {
+			s.countGeneration(g.ctx, counter, delta)
+		},
 	}
 }
 
@@ -514,6 +523,6 @@ func (s *KcpTransport) forwarder(g *kcpGen) portForwarder {
 		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   alwaysNodelay(s.logger),
-		queued: muxRequest(&s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),
+		queued: muxRequestForGeneration(g.ctx, &s.counterMutex, &s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),
 	}
 }

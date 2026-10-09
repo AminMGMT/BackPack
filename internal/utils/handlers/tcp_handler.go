@@ -12,6 +12,9 @@ import (
 )
 
 func TCPConnectionHandler(ctx context.Context, proxyProtocol bool, from net.Conn, to net.Conn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
+	stop := context.AfterFunc(ctx, func() { from.Close(); to.Close() })
+	defer stop()
+
 	// Write Proxy Protocol V2 Header
 	if proxyProtocol {
 		err := WriteProxyProtocol(from, to)
@@ -133,6 +136,11 @@ func writeAll(from, to net.Conn, data []byte, logger *logrus.Logger, usage *web.
 			} else {
 				logger.Trace("unable to write to the connection: ", err)
 			}
+			from.Close()
+			to.Close()
+			return false
+		}
+		if w == 0 {
 			from.Close()
 			to.Close()
 			return false

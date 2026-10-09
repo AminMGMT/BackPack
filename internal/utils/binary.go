@@ -9,6 +9,9 @@ import (
 )
 
 func SendBinaryString(conn interface{}, message string) error {
+	if len(message) > 65535 {
+		return fmt.Errorf("message exceeds the 16-bit frame length")
+	}
 	// Header size
 	const headerSize = 2
 
@@ -24,7 +27,7 @@ func SendBinaryString(conn interface{}, message string) error {
 	switch c := conn.(type) {
 	case net.Conn:
 		// Send the buffer over the connection
-		if _, err := c.Write(buf); err != nil {
+		if err := writeFrame(c, buf); err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
@@ -75,6 +78,9 @@ func ReceiveBinaryString(conn interface{}) (string, error) {
 }
 
 func SendBinaryTransportString(conn interface{}, message string, transport byte) error {
+	if len(message) > 65535 {
+		return fmt.Errorf("message exceeds the 16-bit frame length")
+	}
 	// Header size
 	const headerSize = 3
 
@@ -93,7 +99,7 @@ func SendBinaryTransportString(conn interface{}, message string, transport byte)
 	switch c := conn.(type) {
 	case net.Conn:
 		// Send the buffer over the connection
-		if _, err := c.Write(buf); err != nil {
+		if err := writeFrame(c, buf); err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
@@ -156,7 +162,7 @@ func SendBinaryByte(conn interface{}, message byte) error {
 		// read" here, on the write path, so a control channel that could not be
 		// written to reported itself as a read error with a write error inside
 		// it — a line nobody could act on.
-		if _, err := c.Write(messageBuf[:]); err != nil {
+		if err := writeFrame(c, messageBuf[:]); err != nil {
 			return fmt.Errorf("failed to write message to net.Conn: %w", err)
 		}
 
@@ -166,6 +172,34 @@ func SendBinaryByte(conn interface{}, message byte) error {
 
 	// Successful
 	return nil
+}
+
+// writeFrame preserves framing across short writes and refuses a writer that
+// makes no progress, rather than reporting a truncated frame as successful.
+func writeFrame(w io.Writer, frame []byte) error {
+	for len(frame) > 0 {
+		n, err := w.Write(frame)
+		if err != nil {
+			return err
+		}
+		if n <= 0 || n > len(frame) {
+			return io.ErrShortWrite
+		}
+		frame = frame[n:]
+	}
+	return nil
+}
+
+// SendBinaryTransportStringWithin bounds handshake writes before either peer
+// has a running control loop to interrupt a stalled connection.
+func SendBinaryTransportStringWithin(conn interface{}, message string, transport byte, timeout time.Duration) error {
+	if c, ok := conn.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		if err := c.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+			return err
+		}
+		defer c.SetWriteDeadline(time.Time{})
+	}
+	return SendBinaryTransportString(conn, message, transport)
 }
 
 // SendBinaryByteWithin is SendBinaryByte with a bound on how long it may take.

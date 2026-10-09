@@ -46,14 +46,20 @@ func TcpDialerVia(ctx context.Context, out *Outbound, remoteAddress string, time
 		// Attempt to establish a TCP connection
 		tcpConn, err = attemptTcpDialer(ctx, dialAddress, out, timeout, keepAlive, nodelay, SO_RCVBUF, SO_SNDBUF, mss)
 		if err == nil && proxy != nil {
+			proxyConn := tcpConn
+			stop := context.AfterFunc(ctx, func() { proxyConn.Close() })
 			if err = connectThrough(tcpConn, proxy, remoteAddress, timeout); err != nil {
 				tcpConn.Close()
-				tcpConn = nil
 				err = fmt.Errorf("via %s: %w", proxy, err)
 			}
+			stop()
 		}
 		if err == nil {
 			// Connection successful
+			if ctx.Err() != nil {
+				tcpConn.Close()
+				return nil, ctx.Err()
+			}
 			return tcpConn, nil
 		}
 
@@ -63,7 +69,13 @@ func TcpDialerVia(ctx context.Context, out *Outbound, remoteAddress string, time
 		}
 
 		// Log retry attempt and wait before retrying
-		time.Sleep(backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 		backoff *= 2 // Exponential backoff (double the wait time after each failure)
 	}
 

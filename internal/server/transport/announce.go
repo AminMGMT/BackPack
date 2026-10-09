@@ -85,7 +85,7 @@ func isControlSignal(sig byte) bool {
 // reports an invalid token — the wrong wording, but pointing at the right half
 // of the configuration, where EOF pointed at nothing.
 func refuseControl(conn io.ReadWriteCloser, reason string) {
-	_ = utils.SendBinaryTransportString(conn, reason, utils.SG_Refused)
+	_ = utils.SendBinaryTransportStringWithin(conn, reason, utils.SG_Refused, 10*time.Second)
 	conn.Close()
 }
 

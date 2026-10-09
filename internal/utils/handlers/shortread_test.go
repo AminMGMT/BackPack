@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/backpack/backpack/internal/metrics"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -17,12 +19,16 @@ type halfConn struct {
 	net.Conn
 	once sync.Once
 	data []byte
+	err  error
 }
 
 func (c *halfConn) Read(b []byte) (int, error) {
 	n := 0
 	c.once.Do(func() { n = copy(b, c.data) })
 	if n > 0 {
+		if c.err != nil {
+			return n, c.err
+		}
 		return n, io.EOF
 	}
 	return 0, io.EOF
@@ -81,4 +87,65 @@ func TestTheLastBytesOfAStreamAreNotDropped(t *testing.T) {
 		t.Fatal("nothing reached the far side at all")
 	}
 	<-done
+}
+
+// The websocket relay has the same Reader contract as the TCP relay: send the
+// bytes returned with the terminal error, and count them only after the write.
+func TestTheLastBytesReachWebSocketBeforeReadError(t *testing.T) {
+	const payload = "the websocket response tail"
+	for _, tc := range []struct {
+		name string
+		err  error
+		idle bool
+	}{
+		{"EOF", io.EOF, false},
+		{"read-error", io.ErrUnexpectedEOF, false},
+		{"empty-read-before-EOF", io.EOF, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := websocketPair(t)
+			var source net.Conn = &halfConn{data: []byte(payload), err: tc.err}
+			if tc.idle {
+				source = &emptyFirstConn{Conn: source}
+			}
+			log := logrus.New()
+			log.SetLevel(logrus.PanicLevel)
+			inBefore, outBefore := metrics.Traffic()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				transferTCPToWebSocket(source, server, log, nil, 0, false)
+			}()
+			_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+			kind, got, err := client.ReadMessage()
+			if err != nil || kind != websocket.BinaryMessage || string(got) != payload {
+				t.Fatalf("response before terminal error: kind=%d payload=%q error=%v", kind, got, err)
+			}
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("websocket relay outlived its reader")
+			}
+			inAfter, outAfter := metrics.Traffic()
+			if inAfter != inBefore || outAfter-outBefore != uint64(len(payload)) {
+				t.Fatalf("response accounting: in=%d out=%d wantOut=%d", inAfter-inBefore, outAfter-outBefore, len(payload))
+			}
+		})
+	}
+}
+
+// A zero-byte read with no error has no stream content and must not turn into
+// an empty websocket message before the next payload arrives.
+type emptyFirstConn struct {
+	net.Conn
+	once sync.Once
+}
+
+func (c *emptyFirstConn) Read(p []byte) (int, error) {
+	empty := false
+	c.once.Do(func() { empty = true })
+	if empty {
+		return 0, nil
+	}
+	return c.Conn.Read(p)
 }

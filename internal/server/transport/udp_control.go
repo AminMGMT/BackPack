@@ -93,7 +93,12 @@ func (s *UdpTransport) seatClient(g *udpGen, conn net.Conn) {
 			s.status.set("Connected (UDP)")
 			s.logger.Info("control channel successfully established.")
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.Net(conn)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's channel is closed and forgotten, and
@@ -195,7 +200,7 @@ func (s *UdpTransport) validControlClaim(g *udpGen, conn net.Conn) bool {
 		return false
 	}
 
-	if err := utils.SendBinaryTransportString(conn, s.config.Token, utils.SG_Chan); err != nil {
+	if err := utils.SendBinaryTransportStringWithin(conn, s.config.Token, utils.SG_Chan, 10*time.Second); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
 		return false
 	}

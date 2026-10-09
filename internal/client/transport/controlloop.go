@@ -44,19 +44,31 @@ type controlLoop struct {
 
 // control builds the loop for the generation that is starting now.
 func (l *lifecycle) control(link controlwire.Link, keepAlive time.Duration, dial, restart func()) controlLoop {
+	ctx := l.state.Ctx()
 	return controlLoop{
-		ctx:       l.state.Ctx(),
+		ctx:       ctx,
 		link:      link,
 		keepAlive: keepAlive,
 		log:       l.logger,
-		restart:   restart,
-		asked:     func() { l.serverAsked(dial) },
+		restart: func() {
+			// The goroutine requesting recovery may be scheduled only after
+			// its generation has already been replaced.
+			if ctx.Err() == nil {
+				restart()
+			}
+		},
+		asked: func() { l.serverAsked(dial) },
 	}
 }
 
 // run serves the channel until the generation ends or the channel fails; a
 // failure asks for a restart.
 func (c controlLoop) run() {
+	// Let a healthy channel carry the goodbye, but interrupt a stalled write
+	// promptly instead of leaving shutdown behind the full write timeout.
+	stop := context.AfterFunc(c.ctx, func() { time.AfterFunc(100*time.Millisecond, c.link.Close) })
+	defer stop()
+	defer c.link.Close()
 	done := make(chan struct{})
 	defer close(done)
 
@@ -182,6 +194,6 @@ func (l *lifecycle) serverAsked(dial func()) {
 		// unanswered is how it shrinks. See poolMaintainer.
 	default:
 		l.logger.Debug("channel signal received, initiating tunnel dialer")
-		go dial()
+		l.state.Go(dial)
 	}
 }

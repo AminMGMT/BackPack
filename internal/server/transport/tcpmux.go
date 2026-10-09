@@ -142,6 +142,7 @@ func (s *TcpMuxTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *TcpMuxTransport) start(g *tcpMuxGen) {
+	go sweepTunnelConns(g.ctx, g.tunnelChannel)
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
@@ -186,7 +187,12 @@ func (s *TcpMuxTransport) seatClient(g *tcpMuxGen, candidate controlCandidate) {
 			s.status.set("Connected (TCPMux)")
 			s.logger.Infof("control channel successfully established (mux version %d).", s.muxVersion.Load())
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.Net(candidate.conn)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's channel is closed and forgotten, and
@@ -206,8 +212,10 @@ func (s *TcpMuxTransport) Restart() {
 		// The next run issues its own nonce and settles its own mux version.
 		s.poolNonce.Clear()
 		s.muxVersion.Store(0)
+		s.counterMutex.Lock()
 		atomic.StoreInt32(&s.streamCounter, 0)
 		atomic.StoreInt32(&s.sessionCounter, 0)
+		s.counterMutex.Unlock()
 		go s.start(s.newGen(ctx))
 	})
 }
@@ -289,7 +297,7 @@ func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
 			conn.Close()
 			return
 		}
-		s.deliverTunnelConn(g, conn)
+		s.deliverTunnelConn(g, conn, "")
 		return
 	}
 
@@ -313,7 +321,7 @@ func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
 			return
 		}
 		s.preauth.Prove(conn.RemoteAddr())
-		s.deliverTunnelConn(g, conn)
+		s.deliverTunnelConn(g, conn, ann.payload)
 
 	default:
 		s.logger.Warnf("unexpected announcement %d from %s, discarding", ann.signal, conn.RemoteAddr())
@@ -341,7 +349,7 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 		conn.Close()
 		return
 	}
-	if err := utils.SendBinaryTransportString(conn, ack, ann.signal); err != nil {
+	if err := utils.SendBinaryTransportStringWithin(conn, ack, ann.signal, 10*time.Second); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
 		conn.Close()
 		return
@@ -367,19 +375,41 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 
 // deliverTunnelConn wraps an admitted connection in a mux session and hands it
 // to the pool, dropping it if the pool is full.
-func (s *TcpMuxTransport) deliverTunnelConn(g *tcpMuxGen, conn net.Conn) {
-	session, err := smux.Client(conn, s.smuxCfg())
-	if err != nil {
-		s.logger.Errorf("failed to create MUX session for connection %s: %v", conn.RemoteAddr().String(), err)
+func (s *TcpMuxTransport) deliverTunnelConn(g *tcpMuxGen, conn net.Conn, nonce string) {
+	accepted := g.seat.admit(g.ctx, func(ctx context.Context) bool {
+		if nonce != "" {
+			if !s.controlChannel.IsSet() || !s.poolNonce.Verify(nonce) {
+				return false
+			}
+		} else {
+			peer := s.controlChannel.RemoteAddr()
+			if s.poolNonce.Get() != "" || peer == nil || !sameHost(peer, conn.RemoteAddr()) {
+				return false
+			}
+		}
+		session, err := smux.Client(conn, s.smuxCfg())
+		if err != nil {
+			s.logger.Errorf("failed to create MUX session: %v", err)
+			return false
+		}
+		select {
+		case g.tunnelChannel <- session:
+			// The client identity is captured before the session can reach a worker.
+			go func() {
+				select {
+				case <-ctx.Done():
+					session.Close()
+				case <-session.CloseChan():
+				}
+			}()
+			return true
+		default:
+			session.Close()
+			return false
+		}
+	})
+	if !accepted {
 		conn.Close()
-		return
-	}
-
-	select {
-	case g.tunnelChannel <- session: // ok
-	default:
-		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.RemoteAddr().String())
-		session.Close()
 	}
 }
 
@@ -391,17 +421,15 @@ func (s *TcpMuxTransport) handleLoop(g *tcpMuxGen) {
 
 		case session := <-g.tunnelChannel:
 			// +1 for session counter
-			atomic.AddInt32(&s.sessionCounter, 1)
+			if !s.countGeneration(g.ctx, &s.sessionCounter, 1) {
+				session.Close()
+				continue
+			}
 
-			go s.handleSession(g, session)
+			loop := s.session(g)
+			go loop.run(session)
 		}
 	}
-}
-
-// handleSession carries connections over one session. The state machine is
-// muxSession's, shared with the other two mux transports — see muxsession.go.
-func (s *TcpMuxTransport) handleSession(g *tcpMuxGen, session *smux.Session) {
-	s.session(g).run(session)
 }
 
 // session binds this transport's channels, counters and settings to the shared
@@ -421,6 +449,9 @@ func (s *TcpMuxTransport) session(g *tcpMuxGen) muxSession {
 		log:           s.logger,
 		streams:       &s.streamCounter,
 		sessions:      &s.sessionCounter,
+		count: func(counter *int32, delta int32) {
+			s.countGeneration(g.ctx, counter, delta)
+		},
 	}
 }
 
@@ -430,6 +461,6 @@ func (s *TcpMuxTransport) forwarder(g *tcpMuxGen) portForwarder {
 		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   nodelayTune(s.config.Nodelay, s.logger),
-		queued: muxRequest(&s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),
+		queued: muxRequestForGeneration(g.ctx, &s.counterMutex, &s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),
 	}
 }

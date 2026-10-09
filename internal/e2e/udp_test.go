@@ -66,22 +66,33 @@ func TestUDPTransportCarriesData(t *testing.T) {
 	go func() { defer wg.Done(); cli.Start() }()
 
 	entry := fmt.Sprintf("127.0.0.1:%d", entryPort)
-	payload := []byte("udp-datagram-roundtrip-check")
-
-	// Datagrams are unreliable and the tunnel needs a moment to come up, so
-	// retry the probe until one round-trips or the deadline passes — the same
-	// readiness pattern the TCP harness uses, over UDP.
-	deadline := time.Now().Add(tunnelReadyTimeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		if err := udpRoundTrip(entry, payload); err == nil {
-			return // success: the udp transport carried the datagram
-		} else {
-			lastErr = err
-		}
-		time.Sleep(250 * time.Millisecond)
+	conn, err := holdUDPFlow(t, entry, tunnelReadyTimeout)
+	if err != nil {
+		t.Fatalf("udp tunnel never carried a datagram: %v", err)
 	}
-	t.Fatalf("udp tunnel never carried a datagram: %v", lastErr)
+	defer conn.Close()
+
+	// The same established flow must preserve large and empty packets, then
+	// carry a normal packet afterwards without restarting either endpoint.
+	for _, size := range []int{16384, 16385, 60000, 0, 7} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			payload := bytes.Repeat([]byte{byte(size % 251)}, size)
+			if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := conn.Write(payload); err != nil || n != size {
+				t.Fatalf("datagram send = %d, error = %v, want %d", n, err, size)
+			}
+			got := make([]byte, 65535)
+			n, err := conn.Read(got)
+			if err != nil {
+				t.Fatalf("%d-byte datagram did not return: %v", size, err)
+			}
+			if !bytes.Equal(payload, got[:n]) {
+				t.Fatalf("datagram came back altered: got %d bytes, want %d", n, size)
+			}
+		})
+	}
 }
 
 // TestUDPServerReadoptsControlChannel proves the server keeps accepting control

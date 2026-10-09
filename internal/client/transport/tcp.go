@@ -81,12 +81,12 @@ func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.L
 
 func (c *TcpTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		c.state.Go(c.state.Usage().Monitor)
 	}
 
 	c.status.set("Disconnected (TCP)")
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
 func (c *TcpTransport) Restart() {
 	c.restart(nil, func() {
@@ -160,7 +160,7 @@ func (c *TcpTransport) channelDialer() {
 			// first; a server that predates it closes the connection without
 			// answering, which is what flips the fallback below.
 			signal := c.legacyServer.signal()
-			err = utils.SendBinaryTransportString(tunnelTCPConn, c.config.Token, signal)
+			err = utils.SendBinaryTransportStringWithin(tunnelTCPConn, c.config.Token, signal, 10*time.Second)
 			if err != nil {
 				c.logger.Errorf("failed to send security token: %v", err)
 				tunnelTCPConn.Close()
@@ -221,8 +221,9 @@ func (c *TcpTransport) channelDialer() {
 				c.logger.Info("control channel established successfully")
 
 				c.status.set("Connected (TCP)")
-				go c.poolMaintainer()
-				go c.control().run()
+				c.state.Go(c.poolMaintainer)
+				loop := c.control()
+				c.state.Go(func() { loop.run() })
 
 				return
 
@@ -248,6 +249,9 @@ func (c *TcpTransport) poolMaintainer() {
 		taken:      &c.loadConnections,
 		shrink:     c.controlFlow,
 		dial:       c.tunnelDialer,
+		spawn:      c.state.Go,
+		pending:    &c.dialingConnections,
+		maxSize:    c.config.ConnPoolSize * poolGrowthLimit,
 	}.maintain()
 }
 
@@ -258,6 +262,12 @@ func (c *TcpTransport) control() controlLoop {
 
 // Dialing to the tunnel server, chained functions, without retry
 func (c *TcpTransport) tunnelDialer() {
+	ready, ok := c.beginPoolDial(c.config.ConnPoolSize * poolGrowthLimit)
+	if !ok {
+		return
+	}
+	defer ready()
+
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 	ctx := c.state.Ctx()
 
@@ -271,6 +281,8 @@ func (c *TcpTransport) tunnelDialer() {
 
 		return
 	}
+
+	defer c.state.Own(rawConn)()
 
 	// Same stealth upgrade as the control channel: the data connection carries
 	// its bytes through the Noise record layer when the tunnel is in that mode.
@@ -291,6 +303,7 @@ func (c *TcpTransport) tunnelDialer() {
 
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
+	ready()
 
 	// Attempt to receive the remote address from the tunnel server
 	remoteAddr, transport, err := utils.ReceiveBinaryTransportString(tcpConn)

@@ -287,7 +287,7 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 	}
 
 	// Dial to the WebSocket server
-	tunnelWSConn, resp, err := dialer.Dial(wsURL, headers)
+	tunnelWSConn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
 		return nil, err
 	}

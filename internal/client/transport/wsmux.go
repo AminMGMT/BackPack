@@ -77,12 +77,12 @@ func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logr
 
 func (c *WsMuxTransport) Start() {
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		c.state.Go(c.state.Usage().Monitor)
 	}
 
 	c.status.set(fmt.Sprintf("Disconnected (%s)", c.config.Mode))
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 }
 
 func (c *WsMuxTransport) Restart() {
@@ -122,8 +122,9 @@ func (c *WsMuxTransport) channelDialer() {
 
 			c.status.set(fmt.Sprintf("Connected (%s)", c.config.Mode))
 
-			go c.poolMaintainer()
-			go c.control().run()
+			c.state.Go(c.poolMaintainer)
+			loop := c.control()
+			c.state.Go(func() { loop.run() })
 
 			return
 		}
@@ -142,6 +143,9 @@ func (c *WsMuxTransport) poolMaintainer() {
 		taken:      &c.loadConnections,
 		shrink:     c.controlFlow,
 		dial:       c.tunnelDialer,
+		spawn:      c.state.Go,
+		pending:    &c.dialingConnections,
+		maxSize:    muxPoolLimit(c.config.ConnPoolSize, c.config.MaxReceiveBuffer),
 	}.maintain()
 }
 
@@ -154,6 +158,12 @@ func (c *WsMuxTransport) control() controlLoop {
 }
 
 func (c *WsMuxTransport) tunnelDialer() {
+	ready, ok := c.beginPoolDial(muxPoolLimit(c.config.ConnPoolSize, c.config.MaxReceiveBuffer))
+	if !ok {
+		return
+	}
+	defer ready()
+
 	c.logger.Debugf("initiating new %s tunnel connection to address %s", c.config.Mode, c.config.RemoteAddr)
 
 	// Dial to the tunnel server
@@ -167,8 +177,11 @@ func (c *WsMuxTransport) tunnelDialer() {
 		return
 	}
 
+	defer c.state.Own(tunnelWSConn)()
+
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
+	ready()
 
 	c.handleSession(tunnelWSConn)
 }

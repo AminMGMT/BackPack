@@ -3,12 +3,16 @@ package transport
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
+	"github.com/sirupsen/logrus"
 )
 
 // The udp transport's forwarded ports: each source address is a flow, carried
@@ -46,7 +50,7 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 	s.logger.Infof("UDP listener started successfully, listening on address: %s", listener.LocalAddr().String())
 
 	// Buffer for UDP reads
-	buf := make([]byte, 16*1024)
+	buf := make([]byte, network.MaxDatagram)
 
 	// Track active connections
 	activeConnections := map[string]*LocalUDPConn{}
@@ -110,6 +114,9 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 
 				// Create a new payload channel for this connection
 				payloadChan := make(chan []byte, udpPayloadQueue)
+				// Queue the opening packet before publishing the flow. Once it
+				// is offered, pairing or generation cleanup may close the channel.
+				payloadChan <- append([]byte(nil), buf[:n]...)
 
 				// Build the UDP connection object
 				newUDPConn := LocalUDPConn{
@@ -128,7 +135,6 @@ func (s *UdpTransport) localListener(g *udpGen, localAddr, remoteAddr string) {
 				select {
 				case udpChan <- &newUDPConn:
 					s.logger.Debugf("accepted UDP connection from %s", addr.String())
-					payloadChan <- append([]byte(nil), buf[:n]...) // Send a copy of the new payload to the channel
 
 					// Request a new TCP connection
 					select {
@@ -259,18 +265,25 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 }
 
 func (s *UdpTransport) udpCopy(g *udpGen, udpLocal *LocalUDPConn, udpTunnel *TunnelUDPConn, activeConnections *map[string]*LocalUDPConn, mu *sync.Mutex) {
+	ctx, cancel := context.WithCancel(g.ctx)
+	defer cancel()
+	flow := &udpGen{ctx: ctx, usageMonitor: g.usageMonitor}
+	started := time.Now()
+	var activity atomic.Int64
 	done := make(chan struct{})
 
 	// Handle data from local to tunnel
 	go func() {
 		defer close(done)
-		s.udpLocalCopy(g, udpLocal, udpTunnel)
+		defer cancel()
+		s.udpLocalCopy(flow, udpLocal, udpTunnel, started, &activity)
 	}()
 
 	// Handle data from tunnel to local
-	s.udpTunnelCopy(g, udpTunnel, udpLocal)
+	s.udpTunnelCopy(flow, udpTunnel, udpLocal, started, &activity)
+	cancel()
 
-	// Wait until one of the directions is done (connection closed or idle)
+	// Cancellation stops the other direction before joining it.
 	<-done
 
 	// Remove local connection from active connections and close the channel.
@@ -351,7 +364,7 @@ func (s *UdpTransport) dropTunnelConn(conn *TunnelUDPConn) {
 	s.activeMu.Unlock()
 }
 
-func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn) {
+func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDPConn, started time.Time, activity *atomic.Int64) {
 	// One timer for the session, reset per packet.
 	//
 	// This was time.After inside the select, which allocates a fresh timer on
@@ -378,17 +391,17 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 
 			packetSize := len(data)
 
-			totalWritten := 0
-			for totalWritten < packetSize {
-				// Write the packet to the tunnel
-				w, err := to.listener.WriteToUDP(data[totalWritten:], to.addr)
-				if err != nil {
-					s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
-					return
-				}
-				totalWritten += w
+			// One write is one datagram, including an empty keepalive.
+			totalWritten, err := to.listener.WriteToUDP(data, to.addr)
+			if err == nil && totalWritten != packetSize {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
+				return
 			}
 
+			touchUDPActivity(started, activity)
 			// Onto the tunnel: the other half of what this transport never
 			// counted. See acceptTunnelConn for the inbound side.
 			metrics.AddBytes(0, uint64(totalWritten))
@@ -398,9 +411,15 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 				g.usageMonitor.AddOrUpdatePort(from.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
 
-			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			if s.logger.IsLevelEnabled(logrus.DebugLevel) {
+				s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			}
 
 		case <-idle.C:
+			if remaining := idleForward - (time.Since(started) - time.Duration(activity.Load())); remaining > 0 {
+				idle.Reset(remaining)
+				continue
+			}
 			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
 			return
 		}
@@ -413,7 +432,7 @@ func (s *UdpTransport) udpLocalCopy(g *udpGen, from *LocalUDPConn, to *TunnelUDP
 	}
 }
 
-func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUDPConn) {
+func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUDPConn, started time.Time, activity *atomic.Int64) {
 	// See udpLocalCopy for why this is one timer rather than a time.After per
 	// packet, and why the context is watched.
 	idle := time.NewTimer(idleForward)
@@ -431,24 +450,30 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 
 			packetSize := len(data)
 
-			totalWritten := 0
-			for totalWritten < packetSize {
-				// Write the packet to the tunnel
-				w, err := to.listener.WriteToUDP(data[totalWritten:], to.addr)
-				if err != nil {
-					s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
-					return
-				}
-				totalWritten += w
+			// A short write cannot be continued without splitting the datagram.
+			totalWritten, err := to.listener.WriteToUDP(data, to.addr)
+			if err == nil && totalWritten != packetSize {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				s.logger.Errorf("failed to write UDP payload to tunnel: %v", err)
+				return
 			}
 
+			touchUDPActivity(started, activity)
 			if s.config.Sniffer {
 				g.usageMonitor.AddOrUpdatePort(to.listener.LocalAddr().(*net.UDPAddr).Port, uint64(totalWritten))
 			}
 
-			s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			if s.logger.IsLevelEnabled(logrus.DebugLevel) {
+				s.logger.Debugf("forwarded %d bytes from local connection %s to tunnel", packetSize, from.addr.String())
+			}
 
 		case <-idle.C:
+			if remaining := idleForward - (time.Since(started) - time.Duration(activity.Load())); remaining > 0 {
+				idle.Reset(remaining)
+				continue
+			}
 			s.logger.Debugf("connection idle for %s, closing UDP connection for %s", idleForward, from.addr.String())
 			return
 		}
@@ -458,6 +483,17 @@ func (s *UdpTransport) udpTunnelCopy(g *udpGen, from *TunnelUDPConn, to *LocalUD
 		// its channel is empty and Reset is safe.
 		idle.Stop()
 		idle.Reset(idleForward)
+	}
+}
+
+// Activity is elapsed monotonic time, shared by both directions. Concurrent
+// updates must not move it backwards if one writer is briefly descheduled.
+func touchUDPActivity(started time.Time, activity *atomic.Int64) {
+	now := time.Since(started).Nanoseconds()
+	for previous := activity.Load(); now > previous; previous = activity.Load() {
+		if activity.CompareAndSwap(previous, now) {
+			return
+		}
 	}
 }
 

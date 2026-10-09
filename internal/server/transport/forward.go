@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -229,6 +230,17 @@ func muxRequest(streams, sessions *int32, muxCon int, reqNewConn chan struct{}, 
 		case reqNewConn <- struct{}{}:
 		default:
 			log.Warn("failed to request new connection. channel is full")
+		}
+	}
+}
+
+func muxRequestForGeneration(ctx context.Context, mu *sync.Mutex, streams, sessions *int32, muxCon int, reqNewConn chan struct{}, log *logrus.Logger) func() {
+	ask := muxRequest(streams, sessions, muxCon, reqNewConn, log)
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if ctx.Err() == nil {
+			ask()
 		}
 	}
 }

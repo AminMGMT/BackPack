@@ -144,6 +144,7 @@ func (s *QuicTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *QuicTransport) start(g *quicGen) {
+	go sweepTunnelConns(g.ctx, g.tunnelChannel)
 	if s.config.WebPort > 0 {
 		go g.usageMonitor.Monitor()
 	}
@@ -180,7 +181,12 @@ func (s *QuicTransport) seatClient(g *quicGen, claim quicClaim) {
 			s.status.set("Connected (QUIC)")
 			s.logger.Info("control channel successfully established.")
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.Net(claim.ctrl)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's connection is closed with a word to
@@ -438,7 +444,7 @@ func (s *QuicTransport) acceptStream(g *quicGen, conn *quic.Conn, stream *quic.S
 			}
 			answer = proof
 		}
-		if err := utils.SendBinaryTransportString(wrapped, answer, utils.SG_Chan); err != nil {
+		if err := utils.SendBinaryTransportStringWithin(wrapped, answer, utils.SG_Chan, 10*time.Second); err != nil {
 			s.logger.Errorf("failed to send security token: %v", err)
 			wrapped.Close()
 			return
@@ -530,6 +536,10 @@ func (s *QuicTransport) handleLoop(g *quicGen) {
 				ctx: g.ctx, local: localConn, tunnel: g.tunnelChannel,
 				limits: s.limits, log: s.logger, request: askStream,
 				announce: func(st net.Conn, addr string) error {
+					if err := st.SetWriteDeadline(time.Now().Add(pairingWait(localConn.timeCreated))); err != nil {
+						return err
+					}
+					defer st.SetWriteDeadline(time.Time{})
 					return utils.SendBinaryString(st, addr)
 				},
 				discard: func(st net.Conn) { st.Close() },

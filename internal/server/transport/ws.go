@@ -174,7 +174,12 @@ func (s *WsTransport) seatClient(g *wsGen, conn *websocket.Conn) {
 			s.status.set(fmt.Sprintf("Connected (%s)", s.config.Mode))
 			s.logger.Info("control channel established successfully")
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.WS(conn)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's channel is closed and forgotten, and
@@ -374,6 +379,10 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 					close(c.ping)
 					c.mu.Lock()
 					defer c.mu.Unlock()
+					if err := c.conn.SetWriteDeadline(time.Now().Add(pairingWait(localConn.timeCreated))); err != nil {
+						return err
+					}
+					defer c.conn.SetWriteDeadline(time.Time{})
 					return c.conn.WriteMessage(websocket.TextMessage, []byte(addr))
 				},
 				discard: func(c TunnelChannel) { c.conn.Close() },
@@ -413,7 +422,9 @@ func (s *WsTransport) keepAlive(g *wsGen, conn *TunnelChannel) {
 				return
 			}
 
-			if err := conn.conn.WriteMessage(websocket.BinaryMessage, []byte{utils.SG_Ping}); err != nil {
+			// A stalled idle ping must not hold the pairing writer lock
+			// indefinitely; use the same bound as the control channel.
+			if err := controlwire.WS(conn.conn).Send(utils.SG_Ping); err != nil {
 				conn.mu.Unlock()
 				conn.conn.Close()
 				return

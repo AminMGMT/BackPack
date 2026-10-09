@@ -223,7 +223,7 @@ func announcePoolConn(conn net.Conn, nonce string) error {
 	if nonce == "" {
 		return nil
 	}
-	return utils.SendBinaryTransportString(conn, nonce, utils.SG_Pool)
+	return utils.SendBinaryTransportStringWithin(conn, nonce, utils.SG_Pool, 10*time.Second)
 }
 
 // restartingRefusal reports whether a control claim was answered "come back in

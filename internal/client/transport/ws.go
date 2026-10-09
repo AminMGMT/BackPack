@@ -67,12 +67,12 @@ func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Log
 func (c *WsTransport) Start() {
 	// for  webui
 	if c.config.WebPort > 0 {
-		go c.state.Usage().Monitor()
+		c.state.Go(c.state.Usage().Monitor)
 	}
 
 	c.status.set(fmt.Sprintf("Disconnected (%s)", c.config.Mode))
 
-	go c.channelDialer()
+	c.state.Go(c.channelDialer)
 
 }
 func (c *WsTransport) Restart() {
@@ -111,8 +111,9 @@ func (c *WsTransport) channelDialer() {
 
 			c.status.set(fmt.Sprintf("Connected (%s)", c.config.Mode))
 
-			go c.poolMaintainer()
-			go c.control().run()
+			c.state.Go(c.poolMaintainer)
+			loop := c.control()
+			c.state.Go(func() { loop.run() })
 
 			return
 		}
@@ -131,6 +132,9 @@ func (c *WsTransport) poolMaintainer() {
 		taken:      &c.loadConnections,
 		shrink:     c.controlFlow,
 		dial:       c.tunnelDialer,
+		spawn:      c.state.Go,
+		pending:    &c.dialingConnections,
+		maxSize:    c.config.ConnPoolSize * poolGrowthLimit,
 	}.maintain()
 }
 
@@ -143,6 +147,12 @@ func (c *WsTransport) control() controlLoop {
 }
 
 func (c *WsTransport) tunnelDialer() {
+	ready, ok := c.beginPoolDial(c.config.ConnPoolSize * poolGrowthLimit)
+	if !ok {
+		return
+	}
+	defer ready()
+
 	c.logger.Debugf("initiating new websocket tunnel connection to address %s", c.config.RemoteAddr)
 	ctx := c.state.Ctx()
 
@@ -157,8 +167,11 @@ func (c *WsTransport) tunnelDialer() {
 		return
 	}
 
+	defer c.state.Own(tunnelConn)()
+
 	// Increment active connections counter
 	atomic.AddInt32(&c.poolConnections, 1)
+	ready()
 
 	for {
 		select {

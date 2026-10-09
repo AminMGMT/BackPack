@@ -188,7 +188,15 @@ func TestEveryClientTransportIsCoveredByTheRestartTable(t *testing.T) {
 // size and throughput of a connection that was gone until the next run's first
 // tick. The restart is shared now; this holds every engine to it.
 func TestARestartForgetsThePoolOfTheRunThatEnded(t *testing.T) {
-	for name, tr := range eachClientTransport(t, context.Background()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	transports := eachClientTransport(t, ctx)
+	t.Cleanup(func() {
+		cancel()
+		for _, tr := range transports {
+			tr.Restart() // Join the final generation with its parent cancelled.
+		}
+	})
+	for name, tr := range transports {
 		t.Run(name, func(t *testing.T) {
 			metrics.ReportPool(3, 4, 4, 10)
 			tr.Restart()

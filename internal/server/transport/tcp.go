@@ -113,6 +113,7 @@ func (s *TcpTransport) Start() {
 // nothing in here reaches back for a field that the next Restart is entitled to
 // replace while this run is still using it.
 func (s *TcpTransport) start(g *tcpGen) {
+	go sweepTunnelConns(g.ctx, g.tunnelChannel)
 	s.status.set("Disconnected (TCP)")
 
 	if s.config.WebPort > 0 {
@@ -151,7 +152,12 @@ func (s *TcpTransport) seatClient(g *tcpGen, candidate controlCandidate) {
 			s.status.set("Connected (TCP)")
 			s.logger.Info("control channel successfully established.")
 		},
-		func(ctx context.Context, lost func()) { s.control(g, ctx, lost).run() })
+		func(ctx context.Context, lost func()) {
+			loop := s.control(g, ctx, lost)
+			// Bind to this claim even if its goroutine starts after replacement.
+			loop.link = controlwire.Net(candidate.conn)
+			loop.run()
+		})
 }
 
 // vacate empties the seat: the client's channel is closed and forgotten, and
@@ -271,7 +277,7 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 			conn.Close()
 			return
 		}
-		s.deliverTunnelConn(g, conn)
+		s.deliverTunnelConn(g, conn, "")
 		return
 	}
 
@@ -295,7 +301,7 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 			return
 		}
 		s.preauth.Prove(conn.RemoteAddr())
-		s.deliverTunnelConn(g, conn)
+		s.deliverTunnelConn(g, conn, ann.payload)
 
 	default:
 		s.logger.Warnf("unexpected announcement %d from %s, discarding", ann.signal, conn.RemoteAddr())
@@ -325,7 +331,7 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 		conn.Close()
 		return
 	}
-	if err := utils.SendBinaryTransportString(conn, ack, ann.signal); err != nil {
+	if err := utils.SendBinaryTransportStringWithin(conn, ack, ann.signal, 10*time.Second); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
 		conn.Close()
 		return
@@ -372,13 +378,29 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 
 // deliverTunnelConn hands an admitted connection to the pool, dropping it if
 // the pool is full.
-func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn) {
-	select {
-	case g.tunnelChannel <- conn:
-	default: // The channel is full, do nothing
-		s.logger.Warnf("forwarded port: the queue is full, dropping a client from %s", conn.RemoteAddr().String())
+func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn, nonce string) {
+	accepted := g.seat.admit(g.ctx, func(context.Context) bool {
+		if !s.validPoolIdentity(conn, nonce) {
+			return false
+		}
+		select {
+		case g.tunnelChannel <- conn:
+			return true
+		default:
+			return false
+		}
+	})
+	if !accepted {
 		conn.Close()
 	}
+}
+
+func (s *TcpTransport) validPoolIdentity(conn net.Conn, nonce string) bool {
+	if nonce != "" {
+		return s.controlChannel.IsSet() && s.poolNonce.Verify(nonce)
+	}
+	peer := s.controlChannel.RemoteAddr()
+	return s.poolNonce.Get() == "" && peer != nil && sameHost(peer, conn.RemoteAddr())
 }
 
 func (s *TcpTransport) handleLoop(g *tcpGen) {
@@ -397,8 +419,9 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 				ctx: g.ctx, local: localConn, tunnel: g.tunnelChannel,
 				limits: s.limits, log: s.logger,
 				announce: func(c net.Conn, addr string) error {
-					return utils.SendBinaryTransportString(c, addr, utils.SG_TCP)
+					return utils.SendBinaryTransportStringWithin(c, addr, utils.SG_TCP, pairingWait(localConn.timeCreated))
 				},
+				request: requestAlways(g.reqNewConnChan, s.logger),
 				discard: func(c net.Conn) { c.Close() },
 				relay: func(c net.Conn, local LocalTCPConn) {
 					go func() {
