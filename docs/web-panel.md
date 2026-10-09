@@ -128,4 +128,4 @@ that does the same job — is in
 
 ---
 
-*Last verified against Backpack v1.8.5.*
+*Last verified against Backpack v1.9.0.*

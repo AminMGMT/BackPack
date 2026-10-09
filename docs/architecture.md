@@ -251,4 +251,4 @@ context)، پورت‌های فوروارد (`forward.go`)، حلقهٔ کانا
 
 ---
 
-*Last verified against Backpack v1.8.5.*
+*Last verified against Backpack v1.9.0.*
