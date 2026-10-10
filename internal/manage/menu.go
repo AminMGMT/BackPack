@@ -448,6 +448,9 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 }
 
 func editManagedSettings(name string, spec TunnelSpec, chosen string) {
+	if chosen == "reality" {
+		defer tui.QuickDefaults()()
+	}
 	label := "Public HTTPS Listen Address (IP:Port)"
 	if spec.Role == "client" {
 		label = "Iran HTTPS Address (Hostname Or IP:Port)"

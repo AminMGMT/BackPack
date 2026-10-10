@@ -44,9 +44,10 @@ copies them. Existing PEM files
 can be used for Naive and XHTTP. The private-certificate option generates a
 certificate for the chosen hostname or IP; its public PEM travels in the
 Setup Link. For manual setup, copy only the public PEM to Kharej and enter
-that file as the CA file. REALITY generates its private key on Iran
-when left empty and prints the corresponding public key for Kharej. It also
-requires an explicit reachable TLS 1.3/H2 cover endpoint. UDP forwarding, proxy
+that file as the CA file. REALITY generates its identity on Iran and copies the matching public settings
+in the Setup Link. Its wizard tests suggested TLS 1.3/H2 cover endpoints and
+fills SNI automatically; custom endpoints remain editable and are tested
+before saving. See [the REALITY setup guide](reality-setup.md). UDP forwarding, proxy
 and routing bindings, address and transport fallbacks are excluded from this
 wizard because these wrappers cannot carry them. The helper binaries must be
 installed on both machines; the wizard suggests their pinned installer paths.
@@ -156,6 +157,9 @@ validated by the local integration tests. This first wrapper does not expose
 H3, split download settings, raw JSON overrides, or a website frontend.
 
 ### RAW / REALITY / Vision
+
+For the automatic cover scan, editable defaults and Space/Enter workflow, see
+[Setting up REALITY / Vision](reality-setup.md).
 
 Use `mode = "reality"` on both sides, the same UUID and a fresh 16-character
 hexadecimal `short_id`. Generate an X25519 pair with the installed `xray x25519`;

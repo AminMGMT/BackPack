@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -110,16 +111,17 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 						input = append(input, cert)
 					}
 				} else {
-					input = []string{internal, id, "cover.example.com", "0123456789abcdef", binary}
 					if role == "server" {
-						input = append(input, "cover.example.com:443", "")
+						input = []string{internal, binary, "", "n"}
 					} else {
-						input = append(input, pub)
+						input = []string{internal, binary, id, "cover.example.com", "0123456789abcdef", pub}
 					}
 				}
 				restore := tui.SetInput(strings.NewReader(strings.Join(input, "\n") + "\n"))
 				var ok bool
-				out := capture(t, func() { ok = setupManagedCarrier(&s, chosen, public, "localhost") })
+				out := capture(t, func() {
+					ok = setupManagedCarrierWithProbe(&s, chosen, public, "localhost", func(context.Context, string, string, string) error { return nil })
+				})
 				restore()
 				if !ok {
 					t.Fatalf("wizard rejected valid answers:\n%s", out)
@@ -220,8 +222,11 @@ func TestManagedHTTPSInputLossDoesNotReplaceTheSpec(t *testing.T) {
 	restore := tui.SetInput(strings.NewReader("\n\n\n\n\n"))
 	defer restore()
 	stopped := make(chan struct{})
-	defer tui.OnInputEnd(func() { close(stopped); runtime.Goexit() })()
-	go func() { setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com") }()
+	defer tui.OnInputEnd(func() { runtime.Goexit() })()
+	go func() {
+		defer close(stopped) // wait for wizard cleanup, including its input scope
+		setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com")
+	}()
 	select {
 	case <-stopped:
 	case <-time.After(2 * time.Second):

@@ -600,8 +600,12 @@ func ctCertificate(dir, name, host string) (cert, key, ca string, err error) {
 
 // Probe from Iran: DNS, certificate trust, TLS version and ALPN can differ by route.
 func ctProbeRealityCover(ctx context.Context, target string, roots *x509.CertPool) error {
+	return probeRealityTLS(ctx, target, "", roots)
+}
+
+func probeRealityTLS(ctx context.Context, target, serverName string, roots *x509.CertPool) error {
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{
-		MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}, RootCAs: roots,
+		ServerName: serverName, MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}, RootCAs: roots,
 		CurvePreferences: []tls.CurveID{tls.X25519},
 	}}
 	conn, err := d.DialContext(ctx, "tcp", target)
@@ -622,6 +626,14 @@ func ctProbeRealityCover(ctx context.Context, target string, roots *x509.CertPoo
 // reported as a blocked Iran/Kharej route merely because its cover is unusable.
 func ctProbeRealityTransport(ctx context.Context, target, binary string) error {
 	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return err
+	}
+	return probeRealityTransport(ctx, target, host, binary)
+}
+
+func probeRealityTransport(ctx context.Context, target, host, binary string) error {
+	_, _, err := net.SplitHostPort(target)
 	if err != nil {
 		return err
 	}

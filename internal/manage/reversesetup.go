@@ -38,6 +38,10 @@ func SetupServer() {
 	if transport == "" {
 		return
 	}
+	if transport == "reality" {
+		defer tui.QuickDefaults()()
+		tui.Info("Space/Enter keeps each suggestion; type a replacement to change it.")
+	}
 
 	// AcceptUDP starts off: a forwarded port carries TCP only unless the
 	// operator turns UDP on, which is asked for below. See
@@ -58,7 +62,13 @@ func SetupServer() {
 
 	// A port alone listens on every address; "85.10.11.51:443" pins it to
 	// one, so another service can hold the same port on another address.
-	bind, err := parseTunnelBind(tui.Prompt("Tunnel Port: "))
+	portAnswer := ""
+	if transport == "reality" {
+		portAnswer = tui.PromptDefault("Tunnel Port", realityPublicPort())
+	} else {
+		portAnswer = tui.Prompt("Tunnel Port: ")
+	}
+	bind, err := parseTunnelBind(portAnswer)
 	if err != nil {
 		tui.Error(err.Error())
 		tui.PressEnter()
@@ -112,7 +122,11 @@ func SetupServer() {
 	s.Name = uniqueName(tui.PromptDefault("Tunnel Name", "server-"+bind.Port))
 
 	// Iran makes the token; the setup link carries it to kharej.
-	s.Token = strings.TrimSpace(tui.PromptDefault("Security Token", randomToken(64)))
+	if transport == "reality" {
+		s.Token = randomToken(64)
+	} else {
+		s.Token = strings.TrimSpace(tui.PromptDefault("Security Token", randomToken(64)))
+	}
 	if s.Token == "" {
 		tui.Error("A token is required.")
 		tui.PressEnter()
@@ -180,6 +194,10 @@ func SetupClient() {
 	if transport == "" {
 		return
 	}
+	if transport == "reality" {
+		defer tui.QuickDefaults()()
+		tui.Info("Space/Enter keeps each suggestion; type a replacement to change it.")
+	}
 
 	switch tui.ChooseOpt("How Do You Want To Set Up This Side?", []tui.Option{
 		{Title: "Setup Link", Desc: "recommended — paste the Iran server's link"},
@@ -199,7 +217,12 @@ func SetupClient() {
 	}
 
 	remoteHost := strings.Trim(strings.TrimSpace(tui.Prompt("Iran IP Or Domain: ")), "[]")
-	remotePort := strings.TrimSpace(tui.Prompt("Tunnel Port: "))
+	remotePort := ""
+	if transport == "reality" {
+		remotePort = tui.PromptDefault("Tunnel Port (From Iran)", "443")
+	} else {
+		remotePort = strings.TrimSpace(tui.Prompt("Tunnel Port: "))
+	}
 	if remoteHost == "" || !validPort(remotePort) {
 		tui.Error("Invalid address or port.")
 		tui.PressEnter()
