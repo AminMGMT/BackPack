@@ -1,6 +1,7 @@
 package manage
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -110,16 +111,17 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 						input = append(input, cert)
 					}
 				} else {
-					input = []string{internal, id, "cover.example.com", "0123456789abcdef", binary}
 					if role == "server" {
-						input = append(input, "cover.example.com:443", "")
+						input = []string{internal, binary, "", "n"}
 					} else {
-						input = append(input, pub)
+						input = []string{internal, binary, id, "cover.example.com", "0123456789abcdef", pub}
 					}
 				}
 				restore := tui.SetInput(strings.NewReader(strings.Join(input, "\n") + "\n"))
 				var ok bool
-				out := capture(t, func() { ok = setupManagedCarrier(&s, chosen, public, "localhost") })
+				out := capture(t, func() {
+					ok = setupManagedCarrierWithProbe(&s, chosen, public, "localhost", func(context.Context, string, string, string) error { return nil })
+				})
 				restore()
 				if !ok {
 					t.Fatalf("wizard rejected valid answers:\n%s", out)

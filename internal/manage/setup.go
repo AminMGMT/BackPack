@@ -4,7 +4,6 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -225,6 +224,10 @@ func managedEndpointClash(s TunnelSpec) string {
 // setupManagedCarrier collects a complete role-specific configuration before
 // modifying the caller. The public endpoint and private reverse port are distinct.
 func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
+	return setupManagedCarrierWithProbe(s, chosen, public, host, probeRealitySetup)
+}
+
+func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, probe realitySetupProbe) bool {
 	if !managedTransport(chosen) || (s.Role != "server" && s.Role != "client") {
 		tui.Error("Invalid managed HTTPS transport or tunnel role.")
 		return false
@@ -232,6 +235,9 @@ func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
 	if runtime.GOOS != "linux" {
 		tui.Error("Managed HTTPS transports require Linux.")
 		return false
+	}
+	if chosen == "reality" {
+		defer tui.QuickDefaults()()
 	}
 	n := *s
 	wasManaged := managedTransport(selectedTransport(n))
@@ -244,6 +250,9 @@ func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
 		}
 	}
 	tui.Info("TCP Forwarding Only. Set The Same Internal Port And Security Token On Both Sides.")
+	if chosen == "reality" && n.Role == "server" && !wasManaged {
+		internal = realityInternalPort(public, n.Ports)
+	}
 	internal = strings.TrimSpace(tui.PromptDefault("Internal Reverse Port On Iran (Must Match Kharej)", internal))
 	if !validPort(internal) || internal == addrPort(public) {
 		tui.Error("The internal port must be valid and differ from the public HTTPS port.")
@@ -261,7 +270,11 @@ func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
 		n.RemoteAddr = net.JoinHostPort("127.0.0.1", internal)
 	}
 	clearManagedTransport(&n)
-	if chosen == "naive" {
+	if chosen == "reality" {
+		if !configureReality(&n, *s, public, probe) {
+			return false
+		}
+	} else if chosen == "naive" {
 		if n.Role == "server" {
 			x := s.NaiveServer
 			x.Binary = tui.PromptDefault("Sing-Box Binary", defaultString(x.Binary, managedHelperPath("sing-box")))
@@ -283,12 +296,12 @@ func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
 			x.CAFile = tui.PromptDefault("CA File (Required For A Private Certificate; Empty For Public TLS)", x.CAFile)
 			n.NaiveClient = x
 		}
-	} else {
-		id, serverName, path, shortID := "", host, "", ""
+	} else { // XHTTP retains its certificate and path questions.
+		id, serverName, path := "", host, ""
 		if n.Role == "server" {
-			id, serverName, path, shortID = s.XrayServer.UUID, defaultString(s.XrayServer.ServerName, host), s.XrayServer.Path, s.XrayServer.ShortID
+			id, serverName, path = s.XrayServer.UUID, defaultString(s.XrayServer.ServerName, host), s.XrayServer.Path
 		} else {
-			id, serverName, path, shortID = s.XrayClient.UUID, defaultString(s.XrayClient.ServerName, host), s.XrayClient.Path, s.XrayClient.ShortID
+			id, serverName, path = s.XrayClient.UUID, defaultString(s.XrayClient.ServerName, host), s.XrayClient.Path
 		}
 		if id == "" && n.Role == "server" {
 			var err error
@@ -299,57 +312,26 @@ func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
 			}
 		}
 		id = tui.PromptDefault("VLESS UUID (Same On Both Sides)", id)
-		serverName = tui.PromptDefault("TLS Server Name (REALITY: Cover Hostname)", serverName)
-		if chosen == "xhttp" {
-			if path == "" && n.Role == "server" {
-				path = "/" + randomToken(24)
-			}
-			path = tui.PromptDefault("XHTTP Path (Same On Both Sides)", path)
-		} else {
-			if shortID == "" && n.Role == "server" {
-				var raw [8]byte
-				if _, err := rand.Read(raw[:]); err != nil {
-					tui.Error(err.Error())
-					return false
-				}
-				shortID = hex.EncodeToString(raw[:])
-			}
-			shortID = tui.PromptDefault("REALITY Short ID (Same On Both Sides)", shortID)
+		serverName = tui.PromptDefault("TLS Server Name", serverName)
+		if path == "" && n.Role == "server" {
+			path = "/" + randomToken(24)
 		}
+		path = tui.PromptDefault("XHTTP Path (Same On Both Sides)", path)
 		if n.Role == "server" {
 			x := config.XrayServerConfig{Listen: public, Mode: chosen, UUID: id, ServerName: serverName, Path: path}
 			x.Binary = tui.PromptDefault("Xray Binary", defaultString(s.XrayServer.Binary, managedHelperPath("xray")))
-			if chosen == "xhttp" {
-				x.Host = tui.PromptDefault("HTTP Host (Optional; Same On Kharej)", s.XrayServer.Host)
-				var ok bool
-				x.Certificate, x.Key, ok = managedCertificate(n, serverName, s.XrayServer.Certificate, s.XrayServer.Key)
-				if !ok {
-					return false
-				}
-			} else {
-				x.ShortID = shortID
-				x.Target = tui.PromptDefault("REALITY Cover Endpoint (Reachable TLS 1.3/H2 Host:Port)", s.XrayServer.Target)
-				key := managedSecret("REALITY Private Key (Empty = Generate On First Setup)", s.XrayServer.PrivateKey, "")
-				var pub string
-				var err error
-				x.PrivateKey, pub, err = managedRealityKey(key)
-				if err != nil {
-					tui.Error(err.Error())
-					return false
-				}
-				tui.Info("REALITY Public Key For Kharej: " + pub)
+			x.Host = tui.PromptDefault("HTTP Host (Optional; Same On Kharej)", s.XrayServer.Host)
+			var ok bool
+			x.Certificate, x.Key, ok = managedCertificate(n, serverName, s.XrayServer.Certificate, s.XrayServer.Key)
+			if !ok {
+				return false
 			}
 			n.XrayServer = x
 		} else {
 			x := config.XrayClientConfig{Server: public, Mode: chosen, UUID: id, ServerName: serverName, Path: path}
 			x.Binary = tui.PromptDefault("Xray Binary", defaultString(s.XrayClient.Binary, managedHelperPath("xray")))
-			if chosen == "xhttp" {
-				x.Host = tui.PromptDefault("HTTP Host (Optional; From Iran)", s.XrayClient.Host)
-				x.CAFile = tui.PromptDefault("CA File (Required For A Private Certificate; Empty For Public TLS)", s.XrayClient.CAFile)
-			} else {
-				x.ShortID = shortID
-				x.PublicKey = tui.PromptDefault("REALITY Public Key (From Iran)", s.XrayClient.PublicKey)
-			}
+			x.Host = tui.PromptDefault("HTTP Host (Optional; From Iran)", s.XrayClient.Host)
+			x.CAFile = tui.PromptDefault("CA File (Required For A Private Certificate; Empty For Public TLS)", s.XrayClient.CAFile)
 			n.XrayClient = x
 		}
 	}
@@ -421,7 +403,18 @@ func choosePreset(transport string) string {
 	for i, o := range options {
 		opts[i] = tui.Option{Title: o.Label, Desc: o.Desc}
 	}
-	idx := tui.ChooseOpt("How Should The Tunnel Be Tuned?", opts)
+	idx := -1
+	if tui.QuickDefaultsEnabled() {
+		def := 0
+		for i, option := range options {
+			if option.Value == PresetBalance {
+				def = i
+			}
+		}
+		idx = tui.ChooseOptDefault("How Should The Tunnel Be Tuned?", opts, def)
+	} else {
+		idx = tui.ChooseOpt("How Should The Tunnel Be Tuned?", opts)
+	}
 	if idx < 0 {
 		return PresetTurbo
 	}
