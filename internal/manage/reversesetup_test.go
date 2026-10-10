@@ -222,8 +222,11 @@ func TestManagedHTTPSInputLossDoesNotReplaceTheSpec(t *testing.T) {
 	restore := tui.SetInput(strings.NewReader("\n\n\n\n\n"))
 	defer restore()
 	stopped := make(chan struct{})
-	defer tui.OnInputEnd(func() { close(stopped); runtime.Goexit() })()
-	go func() { setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com") }()
+	defer tui.OnInputEnd(func() { runtime.Goexit() })()
+	go func() {
+		defer close(stopped) // wait for wizard cleanup, including its input scope
+		setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com")
+	}()
 	select {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
