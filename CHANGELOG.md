@@ -24,6 +24,18 @@ All notable changes to Backpack are documented here.
   certificate-verified TLS 1.3/X25519/H2 handshake on its own could accept a
   cover the helper then rejects, which made a reachable route look unusable.
 
+- **Guided REALITY setup with tested covers and Space-to-accept defaults**
+  (#97). REALITY used to need separate UUID, SNI, Short ID, private key and
+  cover answers. The Iran wizard now tests the suggested covers (verified
+  TLS 1.3/H2 plus authenticated data through the real Xray helper), offers
+  only the ones that passed and fills their SNI; a custom endpoint and SNI are
+  tested together before saving. Identity fields are generated once and stay
+  editable in an optional advanced step, and editing keeps the paired identity
+  and cover unless changed. In the REALITY wizard a displayed suggestion is
+  accepted with Space on a Linux terminal, or Enter; typing starts an editable
+  answer. Other menus keep their input behavior, and closed input never saves
+  a configuration. The public key is still shown for a manual Kharej setup.
+
 ### Changed
 
 - **Connection Test measures sustained speed, in each direction, and only on
