@@ -295,6 +295,20 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		if r.Status != ctOK {
 			t.Errorf("%s %s: %s (%s) — %d/%d echoes", r.Kind, r.Transport, r.Status, r.Detail, r.OK, r.Tried)
 		}
+		if managedTransport(r.Transport) {
+			want := "tls-ok"
+			if r.Transport == "reality" {
+				want = "tcp-ok"
+			}
+			if r.HTTPSProbe != want || r.TestPort < 1 {
+				t.Errorf("%s lost its independent HTTPS diagnostics: %+v", r.Transport, r)
+			}
+			for _, peer := range kharej {
+				if peer.Kind == r.Kind && peer.Transport == r.Transport && (peer.HTTPSProbe != r.HTTPSProbe || peer.TestPort != r.TestPort) {
+					t.Errorf("%s peer received different HTTPS diagnostics: %+v", r.Transport, peer)
+				}
+			}
+		}
 	}
 	if len(kharej) != len(results) {
 		t.Errorf("the kharej received %d results, the Iran side had %d", len(kharej), len(results))

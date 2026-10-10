@@ -310,6 +310,8 @@ type ConnTestResult struct {
 	UploadMbps  float64 `json:"upload_mbps,omitempty"`
 	SpeedStable bool    `json:"speed_stable,omitempty"`
 	Phase       string  `json:"phase,omitempty"`
+	HTTPSProbe  string  `json:"https_probe,omitempty"` // independent TCP/TLS preflight, never a tunnel verdict
+	TestPort    int     `json:"test_port,omitempty"`
 	// Total is how many echoes the test sends each tunnel.
 	Total int `json:"z,omitempty"`
 }
@@ -325,15 +327,16 @@ const (
 
 // connTestCase is one tunnel under test, as the Iran side holds it.
 type connTestCase struct {
-	kind, tr string
-	name     string
-	udp      bool   // the forwarded traffic is UDP (the udp transport)
-	entry    int    // reverse: where on this server the tunnel's users arrive
-	peerIP   string // direct: the kharej's tunnel address, where its echo listens
-	l3       l3Spec // direct: this side's spec, finished once the kharej's address is known
-	link     ShareLink
-	skip     string
-	rtts     []time.Duration // every echo's round trip, for the recommendation
+	kind, tr   string
+	name       string
+	udp        bool   // the forwarded traffic is UDP (the udp transport)
+	entry      int    // reverse: where on this server the tunnel's users arrive
+	peerIP     string // direct: the kharej's tunnel address, where its echo listens
+	l3         l3Spec // direct: this side's spec, finished once the kharej's address is known
+	link       ShareLink
+	skip       string
+	httpsProbe string          // frozen from the authenticated coordinator before measurements start
+	rtts       []time.Duration // every echo's round trip, for the recommendation
 }
 
 // ConnTestIran is a test the Iran side is running.
@@ -914,6 +917,7 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 	kharej := s.Kharej()
 	s.coord.mu.Lock()
 	for _, c := range s.cases {
+		c.httpsProbe = s.coord.httpsProbes[c.tr]
 		if c.skip == "" && s.coord.skipped[c.tr] {
 			c.skip = "managed helper could not start on kharej; see its local diagnostic"
 		}
@@ -946,6 +950,7 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 	results := make([]ConnTestResult, len(s.cases))
 	var mu sync.Mutex
 	reportRow := func(i int, r ConnTestResult) {
+		r = ctHTTPSResult(r, s.cases[i])
 		mu.Lock()
 		results[i] = r
 		mu.Unlock()
@@ -955,6 +960,7 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 	}
 	for i, c := range s.cases {
 		results[i] = ConnTestResult{Kind: c.kind, Transport: c.tr, Status: ctTesting, Total: connTestSoak}
+		results[i] = ctHTTPSResult(results[i], c)
 		if c.skip != "" {
 			results[i].Status, results[i].Detail = ctSkipped, c.skip
 		}
@@ -1590,6 +1596,7 @@ type ctCoordinator struct {
 	verdict     string
 	config      string            // the answer to "config"; see ctConfig
 	carriers    map[string]string // public helper settings, fetched one small packet at a time
+	httpsProbes map[string]string // bounded preflight codes; frozen when Kharej joins
 	skipped     map[string]bool   // managed cases unavailable on kharej
 	directPorts map[string]string // direct listener ports selected on Kharej
 	live        func() []ConnTestResult
@@ -1683,6 +1690,22 @@ func (c *ctCoordinator) answer(line, from string) string {
 	}
 	if len(f) > 3 {
 		return ""
+	}
+	if f[0] == "https-probe" && len(f) == 3 {
+		tr, probe, ok := strings.Cut(f[2], ":")
+		if !ok || !ctValidHTTPSProbe(tr, probe) {
+			return ""
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.peer != "" {
+			return "" // late/replayed reports must not alter a running measurement
+		}
+		if c.httpsProbes == nil {
+			c.httpsProbes = make(map[string]string)
+		}
+		c.httpsProbes[tr] = probe
+		return "ok"
 	}
 	if f[0] == "port" && len(f) == 3 {
 		tr, port, ok := strings.Cut(f[2], ":")
@@ -1978,6 +2001,12 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 					_, _ = ctAskContext(ctx, link.Host, link.Coord, "skip "+link.Tok+" "+c.Tr)
 				}
 				continue
+			}
+			if managedTransport(c.Tr) {
+				probe := ctProbeHTTPS(ctx, spec)
+				// Advisory only: the real helper still starts and must carry all
+				// echoes and speed traffic. Older coordinators ignore this command.
+				_, _ = ctAskContext(ctx, link.Host, link.Coord, "https-probe "+link.Tok+" "+c.Tr+":"+probe)
 			}
 			spec.Name = name
 			body = ctQuiet(spec.Render())
