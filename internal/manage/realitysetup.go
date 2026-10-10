@@ -246,8 +246,9 @@ func configureReality(n *TunnelSpec, old TunnelSpec, public string, probe realit
 	if x.UUID == "" {
 		x.UUID, err = managedUUID()
 	}
+	var publicKey string
 	if err == nil {
-		x.PrivateKey, _, err = managedRealityKey(x.PrivateKey)
+		x.PrivateKey, publicKey, err = managedRealityKey(x.PrivateKey)
 	}
 	if err != nil {
 		tui.Error(err.Error())
@@ -271,7 +272,7 @@ func configureReality(n *TunnelSpec, old TunnelSpec, public string, probe realit
 			if key == "generate" {
 				key = ""
 			}
-			x.PrivateKey, _, err = managedRealityKey(key)
+			x.PrivateKey, publicKey, err = managedRealityKey(key)
 			if err != nil {
 				tui.Error(err.Error())
 				return false
@@ -282,6 +283,8 @@ func configureReality(n *TunnelSpec, old TunnelSpec, public string, probe realit
 		tui.Error("A verified cover is required.")
 		return false
 	}
+	// The Setup Link carries this; a manual Kharej setup has no other source.
+	tui.Info("REALITY public key for a manual Kharej setup: " + publicKey)
 	n.XrayServer = x
 	return true
 }

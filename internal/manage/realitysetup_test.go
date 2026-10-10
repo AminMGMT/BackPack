@@ -99,6 +99,9 @@ func TestRealityDefaultsGenerateIdentityAndBuildMatchingKharej(t *testing.T) {
 	if peer.XrayClient.UUID != x.UUID || peer.XrayClient.ShortID != x.ShortID || peer.XrayClient.ServerName != x.ServerName || peer.XrayClient.PublicKey != pub || peer.Token != s.Token || peer.RemoteAddr != s.BindAddr {
 		t.Fatal("link lost paired settings")
 	}
+	if !strings.Contains(output, pub) {
+		t.Fatal("a manual Kharej setup has no way to learn the public key")
+	}
 	if peer.XrayServer.PrivateKey != "" || link.HelperPublicKey == x.PrivateKey {
 		t.Fatal("private key escaped")
 	}
