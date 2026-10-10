@@ -1,5 +1,7 @@
 # Setting up REALITY / Vision
 
+Last verified against Backpack 1.9.0, 2026-10-11.
+
 On Iran, open **Setup Iran → Reverse → HTTPS → REALITY / Vision**. The wizard
 suggests the detected public address and a free HTTPS port (443 when available).
 Enter the ports you actually want to forward; the wizard cannot infer the
@@ -38,7 +40,9 @@ The wizard checks existing listeners when selecting defaults. It never frees a
 port by stopping another service. The final operating-system bind can still race
 another process, and no tunnel is created until you confirm its summary.
 
-## فارسی
+## خلاصهٔ فارسی
+
+<div dir="rtl">
 
 برای سمت ایران، Reality را انتخاب کنید و پورت‌های سرویس موردنظر را وارد کنید.
 بقیهٔ موارد پیشنهادی را می‌توانید با Space یا Enter تأیید کنید؛ برای تغییر، مقدار
@@ -46,3 +50,5 @@ another process, and no tunnel is created until you confirm its summary.
 موفق قابل انتخاب‌اند. SNI از مقصد انتخاب‌شده پر می‌شود و کلیدها و شناسه‌ها
 خودکار ساخته می‌شوند. برای سمت خارج، لینک ایران را وارد کنید تا تنظیمات دو طرف
 یکسان بماند. تست مقصد به‌تنهایی موفقیت تونل بین دو سرور را تضمین نمی‌کند.
+
+</div>
