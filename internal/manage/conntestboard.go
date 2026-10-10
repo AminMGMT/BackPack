@@ -151,7 +151,27 @@ func ConnTestTable(results []ConnTestResult) string {
 	if len(notes) > 0 {
 		b.WriteString("\nNotes:\n\n" + strings.Join(notes, "\n") + "\n")
 	}
+	ctHTTPSNotes(&b, results)
 	return b.String()
+}
+
+func ctHTTPSNotes(out io.Writer, results []ConnTestResult) {
+	shown := false
+	for _, r := range results {
+		if r.Kind != "reverse" || !managedTransport(r.Transport) || r.Status == ctSkipped || r.TestPort < 1 || r.TestPort > 65535 {
+			continue
+		}
+		if !shown {
+			fmt.Fprint(out, "\nHTTPS path checks (separate connections):\n\n")
+			shown = true
+		}
+		fmt.Fprintf(out, "  %-16s :%-5d %s\n", ctName(r.Transport), r.TestPort, ctHTTPSProbeLabel(r.HTTPSProbe))
+	}
+	if shown {
+		fmt.Fprintln(out, "  Tunnel status above requires real authenticated, sustained traffic.")
+		fmt.Fprintln(out, "  Temporary ports/private test certificates differ from a real HTTPS site.")
+		fmt.Fprintln(out, "  Changing SNI alone cannot fix a route that drops established flows.")
+	}
 }
 
 // ctGroups orders the verdict as the table shows it: what worked, fastest
