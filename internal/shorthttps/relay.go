@@ -201,22 +201,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(q.ID) != 32 || len(q.Data) > chunkSize || q.Offset+uint64(len(q.Data)) < q.Offset {
-		http.Error(w, "bad request", 400)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if _, err := hex.DecodeString(q.ID); err != nil {
-		http.Error(w, "bad request", 400)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if d.Decode(new(any)) != io.EOF {
-		http.Error(w, "bad request", 400)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	s.mu.Lock()
 	stream := s.sessions[q.ID]
 	if s.closed {
 		s.mu.Unlock()
-		http.Error(w, "stopped", 503)
+		http.Error(w, "stopped", http.StatusServiceUnavailable)
 		return
 	}
 	if q.Close {
@@ -225,19 +225,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			stream.close()
 		}
 		s.mu.Unlock()
-		w.WriteHeader(204)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if stream == nil && q.Open {
 		if len(s.sessions) >= maxSessions {
 			s.mu.Unlock()
-			http.Error(w, "session limit", 503)
+			http.Error(w, "session limit", http.StatusServiceUnavailable)
 			return
 		}
 		conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(s.ctx, "tcp", s.target)
 		if err != nil {
 			s.mu.Unlock()
-			http.Error(w, "backend unavailable", 502)
+			http.Error(w, "backend unavailable", http.StatusBadGateway)
 			return
 		}
 		stream = &session{conn: conn, last: time.Now(), ready: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
@@ -247,7 +247,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	if stream == nil {
-		http.Error(w, "session expired", 410)
+		http.Error(w, "session expired", http.StatusGone)
 		return
 	}
 	stream.serial.Lock()
@@ -255,7 +255,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stream.mu.Lock()
 	if stream.closed || q.Ack < stream.download || q.Ack > stream.offered || q.Offset > stream.upload || (q.Offset < stream.upload && q.Offset+uint64(len(q.Data)) > stream.upload) || (stream.sentEOF && len(q.Data) > 0 && q.Offset == stream.upload) {
 		stream.mu.Unlock()
-		http.Error(w, "invalid stream offset", 409)
+		http.Error(w, "invalid stream offset", http.StatusConflict)
 		return
 	}
 	trim := int(q.Ack - stream.download)
@@ -274,7 +274,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		stream.mu.Unlock()
 		if err != nil {
 			stream.close()
-			http.Error(w, "backend write failed", 502)
+			http.Error(w, "backend write failed", http.StatusBadGateway)
 			return
 		}
 	}
@@ -282,7 +282,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if tcp, ok := stream.conn.(*net.TCPConn); ok {
 			if err := tcp.CloseWrite(); err != nil {
 				stream.close()
-				http.Error(w, "backend EOF failed", 502)
+				http.Error(w, "backend EOF failed", http.StatusBadGateway)
 				return
 			}
 		}
@@ -380,7 +380,7 @@ func (c *Client) exchange(ctx context.Context, q request) (response, error) {
 		return response{}, err
 	}
 	defer reply.Body.Close()
-	if reply.StatusCode != 200 {
+	if reply.StatusCode != http.StatusOK {
 		return response{}, relayStatusError(reply.StatusCode)
 	}
 	var p response
