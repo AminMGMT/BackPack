@@ -358,6 +358,18 @@ func (c *fecCarrier) absorb(kind byte, group uint32, index byte, body []byte, ad
 		c.evict()
 	}
 
+	// Reject an unparseable data shard before counting it. Marking it present
+	// and delivered would make haveData == Data and block parity rebuild, so a
+	// truncated/corrupt body would permanently lose the packet.
+	var livePayload []byte
+	if kind == fecKindData {
+		payload, ok := trimShard(body)
+		if !ok {
+			return nil, false
+		}
+		livePayload = payload
+	}
+
 	if g.shards[int(index)] == nil {
 		g.shards[int(index)] = append([]byte(nil), body...)
 		g.haveTotal++
@@ -375,9 +387,7 @@ func (c *fecCarrier) absorb(kind byte, group uint32, index byte, body []byte, ad
 	var deliver bool
 	if kind == fecKindData && !g.delivered[int(index)] {
 		g.delivered[int(index)] = true
-		if payload, ok := trimShard(body); ok {
-			out, deliver = payload, true
-		}
+		out, deliver = livePayload, true
 	}
 
 	c.rebuild(g)
