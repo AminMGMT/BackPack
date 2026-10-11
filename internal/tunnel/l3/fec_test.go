@@ -2,6 +2,7 @@ package l3
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -222,5 +223,76 @@ func TestFECSchemeValidation(t *testing.T) {
 	}
 	if got != DatagramCarrier(send) {
 		t.Error("a disabled scheme still wrapped the carrier")
+	}
+}
+
+// A corrupt data shard must not be counted as present/delivered. Otherwise
+// haveData reaches Data and parity never rebuilds the lost packet.
+func TestFECCorruptDataShardDoesNotBlockParityRepair(t *testing.T) {
+	send, recv := newLossyPair(nil)
+	tx, err := newFECCarrier(send, FECConfig{Data: 2, Parity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rx, err := newFECCarrier(recv, FECConfig{Data: 2, Parity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := [][]byte{[]byte("alpha"), []byte("bravo")}
+	for _, msg := range want {
+		if _, err := tx.WriteTo(msg, recv.addr); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Corrupt the length prefix of the first data shard on the wire.
+	recv.mu.Lock()
+	if len(recv.queue) < 1 || len(recv.queue[0]) < fecHeaderLen+fecLenPrefix {
+		recv.mu.Unlock()
+		t.Fatal("expected a data shard on the wire")
+	}
+	binary.BigEndian.PutUint16(recv.queue[0][fecHeaderLen:fecHeaderLen+fecLenPrefix], 0xffff)
+	recv.mu.Unlock()
+
+	got := drain(t, rx)
+	if len(got) != len(want) {
+		t.Fatalf("delivered %d packets, want %d — corrupt shard blocked parity repair", len(got), len(want))
+	}
+	for _, w := range want {
+		found := false
+		for _, g := range got {
+			if bytes.Equal(g, w) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("packet %q never arrived", w)
+		}
+	}
+}
+
+func TestFECAbsorbRejectsUntrimableDataShard(t *testing.T) {
+	send, _ := newLossyPair(nil)
+	tx, err := newFECCarrier(send, FECConfig{Data: 2, Parity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := tx.(*fecCarrier)
+
+	bad := make([]byte, fecLenPrefix+1)
+	binary.BigEndian.PutUint16(bad[:fecLenPrefix], 0xffff) // longer than the body
+	out, deliver := fc.absorb(fecKindData, 1, 0, bad, send.addr)
+	if out != nil || deliver {
+		t.Fatalf("absorb delivered %#v deliver=%v, want reject", out, deliver)
+	}
+	g := fc.groups[1]
+	if g == nil {
+		return // rejected before creating a group is also fine
+	}
+	if g.haveData != 0 || g.haveTotal != 0 || g.shards[0] != nil || g.delivered[0] {
+		t.Fatalf("corrupt shard was counted: haveData=%d haveTotal=%d shard=%v delivered=%v",
+			g.haveData, g.haveTotal, g.shards[0] != nil, g.delivered[0])
 	}
 }
