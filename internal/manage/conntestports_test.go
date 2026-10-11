@@ -114,3 +114,16 @@ func TestConnectionTestLocalFailureDoesNotSkipTheOtherDirection(t *testing.T) {
 		t.Fatal("old helper skip command broke")
 	}
 }
+
+// A picked port is bound later by an engine; one inside the ephemeral range
+// can meanwhile become the source port of an outgoing connection, and the
+// tunnel meant to listen there never comes up.
+func TestConnectionTestPortsStayBelowTheEphemeralRange(t *testing.T) {
+	used := map[int]bool{}
+	for i := 0; i < 200; i++ {
+		p := ctPickPort(used, i%2 == 0)
+		if p < 20000 || p >= ephemeralDefaultLow {
+			t.Fatalf("picked port %d, want [20000, %d)", p, ephemeralDefaultLow)
+		}
+	}
+}

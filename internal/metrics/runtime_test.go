@@ -30,16 +30,24 @@ func TestTheRuntimeCountersTrackWhatTheyCount(t *testing.T) {
 	started.Wait()
 
 	during := readRuntimeStats()
-	if during.Goroutines < before.Goroutines+held {
-		t.Errorf("held %d extra goroutines but the count went %d -> %d; it is not tracking them",
-			held, before.Goroutines, during.Goroutines)
-	}
 
 	close(release)
 	// Let them finish. Gosched rather than a sleep: the goroutines are already
 	// runnable, so this is a scheduling point rather than a wait.
-	for i := 0; i < 100 && readRuntimeStats().Goroutines > before.Goroutines+held/2; i++ {
+	after := readRuntimeStats()
+	for i := 0; i < 1000 && after.Goroutines > during.Goroutines-held; i++ {
 		runtime.Gosched()
+		after = readRuntimeStats()
+	}
+
+	// The baseline is the lower of the readings either side. A goroutine an
+	// earlier test left behind can exit between "before" and "during", which
+	// put the count one short of before+held on CI (8 -> 57) although every
+	// held goroutine was counted. One that starts meanwhile only adds.
+	base := min(before.Goroutines, after.Goroutines)
+	if during.Goroutines < base+held {
+		t.Errorf("held %d extra goroutines but the count went %d -> %d -> %d; it is not tracking them",
+			held, before.Goroutines, during.Goroutines, after.Goroutines)
 	}
 
 	// And the heap figures are real numbers rather than zero.

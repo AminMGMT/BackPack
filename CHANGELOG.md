@@ -105,6 +105,12 @@ All notable changes to Backpack are documented here.
   reached, the message now says that no tunnel has been measured yet and that
   ICMP and raw carriers may still pass — see the new [Checking a heavily
   filtered path](docs/filtered-paths.md).
+- **Connection Test could pick a port the server was about to use itself.**
+  Test ports came from 20000–59999, most of which is the kernel's ephemeral
+  range, where every outgoing connection draws its source port. A port is
+  checked free and bound by the engine a moment later, so an outgoing
+  connection could take it in between, and that tunnel read DOWN without
+  carrying any traffic. Ports now come from below the ephemeral range.
 - **A stalled resolver could hold a tunnel open past cancellation.** DNS ran
   outside the owning context on most dial paths, so a reconnect worker,
   endpoint failover or restart could wait on it indefinitely while the
