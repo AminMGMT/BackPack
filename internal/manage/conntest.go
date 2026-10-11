@@ -1437,13 +1437,19 @@ func ctSleep(ctx context.Context, d time.Duration) {
 
 // ctPickPort is a random port free on this server (for TCP, and for UDP as
 // well when both is set) and not already given to another part of the test.
-// The kharej's echo ports are picked here too; they are high and random, so a
-// clash there is unlikely, and a tunnel that meets one reports it.
+// The kharej's echo ports are picked here too; they are random, so a clash
+// there is unlikely, and a tunnel that meets one reports it.
+//
+// It stays below the kernel's ephemeral range. The port is free only when
+// checked and is bound later by an engine, and meanwhile every outgoing
+// connection on the server draws its source port from that range: one could
+// take the number first, and the tunnel listening there would never come up.
+// See internal/testport for the same failure in the test suites.
 func ctPickPort(used map[int]bool, both bool) int {
 	for i := 0; i < 500; i++ {
 		var b [2]byte
 		_, _ = rand.Read(b[:])
-		p := 20000 + (int(b[0])<<8|int(b[1]))%40000
+		p := 20000 + (int(b[0])<<8|int(b[1]))%(ephemeralDefaultLow-20000)
 		if used[p] {
 			continue
 		}
