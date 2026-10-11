@@ -224,3 +224,48 @@ func TestFECSchemeValidation(t *testing.T) {
 		t.Error("a disabled scheme still wrapped the carrier")
 	}
 }
+
+// failOnceCarrier fails the first WriteTo, then behaves like a normal pipe peer.
+type failOnceCarrier struct {
+	*lossyPipe
+	failed bool
+}
+
+func (p *failOnceCarrier) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if !p.failed {
+		p.failed = true
+		return 0, fmt.Errorf("carrier write failed")
+	}
+	return p.lossyPipe.WriteTo(b, addr)
+}
+
+// A local WriteTo failure must not advance the FEC group. Otherwise a dropped
+// local send still occupies a data shard and can waste the group's repair budget.
+func TestFECWriteFailureDoesNotAdvanceShardIndex(t *testing.T) {
+	send, _ := newLossyPair(nil)
+	below := &failOnceCarrier{lossyPipe: send}
+	tx, err := newFECCarrier(below, FECConfig{Data: 2, Parity: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc, ok := tx.(*fecCarrier)
+	if !ok {
+		t.Fatalf("expected *fecCarrier, got %T", tx)
+	}
+
+	wantGrp := fc.sendGrp
+
+	if _, err := tx.WriteTo([]byte("first"), send.peer.addr); err == nil {
+		t.Fatal("want a WriteTo failure on the first shard")
+	}
+	if fc.sendIdx != 0 || fc.sendGrp != wantGrp {
+		t.Fatalf("after failed write: sendIdx=%d sendGrp=%d, want 0/%d", fc.sendIdx, fc.sendGrp, wantGrp)
+	}
+
+	if _, err := tx.WriteTo([]byte("first"), send.peer.addr); err != nil {
+		t.Fatalf("retry after failure: %v", err)
+	}
+	if fc.sendIdx != 1 || fc.sendGrp != wantGrp {
+		t.Fatalf("after successful retry: sendIdx=%d sendGrp=%d, want 1/%d", fc.sendIdx, fc.sendGrp, wantGrp)
+	}
+}

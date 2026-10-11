@@ -227,12 +227,15 @@ func (c *fecCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if err == nil && n != len(frame) {
 		err = io.ErrShortWrite
 	}
+	if err != nil {
+		return 0, err
+	}
+	// Only advance the group after the shard actually left. A local WriteTo
+	// failure must not burn a data slot (or trigger parity) for a packet that
+	// never reached the wire — the next attempt reuses this index.
 	c.sendIdx++
 	if c.sendIdx == c.cfg.Data {
 		c.flushParity()
-	}
-	if err != nil {
-		return 0, err
 	}
 	return len(p), nil
 }
