@@ -368,7 +368,7 @@ func TestConnTestBulkRejectsCorruptionAndStopsOnCancellation(t *testing.T) {
 				_, _ = peer.Write(buf)
 			}
 		}()
-		if speed, err := ctBulk(func() (net.Conn, error) { return client, nil }); err == nil || speed != 0 {
+		if speed, err := ctBulkContext(context.Background(), func() (net.Conn, error) { return client, nil }); err == nil || speed != 0 {
 			t.Fatalf("corrupt transfer returned %f, %v", speed, err)
 		}
 	})

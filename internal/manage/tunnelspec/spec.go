@@ -29,6 +29,8 @@ type Spec struct {
 	// balance, turbo or aggressive. Empty means the values were set by hand or
 	// by a version that predates presets — either way they are left untouched.
 	Preset string
+	// Preserve the operator's decision to avoid process-wide kernel tuning.
+	SkipOptz bool
 
 	BindAddr   string   // server: listen address for the tunnel control channel
 	RemoteAddr string   // client: address of the server tunnel port
@@ -170,6 +172,9 @@ func monitorBind(configured string) string {
 
 // writeTuning emits the throughput/latency knobs shared by server and client.
 func (s Spec) writeTuning(p func(string, ...any)) {
+	if s.SkipOptz {
+		p("skip_optz = true\n")
+	}
 	if s.SOPinTCP {
 		p("so_pin_tcp = true\n")
 	}

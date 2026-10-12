@@ -149,6 +149,7 @@ func Run(configPath string, ctx context.Context) {
 		// so a restart asked for over the socket takes the path a reload takes
 		// rather than a second way of stopping a transport.
 		ctl.setGeneration(cancel, cfg)
+		runCtx = ctl.helperContext(runCtx)
 		go func() {
 			defer close(done)
 			runEngine(&running, runCtx, configPath, applyTuning)

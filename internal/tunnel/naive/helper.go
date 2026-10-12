@@ -196,6 +196,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 	go func() {
 		defer close(h.done)
 		defer os.RemoveAll(dir)
+		defer reportReadiness(ctx, false)
 		first := true
 		for ctx.Err() == nil {
 			args := []string{file}
@@ -215,20 +216,20 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 			}
 			exited := make(chan error, 1)
 			go func() { exited <- cmd.Wait(); close(exited) }()
-			if first {
-				err := waitReady(ctx, addr, mode, exited)
-				if err != nil {
-					stopChild(cmd, exited)
-					if ctx.Err() != nil {
-						ready <- ctx.Err()
-						return
-					}
-					log.Warnf("%s %s helper did not become ready: %v; retrying in one second", label, mode, err)
-					if !sleep(ctx, time.Second) {
-						return
-					}
-					continue
+			if err := waitReady(ctx, addr, mode, exited); err != nil {
+				stopChild(cmd, exited)
+				if ctx.Err() != nil {
+					ready <- ctx.Err()
+					return
 				}
+				log.Warnf("%s %s helper did not become ready: %v; retrying in one second", label, mode, err)
+				if !sleep(ctx, time.Second) {
+					return
+				}
+				continue
+			}
+			reportReadiness(ctx, true)
+			if first {
 				first = false
 				ready <- nil
 			}
@@ -238,6 +239,7 @@ func startManaged(parent context.Context, binary, mode string, body []byte, addr
 				stopChild(cmd, exited)
 				return
 			case <-exited:
+				reportReadiness(ctx, false)
 				// Also remove descendants after the leader has exited.
 				_ = killProcess(cmd.Process)
 				if ctx.Err() != nil {

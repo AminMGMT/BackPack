@@ -48,16 +48,13 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 
 func (s *Server) Start() {
 	if s.config.Naive.Enabled() || s.config.Xray.Enabled() {
-		var helper *naive.Helper
-		var err error
-		if s.config.Xray.Enabled() {
-			helper, err = naive.StartXrayServer(s.ctx, s.config, s.logger)
-		} else {
-			helper, err = naive.StartServer(s.ctx, s.config, s.logger)
-		}
+		helper, err := naive.StartWithRetry(s.ctx, s.logger, func() (*naive.Helper, error) {
+			if s.config.Xray.Enabled() {
+				return naive.StartXrayServer(s.ctx, s.config, s.logger)
+			}
+			return naive.StartServer(s.ctx, s.config, s.logger)
+		})
 		if err != nil {
-			s.logger.Errorf("managed transport helper could not start; tunnel remains stopped: %v", err)
-			<-s.ctx.Done()
 			return
 		}
 		defer helper.Close()

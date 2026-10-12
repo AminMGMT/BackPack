@@ -1,13 +1,17 @@
 package tunnelspec
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/enginectl"
 	"github.com/backpack/backpack/internal/manage/core"
 )
 
@@ -43,7 +47,7 @@ func Apply(s Spec) error {
 
 	// The unit can report "activating" for a moment; give it a chance, then
 	// confirm it is really running.
-	if !core.WaitServiceActive(service, 10*time.Second) {
+	if !waitTunnelActive(s.Name, []byte(s.Render())) {
 		detail := LastLogLine(service)
 		Revert(path, prev, service, wasActive)
 		if detail != "" {
@@ -86,7 +90,7 @@ func applyRaw(name string, cfg []byte, note string) error {
 		Revert(path, prev, service, wasActive)
 		return fmt.Errorf("the tunnel failed to restart on that configuration — reverted: %w", err)
 	}
-	if !core.WaitServiceActive(service, 10*time.Second) {
+	if !waitTunnelActive(name, cfg) {
 		detail := LastLogLine(service)
 		Revert(path, prev, service, wasActive)
 		if detail != "" {
@@ -96,6 +100,48 @@ func applyRaw(name string, cfg []byte, note string) error {
 	}
 	RecordChange(name, prev, note)
 	return nil
+}
+
+// Type=simple becomes active before the engine starts its helper. Managed
+// carriers also need an affirmative readiness response from the new process;
+// neither peer connectivity nor an older engine's missing field can replace it.
+func waitTunnelActive(name string, body []byte) bool {
+	var cfg config.Config
+	if _, err := toml.Decode(string(body), &cfg); err != nil {
+		return false
+	}
+	managed := cfg.Server.Naive.Enabled() || cfg.Client.Naive.Enabled() || cfg.Server.Xray.Enabled() || cfg.Client.Xray.Enabled()
+	timeout := 10 * time.Second
+	if managed {
+		// Preflight and listener readiness each have a ten-second bound.
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if !core.WaitServiceActive(app.ServiceName(name), timeout) {
+		return false
+	}
+	return !managed || waitHelperReady(ctx, name)
+}
+
+func waitHelperReady(ctx context.Context, name string) bool {
+	for ctx.Err() == nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		var status enginectl.Status
+		err := enginectl.AskContext(probeCtx, name, enginectl.OpStatus, &status)
+		cancel()
+		if err == nil && status.Name == name && status.HelperReady != nil && *status.HelperReady {
+			return true
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+	return false
 }
 
 // Revert restores a previous config file and brings the service back to the

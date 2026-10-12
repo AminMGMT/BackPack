@@ -9,6 +9,7 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/enginectl"
 	"github.com/backpack/backpack/internal/metrics"
+	"github.com/backpack/backpack/internal/tunnel/naive"
 )
 
 // The engine's side of the control socket.
@@ -31,8 +32,9 @@ type engineControl struct {
 	// role and transport say what this generation runs. They were never set,
 	// so every Status answered without them; they change with a reload that
 	// switches engine or transport, hence under mu.
-	role      string
-	transport string
+	role        string
+	transport   string
+	helperReady *bool
 	// restart ends the running generation. It is replaced on every generation,
 	// because each one has its own context to cancel.
 	restart func()
@@ -54,16 +56,22 @@ func (e *engineControl) Status() enginectl.Status {
 	}
 	e.mu.Lock()
 	role, transport := e.role, e.transport
+	var helperReady *bool
+	if e.helperReady != nil {
+		ready := *e.helperReady
+		helperReady = &ready
+	}
 	e.mu.Unlock()
 	return enginectl.Status{
-		Name:       e.name,
-		Role:       role,
-		Transport:  transport,
-		Connected:  connected,
-		Peer:       metrics.SnapshotPeer(),
-		BytesIn:    in,
-		BytesOut:   out,
-		Generation: int(e.generation.Load()),
+		Name:        e.name,
+		Role:        role,
+		Transport:   transport,
+		Connected:   connected,
+		Peer:        metrics.SnapshotPeer(),
+		BytesIn:     in,
+		BytesOut:    out,
+		Generation:  int(e.generation.Load()),
+		HelperReady: helperReady,
 	}
 }
 
@@ -92,8 +100,23 @@ func (e *engineControl) setGeneration(stop func(), cfg *config.Config) {
 	e.mu.Lock()
 	e.restart = stop
 	e.role, e.transport = role, transport
+	e.helperReady = nil
+	if cfg.Server.Naive.Enabled() || cfg.Client.Naive.Enabled() || cfg.Server.Xray.Enabled() || cfg.Client.Xray.Enabled() {
+		ready := false
+		e.helperReady = &ready
+	}
 	e.mu.Unlock()
 	e.generation.Add(1)
+}
+
+func (e *engineControl) helperContext(ctx context.Context) context.Context {
+	return naive.WithReadiness(ctx, func(ready bool) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.helperReady != nil {
+			*e.helperReady = ready
+		}
+	})
 }
 
 // engineIdentity names the role and transport a configuration runs, in the
