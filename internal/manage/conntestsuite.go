@@ -240,10 +240,13 @@ func (s *ConnTestSuite) Run(ctx context.Context, progress func([]ConnTestPath)) 
 		case <-ctx.Done():
 		case <-time.After(30 * time.Second):
 		}
-		test.Close()
+		if ctx.Err() == nil {
+			test.Close()
+		}
 		joinDeadline = time.Now().Add(connTestJoinWait)
 	}
 	if ctx.Err() != nil {
+		s.stopPeers()
 		s.mu.Lock()
 		for i := range s.paths {
 			if s.paths[i].State == "waiting" || s.paths[i].State == "running" {
@@ -254,6 +257,31 @@ func (s *ConnTestSuite) Run(ctx context.Context, progress func([]ConnTestPath)) 
 		report()
 	}
 	return s.Paths()
+}
+
+// Give a reachable peer one poll to hear the cancellation before closing its
+// coordinator. This context deliberately outlives the cancelled measurement,
+// but the grace is shared by all paths and never exceeds three seconds.
+func (s *ConnTestSuite) stopPeers() {
+	var waiting []<-chan struct{}
+	for _, test := range s.tests {
+		if test == nil {
+			continue
+		}
+		test.coord.mu.Lock()
+		test.coord.stopped = true
+		test.coord.mu.Unlock()
+		waiting = append(waiting, test.Fetched())
+	}
+	grace := time.NewTimer(3 * time.Second)
+	defer grace.Stop()
+	for _, ack := range waiting {
+		select {
+		case <-ack:
+		case <-grace.C:
+			return
+		}
+	}
 }
 
 // ConnTestSuiteBest compares only paths whose tunnels passed the traffic
@@ -294,6 +322,11 @@ func runConnTestSuiteKharej(ctx context.Context, routes []connTestAddr, out io.W
 			cancel()
 		}
 		if err != nil {
+			if errors.Is(err, errConnTestStopped) || ctx.Err() != nil {
+				paths[i].State, paths[i].Error = "stopped", err.Error()
+				report(i)
+				return paths, err
+			}
 			paths[i].State, paths[i].Error = "unavailable", err.Error()
 			fmt.Fprintln(out, paths[i].Error)
 		}
@@ -344,6 +377,11 @@ func runConnTestSuiteKharej(ctx context.Context, routes []connTestAddr, out io.W
 		paths[i].Rows, paths[i].Best = rows, best
 		paths[i].State = "done"
 		if err != nil {
+			if errors.Is(err, errConnTestStopped) || ctx.Err() != nil {
+				paths[i].State, paths[i].Error = "stopped", err.Error()
+				report(i)
+				return paths, err
+			}
 			paths[i].State, paths[i].Error = "unavailable", err.Error()
 			notify(i)
 		} else {

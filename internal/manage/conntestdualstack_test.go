@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -248,5 +249,55 @@ func TestBothFamiliesCarryRealTrafficThroughOneLinkInSequence(t *testing.T) {
 	}
 	if ConnTestSuiteBest(paths).Transport == "" {
 		t.Error("no winning IP path")
+	}
+}
+
+func TestStoppingASuiteTellsBothPeersAndCleansEveryPath(t *testing.T) {
+	ctRequireIPv6(t)
+	previous := connTestReverse
+	connTestReverse = nil
+	defer func() { connTestReverse = previous }()
+	suite, raw, err := StartConnTestSuite(ConnTestOptions{}, []string{"127.0.0.1", "::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer suite.Close()
+	a, err := parseConnTestLink(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	finished := make(chan []ConnTestPath, 1)
+	go func() { finished <- suite.Run(ctx, nil) }()
+	check, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	for _, route := range a.Routes {
+		for {
+			_, err := fetchConnTestLink(check, route)
+			if errors.Is(err, errConnTestStopped) {
+				break
+			}
+			if check.Err() != nil {
+				t.Fatalf("peer never heard cancellation: %v", err)
+			}
+			ctSleep(check, 10*time.Millisecond)
+		}
+	}
+	select {
+	case paths := <-finished:
+		for _, p := range paths {
+			if p.State != "stopped" {
+				t.Errorf("path survived stop: %+v", p)
+			}
+		}
+	case <-check.Done():
+		t.Fatal("suite did not stop after both peers acknowledged cancellation")
+	}
+	suite.Close()
+	for _, test := range suite.tests {
+		if _, err := os.Stat(test.dir); !os.IsNotExist(err) {
+			t.Errorf("test directory survived stop: %s %v", test.dir, err)
+		}
 	}
 }

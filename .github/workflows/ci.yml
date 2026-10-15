@@ -142,6 +142,12 @@ jobs:
           BP_CONNTEST_HELPERS: '1'
         run: go test ./internal/manage -run '^(TestRealityCoverSelectionAuthenticatesWithThePinnedHelper|TestAConnectionTestOverLoopbackPassesEveryReverseTransport)$' -race -count=1 -v -timeout 8m
 
+      - name: Authenticate the managed HTTPS carriers over IPv6
+        env:
+          BP_CONNTEST_HELPERS: '1'
+          BP_CONNTEST_HOST: '::1'
+        run: go test ./internal/manage -run '^TestAConnectionTestOverLoopbackPassesEveryReverseTransport$' -race -count=1 -v -timeout 8m
+
   conntest-ipv6:
     name: Connection Test over an IPv6-only path
     runs-on: ubuntu-latest

@@ -104,6 +104,8 @@ const connTestBulk = 1 << 20
 // built binary rather than at the test itself.
 var connTestBinary = os.Executable
 
+var errConnTestStopped = errors.New("the Iran server stopped this connection test")
+
 // Use the same pinned helper binaries as the setup wizard. Absence is a
 // skipped test, rather than evidence that the network blocked a protocol.
 var connTestHelperBinary = func(tool string) (string, error) {
@@ -263,6 +265,9 @@ func fetchConnTestLink(ctx context.Context, a connTestAddr) (ConnTestLink, error
 	var out ConnTestLink
 	for {
 		reply, err := ctAskContext(ctx, a.Host, a.Coord, "config "+a.Tok)
+		if err == nil && reply == "stopped" {
+			return out, errConnTestStopped
+		}
 		if err == nil && strings.HasPrefix(reply, "config ") {
 			raw, err := unGzipB64(strings.TrimPrefix(reply, "config "))
 			if err != nil || json.Unmarshal(raw, &out) != nil || out.Kind != connTestKind {
@@ -1669,6 +1674,7 @@ type ctCoordinator struct {
 
 	// Installed before the suite link is exposed; immutable thereafter.
 	routeUnavailable func(int) bool
+	stopped          bool
 }
 
 func startCTCoordinator(port int, tok string) (*ctCoordinator, error) {
@@ -1711,7 +1717,7 @@ func (c *ctCoordinator) serveTCP() {
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			if reply := c.answer(line, host); reply != "" {
 				n, err := conn.Write([]byte(reply + "\n"))
-				if err == nil && n == len(reply)+1 && strings.HasPrefix(reply, "done ") {
+				if err == nil && n == len(reply)+1 && (strings.HasPrefix(reply, "done ") || reply == "stopped") {
 					// The peer reads to EOF. Publish Fetched only after its
 					// full verdict has left this socket; a suite immediately
 					// tears down this path before starting the next one.
@@ -1733,7 +1739,7 @@ func (c *ctCoordinator) serveUDP() {
 		host, _, _ := net.SplitHostPort(from.String())
 		if reply := c.answer(string(buf[:n]), host); reply != "" {
 			n, err := c.udp.WriteTo([]byte(reply+"\n"), from)
-			if err == nil && n == len(reply)+1 && strings.HasPrefix(reply, "done ") {
+			if err == nil && n == len(reply)+1 && (strings.HasPrefix(reply, "done ") || reply == "stopped") {
 				c.fetchOn.Do(func() { close(c.fetched) })
 			}
 		}
@@ -1750,6 +1756,12 @@ func (c *ctCoordinator) answer(line, from string) string {
 	f := strings.Fields(line)
 	if len(f) < 2 || subtle.ConstantTimeCompare([]byte(f[1]), []byte(c.tok)) != 1 {
 		return ""
+	}
+	c.mu.Lock()
+	stopped := c.stopped
+	c.mu.Unlock()
+	if stopped {
+		return "stopped"
 	}
 	// A path-MTU probe: its padding is the point, and the answer is small.
 	if f[0] == "pmtu" && len(f) == 4 {
@@ -2131,6 +2143,9 @@ func runConnTestKharejLink(ctx context.Context, link ConnTestLink, out io.Writer
 	// Checking in: every few seconds until the Iran side hears it.
 	for {
 		reply, err := ctAskContext(ctx, link.Host, link.Coord, "hello "+link.Tok)
+		if err == nil && reply == "stopped" {
+			return nil, ConnTestBest{}, errConnTestStopped
+		}
 		if err == nil && reply == "ok" {
 			break
 		}
@@ -2163,6 +2178,9 @@ func runConnTestKharejLink(ctx context.Context, link ConnTestLink, out io.Writer
 			}
 		}
 		reply, err := ctAskContext(ctx, link.Host, link.Coord, "result "+link.Tok)
+		if err == nil && reply == "stopped" {
+			return nil, ConnTestBest{}, errConnTestStopped
+		}
 		if err == nil && strings.HasPrefix(reply, "live ") && live != nil {
 			if raw, err := unGzipB64(strings.TrimPrefix(reply, "live ")); err == nil {
 				var rows []ConnTestResult

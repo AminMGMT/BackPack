@@ -87,7 +87,10 @@ func ctResolveHost(ctx context.Context, host, family string) (string, error) {
 	}
 	host = strings.Trim(strings.TrimSpace(host), "[]")
 	if host == "" {
-		return "", fmt.Errorf("a %s server address is required", family)
+		if family == "" {
+			return "", fmt.Errorf("this server's address is required")
+		}
+		return "", fmt.Errorf("an %s server address is required", family)
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
