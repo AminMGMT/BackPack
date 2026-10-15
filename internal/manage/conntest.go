@@ -1717,7 +1717,7 @@ func (c *ctCoordinator) serveTCP() {
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			if reply := c.answer(line, host); reply != "" {
 				n, err := conn.Write([]byte(reply + "\n"))
-				if err == nil && n == len(reply)+1 && (strings.HasPrefix(reply, "done ") || reply == "stopped") {
+				if err == nil && n == len(reply)+1 && (strings.HasPrefix(reply, "done ") || reply == "stopped" && ctStopAcknowledged(line)) {
 					// The peer reads to EOF. Publish Fetched only after its
 					// full verdict has left this socket; a suite immediately
 					// tears down this path before starting the next one.
@@ -1737,13 +1737,22 @@ func (c *ctCoordinator) serveUDP() {
 			return
 		}
 		host, _, _ := net.SplitHostPort(from.String())
-		if reply := c.answer(string(buf[:n]), host); reply != "" {
+		line := string(buf[:n])
+		if reply := c.answer(line, host); reply != "" {
 			n, err := c.udp.WriteTo([]byte(reply+"\n"), from)
-			if err == nil && n == len(reply)+1 && (strings.HasPrefix(reply, "done ") || reply == "stopped") {
+			if err == nil && n == len(reply)+1 && (strings.HasPrefix(reply, "done ") || reply == "stopped" && ctStopAcknowledged(line)) {
 				c.fetchOn.Do(func() { close(c.fetched) })
 			}
 		}
 	}
+}
+
+// Only the worker's lifecycle requests observe cancellation and return from
+// the run. A background PMTU probe ignores other replies; counting it as a
+// shutdown acknowledgement would close the coordinator before the worker hears.
+func ctStopAcknowledged(line string) bool {
+	f := strings.Fields(line)
+	return len(f) >= 2 && (f[0] == "config" || f[0] == "hello" || f[0] == "result")
 }
 
 // answer is the coordinator's whole protocol. An empty answer is silence: a

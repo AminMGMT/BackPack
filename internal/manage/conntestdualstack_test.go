@@ -301,3 +301,33 @@ func TestStoppingASuiteTellsBothPeersAndCleansEveryPath(t *testing.T) {
 		}
 	}
 }
+
+func TestBackgroundProbesCannotAcknowledgeThePeerHasStopped(t *testing.T) {
+	c, err := startCTCoordinator(0, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	c.mu.Lock()
+	c.stopped = true
+	c.mu.Unlock()
+	port := c.tcp.Addr().(*net.TCPAddr).Port
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if reply, err := ctAskContext(ctx, "127.0.0.1", port, "pmtu tok 1280 pad"); err != nil || reply != "stopped" {
+		t.Fatalf("probe: %q %v", reply, err)
+	}
+	select {
+	case <-c.fetched:
+		t.Fatal("background PMTU reply acknowledged the main worker's shutdown")
+	default:
+	}
+	if reply, err := ctAskContext(ctx, "127.0.0.1", port, "result tok"); err != nil || reply != "stopped" {
+		t.Fatalf("worker: %q %v", reply, err)
+	}
+	select {
+	case <-c.fetched:
+	case <-ctx.Done():
+		t.Fatal("worker's stop reply was not acknowledged")
+	}
+}
