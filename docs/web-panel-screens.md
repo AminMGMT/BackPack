@@ -62,12 +62,29 @@ command to carry to the other end and nothing to wait for. See
 
 ### Connection test — `#/conntest`
 
-The Iran side of the menu's Connection Test, in two panes of one size. The left
-one is what to do now: the form, then a 15-minute dial with the one line for the
-kharej — `sudo backpack link apply 'backpack://t.…'` — then the test's own
-countdown, then *Best for this path*. The right one fills a row per transport as
-its echoes come back and, at the end, keeps only what held or was unstable. The
-test tunnels are removed when it ends.
+The Iran side of the menu's Connection Test. Public IPv4 and IPv6 addresses on
+active interfaces are detected locally. Choose IPv4, IPv6, or both sequentially;
+when several addresses exist, select one per family or enter an address/hostname
+manually (including private or NAT addresses). Detection is not a reachability
+claim: Kharej checks the selected coordinators. Hostnames are resolved once to
+the selected family, so an IPv6 test cannot fall back to IPv4.
+
+Copy one `sudo backpack link apply 'backpack://t.…'` command to Kharej. A test of
+both families uses a versioned link and requires an updated Backpack on both
+servers; existing single-path links remain supported. Each family is measured
+separately, including download/upload, stability, RTT and path MTU. Paths run in
+sequence so their bandwidth tests do not interfere. An unreachable coordinator
+is reported as an unavailable path, without a protocol verdict, and the other
+family continues. All paths can be stopped together.
+
+Use the path buttons to inspect separate results and compare recommendations.
+The overall recommendation identifies both the winning address and transport.
+Failed and skipped rows remain visible, including the reason for each skip.
+Native socket transports and Direct UDP/QUIC can test IPv6. Raw IPv4 carriers
+(PCK, Direct xDi/SNI and IP spoofing) are explicitly skipped for IPv6. IPv6 PMTU
+uses a 1280-byte minimum, its own fragmentation option and a 40-byte IP header;
+a suggested TCP MSS subtracts 60 bytes. Missing managed helpers are skipped as
+before. All temporary test engines and files are removed when the test ends.
 
 *CLI: 0 Connection Test → Iran.*
 

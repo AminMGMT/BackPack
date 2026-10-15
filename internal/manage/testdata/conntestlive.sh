@@ -13,7 +13,16 @@ mount -t tmpfs none /run 2>/dev/null; mkdir -p /run/netns
 ip netns add iran; ip netns add kharej
 ip link add vi type veth peer name vk
 ip link set vi netns iran; ip link set vk netns kharej
-ip -n iran addr add 10.99.0.1/24 dev vi; ip -n kharej addr add 10.99.0.2/24 dev vk
+CT_SERVER=10.99.0.1
+if [ "${CT_IPV6:-}" = 1 ]; then
+  # No IPv4 address on the inter-server link: a passing tunnel cannot have
+  # silently fallen back to IPv4. Inner tunnel addresses remain independent.
+  ip -n iran -6 addr add fd99::1/64 dev vi nodad
+  ip -n kharej -6 addr add fd99::2/64 dev vk nodad
+  CT_SERVER=fd99::1
+else
+  ip -n iran addr add 10.99.0.1/24 dev vi; ip -n kharej addr add 10.99.0.2/24 dev vk
+fi
 for n in iran kharej; do ip -n $n link set lo up; done
 ip -n iran link set vi up; ip -n kharej link set vk up
 if [ -n "${PATHMTU:-}" ]; then
@@ -40,7 +49,7 @@ fi
 
 mkdir -p "$W"
 rm -f "$W/link"
-ip netns exec iran env CT_ROLE=iran CT_HOST=10.99.0.1 CT_W="$W" CT_SOAK="$SOAK" CT_PRESET="${PRESET:-}" CT_ONLY="${ONLY:-}" BIN="$BIN" \
+ip netns exec iran env CT_ROLE=iran CT_HOST="$CT_SERVER" CT_W="$W" CT_SOAK="$SOAK" CT_PRESET="${PRESET:-}" CT_ONLY="${ONLY:-}" BIN="$BIN" \
   "$TESTBIN" -test.run '^TestConnTestIranSide$' -test.v -test.timeout 10m > "$W/iran.out" 2>&1 &
 IP=$!
 for i in $(seq 60); do [ -s "$W/link" ] && break; sleep 1; done

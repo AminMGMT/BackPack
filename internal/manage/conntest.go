@@ -22,6 +22,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -169,16 +170,24 @@ func (l ConnTestLink) Short() string {
 	if ip := net.ParseIP(l.Host).To4(); ip != nil {
 		b = append(b, ip...)
 	} else {
-		b = append(b, l.Host...)
+		host := l.Host
+		// V1 reserves a four-byte tail for compact IPv4. Expand short IPv6
+		// literals such as ::10 so old readers cannot mistake them for IPv4.
+		if ip, err := netip.ParseAddr(host); err == nil && len(host) == 4 {
+			host = ip.StringExpanded()
+		}
+		b = append(b, host...)
 	}
 	return connTestScheme + base64.RawURLEncoding.EncodeToString(b)
 }
 
 // connTestAddr is what a copied link says: where to ask, and the secret.
 type connTestAddr struct {
-	Host  string
-	Coord int
-	Tok   string
+	Host   string
+	Coord  int
+	Tok    string
+	Routes []connTestAddr `json:"-"`
+	Error  string         `json:"error,omitempty"`
 }
 
 // parseConnTestLink reads a copied test link, wherever it sits in what was
@@ -189,8 +198,11 @@ func parseConnTestLink(s string) (connTestAddr, error) {
 		return connTestAddr{}, fmt.Errorf("that is not a Backpack connection-test link — it begins with %s", connTestScheme)
 	}
 	b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(s, connTestScheme))
-	if err != nil || len(b) <= connTestFixedLen || b[0] != connTestLinkVer {
+	if err != nil || len(b) <= connTestFixedLen || (b[0] != connTestLinkVer && b[0] != 2) {
 		return connTestAddr{}, fmt.Errorf("the test link is damaged or cut short — copy all of it again")
+	}
+	if b[0] == 2 {
+		return ctParseSuiteLink(b[1:])
 	}
 	a := connTestAddr{
 		Coord: int(b[1])<<8 | int(b[2]),
@@ -201,6 +213,9 @@ func parseConnTestLink(s string) (connTestAddr, error) {
 		a.Host = net.IP(host).String()
 	} else {
 		a.Host = string(host)
+		if ip := net.ParseIP(a.Host); ip != nil {
+			a.Host = ip.String()
+		}
 	}
 	if a.Coord == 0 || a.Host == "" {
 		return connTestAddr{}, fmt.Errorf("the test link is damaged or cut short — copy all of it again")
@@ -387,7 +402,12 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	host := strings.Trim(strings.TrimSpace(o.Host), "[]")
+	resolveCtx, cancelResolve := context.WithTimeout(ctx, connTestResolveWait)
+	host, resolveErr := ctResolveHost(resolveCtx, o.Host, "")
+	cancelResolve()
+	if resolveErr != nil {
+		return nil, "", resolveErr
+	}
 	if host == "" {
 		return nil, "", fmt.Errorf("this server's address is needed: it is what the kharej dials")
 	}
@@ -440,6 +460,11 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 			s.cases = append(s.cases, c)
 			continue
 		}
+		if ctFamily(host) == "IPv6" && tr == "pck" {
+			c.skip = "PCK uses raw IPv4 packets; IPv6 is not supported"
+			s.cases = append(s.cases, c)
+			continue
+		}
 		if connTestNeedsRoot(tr) && !s.root {
 			c.skip = "needs root on both servers"
 			s.cases = append(s.cases, c)
@@ -456,7 +481,7 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 		}
 		spec := TunnelSpec{
 			Role: "server", Transport: tr, Name: c.name,
-			BindAddr: net.JoinHostPort("0.0.0.0", strconv.Itoa(port)),
+			BindAddr: net.JoinHostPort(ctBindHost(host), strconv.Itoa(port)),
 			Ports:    []string{fmt.Sprintf("127.0.0.1:%d=127.0.0.1:%d", c.entry, target)},
 			Token:    ctCaseToken(s.link.Tok, "reverse", tr),
 		}
@@ -484,6 +509,11 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 				return fail(err)
 			}
 			c := &connTestCase{kind: "direct", tr: carrier, name: fmt.Sprintf("ct-%s-d%s", id, carrier)}
+			if ctFamily(host) == "IPv6" && carrier != "udp" && carrier != "quic" {
+				c.skip = "this raw carrier uses IPv4 packets; IPv6 is not supported"
+				s.cases = append(s.cases, c)
+				continue
+			}
 			if !s.root {
 				c.skip = "needs root on both servers"
 				s.cases = append(s.cases, c)
@@ -519,12 +549,16 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 	// receiver on one server counts the probes that arrive from the forged
 	// source, the other server sends them. Once each way.
 	if spoofSrc != "" {
-		s.link.SpoofSrc, s.link.SpoofN = spoofSrc, connTestSoak
+		if ctFamily(host) != "IPv6" {
+			s.link.SpoofSrc, s.link.SpoofN = spoofSrc, connTestSoak
+		}
 		s.link.SpoofK = ctPickPort(used, false)
 		s.link.SpoofI = ctPickPort(used, true)
 		for _, dir := range []string{ctSpoofToKharej, ctSpoofToIran} {
 			c := &connTestCase{kind: "spoof", tr: dir}
-			if !s.root {
+			if ctFamily(host) == "IPv6" {
+				c.skip = "IP spoofing uses IPv4 packets; IPv6 is not supported"
+			} else if !s.root {
 				c.skip = "needs root on both servers"
 			}
 			s.cases = append(s.cases, c)
@@ -808,7 +842,7 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 	}
 	c.link.Tr, c.link.Port, c.link.Name = c.tr, strconv.Itoa(port), c.name
 	settings := ctCarrierSettings{TargetPort: targetPort, ServerName: "conntest.backpack.invalid"}
-	public := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+	public := net.JoinHostPort(ctBindHost(s.link.Host), strconv.Itoa(port))
 	var cert, key string
 	if c.tr != "reality" {
 		cert, key, settings.CA, err = ctCertificate(s.dir, c.name, s.link.Host)
@@ -1037,6 +1071,10 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 	case <-ctx.Done():
 	}
 	s.best = ctComputeBest(results, s.cases, pmtu, s.dir)
+	s.best.Host, s.best.Family = s.link.Host, ctFamily(s.link.Host)
+	if s.best.Family == "IPv6" && s.best.MSS > 0 {
+		s.best.MSS = pmtu - 60
+	}
 	s.coord.publish(results, s.best)
 	return results
 }
@@ -1623,6 +1661,9 @@ type ctCoordinator struct {
 	// pmtu is the path MTU the kharej measured.
 	pmtu     chan int
 	pmtuOnce sync.Once
+
+	// Installed before the suite link is exposed; immutable thereafter.
+	routeUnavailable func(int) bool
 }
 
 func startCTCoordinator(port int, tok string) (*ctCoordinator, error) {
@@ -1664,7 +1705,14 @@ func (c *ctCoordinator) serveTCP() {
 			}
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			if reply := c.answer(line, host); reply != "" {
-				_, _ = conn.Write([]byte(reply + "\n"))
+				n, err := conn.Write([]byte(reply + "\n"))
+				if err == nil && n == len(reply)+1 && strings.HasPrefix(reply, "done ") {
+					// The peer reads to EOF. Publish Fetched only after its
+					// full verdict has left this socket; a suite immediately
+					// tears down this path before starting the next one.
+					conn.Close()
+					c.fetchOn.Do(func() { close(c.fetched) })
+				}
 			}
 		}()
 	}
@@ -1679,7 +1727,10 @@ func (c *ctCoordinator) serveUDP() {
 		}
 		host, _, _ := net.SplitHostPort(from.String())
 		if reply := c.answer(string(buf[:n]), host); reply != "" {
-			_, _ = c.udp.WriteTo([]byte(reply+"\n"), from)
+			n, err := c.udp.WriteTo([]byte(reply+"\n"), from)
+			if err == nil && n == len(reply)+1 && strings.HasPrefix(reply, "done ") {
+				c.fetchOn.Do(func() { close(c.fetched) })
+			}
 		}
 	}
 }
@@ -1700,6 +1751,16 @@ func (c *ctCoordinator) answer(line, from string) string {
 		return "pm " + f[2]
 	}
 	if len(f) > 3 {
+		return ""
+	}
+	if f[0] == "unavailable" && len(f) == 3 {
+		c.mu.Lock()
+		unavailable := c.routeUnavailable
+		c.mu.Unlock()
+		i, err := strconv.Atoi(f[2])
+		if err == nil && unavailable != nil && unavailable(i) {
+			return "ok"
+		}
 		return ""
 	}
 	if f[0] == "port" && len(f) == 3 {
@@ -1787,7 +1848,6 @@ func (c *ctCoordinator) answer(line, from string) string {
 			raw, _ := json.Marshal(live())
 			return "live " + gzipB64(raw)
 		}
-		c.fetchOn.Do(func() { close(c.fetched) })
 		return "done " + v
 	}
 	return ""
@@ -1940,6 +2000,14 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 	if err != nil {
 		return nil, ConnTestBest{}, err
 	}
+	if len(addr.Routes) > 0 {
+		paths, err := runConnTestSuiteKharej(ctx, addr.Routes, out, nil)
+		var rows []ConnTestResult
+		for _, p := range paths {
+			rows = append(rows, p.Rows...)
+		}
+		return rows, ConnTestSuiteBest(paths), err
+	}
 	fmt.Fprintf(out, "Fetching the test from %s...\n", addr.Host)
 	fetchCtx, cancelFetch := context.WithTimeout(ctx, 3*time.Minute)
 	link, err := fetchConnTestLink(fetchCtx, addr)
@@ -1947,6 +2015,10 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 	if err != nil {
 		return nil, ConnTestBest{}, err
 	}
+	return runConnTestKharejLink(ctx, link, out, live)
+}
+
+func runConnTestKharejLink(ctx context.Context, link ConnTestLink, out io.Writer, live func([]ConnTestResult)) ([]ConnTestResult, ConnTestBest, error) {
 	until := time.Unix(link.Until, 0)
 	if time.Now().After(until) {
 		return nil, ConnTestBest{}, fmt.Errorf("this test link has expired — start a new test on the Iran server")
@@ -2020,6 +2092,9 @@ func RunConnTestKharej(ctx context.Context, raw string, out io.Writer, live func
 				continue
 			}
 			spec.Name, spec.Iface = name, fmt.Sprintf("bpt%d", i)
+			if ctFamily(link.Host) == "IPv6" {
+				spec.Addr = net.JoinHostPort("::", addrPort(spec.Addr))
+			}
 			if _, body, err = directBodyFromSpec(spec); err != nil {
 				local[c.Kind+"/"+c.Tr] = err.Error()
 				continue
