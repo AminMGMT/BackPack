@@ -97,6 +97,31 @@ func ctRequireIPv6(t *testing.T) {
 	l.Close()
 }
 
+func TestUnjoinedFamiliesShareOneJoinDeadlineAndKeepHonestErrors(t *testing.T) {
+	ctRequireIPv6(t)
+	previous, wait := connTestReverse, connTestJoinWait
+	connTestReverse = nil
+	connTestJoinWait = 30 * time.Millisecond
+	defer func() { connTestReverse, connTestJoinWait = previous, wait }()
+	suite, _, err := StartConnTestSuite(ConnTestOptions{}, []string{"127.0.0.1", "::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer suite.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	paths := suite.Run(ctx, nil)
+	for _, p := range paths {
+		if p.State != "unavailable" || !strings.Contains(p.Error, "did not join") || len(p.Rows) != 0 {
+			t.Fatalf("invented a peer reachability check: %+v", p)
+		}
+	}
+	suite.paths[0].Error = "preparation failed on Iran"
+	if !suite.unavailable(0) || suite.Paths()[0].Error != "preparation failed on Iran" {
+		t.Fatal("a repeated peer report overwrote the original preparation error")
+	}
+}
+
 func TestAnUnreachablePathDoesNotHoldTheOtherFamilyForTheJoinTimeout(t *testing.T) {
 	ctRequireIPv6(t)
 	previous, wait := connTestReverse, connTestPathCheckWait

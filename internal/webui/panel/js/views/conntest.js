@@ -194,6 +194,8 @@ function bestPane(v) {
       <div><span class="badge">Best for this path</span><b class="tr">${esc(b.tr)}</b></div>
     </div>
     <div class="ct-bgrid">
+      ${cell('IP path', b.family || '')}
+      ${cell('Server address', b.host || '')}
       ${cell('Download', b.mb ? b.mb.toFixed(b.mb < 10 ? 1 : 0) : '', 'Mb/s')}
       ${cell('Upload', b.upload_mb ? b.upload_mb.toFixed(b.upload_mb < 10 ? 1 : 0) : '', 'Mb/s')}
       ${cell('Round trip', b.rt, 'ms')}
@@ -357,7 +359,7 @@ export function connTestView(ctx) {
     const whole = liveRows.reduce((a, r) => a + (r.total || 60), 0) || 1;
     const pct = Math.round((tried / whole) * 100);
     const head = !showRows
-      ? `<div class="ct-rt"><b>Transports</b><small>${mode === 'waiting' || mode === 'starting' ? 'standing by' : 'none yet'}</small></div>`
+      ? `<div class="ct-rt"><b>Transports</b><small>${st === 'waiting' || st === 'starting' ? 'standing by' : 'none yet'}</small></div>`
       : st === 'running'
         ? `<div class="ct-rt"><b>Transports</b><small>${esc(v.kharej || '')}</small><span class="sp"></span><span class="pc">${pct}%</span></div>
            <div class="ct-track"><i style="--w:${pct}%"></i></div>`
@@ -438,12 +440,14 @@ export function connTestView(ctx) {
     if (steps.innerHTML !== stp) steps.innerHTML = stp;
     const paths = v.paths || [];
     const active = paths.findIndex(p => p.state === 'running');
-    const at = selectedPath >= 0 && selectedPath < paths.length ? selectedPath : active >= 0 ? active : 0;
-    const ps = JSON.stringify([fresh, paths.map(p => [p.host,p.state,p.error,p.best]),at,v.best]);
+    const recommended = paths.findIndex(p => p.host === v.best?.host);
+    const at = selectedPath >= 0 && selectedPath < paths.length ? selectedPath : active >= 0 ? active : recommended >= 0 ? recommended : 0;
+    const ps = JSON.stringify([fresh, st, paths.map(p => [p.host,p.state,p.error,p.best]),at,v.best]);
     if (ps !== pathsSig) {
       pathsSig = ps;
       $('#ctPaths',view).innerHTML = fresh || !paths.length ? '' : `<div class="tl-seg">${paths.map((p,i) =>
         `<button type="button" data-route="${i}" class="${i === at ? 'on' : ''}" aria-pressed="${i === at}"><b>${esc(p.family)} · ${esc(p.host)}</b><small>${esc(p.state)}${p.best?.tr ? ` · ${esc(p.best.tr)} · ${(p.best.mb || 0).toFixed(2)} ↓ / ${(p.best.upload_mb || 0).toFixed(2)} ↑ Mb/s · ${p.best.rt || 0} ms` : ''}</small></button>`).join('')}</div>
+        ${ACTIVE.includes(st) ? '<button type="button" class="tl-btn" id="ctStopPaths">Stop all IP paths</button>' : ''}
         ${v.best?.tr ? `<p class="tl-meta">Recommended: ${esc(v.best.family)} · ${esc(v.best.host)} · ${esc(v.best.tr)}</p>` : ''}`;
     }
     const p = !fresh && !['idle','starting'].includes(st) ? paths[at] : null;
@@ -505,7 +509,7 @@ export function connTestView(ctx) {
       } catch (e) { oops(e); b.disabled = false; b.innerHTML = `${ICON.play}Start the test`; }
       return;
     }
-    if (b.id === 'ctStop') {
+    if (b.id === 'ctStop' || b.id === 'ctStopPaths') {
       if (!await confirmBox({ title: 'Stop the test?', body: 'Every test tunnel on this server is taken down. The kharej notices on its own and stops too.', go: 'Stop' })) return;
       try { paint(await api.connTestStop()); toast('Stopping the test…'); } catch (e) { oops(e); }
       setTimeout(load, 1200);

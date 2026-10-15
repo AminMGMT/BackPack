@@ -367,6 +367,8 @@ type ConnTestIran struct {
 
 // ConnTestOptions are what the Iran operator answers.
 type ConnTestOptions struct {
+	// A suite reserves ports across paths while child listeners are starting.
+	ports     map[int]bool
 	Context   context.Context // optional cancellation, including startup
 	Host      string          // this server's address, as the kharej dials it
 	SNIDomain string          // what the sni carrier announces
@@ -435,7 +437,10 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 	}
 
 	id := randomToken(8)
-	used := map[int]bool{}
+	used := o.ports
+	if used == nil {
+		used = map[int]bool{}
+	}
 	s.link = ConnTestLink{
 		ID: id, Host: host, Tok: ctNewSecret(), Preset: preset,
 		TCP: ctPickPort(used, false), UDP: ctPickPort(used, false), L3: ctPickPort(used, false),

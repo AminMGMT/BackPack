@@ -110,6 +110,7 @@ func StartConnTestSuite(o ConnTestOptions, hosts []string) (*ConnTestSuite, stri
 	routes := make([]connTestAddr, len(hosts))
 	until := time.Now().Add(connTestJoinWait + time.Duration(len(hosts))*ConnTestRunTime() + connTestSlack).Unix()
 	available := 0
+	o.ports = make(map[int]bool)
 	for i, host := range hosts {
 		o.Host = host
 		test, _, err := StartConnTestIran(o)
@@ -149,13 +150,20 @@ func StartConnTestSuite(o ConnTestOptions, hosts []string) (*ConnTestSuite, stri
 }
 
 func (s *ConnTestSuite) unavailable(i int) bool {
+	return s.markUnavailable(i, "Kharej could not reach this path's test coordinator over TCP/UDP; tunnel protocols were not measured")
+}
+
+func (s *ConnTestSuite) markUnavailable(i int, reason string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if i < 0 || i >= len(s.paths) || s.paths[i].State == "running" || s.paths[i].State == "done" {
 		return false
 	}
+	if s.paths[i].State == "unavailable" {
+		return true
+	}
 	s.paths[i].State = "unavailable"
-	s.paths[i].Error = "Kharej could not reach this path's test coordinator over TCP/UDP; tunnel protocols were not measured"
+	s.paths[i].Error = reason
 	select {
 	case s.changed <- struct{}{}:
 	default:
@@ -173,11 +181,12 @@ func (s *ConnTestSuite) Run(ctx context.Context, progress func([]ConnTestPath)) 
 		}
 	}
 	report()
+	joinDeadline := time.Now().Add(connTestJoinWait)
 	for i, test := range s.tests {
 		if test == nil {
 			continue
 		}
-		wait := time.NewTimer(connTestJoinWait)
+		wait := time.NewTimer(time.Until(joinDeadline))
 		waiting := true
 		for waiting && ctx.Err() == nil {
 			if s.Paths()[i].State == "unavailable" {
@@ -190,7 +199,7 @@ func (s *ConnTestSuite) Run(ctx context.Context, progress func([]ConnTestPath)) 
 				report()
 			case <-ctx.Done():
 			case <-wait.C:
-				s.unavailable(i)
+				s.markUnavailable(i, "Kharej did not join this path before the deadline; tunnel protocols were not measured")
 				report()
 			}
 		}
@@ -232,6 +241,7 @@ func (s *ConnTestSuite) Run(ctx context.Context, progress func([]ConnTestPath)) 
 		case <-time.After(30 * time.Second):
 		}
 		test.Close()
+		joinDeadline = time.Now().Add(connTestJoinWait)
 	}
 	if ctx.Err() != nil {
 		s.mu.Lock()
