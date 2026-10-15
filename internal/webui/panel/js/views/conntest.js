@@ -439,7 +439,7 @@ export function connTestView(ctx) {
     const stp = stepper(fresh ? 'idle' : st);
     if (steps.innerHTML !== stp) steps.innerHTML = stp;
     const paths = v.paths || [];
-    const active = paths.findIndex(p => p.state === 'running');
+    const active = paths.findIndex(p => phase(p) === 'running');
     const recommended = paths.findIndex(p => p.host === v.best?.host);
     const at = selectedPath >= 0 && selectedPath < paths.length ? selectedPath : active >= 0 ? active : recommended >= 0 ? recommended : 0;
     const ps = JSON.stringify([fresh, st, paths.map(p => [p.host,p.state,p.error,p.best]),at,v.best]);
@@ -451,8 +451,8 @@ export function connTestView(ctx) {
         ${v.best?.tr ? `<p class="tl-meta">Recommended: ${esc(v.best.family)} · ${esc(v.best.host)} · ${esc(v.best.tr)}</p>` : ''}`;
     }
     const p = !fresh && !['idle','starting'].includes(st) ? paths[at] : null;
-    const detail = p ? { ...v, ...p, state: p.state === 'unavailable' ? 'failed' : p.state, ran: p.started, best: p.best?.tr ? p.best : null } : v;
-    if (ACTIVE.includes(st) && p?.state === 'done') detail.suiteActive = true;
+    const detail = p ? { ...v, ...p, state: phase(p) === 'unavailable' ? 'failed' : p.state, ran: p.started, best: p.best?.tr ? p.best : null } : v;
+    if (ACTIVE.includes(st) && p && phase(p) === 'done') detail.suiteActive = true;
     paintLeft(detail, phase(detail));
     paintRight(detail, phase(detail));
   };

@@ -157,6 +157,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Selection, fallback, sequencing, cancellation and panel API regressions
+        run: |
+          go test ./internal/manage ./internal/webui -race -count=1 -v -timeout 6m \
+            -run '^(TestConnectionTest|TestAnUnreachablePath|TestIPv6RawCarriers|TestBothFamilies|TestUnjoinedFamilies|TestStoppingASuite|TestTheScreensReadTunnelStateThroughOnePlace|TestEveryPanelCallReachesAHandlerThatReadsWhatItSends)'
       - name: Native transports, direct UDP/QUIC, PMTU and unsupported raw carriers
         run: |
           sudo env PATH="$PATH" GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" BP_L3_LIVE=1 \
