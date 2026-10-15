@@ -366,6 +366,26 @@ func runConnTestSuiteKharej(ctx context.Context, routes []connTestAddr, out io.W
 		if paths[i].State == "unavailable" {
 			continue
 		}
+		// The previous worker has finished and removed its engines. Recheck
+		// cancellation before creating any engines for a later path; its
+		// initial preflight may now be several minutes old.
+		if i > 0 {
+			check, cancel := context.WithTimeout(ctx, connTestPathCheckWait)
+			refreshed, err := fetchConnTestLink(check, routes[i])
+			cancel()
+			if err != nil {
+				paths[i].State, paths[i].Error = "unavailable", err.Error()
+				if errors.Is(err, errConnTestStopped) || ctx.Err() != nil {
+					paths[i].State = "stopped"
+					report(i)
+					return paths, err
+				}
+				notify(i)
+				report(i)
+				continue
+			}
+			links[i] = refreshed
+		}
 		paths[i].State = "running"
 		report(i)
 		fmt.Fprintf(out, "\nTesting %s · %s\n", paths[i].Family, paths[i].Host)

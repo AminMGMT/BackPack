@@ -331,3 +331,38 @@ func TestBackgroundProbesCannotAcknowledgeThePeerHasStopped(t *testing.T) {
 		t.Fatal("worker's stop reply was not acknowledged")
 	}
 }
+
+func TestStoppingBetweenPathsNeverStartsTheRemainingFamily(t *testing.T) {
+	ctRequireIPv6(t)
+	previous := connTestReverse
+	connTestReverse = nil
+	defer func() { connTestReverse = previous }()
+	iranCtx, cancelIran := context.WithCancel(context.Background())
+	defer cancelIran()
+	suite, raw, err := StartConnTestSuite(ConnTestOptions{Context: iranCtx}, []string{"127.0.0.1", "::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer suite.Close()
+	a, err := parseConnTestLink(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan []ConnTestPath, 1)
+	go func() { finished <- suite.Run(iranCtx, nil) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	paths, err := runConnTestSuiteKharej(ctx, a.Routes, io.Discard, func(i int, p ConnTestPath) {
+		if i == 0 && p.State == "done" {
+			cancelIran()
+		}
+	})
+	if !errors.Is(err, errConnTestStopped) || paths[1].State != "stopped" || len(paths[1].Rows) != 0 {
+		t.Fatalf("queued family ran after stop: %+v %v", paths, err)
+	}
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		t.Fatal("Iran did not finish cancelling both paths")
+	}
+}
