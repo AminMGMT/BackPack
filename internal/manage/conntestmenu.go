@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/backpack/backpack/internal/tui"
 )
@@ -41,10 +40,8 @@ func connTestContext() (context.Context, context.CancelFunc) {
 
 func connTestIranMenu() {
 	root := os.Geteuid() == 0
-	host := strings.TrimSpace(tui.PromptDefault("This Server's IP", linkHost()))
-	if host == "" {
-		tui.Error("An address is required.")
-		tui.PressEnter()
+	hosts := ctChooseHosts()
+	if len(hosts) == 0 {
 		return
 	}
 	presets := []string{PresetBalance, PresetTurbo, PresetAggressive}
@@ -71,59 +68,54 @@ func connTestIranMenu() {
 	ctx, stop := connTestContext()
 	defer stop()
 	ctMenuStage(os.Stdout, "1", "Preparing test tunnels", "Checking listeners, helpers and REALITY cover compatibility.")
-	s, link, err := StartConnTestIran(ConnTestOptions{Context: ctx, Host: host, Direct: direct,
-		Preset: preset, SpoofSrc: spoof})
+	suite, link, err := StartConnTestSuite(ConnTestOptions{Context: ctx, Direct: direct, Preset: preset, SpoofSrc: spoof}, hosts)
 	if err != nil {
 		tui.Error(err.Error())
 		tui.PressEnter()
 		return
 	}
-	defer s.Close()
-	ctMenuStartup(os.Stdout, s)
-
+	defer suite.Close()
+	for _, test := range suite.tests {
+		if test != nil {
+			ctMenuStartup(os.Stdout, test)
+		}
+	}
 	fmt.Println()
-	ctMenuStage(os.Stdout, "2", "Connect the Kharej", "On Kharej: sudo backpack → 0 → Kharej. Paste the full link below.")
-	fmt.Println()
+	ctMenuStage(os.Stdout, "2", "Connect the Kharej", "Paste this one link on Kharej. Selected IP paths run one after another.")
 	fmt.Println(tui.Color(tui.Bold+tui.White, link))
-	fmt.Println()
-	tui.Warn(fmt.Sprintf("  Waiting for Kharej · up to %d min · Ctrl+C stops", int(connTestJoinWait.Minutes())))
-	tui.Warn("  Leave this test open while connecting the other server.")
-
-	select {
-	case <-s.Joined():
-	case <-ctx.Done():
+	tui.Warn("Leave this test open while connecting the other server. Ctrl+C stops all paths.")
+	board := &ctPathBoard{}
+	paths := suite.Run(ctx, func(paths []ConnTestPath) {
+		for i, p := range paths {
+			board.update(i, p)
+		}
+	})
+	board.abandon()
+	ctSuiteSummary(os.Stdout, paths)
+	if ctx.Err() != nil {
 		tui.Warn("Stopped.")
-		tui.PressEnter()
-		return
-	case <-time.After(connTestJoinWait):
-		tui.Error("The Kharej never checked in. " + ctCoordinatorFailure(s.link.Host, s.link.Coord).Error())
-		tui.PressEnter()
-		return
 	}
-
-	fmt.Println()
-	ctMenuStage(os.Stdout, "3", "Testing the connection", "Kharej "+s.Kharej()+" joined. Five minutes of stability, then download/upload for healthy tunnels (about 8–12 seconds each).")
-	fmt.Println()
-	board := newCTBoard(os.Stdout, s.Kharej())
-	results := s.Run(ctx, board.set)
-	board.finish(results, s.Best())
-	fmt.Println()
-
-	// The kharej collects the verdict on its next question, a few seconds
-	// away; the tunnels stay up until then so it is not told they all failed.
-	select {
-	case <-s.Fetched():
-	case <-ctx.Done():
-	case <-time.After(30 * time.Second):
-	}
-	stop()
-	tui.Info("Stopping The Test Tunnels...")
-	s.Close()
+	suite.Close()
 	tui.PressEnter()
+
 }
 
 // RunConnTestKharejTUI runs the kharej side and prints the verdict.
 func RunConnTestKharejTUI(raw string) bool {
+	if a, err := parseConnTestLink(raw); err == nil && len(a.Routes) > 0 {
+		ctx, stop := connTestContext()
+		defer stop()
+		board := &ctPathBoard{}
+		paths, err := runConnTestSuiteKharej(ctx, a.Routes, os.Stdout, board.update)
+		board.abandon()
+		ctSuiteSummary(os.Stdout, paths)
+		if err != nil {
+			tui.Error(err.Error())
+			return false
+		}
+		return true
+	}
+
 	ctx, stop := connTestContext()
 	defer stop()
 	fmt.Println()

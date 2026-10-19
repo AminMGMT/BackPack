@@ -39,6 +39,13 @@ func ctMenuStartup(out io.Writer, s *ConnTestIran) {
 		level = CheckFail
 	}
 	row(checkMark(level), "Test cases", fmt.Sprintf("%d configured · %d skipped", ready, skipped))
+	for _, c := range s.cases {
+		if c.skip == "" && (c.tr == "naive" || c.tr == "xhttp") {
+			row(checkMark(CheckWarn), "HTTPS test", "Temporary ports · private certificates")
+			fmt.Fprintln(out, tui.Color(tui.Gray, "    XHTTP uses a synthetic SNI; Naive connects by IP. These are not real-site/CDN tests."))
+			break
+		}
+	}
 	if s.realityTarget != "" {
 		row(checkMark(CheckOK), "REALITY cover", s.realityTarget+" · verified")
 		fmt.Fprintln(out, tui.Color(tui.Gray, "    Cover check passed here; the two-server test starts after Kharej joins."))

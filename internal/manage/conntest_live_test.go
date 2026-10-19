@@ -144,9 +144,76 @@ func TestConnTestIranSide(t *testing.T) {
 	raw, _ := json.Marshal(results)
 	_ = os.WriteFile(filepath.Join(w, "iran.json"), raw, 0o600)
 	t.Log("\n" + ConnTestTable(results))
+	if os.Getenv("CT_IPV6") == "1" {
+		best := s.Best()
+		if best.PathMTU != 1400 || best.MSS != 1340 || best.Family != "IPv6" {
+			t.Errorf("IPv6 recommendation: %+v", best)
+		}
+	}
 	select {
 	case <-s.Fetched():
 	case <-time.After(30 * time.Second):
 		t.Error("the kharej never collected the verdict")
 	}
+}
+
+// This runs on CI in isolated network/mount namespaces. The physical link has
+// only IPv6, and a 1400-byte MTU proves the measurement uses IPv6's headers and
+// DF option rather than merely accepting a literal in a setup form.
+func TestTheConnectionTestAcrossAnIPv6OnlyPath(t *testing.T) {
+	if os.Getenv("BP_L3_LIVE") == "" {
+		t.Skip("set BP_L3_LIVE=1 for namespace integration")
+	}
+	bin := filepath.Join(t.TempDir(), "backpack")
+	build := exec.Command("go", "build", "-o", bin, "../..")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatal(err)
+	}
+	script, _ := filepath.Abs(filepath.Join("testdata", "conntestlive.sh"))
+	self, _ := os.Executable()
+	w := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	args := []string{"--net", "--mount", "--fork", "--", script}
+	if os.Geteuid() != 0 {
+		args = append([]string{"--map-auto", "--map-root-user"}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "unshare", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.Env = append(os.Environ(), "BIN="+bin, "TESTBIN="+self, "W="+w, "SOAK=3", "CT_IPV6=1", "PATHMTU=1400", "ONLY=", "FILTER=")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "RESULT DONE") {
+		t.Fatalf("IPv6 path: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(filepath.Join(w, "iran.json"))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var rows []ConnTestResult
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != len(connTestReverse)+len(connTestDirect)+2 {
+		t.Fatalf("missing IPv6 results: %+v", rows)
+	}
+	for _, r := range rows {
+		unsupported := r.Kind == "spoof" || r.Transport == "pck" || r.Transport == "xdi" || r.Transport == "sni"
+		if unsupported {
+			if r.Status != ctSkipped || !strings.Contains(r.Detail, "IPv6 is not supported") {
+				t.Errorf("raw IPv6 verdict: %+v", r)
+			}
+		} else if managedTransport(r.Transport) && r.Status == ctSkipped {
+			t.Logf("optional helper %s: %s", r.Transport, r.Detail)
+		} else if r.Status != ctOK {
+			t.Errorf("supported IPv6 path failed: %+v", r)
+		}
+	}
+	// The Iran-side helper prints the same recommendation as the CLI, including
+	// the measured PMTU and IPv6 MSS (1400 - 40 - 20).
+	if !strings.Contains(string(out), "1400") {
+		t.Errorf("IPv6 PMTU not reported\n%s", out)
+	}
+	t.Log(string(out))
 }

@@ -463,7 +463,11 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 	// full-sized packet. Only worth measuring on a tunnel that is up; on one
 	// that is not, the checks above already say why. See diagnose_path.go.
 	if h.State == "online" {
-		out = append(out, pathChecks(g, t)...)
+		if spec.NaiveServer.Enabled() || spec.NaiveClient.Enabled() || spec.XrayServer.Enabled() || spec.XrayClient.Enabled() {
+			out = append(out, managedPathChecks(g, t)...)
+		} else {
+			out = append(out, pathChecks(g, t)...)
+		}
 	}
 
 	// TLS certificate validity for the transports that terminate TLS.

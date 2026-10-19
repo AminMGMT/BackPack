@@ -269,8 +269,8 @@ export const setChannel   = beta =>
 /* The Iran side of a test: start it, read how it is going, stop it. The kharej
    side is the one line the state carries in `command`. */
 export const connTest = () => get('/api/conntest');
-export const connTestStart = ({ host = '', preset = '' } = {}) =>
-  post('/api/conntest', new URLSearchParams({ action: 'start', host, preset }));
+export const connTestStart = ({ host = '', preset = '', path = 'manual', ipv4 = '', ipv6 = '' } = {}) =>
+  post('/api/conntest', new URLSearchParams({ action: 'start', host, preset, path, ipv4, ipv6 }));
 export const connTestStop = () => post('/api/conntest', new URLSearchParams({ action: 'stop' }));
 
 /* ---- CLI: 3 Manage → Auto Refresh, Proxy, File Locations ------- */
@@ -291,6 +291,8 @@ export const tunnelLink = (name, host = '') =>
 export const tunnelQuota = name => get('/api/tunnel/quota?name=' + encodeURIComponent(name));
 export const setTunnelQuota = (name, limit) =>
   post('/api/tunnel/quota', new URLSearchParams({ name, limit: String(Math.max(0, Math.round(limit))) }));
+/* Sets what the tunnel has used back to zero (#106). It restarts the tunnel. */
+export const resetTunnelUsage = name => post('/api/tunnel/quota', new URLSearchParams({ name, reset: '1' }));
 
 /* ---- CLI: 4 Backup & Restore — the archives kept on this server ---------- */
 export const backups = () => get('/api/backups');

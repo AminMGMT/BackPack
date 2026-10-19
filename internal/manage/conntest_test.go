@@ -179,6 +179,13 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		}
 	}
 	defer func() { connTestReverse = previousReverse }()
+	host := os.Getenv("BP_CONNTEST_HOST")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if ctFamily(host) == "IPv6" {
+		ctRequireIPv6(t)
+	}
 	bin := filepath.Join(t.TempDir(), "backpack")
 	build := exec.Command("go", "build", "-o", bin, "../..")
 	build.Stderr = os.Stderr
@@ -210,7 +217,7 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 	defer cover.Close()
 	_, coverPort, _ := net.SplitHostPort(cover.Listener.Addr().String())
 
-	iran, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1", RealityTarget: "localhost:" + coverPort})
+	iran, link, err := StartConnTestIran(ConnTestOptions{Host: host, RealityTarget: "localhost:" + coverPort})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +232,7 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		if _, err := toml.DecodeFile(filepath.Join(iran.dir, c.name+".toml"), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		raw, err := shareLinkOf(c.name, "127.0.0.1", cfg)
+		raw, err := shareLinkOf(c.name, host, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -294,6 +301,20 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		}
 		if r.Status != ctOK {
 			t.Errorf("%s %s: %s (%s) — %d/%d echoes", r.Kind, r.Transport, r.Status, r.Detail, r.OK, r.Tried)
+		}
+		if managedTransport(r.Transport) {
+			want := "tls-ok"
+			if r.Transport == "reality" {
+				want = "tcp-ok"
+			}
+			if r.HTTPSProbe != want || r.TestPort < 1 {
+				t.Errorf("%s lost its independent HTTPS diagnostics: %+v", r.Transport, r)
+			}
+			for _, peer := range kharej {
+				if peer.Kind == r.Kind && peer.Transport == r.Transport && (peer.HTTPSProbe != r.HTTPSProbe || peer.TestPort != r.TestPort) {
+					t.Errorf("%s peer received different HTTPS diagnostics: %+v", r.Transport, peer)
+				}
+			}
 		}
 	}
 	if len(kharej) != len(results) {
@@ -368,7 +389,7 @@ func TestConnTestBulkRejectsCorruptionAndStopsOnCancellation(t *testing.T) {
 				_, _ = peer.Write(buf)
 			}
 		}()
-		if speed, err := ctBulk(func() (net.Conn, error) { return client, nil }); err == nil || speed != 0 {
+		if speed, err := ctBulkContext(context.Background(), func() (net.Conn, error) { return client, nil }); err == nil || speed != 0 {
 			t.Fatalf("corrupt transfer returned %f, %v", speed, err)
 		}
 	})

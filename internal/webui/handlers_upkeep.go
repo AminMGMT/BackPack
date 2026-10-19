@@ -44,8 +44,8 @@ func (s *server) handleTunnelLink(w http.ResponseWriter, r *http.Request) {
 // --- traffic limit -------------------------------------------------------------
 
 // handleTunnelQuota is GET ?name= for a tunnel's limit and use, and POST
-// name + limit (bytes, 0 for none) to set it. The engine enforces it; see
-// internal/quota.
+// name + limit (bytes, 0 for none) to set it. POST name + reset=1 sets what it
+// has used back to zero instead. The engine enforces it; see internal/quota.
 func (s *server) handleTunnelQuota(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -57,6 +57,15 @@ func (s *server) handleTunnelQuota(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, q)
 	case http.MethodPost:
 		_ = r.ParseForm()
+		if r.FormValue("reset") == "1" {
+			q, err := manage.ResetTunnelUsage(r.FormValue("name"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, q)
+			return
+		}
 		limit, err := strconv.ParseUint(strings.TrimSpace(r.FormValue("limit")), 10, 64)
 		if err != nil {
 			http.Error(w, "the limit is a number of bytes — 0 for no limit", http.StatusBadRequest)

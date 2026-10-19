@@ -493,7 +493,8 @@ type retired struct {
 	BytesOut uint64 `json:"bytes_out"`
 }
 
-// Retired is what the tunnels deleted from this server carried between them.
+// Retired is what the tunnels deleted from this server carried between them,
+// plus what live tunnels carried before their usage was reset.
 func Retired(dir string) (in, out uint64) {
 	var r retired
 	path := filepath.Join(dir, retiredFile)
@@ -511,7 +512,7 @@ func Retired(dir string) (in, out uint64) {
 }
 
 // Retire adds a deleted tunnel's totals to the server's ledger and removes the
-// tunnel's own file. Call it once the tunnel has stopped, so its last write is
+// tunnel's own file; a usage reset does the same to a tunnel that stays. Call it once the tunnel has stopped, so its last write is
 // in. A tunnel that never wrote a file has nothing to add.
 func Retire(dir, name string) error {
 	snap, err := Read(dir, name)

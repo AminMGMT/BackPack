@@ -62,12 +62,29 @@ command to carry to the other end and nothing to wait for. See
 
 ### Connection test — `#/conntest`
 
-The Iran side of the menu's Connection Test, in two panes of one size. The left
-one is what to do now: the form, then a 15-minute dial with the one line for the
-kharej — `sudo backpack link apply 'backpack://t.…'` — then the test's own
-countdown, then *Best for this path*. The right one fills a row per transport as
-its echoes come back and, at the end, keeps only what held or was unstable. The
-test tunnels are removed when it ends.
+The Iran side of the menu's Connection Test. Public IPv4 and IPv6 addresses on
+active interfaces are detected locally. Choose IPv4, IPv6, or both sequentially;
+when several addresses exist, select one per family or enter an address/hostname
+manually (including private or NAT addresses). Detection is not a reachability
+claim: Kharej checks the selected coordinators. Hostnames are resolved once to
+the selected family, so an IPv6 test cannot fall back to IPv4.
+
+Copy one `sudo backpack link apply 'backpack://t.…'` command to Kharej. A test of
+both families uses a versioned link and requires an updated Backpack on both
+servers; existing single-path links remain supported. Each family is measured
+separately, including download/upload, stability, RTT and path MTU. Paths run in
+sequence so their bandwidth tests do not interfere. An unreachable coordinator
+is reported as an unavailable path, without a protocol verdict, and the other
+family continues. All paths can be stopped together.
+
+Use the path buttons to inspect separate results and compare recommendations.
+The overall recommendation identifies both the winning address and transport.
+Failed and skipped rows remain visible, including the reason for each skip.
+Native socket transports and Direct UDP/QUIC can test IPv6. Raw IPv4 carriers
+(PCK, Direct xDi/SNI and IP spoofing) are explicitly skipped for IPv6. IPv6 PMTU
+uses a 1280-byte minimum, its own fragmentation option and a 40-byte IP header;
+a suggested TCP MSS subtracts 60 bytes. Missing managed helpers are skipped as
+before. All temporary test engines and files are removed when the test ends.
 
 *CLI: 0 Connection Test → Iran.*
 
@@ -108,7 +125,7 @@ were on. `fr-relay` below is an example name.
 | History | `#/t/fr-relay/history` | The long view: speed over the last day, per-day totals for the week, both uptime figures, and the configuration changes inside the window. | Manage → Tunnel Metrics |
 | Link test | `#/t/fr-relay/link` | Twelve TCP connects to the tunnel port, then the transport the measurement argues for. Same branch logic as the CLI's recommendation, in the same order. | Manage → Link Test |
 | Setup link | `#/t/fr-relay/share` | The link that builds the tunnel's other end, with the one line for a kharej (`sudo backpack link apply '…'`) and the install-and-set-up line for one without Backpack. Add tunnel shows the same block when it builds only this end. | Manage → Manage Tunnels → Setup Link |
-| Traffic limit | `#/t/fr-relay/quota` | How much the tunnel may carry, in and out together, before it goes offline: used, limit and what is left, presets from 50 GB to 10 TB or any amount, and quick adds. Opened from the pencil in the card's bottom band, on the Iran end only. The count survives restarts and updates; the engine takes the tunnel offline the moment it reaches the limit and brings it back when the limit is raised. | — (panel only) |
+| Traffic limit | `#/t/fr-relay/quota` | How much the tunnel may carry, in and out together, before it goes offline: used, limit and what is left, presets from 50 GB to 10 TB or any amount, and quick adds. Opened from the pencil in the card's bottom band, on the Iran end only. The count survives restarts and updates; the engine takes the tunnel offline the moment it reaches the limit and brings it back when the limit is raised. Reset usage (either end) restarts the tunnel and starts the count from zero, keeping the limit; `backpack tunnel reset-usage <name>` or `--all` does the same from a terminal. | — (panel only) |
 | Edit | `#/t/fr-relay/edit` | Every setting the tunnel has. The values come from the same call the CLI's edit screen makes, so a tunnel edited here is byte for byte a tunnel edited in the terminal. | Manage → Manage Tunnels → Edit |
 | Undo | `#/t/fr-relay/undo` | The configuration history for this tunnel, and a restore back to any earlier version of it. | Manage → Manage Tunnels → Config history |
 

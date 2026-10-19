@@ -15,6 +15,7 @@ package webui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -53,22 +54,35 @@ type conntestRow struct {
 }
 
 // conntestView is the whole state, as GET /api/conntest answers it.
+type conntestPath struct {
+	Host    string              `json:"host"`
+	Family  string              `json:"family"`
+	State   string              `json:"state"`
+	Error   string              `json:"error,omitempty"`
+	Kharej  string              `json:"kharej,omitempty"`
+	Rows    []conntestRow       `json:"rows,omitempty"`
+	Best    manage.ConnTestBest `json:"best"`
+	Started int64               `json:"started,omitempty"`
+}
+
 type conntestView struct {
-	State    string               `json:"state"`
-	Host     string               `json:"host,omitempty"`
-	Preset   string               `json:"preset,omitempty"`
-	Link     string               `json:"link,omitempty"`
-	Command  string               `json:"command,omitempty"`
-	Install  string               `json:"install,omitempty"`
-	Kharej   string               `json:"kharej,omitempty"`
-	Error    string               `json:"error,omitempty"`
-	Started  int64                `json:"started,omitempty"`
-	Deadline int64                `json:"deadline,omitempty"` // unix: when waiting gives up
-	Ran      int64                `json:"ran,omitempty"`      // unix: when the kharej joined and the test began
-	Ends     int64                `json:"ends,omitempty"`     // unix: about when the running test is judged
-	Finished int64                `json:"finished,omitempty"`
-	Rows     []conntestRow        `json:"rows,omitempty"`
-	Best     *manage.ConnTestBest `json:"best,omitempty"`
+	Addresses []manage.ConnTestAddress `json:"addresses"`
+	Paths     []conntestPath           `json:"paths,omitempty"`
+	State     string                   `json:"state"`
+	Host      string                   `json:"host,omitempty"`
+	Preset    string                   `json:"preset,omitempty"`
+	Link      string                   `json:"link,omitempty"`
+	Command   string                   `json:"command,omitempty"`
+	Install   string                   `json:"install,omitempty"`
+	Kharej    string                   `json:"kharej,omitempty"`
+	Error     string                   `json:"error,omitempty"`
+	Started   int64                    `json:"started,omitempty"`
+	Deadline  int64                    `json:"deadline,omitempty"` // unix: when waiting gives up
+	Ran       int64                    `json:"ran,omitempty"`      // unix: when the kharej joined and the test began
+	Ends      int64                    `json:"ends,omitempty"`     // unix: about when the running test is judged
+	Finished  int64                    `json:"finished,omitempty"`
+	Rows      []conntestRow            `json:"rows,omitempty"`
+	Best      *manage.ConnTestBest     `json:"best,omitempty"`
 	// What the form starts from.
 	DefaultHost string `json:"defaultHost,omitempty"`
 	Root        bool   `json:"root"`
@@ -87,6 +101,10 @@ func (c *conntestRunner) view() conntestView {
 	defer c.mu.Unlock()
 	v := c.v
 	v.Rows = append([]conntestRow(nil), c.v.Rows...)
+	v.Paths = append([]conntestPath(nil), c.v.Paths...)
+	for i := range v.Paths {
+		v.Paths[i].Rows = append([]conntestRow(nil), v.Paths[i].Rows...)
+	}
 	if v.State == "" {
 		v.State = ctIdle
 	}
@@ -130,94 +148,91 @@ func rowOf(r manage.ConnTestResult) conntestRow {
 
 // start begins a test in the background and returns once the test tunnels are
 // up and the link exists, or they could not be started.
-func (c *conntestRunner) start(parent context.Context, host, preset string) error {
+func (c *conntestRunner) start(parent context.Context, hosts []string, preset string) error {
 	ctx, cancel := context.WithCancel(parent)
 	c.mu.Lock()
+	if c.v.State == ctStarting || c.v.State == ctWaiting || c.v.State == ctRunning {
+		c.mu.Unlock()
+		cancel()
+		return fmt.Errorf("a connection test is already running — stop it first")
+	}
 	c.cancel = cancel
-	c.v = conntestView{State: ctStarting, Host: host, Preset: preset, Started: time.Now().Unix()}
+	c.v = conntestView{State: ctStarting, Host: hosts[0], Preset: preset, Started: time.Now().Unix()}
 	c.mu.Unlock()
-
-	s, link, err := manage.StartConnTestIran(manage.ConnTestOptions{
-		Host: host, Preset: preset,
-		// The menu includes what needs root only with root; the panel runs as
-		// root on a real server, so this is normally everything.
-		Direct: os.Geteuid() == 0, SpoofSrc: manage.ConnTestSpoofSource,
-	})
+	suite, link, err := manage.StartConnTestSuite(manage.ConnTestOptions{
+		Context: ctx, Preset: preset, Direct: os.Geteuid() == 0, SpoofSrc: manage.ConnTestSpoofSource,
+	}, hosts)
 	if err != nil {
 		cancel()
 		c.update(func(v *conntestView) { v.State, v.Error, v.Finished = ctFailed, err.Error(), time.Now().Unix() })
 		return err
 	}
-	wait := manage.ConnTestJoinWait()
 	c.update(func(v *conntestView) {
 		v.State, v.Link = ctWaiting, link
 		v.Command = "sudo backpack link apply '" + link + "'"
 		v.Install = manage.InstallCommand(link)
-		v.Deadline = time.Now().Add(wait).Unix()
+		v.Deadline = time.Now().Add(manage.ConnTestJoinWait()).Unix()
 	})
-
 	go func() {
 		defer cancel()
-		defer s.Close()
-		finish := func(state, why string) {
+		defer suite.Close()
+		paths := suite.Run(ctx, func(paths []manage.ConnTestPath) {
 			c.update(func(v *conntestView) {
-				v.State, v.Error, v.Finished = state, why, time.Now().Unix()
-			})
-		}
-		select {
-		case <-s.Joined():
-		case <-ctx.Done():
-			finish(ctStopped, "")
-			return
-		case <-time.After(wait):
-			finish(ctFailed, "the kharej never checked in — nothing reached this server's test port, neither over TCP nor UDP")
-			return
-		}
-		c.update(func(v *conntestView) {
-			v.State, v.Kharej = ctRunning, s.Kharej()
-			v.Ran = time.Now().Unix()
-			v.Ends = time.Now().Add(manage.ConnTestRunTime()).Unix()
-		})
-
-		results := s.Run(ctx, func(i int, r manage.ConnTestResult) {
-			c.update(func(v *conntestView) {
-				for len(v.Rows) <= i {
-					v.Rows = append(v.Rows, conntestRow{})
+				v.Paths = nil
+				active := -1
+				for i, p := range paths {
+					item := conntestPath{Host: p.Host, Family: p.Family, State: p.State, Error: p.Error, Kharej: p.Kharej, Best: p.Best, Started: p.Started}
+					for _, r := range p.Rows {
+						item.Rows = append(item.Rows, rowOf(r))
+					}
+					v.Paths = append(v.Paths, item)
+					if p.State == "running" {
+						active = i
+					}
 				}
-				v.Rows[i] = rowOf(r)
-				if r.Phase == "speed" {
+				if active >= 0 {
+					p := v.Paths[active]
+					v.State, v.Host, v.Kharej, v.Rows = ctRunning, p.Host, p.Kharej, append([]conntestRow(nil), p.Rows...)
+					v.Ran = p.Started
+					v.Ends = time.Unix(p.Started, 0).Add(manage.ConnTestRunTime()).Unix()
 					pending := 0
-					for _, row := range v.Rows {
-						if row.Phase == "speed" || row.Phase == "speed-queued" {
+					speed := false
+					for _, r := range p.Rows {
+						if r.Phase == "speed" {
+							speed = true
+						}
+						if r.Phase == "speed" || r.Phase == "speed-queued" {
 							pending++
 						}
 					}
-					v.Ends = time.Now().Add(manage.ConnTestSpeedTime(pending) + 15*time.Second).Unix()
+					if speed {
+						v.Ends = time.Now().Add(manage.ConnTestSpeedTime(pending) + 15*time.Second).Unix()
+					}
+				} else {
+					v.State = ctWaiting
+					v.Deadline = time.Now().Add(manage.ConnTestJoinWait()).Unix()
 				}
 			})
 		})
-		best := s.Best()
+		best := manage.ConnTestSuiteBest(paths)
 		c.update(func(v *conntestView) {
-			v.Rows = v.Rows[:0]
-			for _, r := range results {
-				v.Rows = append(v.Rows, rowOf(r))
+			v.State, v.Finished = ctFinished, time.Now().Unix()
+			completed := false
+			for _, p := range paths {
+				if p.State == "done" {
+					completed = true
+				}
+			}
+			if !completed {
+				v.State, v.Error = ctFailed, "No selected path completed; inspect each path's coordinator or preparation error. Tunnel protocols were not measured on unavailable paths."
+			}
+			if ctx.Err() != nil {
+				v.State, v.Error = ctStopped, ""
 			}
 			if best.Transport != "" {
 				v.Best = &best
 			}
 		})
-		if ctx.Err() != nil {
-			finish(ctStopped, "")
-			return
-		}
-		finish(ctFinished, "")
-		// The kharej collects the verdict on its next question, a few seconds
-		// away; the tunnels stay up until then so it is not told they failed.
-		select {
-		case <-s.Fetched():
-		case <-ctx.Done():
-		case <-time.After(30 * time.Second):
-		}
 	}()
 	return nil
 }
@@ -227,7 +242,10 @@ func (s *server) handleConnTest(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		v := s.conntest.view()
-		v.DefaultHost = manage.ConnTestHost()
+		v.Addresses = manage.ConnTestAddresses()
+		if len(v.Addresses) > 0 {
+			v.DefaultHost = v.Addresses[0].Host
+		}
 		writeJSON(w, v)
 	case http.MethodPost:
 		if err := r.ParseForm(); err != nil {
@@ -240,12 +258,13 @@ func (s *server) handleConnTest(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "a connection test is already running — stop it first", http.StatusConflict)
 				return
 			}
-			host := strings.Trim(strings.TrimSpace(r.FormValue("host")), "[]")
-			if host == "" {
-				host = manage.ConnTestHost()
-			}
-			if host == "" {
-				http.Error(w, "this server's address is needed: it is what the kharej dials", http.StatusBadRequest)
+			host := strings.TrimSpace(r.FormValue("host"))
+			mode := r.FormValue("path")
+			v4, v6 := r.FormValue("ipv4"), r.FormValue("ipv6")
+			resolveCtx := r.Context()
+			hosts, err := manage.ConnTestHosts(resolveCtx, mode, host, v4, v6)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			preset := strings.ToLower(strings.TrimSpace(r.FormValue("preset")))
@@ -253,7 +272,7 @@ func (s *server) handleConnTest(w http.ResponseWriter, r *http.Request) {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			if err := s.conntest.start(ctx, host, preset); err != nil {
+			if err := s.conntest.start(ctx, hosts, preset); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}

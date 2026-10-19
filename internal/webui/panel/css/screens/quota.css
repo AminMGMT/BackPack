@@ -60,6 +60,13 @@ body[data-accent] .dlg.quota .qt-presets button.on{background:var(--ac);color:va
 .dlg.quota .qt-add{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .dlg.quota .qt-add span{font-size:11.5px;color:var(--dim);margin-right:2px}
 .dlg.quota .qt-add button{padding:7px 11px;font-size:12px}
+.dlg.quota .qt-reset{display:flex;gap:8px;align-items:center;justify-content:space-between;padding-top:10px;border-top:1px solid var(--ln)}
+.dlg.quota .qt-reset span{font-size:11.5px;color:var(--dim)}
+.dlg.quota .qt-reset span b{color:var(--tx2);font-weight:630}
+.dlg.quota .qt-reset button{font:inherit;font-size:12px;font-weight:620;padding:7px 12px;border-radius:11px;border:1px solid var(--ln);
+  background:var(--field);color:var(--er);cursor:pointer}
+.dlg.quota .qt-reset button:hover:not(:disabled){border-color:var(--er)}
+.dlg.quota .qt-reset button:disabled{opacity:.45;cursor:default}
 .dlg.quota .qt-preview{font-size:12px;color:var(--dim);min-height:18px}
 .dlg.quota .qt-preview b{color:var(--tx);font-weight:630}
 .dlg.quota .qt-preview.er b{color:var(--er)}

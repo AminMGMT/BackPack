@@ -16,8 +16,12 @@ func ctDontFragment(c *net.UDPConn) error {
 		return err
 	}
 	var serr error
+	level, option, value := syscall.IPPROTO_IP, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO
+	if addr, ok := c.LocalAddr().(*net.UDPAddr); ok && addr.IP.To4() == nil {
+		level, option, value = syscall.IPPROTO_IPV6, syscall.IPV6_MTU_DISCOVER, syscall.IPV6_PMTUDISC_DO
+	}
 	if err := raw.Control(func(fd uintptr) {
-		serr = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
+		serr = syscall.SetsockoptInt(int(fd), level, option, value)
 	}); err != nil {
 		return err
 	}
