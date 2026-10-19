@@ -48,6 +48,7 @@ const JOIN = 15 * 60;
 const stepOf = st => (st === 'done' ? 3 : st === 'running' ? 2 : st === 'waiting' || st === 'starting' ? 1 : 0);
 
 let preset = 'turbo';
+let pathMode = '';
 
 function stepper(st) {
   const at = stepOf(st);
@@ -93,15 +94,28 @@ const mmss = left => `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '
 
 /* ---- left: what to do now ------------------------------------------------ */
 function startPane(v) {
-  const host = v.host || v.defaultHost || '';
+  const host = v.defaultHost || '';
+  const addresses = v.addresses || [];
+  const v4 = addresses.filter(a => a.family === 'IPv4');
+  const v6 = addresses.filter(a => a.family === 'IPv6');
+  if (!pathMode) pathMode = v4.length && v6.length ? 'both' : v6.length ? 'ipv6' : v4.length ? 'ipv4' : 'manual';
+  const addressField = (family, items) => `<label class="tl-f ct-field"><span>${family} address</span>
+    <input id="ct${family}" type="text" list="ct${family}Options" value="${esc(items[0]?.host || '')}" placeholder="${family} IP or hostname" autocomplete="off" spellcheck="false">
+    <datalist id="ct${family}Options">${items.map(a => `<option value="${esc(a.host)}">${esc(a.interface || '')}</option>`).join('')}</datalist></label>`;
   return `<div class="ct-l-in fade">
     <span class="ct-kick">New test</span>
     <div class="tl-lede"><b>Every transport, tried for real between this server and one kharej.</b>
       <span>Five minutes of stability checks, then about 8–12 seconds of speed testing per healthy tunnel.
         Download and upload use four connections and run one tunnel at a time. The test tunnels run on free ports and are
         removed when it ends — nothing is left behind on either server.</span></div>
-    <label class="tl-f ct-field"><span>This server's address</span>
-      <input id="ctHost" type="text" value="${esc(host)}" placeholder="the IP the kharej dials" autocomplete="off" spellcheck="false"></label>
+    <div class="tl-f ct-field"><span>IP paths to test</span>
+      <div class="tl-seg" id="ctPathMode">${[['both','Both, sequentially'],['ipv4','IPv4'],['ipv6','IPv6'],['manual','One address']].map(([value,label]) =>
+        `<button type="button" data-path="${value}" class="${pathMode === value ? 'on' : ''}" aria-pressed="${pathMode === value}">${label}</button>`).join('')}</div></div>
+    <div id="ctV4Field" ${['ipv4','both'].includes(pathMode) ? '' : 'hidden'}>${addressField('IPv4',v4)}</div>
+    <div id="ctV6Field" ${['ipv6','both'].includes(pathMode) ? '' : 'hidden'}>${addressField('IPv6',v6)}</div>
+    <label class="tl-f ct-field" id="ctManualField" ${pathMode === 'manual' ? '' : 'hidden'}><span>This server's address</span>
+      <input id="ctHost" type="text" value="${esc(host)}" placeholder="IP or hostname · NAT/private addresses allowed" autocomplete="off" spellcheck="false"></label>
+    <div class="tl-note">Detected public interface addresses are candidates. Kharej checks each selected path's reachability. You can choose another detected address or enter one manually.</div>
     <div class="tl-f ct-field"><span>Preset</span>
       <div class="tl-seg" id="ctPreset">${PRESETS.map(p =>
         `<button type="button" data-p="${p.v}" class="${p.v === preset ? 'on' : ''}">
@@ -163,7 +177,7 @@ function bestPane(v) {
   const finished = v.finished ? new Date(v.finished * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   const foot = `<span class="sp"></span>
     <div class="ct-foot"><span class="tl-meta">Tested with <b>${esc(title(v.preset))}</b>${finished ? ` · ${finished}` : ''}</span>
-      <button class="tl-btn solid" id="ctNew">${ICON.again}Test again</button></div>`;
+      ${v.suiteActive ? '<span class="tl-meta">Other IP path in progress</span>' : `<button class="tl-btn solid" id="ctNew">${ICON.again}Test again</button>`}</div>`;
   if (!b || !b.tr) {
     return `<div class="ct-l-in ct-best none">
       <span class="ct-kick er">Verdict</span>
@@ -180,6 +194,8 @@ function bestPane(v) {
       <div><span class="badge">Best for this path</span><b class="tr">${esc(b.tr)}</b></div>
     </div>
     <div class="ct-bgrid">
+      ${cell('IP path', b.family || '')}
+      ${cell('Server address', b.host || '')}
       ${cell('Download', b.mb ? b.mb.toFixed(b.mb < 10 ? 1 : 0) : '', 'Mb/s')}
       ${cell('Upload', b.upload_mb ? b.upload_mb.toFixed(b.upload_mb < 10 ? 1 : 0) : '', 'Mb/s')}
       ${cell('Round trip', b.rt, 'ms')}
@@ -261,6 +277,7 @@ export function connTestView(ctx) {
     <div class="sech2 tl-head"><h2>Connection test</h2><span class="cnt" id="ctState">—</span><span class="sp"></span></div>
     <p class="tl-sub">Which transports actually survive the route between this Iran server and a kharej — measured, not guessed.</p>
     <div id="ctSteps"></div>
+    <div id="ctPaths" class="ct-paths" aria-label="IP path comparison"></div>
     <div class="ct-duo">
       <section class="tl-card ct-l" id="ctLeft"></section>
       <section class="tl-card ct-r" id="ctRight">
@@ -274,6 +291,7 @@ export function connTestView(ctx) {
   const left = $('#ctLeft', view), rHead = $('#ctRHead', view), list = $('#ctList', view), rFoot = $('#ctRFoot', view);
   let last = null, fresh = false, timer = null, tick = null, alive = true;
   let leftSig = '', rightMode = '', headSig = '';
+  let selectedPath = -1, pathsSig = '';
   const rows = new Map();
 
   const dockDot = st => {
@@ -300,13 +318,13 @@ export function connTestView(ctx) {
   };
 
   const paintLeft = (v, st) => {
-    const sig = JSON.stringify([fresh, st, v.command, v.error, v.kharej, v.best, st === 'idle' || fresh ? v.root : 0]);
+    const sig = JSON.stringify([fresh, st, v.command, v.error, v.kharej, v.best, v.host, v.suiteActive, st === 'idle' || fresh ? v.root : 0]);
     if (sig === leftSig) {
       if (st === 'running') { const s = $('#ctSettled', left); if (s) s.textContent = settled(v); }
       return;
     }
     leftSig = sig;
-    const keep = $('#ctHost', left)?.value;
+    const keep = ['ctHost','ctIPv4','ctIPv6'].map(id => [id, $('#' + id, left)?.value]);
     let html;
     if (fresh || st === 'idle') html = startPane(v);
     else if (st === 'starting' || st === 'waiting') html = waitPane(v);
@@ -315,23 +333,22 @@ export function connTestView(ctx) {
     else html = endPane(v);
     left.innerHTML = html;
     left.dataset.ph = fresh ? 'idle' : st;
-    if (keep !== undefined && $('#ctHost', left)) $('#ctHost', left).value = keep;
+    for (const [id,value] of keep) if (value !== undefined && $('#' + id,left)) $('#' + id,left).value = value;
     paintClock();
   };
 
   const paintRight = (v, st) => {
     const showRows = !fresh && (st === 'running' || st === 'done' || ((st === 'failed' || st === 'stopped') && v.rows?.length));
-    const mode = showRows ? 'rows' : (fresh ? 'idle' : st);
+    const mode = (showRows ? 'rows' : (fresh ? 'idle' : st)) + ':' + (v.host || '');
     const all = v.rows || [];
-    /* At the end the list is the shortlist: what held and what wobbled. What
-       did not connect is counted below it, not listed. */
+    /* Keep failed and unsupported rows visible for the selected family. */
     const final = st === 'done';
-    const shown = showRows ? all.filter(r => !final || r.status === 'ok' || r.status === 'unstable') : [];
+    const shown = showRows ? all : [];
 
     if (mode !== rightMode) {
       rightMode = mode;
       rows.clear();
-      list.innerHTML = showRows ? '' : emptyRight(mode);
+      list.innerHTML = showRows ? '' : v.error ? `<div class="ct-empty"><b>${esc(v.family || 'Path')} unavailable</b><small>${esc(v.error)}</small></div>` : emptyRight(st);
       list.classList.toggle('rows', showRows);
     }
 
@@ -342,11 +359,11 @@ export function connTestView(ctx) {
     const whole = liveRows.reduce((a, r) => a + (r.total || 60), 0) || 1;
     const pct = Math.round((tried / whole) * 100);
     const head = !showRows
-      ? `<div class="ct-rt"><b>Transports</b><small>${mode === 'waiting' || mode === 'starting' ? 'standing by' : 'none yet'}</small></div>`
+      ? `<div class="ct-rt"><b>Transports</b><small>${st === 'waiting' || st === 'starting' ? 'standing by' : 'none yet'}</small></div>`
       : st === 'running'
         ? `<div class="ct-rt"><b>Transports</b><small>${esc(v.kharej || '')}</small><span class="sp"></span><span class="pc">${pct}%</span></div>
            <div class="ct-track"><i style="--w:${pct}%"></i></div>`
-        : `<div class="ct-rt"><b>${final ? 'Worth building on' : 'Transports'}</b><span class="sp"></span>
+        : `<div class="ct-rt"><b>${final ? 'Path results' : 'Transports'}</b><span class="sp"></span>
             <span class="tl-pill ok"><i></i>${count('ok')} held</span>
             <span class="tl-pill wr"><i></i>${count('unstable')} unstable</span></div>`;
     if (head !== headSig) {
@@ -358,13 +375,13 @@ export function connTestView(ctx) {
       headSig = head;
     }
 
-    // foot: what the shortlist leaves out
+    // foot: the selected path's down and skipped totals
     const hidden = final ? count('down') + count('skipped') : 0;
     rFoot.hidden = !hidden;
     if (hidden) {
       rFoot.innerHTML = `<span class="tl-pill er"><i></i>${count('down')} down</span>
         ${count('skipped') ? `<span class="tl-pill"><i></i>${count('skipped')} skipped</span>` : ''}
-        <span class="tl-meta">not listed — they did not hold on this path</span>`;
+        <span class="tl-meta">see the rows for failure and unsupported-carrier details</span>`;
     }
 
     if (!showRows) return;
@@ -421,8 +438,23 @@ export function connTestView(ctx) {
     dockDot(st);
     const stp = stepper(fresh ? 'idle' : st);
     if (steps.innerHTML !== stp) steps.innerHTML = stp;
-    paintLeft(v, st);
-    paintRight(v, st);
+    const paths = v.paths || [];
+    const active = paths.findIndex(p => phase(p) === 'running');
+    const recommended = paths.findIndex(p => p.host === v.best?.host);
+    const at = selectedPath >= 0 && selectedPath < paths.length ? selectedPath : active >= 0 ? active : recommended >= 0 ? recommended : 0;
+    const ps = JSON.stringify([fresh, st, paths.map(p => [p.host,p.state,p.error,p.best]),at,v.best]);
+    if (ps !== pathsSig) {
+      pathsSig = ps;
+      $('#ctPaths',view).innerHTML = fresh || !paths.length ? '' : `<div class="tl-seg">${paths.map((p,i) =>
+        `<button type="button" data-route="${i}" class="${i === at ? 'on' : ''}" aria-pressed="${i === at}"><b>${esc(p.family)} · ${esc(p.host)}</b><small>${esc(p.state)}${p.best?.tr ? ` · ${esc(p.best.tr)} · ${(p.best.mb || 0).toFixed(2)} ↓ / ${(p.best.upload_mb || 0).toFixed(2)} ↑ Mb/s · ${p.best.rt || 0} ms` : ''}</small></button>`).join('')}</div>
+        ${ACTIVE.includes(st) ? '<button type="button" class="tl-btn" id="ctStopPaths">Stop all IP paths</button>' : ''}
+        ${v.best?.tr ? `<p class="tl-meta">Recommended: ${esc(v.best.family)} · ${esc(v.best.host)} · ${esc(v.best.tr)}</p>` : ''}`;
+    }
+    const p = !fresh && !['idle','starting'].includes(st) ? paths[at] : null;
+    const detail = p ? { ...v, ...p, state: phase(p) === 'unavailable' ? 'failed' : p.state, ran: p.started, best: p.best?.tr ? p.best : null } : v;
+    if (ACTIVE.includes(st) && p && phase(p) === 'done') detail.suiteActive = true;
+    paintLeft(detail, phase(detail));
+    paintRight(detail, phase(detail));
   };
 
   const load = async () => {
@@ -439,6 +471,15 @@ export function connTestView(ctx) {
   view.addEventListener('click', async ev => {
     const b = ev.target.closest('button');
     if (!b || !view.contains(b)) return;
+    if (b.dataset.route !== undefined) { selectedPath = Number(b.dataset.route); paint(last); return; }
+    if (b.dataset.path) {
+      pathMode = b.dataset.path;
+      b.parentElement.querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); });
+      $('#ctV4Field',view).hidden = !['ipv4','both'].includes(pathMode);
+      $('#ctV6Field',view).hidden = !['ipv6','both'].includes(pathMode);
+      $('#ctManualField',view).hidden = pathMode !== 'manual';
+      return;
+    }
     if (b.dataset.p) {
       preset = b.dataset.p;
       b.parentElement.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
@@ -454,17 +495,21 @@ export function connTestView(ctx) {
     if (b.id === 'ctNew') { fresh = true; leftSig = ''; paint(last || { state: 'idle' }); return; }
     if (b.id === 'ctStart') {
       const host = $('#ctHost', view)?.value.trim();
-      if (!host) { toast('Give this server’s address — it is what the kharej dials.', true); return; }
+      const ipv4 = $('#ctIPv4',view)?.value.trim() || '';
+      const ipv6 = $('#ctIPv6',view)?.value.trim() || '';
+      if ((pathMode === 'manual' && !host) || (['ipv4','both'].includes(pathMode) && !ipv4) || (['ipv6','both'].includes(pathMode) && !ipv6)) {
+        toast('Enter an address for each selected IP path.',true); return;
+      }
       b.disabled = true;
       b.innerHTML = `${ICON.play}Starting…`;
       try {
-        fresh = false;
-        paint(await api.connTestStart({ host, preset }));
+        fresh = false; selectedPath = -1;
+        paint(await api.connTestStart({ host, preset, path: pathMode, ipv4, ipv6 }));
         schedule();
       } catch (e) { oops(e); b.disabled = false; b.innerHTML = `${ICON.play}Start the test`; }
       return;
     }
-    if (b.id === 'ctStop') {
+    if (b.id === 'ctStop' || b.id === 'ctStopPaths') {
       if (!await confirmBox({ title: 'Stop the test?', body: 'Every test tunnel on this server is taken down. The kharej notices on its own and stops too.', go: 'Stop' })) return;
       try { paint(await api.connTestStop()); toast('Stopping the test…'); } catch (e) { oops(e); }
       setTimeout(load, 1200);

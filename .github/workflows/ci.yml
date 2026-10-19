@@ -142,6 +142,30 @@ jobs:
           BP_CONNTEST_HELPERS: '1'
         run: go test ./internal/manage -run '^(TestRealityCoverSelectionAuthenticatesWithThePinnedHelper|TestAConnectionTestOverLoopbackPassesEveryReverseTransport)$' -race -count=1 -v -timeout 8m
 
+      - name: Authenticate the managed HTTPS carriers over IPv6
+        env:
+          BP_CONNTEST_HELPERS: '1'
+          BP_CONNTEST_HOST: '::1'
+        run: go test ./internal/manage -run '^TestAConnectionTestOverLoopbackPassesEveryReverseTransport$' -race -count=1 -v -timeout 8m
+
+  conntest-ipv6:
+    name: Connection Test over an IPv6-only path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Selection, fallback, sequencing, cancellation and panel API regressions
+        run: |
+          go test ./internal/manage ./internal/webui -race -count=1 -v -timeout 6m \
+            -run '^(TestConnectionTest|TestAnUnreachablePath|TestIPv6RawCarriers|TestBothFamilies|TestUnjoinedFamilies|TestStoppingASuite|TestStoppingBetweenPaths|TestBackgroundProbes|TestTheScreensReadTunnelStateThroughOnePlace|TestEveryPanelCallReachesAHandlerThatReadsWhatItSends)'
+      - name: Native transports, direct UDP/QUIC, PMTU and unsupported raw carriers
+        run: |
+          sudo env PATH="$PATH" GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" BP_L3_LIVE=1 \
+            go test ./internal/manage -run '^TestTheConnectionTestAcrossAnIPv6OnlyPath$' -count=1 -v -timeout 10m
+
   audit:
     name: Vulnerabilities and static analysis
     runs-on: ubuntu-latest

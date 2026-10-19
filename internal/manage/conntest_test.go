@@ -179,6 +179,13 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		}
 	}
 	defer func() { connTestReverse = previousReverse }()
+	host := os.Getenv("BP_CONNTEST_HOST")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if ctFamily(host) == "IPv6" {
+		ctRequireIPv6(t)
+	}
 	bin := filepath.Join(t.TempDir(), "backpack")
 	build := exec.Command("go", "build", "-o", bin, "../..")
 	build.Stderr = os.Stderr
@@ -210,7 +217,7 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 	defer cover.Close()
 	_, coverPort, _ := net.SplitHostPort(cover.Listener.Addr().String())
 
-	iran, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1", RealityTarget: "localhost:" + coverPort})
+	iran, link, err := StartConnTestIran(ConnTestOptions{Host: host, RealityTarget: "localhost:" + coverPort})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +232,7 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		if _, err := toml.DecodeFile(filepath.Join(iran.dir, c.name+".toml"), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		raw, err := shareLinkOf(c.name, "127.0.0.1", cfg)
+		raw, err := shareLinkOf(c.name, host, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

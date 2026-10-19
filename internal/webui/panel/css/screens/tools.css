@@ -521,3 +521,16 @@ body[data-t="light"] .panel .tm-body{background:#fbfbfb}
 @media (max-width:560px){ .sl .ct-cmd{flex-wrap:wrap} .sl .ct-cmd .tl-btn{width:100%;justify-content:center} }
 @media (prefers-reduced-motion:reduce){ .sl-wire i{animation:none} }
 .sl-wait{padding:18px 0;text-align:center;font-size:12.5px;color:var(--dim)}
+
+/* Address candidates and per-family results stay readable for full IPv6 literals. */
+.panel .ct-paths{margin-bottom:14px}
+.panel .ct-paths:empty{display:none}
+.panel .ct-paths .tl-seg{display:flex;flex-wrap:wrap;gap:8px}
+.panel .ct-paths button{flex:1 1 260px;text-align:left;overflow-wrap:anywhere;white-space:normal;padding:12px}
+.panel .ct-paths button b,.panel .ct-paths button small{display:block}
+.panel .ct-paths button small{margin-top:6px}
+.panel .ct-paths p{margin:10px 0;overflow-wrap:anywhere}
+.panel #ctPathMode{display:flex;flex-wrap:wrap}
+.panel #ctPathMode button{flex:1 1 95px}
+.panel .ct-field[hidden],.panel #ctV4Field[hidden],.panel #ctV6Field[hidden]{display:none}
+.panel .ct-bc b{overflow-wrap:anywhere}

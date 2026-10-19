@@ -29,6 +29,8 @@ import (
 
 // ConnTestBest is the recommendation table's content.
 type ConnTestBest struct {
+	Host       string  `json:"host,omitempty"`
+	Family     string  `json:"family,omitempty"`
 	Transport  string  `json:"tr,omitempty"` // "direct pck"
 	Mbps       float64 `json:"mb,omitempty"`
 	UploadMbps float64 `json:"upload_mb,omitempty"`
@@ -55,12 +57,12 @@ const (
 	ctPMTUMax = 1500
 )
 
-// ctProbePMTU is the largest IPv4 packet that crosses from here to the Iran
+// ctProbePMTU is the largest packet that crosses from here to the Iran
 // side's coordinator without being fragmented, found by halving; 0 if nothing
 // came back at all.
 func ctProbePMTU(ctx context.Context, host string, port int, tok string) int {
-	ip := ctIPv4Context(ctx, host)
-	if ip == "" || ctx.Err() != nil {
+	ip, err := ctResolveHost(ctx, host, "")
+	if err != nil || ctx.Err() != nil {
 		return 0
 	}
 	addr := net.JoinHostPort(ip, strconv.Itoa(port))
@@ -72,13 +74,17 @@ func ctProbePMTU(ctx context.Context, host string, port int, tok string) int {
 		}
 		return false
 	}
-	if !fits(ctPMTUMin) {
+	minimum := ctPMTUMin
+	if ctFamily(ip) == "IPv6" {
+		minimum = 1280
+	}
+	if !fits(minimum) {
 		return 0
 	}
 	if fits(ctPMTUMax) {
 		return ctPMTUMax
 	}
-	lo, hi := ctPMTUMin, ctPMTUMax // lo fits, hi does not
+	lo, hi := minimum, ctPMTUMax // lo fits, hi does not
 	for hi-lo > 1 && ctx.Err() == nil {
 		mid := (lo + hi) / 2
 		if fits(mid) {
@@ -93,10 +99,18 @@ func ctProbePMTU(ctx context.Context, host string, port int, tok string) int {
 	return lo
 }
 
-// ctPMTUProbe sends one unfragmentable datagram making an IPv4 packet of size
+// ctPMTUProbe sends one unfragmentable datagram making an IP packet of size
 // bytes, from a socket of its own, and reports whether it was answered.
 func ctPMTUProbe(ctx context.Context, addr, tok string, size int) bool {
-	conn, err := (&net.Dialer{}).DialContext(ctx, "udp4", addr)
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	network, overhead := "udp4", 28
+	if ctFamily(host) == "IPv6" {
+		network, overhead = "udp6", 48
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 	if err != nil {
 		return false
 	}
@@ -108,7 +122,7 @@ func ctPMTUProbe(ctx context.Context, addr, tok string, size int) bool {
 		return false
 	}
 	head := fmt.Sprintf("pmtu %s %d ", tok, size)
-	payload := size - 28 // IPv4 and UDP headers
+	payload := size - overhead // chosen IP family and UDP headers
 	if payload < len(head) {
 		return false
 	}
