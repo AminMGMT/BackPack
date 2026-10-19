@@ -261,8 +261,41 @@ func pathMTUCheck(g string, mtu, negotiated int, fromKernel bool) Check {
 	}
 }
 
-// pathChecks measures what the tunnel could not say about itself: how much of
-// the pool is really there, and whether the path can carry a full-sized packet.
+// Managed carriers use loopback control/SOCKS connections at ports that do not
+// identify the outer HTTPS connection. Counting ss entries at t.Addr reports a
+// false empty pool, and measuring that loopback path says nothing about its MTU.
+func managedPathChecks(g string, t core.Tunnel) []Check {
+	snap, err := metrics.Read(app.ConfigDir, t.Name)
+	var pool *metrics.PoolStats
+	if err == nil && time.Since(snap.Taken) <= time.Minute {
+		pool = snap.Pool
+	}
+	return []Check{
+		managedPoolCheck(g, pool),
+		{Group: g, Name: "Path MTU", Level: CheckInfo,
+			Detail: "managed HTTPS path; the inner loopback MTU does not describe the carrier",
+			Fix:    "verify large transfers through the forwarded entry port"},
+	}
+}
+
+func managedPoolCheck(g string, pool *metrics.PoolStats) Check {
+	c := Check{Group: g, Name: "Pool", Level: CheckInfo,
+		Detail: "managed carrier; no recent engine pool snapshot is available on this side",
+		Fix:    "check the client engine's pool metrics and verified traffic through the forwarded entry port"}
+	if pool == nil {
+		return c
+	}
+	c.Detail = fmt.Sprintf("engine reports %d live pool connections (target %d, configured %d)", pool.Live, pool.Target, pool.Configured)
+	c.Level = CheckOK
+	c.Fix = ""
+	if pool.Live == 0 {
+		c.Level = CheckWarn
+		c.Fix = "the latest client snapshot has no pool; check its helper and tunnel logs"
+	}
+	return c
+}
+
+// pathChecks measures the ordinary transport's pool and outer path MTU.
 func pathChecks(g string, t core.Tunnel) []Check {
 	var out []Check
 

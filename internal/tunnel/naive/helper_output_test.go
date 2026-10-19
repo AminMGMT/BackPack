@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,9 @@ func init() {
 			os.Exit(2)
 		}
 		os.Exit(0)
+	}
+	if pidfile := os.Getenv("BACKPACK_HELPER_PID_FILE"); pidfile != "" {
+		_ = os.WriteFile(pidfile, []byte(strconv.Itoa(os.Getpid())), 0600)
 	}
 	ln, err := net.Listen("tcp", os.Getenv("BACKPACK_HELPER_LISTEN"))
 	if err != nil {

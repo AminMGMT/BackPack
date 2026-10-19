@@ -1381,12 +1381,8 @@ func ctEcho(c net.Conn, udp bool) error {
 	return nil
 }
 
-// ctBulk exercises the legacy echo transfer for compatibility checks.
+// ctBulkContext exercises the legacy echo transfer for compatibility checks.
 // Production speed measurements use ctSpeed after all stability probes finish.
-func ctBulk(dial func() (net.Conn, error)) (float64, error) {
-	return ctBulkContext(context.Background(), dial)
-}
-
 func ctBulkContext(ctx context.Context, dial func() (net.Conn, error)) (float64, error) {
 	c, err := dial()
 	if err != nil {

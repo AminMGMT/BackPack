@@ -110,6 +110,9 @@ type Status struct {
 	// process, so a caller can tell a restart that happened from one that was
 	// asked for and did not.
 	Generation int `json:"generation"`
+	// HelperReady is absent for ordinary transports and older engines. A
+	// running process is not sufficient evidence that its HTTPS helper started.
+	HelperReady *bool `json:"helperReady,omitempty"`
 }
 
 // Handler is what the engine supplies: the two questions it can answer and the
@@ -269,4 +272,18 @@ func Ask(name, op string, out any) error {
 	}
 	defer c.Close()
 	return c.Call(op, out)
+}
+
+// AskContext bounds both connecting and waiting for a response. A startup
+// readiness check must not wait past its rollback deadline on a stalled engine.
+func AskContext(ctx context.Context, name, op string, out any) error {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "unix", SocketPath(name))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	return (&Client{conn: conn}).Call(op, out)
 }
