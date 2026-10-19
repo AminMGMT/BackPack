@@ -74,6 +74,8 @@ const usage = `backpack — non-interactive commands
 
   backpack tunnel list [--json]         every tunnel and its state
   backpack tunnel status <name> [--json]  one tunnel: state, peer, and what it has carried
+  backpack tunnel reset-usage <name> | --all
+                                        set what a tunnel has carried back to zero (restarts it)
   backpack check -c <file>              validate a config without starting it
   backpack link apply [--name N] [--host IP] '<setup link>'
                                         build and start the tunnel a setup link describes
@@ -118,7 +120,7 @@ func Run(args []string) Result {
 
 func runTunnel(args []string) Result {
 	if len(args) == 0 {
-		return fail(CodeUsage, "tunnel needs a subcommand: list or status\n")
+		return fail(CodeUsage, "tunnel needs a subcommand: list, status or reset-usage\n")
 	}
 	asJSON, rest := takeJSONFlag(args[1:])
 	switch args[0] {
@@ -132,8 +134,51 @@ func runTunnel(args []string) Result {
 			return fail(CodeUsage, "tunnel status needs exactly one tunnel name\n")
 		}
 		return tunnelStatus(rest[0], asJSON)
+	case "reset-usage":
+		if len(rest) != 1 {
+			return fail(CodeUsage, "tunnel reset-usage needs one tunnel name, or --all\n")
+		}
+		return tunnelResetUsage(rest[0])
 	}
 	return fail(CodeUsage, "unknown tunnel subcommand %q\n", args[0])
+}
+
+// resetUsage and resetAllUsage are variables so a test can see what would
+// have been reset without a systemd to restart the tunnels with.
+var (
+	resetUsage    = manage.ResetTunnelUsage
+	resetAllUsage = manage.ResetAllUsage
+)
+
+// tunnelResetUsage is `tunnel reset-usage <name> | --all` (#106).
+func tunnelResetUsage(target string) Result {
+	if !isRoot() {
+		return fail(CodeFailed, "tunnel reset-usage restarts the tunnel: run it as root (sudo)\n")
+	}
+	if target == "--all" {
+		reset, err := resetAllUsage()
+		out := ""
+		for _, name := range reset {
+			out += "✓ " + name + " starts counting from zero.\n"
+		}
+		if err != nil {
+			return Result{Out: out, Err: err.Error() + "\n", Code: CodeFailed}
+		}
+		if out == "" {
+			out = "No tunnels.\n"
+		}
+		return ok(out)
+	}
+	if strings.HasPrefix(target, "-") {
+		return fail(CodeUsage, "unknown flag %q: tunnel reset-usage takes a tunnel name or --all\n", target)
+	}
+	if _, found := manage.Find(target); !found {
+		return fail(CodeNotFound, "no tunnel named %q\n", target)
+	}
+	if _, err := resetUsage(target); err != nil {
+		return fail(CodeFailed, "%v\n", err)
+	}
+	return ok("✓ " + target + " starts counting from zero.\n")
 }
 
 // tunnelView is one tunnel as this package reports it. A named type rather than

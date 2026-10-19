@@ -291,6 +291,8 @@ export const tunnelLink = (name, host = '') =>
 export const tunnelQuota = name => get('/api/tunnel/quota?name=' + encodeURIComponent(name));
 export const setTunnelQuota = (name, limit) =>
   post('/api/tunnel/quota', new URLSearchParams({ name, limit: String(Math.max(0, Math.round(limit))) }));
+/* Sets what the tunnel has used back to zero (#106). It restarts the tunnel. */
+export const resetTunnelUsage = name => post('/api/tunnel/quota', new URLSearchParams({ name, reset: '1' }));
 
 /* ---- CLI: 4 Backup & Restore — the archives kept on this server ---------- */
 export const backups = () => get('/api/backups');

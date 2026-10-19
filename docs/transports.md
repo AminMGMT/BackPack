@@ -19,6 +19,12 @@ require a Backpack build that implements the managed Xray wrapper.
 
 ## Managed HTTPS carriers
 
+For paths that carry only short HTTPS exchanges, an experimental IP-only fixed
+TCP relay is available through `backpack short-https`. It retains stream offsets
+across fresh HTTPS requests rather than relying on one persistent connection.
+It has lower throughput and is separate from these managed helpers and their
+menus. See [Experimental Short HTTPS](short-https.md) for paired setup and limits.
+
 Use a build containing these changes on both machines. From its source checkout,
 `BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash install.sh` builds that checkout
 and installs the pinned helpers. Without the source flag the installer prefers
@@ -72,6 +78,24 @@ is cancelled. Ordinary TCP connections keep their existing wire format. The
 record header adds four bytes per at-most-64KiB chunk; vectored TCP writes avoid
 a separate header syscall. There is no automatic fallback to older unframed
 managed peers. Deploy the matching build to both sides together.
+
+### HTTPS Connection Test
+
+Connection Test uses free temporary public ports, private certificates and a
+synthetic hostname for XHTTP; Naive connects by IP. Kharej also probes public TCP
+and verified TLS/HTTP2 on a **separate connection** (TCP only for REALITY).
+The final table shows these checks alongside the actual test port. They never
+count as tunnel success: authentication, all stability echoes and verified
+download/upload still have to pass through the real helper. A successful TLS
+probe followed by DOWN means ordinary TLS was reachable but the helper did not
+carry traffic; it does not establish whether filtering, fingerprint differences
+or an application error caused that failure. A failed synthetic test cannot
+predict every deployment using a real site, certificate, port or CDN.
+
+Without an owned domain, REALITY can connect to an IP using a verified cover
+hostname, and private IP certificates can be shared for Naive. Neither
+guarantees that a filtered route will carry sustained data. Do not disable
+certificate verification or select an unverified SNI as a purported fix.
 
 ### Naive HTTP/2
 

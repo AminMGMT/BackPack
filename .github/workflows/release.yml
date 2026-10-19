@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish, e.g. v1.8.5 or v1.8.5-beta.1. Blank uses VERSION."
+        description: "Tag to publish, e.g. v1.9.0 or v1.9.0-beta.1. Blank uses VERSION."
         required: false
         default: ""
 

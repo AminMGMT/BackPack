@@ -93,7 +93,7 @@ const samples = {
   proxyEnable: [[{ type: 'socks5', port: 1085, username: 'u', password: 'p' }]],
   proxyDisable: [[]], proxyTest: [[]],
   tunnelLink: [['fr-relay'], ['fr-relay', '203.0.113.7']],
-  tunnelQuota: [['fr-relay']], setTunnelQuota: [['fr-relay', 5e12], ['fr-relay', 0]],
+  tunnelQuota: [['fr-relay']], setTunnelQuota: [['fr-relay', 5e12], ['fr-relay', 0]], resetTunnelUsage: [['fr-relay']],
   backups: [[]], backupCreate: [[]], backupTest: [['backpack-backup-1.tar.gz']],
   backupRestoreSaved: [['backpack-backup-1.tar.gz']], backupDelete: [['backpack-backup-1.tar.gz']],
   setOffsite: [['rclone copy {} remote:backpack/']], sendOffsite: [[]],

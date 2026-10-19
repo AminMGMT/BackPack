@@ -4,13 +4,15 @@
  *
  * The count is the tunnel's own total, carried over every restart and update,
  * so what this shows as used is what the limit is held against. The engine
- * enforces it (cmd/quota.go); this only writes the number.
+ * enforces it (cmd/quota.go); this only writes the number. Reset usage sets
+ * the count back to zero (#106) on either end; the Iran end's limit stays.
  */
 
 import { esc } from '../lib/dom.js';
 import { bytes as fmtBytes } from '../lib/format.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
+import { confirmBox } from '../ui/confirm.js';
 import { openScreen } from '../ui/screen.js';
 import { oops, toast } from '../ui/toast.js';
 
@@ -30,6 +32,8 @@ const toneOf = (used, lim) => {
   const p = used / lim;
   return p >= 0.9 ? 'er' : p >= 0.7 ? 'wr' : 'ok';
 };
+const resetRow = used => `<div class="qt-reset"><span>Used so far <b>${esc(bytes(used))}</b></span>
+  <button type="button" id="qtReset"${used ? '' : ' disabled'}>Reset usage</button></div>`;
 const TONE_COLOR = { ok: 'var(--ac)', wr: 'var(--wr)', er: 'var(--er)', none: 'var(--mu)' };
 
 export function quotaView(ctx) {
@@ -45,6 +49,27 @@ export function quotaView(ctx) {
       const save = root.querySelector('#qtSave');
 
       let q;
+      /* A count the engine keeps in memory can only be zeroed with the tunnel
+       * stopped, so this restarts it: said before, not discovered after. */
+      const resetUsage = async () => {
+        const btn = root.querySelector('#qtReset');
+        if (!await confirmBox({
+          title: `Reset the usage of <q>${esc(name)}</q>?`,
+          body: `What it has carried goes back to zero${q.limit ? ', so its whole limit is available again' : ''}. `
+              + 'The tunnel restarts to do it, so traffic stops for a moment. '
+              + 'The server\'s lifetime total keeps what it carried.',
+          go: 'Reset usage',
+          danger: true,
+        })) return;
+        if (btn) btn.disabled = true;
+        try {
+          const was = q;
+          await api.resetTunnelUsage(name);
+          toast(was.hit ? `${name} starts from zero — it is coming back online.` : `${name} starts counting from zero.`);
+          store.refresh();
+          close();
+        } catch (e) { oops(e); if (btn) btn.disabled = false; }
+      };
       try { q = await api.tunnelQuota(name); } catch (e) {
         body.innerHTML = `<div class="qt-wait">${esc(e.message)}</div>`;
         if (save) save.hidden = true;
@@ -52,8 +77,10 @@ export function quotaView(ctx) {
       }
       if (!q.settable) {
         body.innerHTML = `<div class="qt-state"><i></i><span><b>This is the kharej end.</b> A traffic limit is set on the
-          Iran end of the tunnel — the one users connect to — and this end follows whatever it lets through.</span></div>`;
+          Iran end of the tunnel — the one users connect to — and this end follows whatever it lets through.</span></div>
+          ${resetRow(q.used || 0)}`;
         if (save) save.hidden = true;
+        body.addEventListener('click', ev => { if (ev.target.closest('#qtReset')) resetUsage(); });
         return;
       }
 
@@ -101,7 +128,8 @@ export function quotaView(ctx) {
           </div>
           <div class="qt-add"><span>Add to it</span>${ADDS.map(a =>
             `<button type="button" data-add="${a}">+ ${esc(bytes(a))}</button>`).join('')}</div>
-          <div class="qt-preview ${want && want <= used ? 'er' : ''}" id="qtPrev">${preview(used)}</div>`;
+          <div class="qt-preview ${want && want <= used ? 'er' : ''}" id="qtPrev">${preview(used)}</div>
+          ${resetRow(used)}`;
         if (save) save.disabled = want === (q.limit || 0);
       };
 
@@ -115,6 +143,7 @@ export function quotaView(ctx) {
       body.addEventListener('click', ev => {
         const b = ev.target.closest('button');
         if (!b) return;
+        if (b.id === 'qtReset') { resetUsage(); return; }
         if (b.dataset.v !== undefined) { want = Number(b.dataset.v); draw(); return; }
         if (b.dataset.u) {
           unit = Number(b.dataset.u);

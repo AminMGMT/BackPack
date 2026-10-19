@@ -15,6 +15,7 @@ import (
 	"github.com/backpack/backpack/internal/manage"
 	"github.com/backpack/backpack/internal/menu"
 	"github.com/backpack/backpack/internal/monitor"
+	"github.com/backpack/backpack/internal/shorthttps"
 	"github.com/backpack/backpack/internal/telegram"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/webui"
@@ -31,6 +32,15 @@ var logger = utils.NewLogger("info")
 //   - Menu mode:    `backpack`  (no arguments)
 //     Opens the interactive management CLI on the VPS.
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "short-https" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := shorthttps.Run(ctx, os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// Handled before the flags, because it is a subcommand with flags of its
 	// own: `backpack node setup --panel ... --key ...`. The flag package would
 	// stop at "node" and report the rest as unknown.

@@ -2,7 +2,7 @@
 
 All notable changes to Backpack are documented here.
 
-## v1.9.0 — 2026-10-09
+## v1.9.0 — 2026-10-19
 
 ### Added
 
@@ -35,6 +35,33 @@ All notable changes to Backpack are documented here.
   accepted with Space on a Linux terminal, or Enter; typing starts an editable
   answer. Other menus keep their input behavior, and closed input never saves
   a configuration. The public key is still shown for a manual Kharej setup.
+
+- **Connection Test runs over IPv4, IPv6 or both, one after the other**
+  (#108). An IPv6 address could reach the coordinator while the tunnel
+  listeners and the PMTU probe still used IPv4. The terminal and the panel now
+  detect public addresses on active interfaces and offer IPv4, IPv6 or both,
+  with manual IP or hostname entry and one link to run on the kharej. Each
+  family has its own stability, download/upload, RTT, PMTU and recommendation;
+  an unreachable family is reported through the one that answers and the
+  other path carries on. Native socket transports and Direct UDP/QUIC listen
+  on IPv6 with IPv6 PMTU/MSS accounting; PCK, Direct xDi/SNI and IP spoofing
+  are skipped on IPv6 because their engines emit raw IPv4. Single-path v1
+  links still work; dual-path v2 links need updated peers.
+- **Experimental `backpack short-https` relay for flow-limited paths** (#98).
+  On a path where TLS/HTTP2 handshakes complete but long TCP flows stop after
+  a few exchanges, a standalone fixed-backend TCP relay carries logical byte
+  offsets across fresh, authenticated HTTPS requests with verified private IP
+  certificates. `init`, `serve` and `client`; it installs no service and
+  leaves existing tunnels alone. TCP only, 2 KiB per request, low throughput,
+  seven-day test certificates — see `docs/short-https.md`. Connection Test
+  also reports a bounded TCP / verified TLS-H2 preflight and the public test
+  port it actually used; the preflight never changes the echo/speed verdict.
+- **Reset a tunnel's traffic usage** (#106). The Traffic limit dialog has a
+  Reset usage button, on either end, and `backpack tunnel reset-usage <name>`
+  or `--all` does the same from a terminal. The tunnel restarts so the engine
+  cannot write its in-memory total back; what it had carried moves to the
+  server's lifetime total, the limit is kept, and a tunnel held offline by
+  its limit comes back online.
 
 ### Changed
 
@@ -81,6 +108,8 @@ All notable changes to Backpack are documented here.
   symlinks, so a failed write no longer discards pending traffic.
 - **Dependencies** (Dependabot #64): quic-go 0.63.0, gopsutil/v4, smux and
   golang.org/x/net.
+- **Dependencies** (Dependabot #107): golang.org/x/crypto 0.58.0,
+  golang.org/x/net 0.61.0 and golang.org/x/sys 0.49.0.
 
 ### Security
 
@@ -232,6 +261,17 @@ All notable changes to Backpack are documented here.
   allocation (#89). The panel wiring guard split a native relative path on `/`,
   so on Windows `lib\dom.js` read as a whole filename and an existing module
   was reported unused (#90).
+- **A managed tunnel edit could succeed with its HTTPS helper down** (#104).
+  The edit waited only for systemd to say the unit was active, which happens
+  before the engine starts its Naive/Xray helper. The whole helper start is
+  now retried while the reverse engine stays stopped, the engine reports
+  helper readiness on its control socket, and an edit or a restore is
+  accepted only once the new process says the helper is ready — otherwise it
+  reverts after a bounded wait. `skip_optz` now survives server and client
+  edits, and managed tunnels' Diagnose reads the engine's pool snapshot
+  instead of counting unrelated loopback sockets.
+- **Connection Test startup ports** (#98): a listener reservation that loses a
+  race is retried instead of being reported as a failed path.
 
 ## v1.8.5 — 2026-09-30
 
