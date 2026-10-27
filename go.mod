@@ -8,11 +8,11 @@ require (
 	github.com/flynn/noise v1.1.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/reedsolomon v1.14.2
-	github.com/quic-go/quic-go v0.63.0
+	github.com/quic-go/quic-go v0.64.1
 	github.com/refraction-networking/utls v1.8.2
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/sirupsen/logrus v1.10.2
-	github.com/xtaci/kcp-go/v5 v5.6.72
+	github.com/xtaci/kcp-go/v5 v5.6.73
 	github.com/xtaci/smux v1.5.57
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
