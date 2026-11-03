@@ -59,9 +59,14 @@ func (c SpoofCarrier) spoofOpts(token string, realPeer net.IP) spoofConnOpts {
 }
 
 // spoofDiagnoser is implemented by the spoof carrier to report a one-line
-// startup note — currently whether the XDP receive fast path attached or fell
-// back to the ordinary socket.
+// startup note — whether the XDP receive fast path attached or fell back to the
+// ordinary socket, and what the ICMP echo guard is doing.
 type spoofDiagnoser interface{ spoofDiag() string }
+
+// spoofWarner is implemented by the spoof carrier to report what it could not
+// put in place — today, why the kernel's automatic echo replies are still being
+// answered. A note would understate it: the tunnel works, but it is leaking.
+type spoofWarner interface{ spoofWarning() string }
 
 // SpoofDiag returns the carrier's startup note, or "" for anything that is not
 // a spoof carrier or has nothing to say.
@@ -72,6 +77,15 @@ type spoofDiagnoser interface{ spoofDiag() string }
 func SpoofDiag(conn net.PacketConn) string {
 	if d, ok := conn.(spoofDiagnoser); ok {
 		return d.spoofDiag()
+	}
+	return ""
+}
+
+// SpoofWarning returns the carrier's startup warning, or "" for anything that is
+// not a spoof carrier or has nothing wrong to report.
+func SpoofWarning(conn net.PacketConn) string {
+	if w, ok := conn.(spoofWarner); ok {
+		return w.spoofWarning()
 	}
 	return ""
 }

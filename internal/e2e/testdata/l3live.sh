@@ -17,6 +17,17 @@
 # BLOCKFLOW=1 (pck/sni: once the tunnel works, drop the dialling end's current
 # flow on the path — its source port, as a middlebox that stopped passing it
 # would — and require the tunnel to come back on its own, from other ports).
+# For CARRIER=spoof: PROFILE / UPLINK / DOWNLINK choose the profiles,
+# REPLY=1 turns on spoof_icmp_reply, NOSRC=1 omits the forged sources entirely,
+# POOL=N>1 gives each end a rotating pool of N sources, and RULECONFLICT=mask,
+# invert or all puts a policy rule on the listening end that would swallow a
+# blindly chosen fwmark (fwmark 0x1/0x1, not fwmark 0x0/0x1, or not fwmark
+# 0x0/0xffffffff) with a blackhole table behind it. With an icmp receive
+# direction the script also checks the listening end's ICMP echo guard: that it
+# installed, that reply mode exempts the carrier's own marked replies, that it
+# drops the kernel's automatic ones, and that it is removed on exit. With
+# NOGUARD=1 it instead requires the guard to be absent and the reason for that
+# to be logged — the honest outcome when no mark keeps the route.
 set -u
 CARRIER="$1"; PATHS="$2"
 mkdir -p "$W"
@@ -44,9 +55,66 @@ TOKEN="l3-live-token-0123456789abcdef"
 extra_k=""; extra_i=""
 case "$CARRIER" in
   pck|sni) extra_k='pck_interface = "vk"'; extra_i='pck_interface = "vi"' ;;
-  spoof) extra_k='spoof_peer_ip = "10.99.0.1"
-spoof_src_pool = ["198.51.100.77"]'
-         extra_i='spoof_src_pool = ["198.51.100.66"]' ;;
+  spoof)
+    extra_k='spoof_peer_ip = "10.99.0.1"'
+    extra_i=''
+    if [ -n "${PROFILE:-}" ]; then
+      extra_k="$extra_k
+spoof_profile = \"$PROFILE\""
+      extra_i="$extra_i
+spoof_profile = \"$PROFILE\""
+    fi
+    if [ -n "${UPLINK:-}" ]; then
+      extra_k="$extra_k
+spoof_uplink = \"$UPLINK\""
+      extra_i="$extra_i
+spoof_uplink = \"$UPLINK\""
+    fi
+    if [ -n "${DOWNLINK:-}" ]; then
+      extra_k="$extra_k
+spoof_downlink = \"$DOWNLINK\""
+      extra_i="$extra_i
+spoof_downlink = \"$DOWNLINK\""
+    fi
+    if [ -z "${NOSRC:-}" ]; then
+      if [ "${POOL:-1}" -gt 1 ]; then
+        extra_k="$extra_k
+spoof_src_pool = [\"198.51.100.77\", \"198.51.100.78\"]"
+        extra_i="$extra_i
+spoof_src_pool = [\"198.51.100.66\", \"198.51.100.67\"]"
+      else
+        extra_k="$extra_k
+spoof_src_pool = [\"198.51.100.77\"]"
+        extra_i="$extra_i
+spoof_src_pool = [\"198.51.100.66\"]"
+      fi
+      # A route back toward the forged pool, so the listening end's kernel
+      # actually emits its automatic reply where the guard can drop it. The
+      # namespaces have no default route; on a real host there always is one.
+      ip -n kharej route add 198.51.100.0/24 dev vk
+    fi
+    if [ -n "${RULECONFLICT:-}" ]; then
+      # A mark is what `ip rule fwmark` matches, by mask and either way round.
+      # Both shapes below catch every odd mark — the shape a fixed constant
+      # happened to be — and route it into a blackhole table, while leaving
+      # unmarked traffic (the kernel's automatic replies) on the main table.
+      # The carrier's replies must keep working anyway: it has to pick a mark
+      # this policy does not divert, instead of stamping a constant.
+      case "$RULECONFLICT" in
+        mask)   ip -n kharej rule add fwmark 0x1/0x1 table 100 pref 1000 ;;
+        invert) ip -n kharej rule add not fwmark 0x0/0x1 table 100 pref 1000 ;;
+        # Every marked packet diverted, unmarked traffic left alone: no mark
+        # keeps the route, so the carrier must not install the guard at all.
+        all)    ip -n kharej rule add not fwmark 0x0/0xffffffff table 100 pref 1000 ;;
+      esac
+      ip -n kharej route add blackhole 10.99.0.1 table 100
+    fi
+    if [ "${REPLY:-0}" = 1 ]; then
+      extra_k="$extra_k
+spoof_icmp_reply = true"
+      extra_i="$extra_i
+spoof_icmp_reply = true"
+    fi ;;
 esac
 # auto_mtu=false: with it on, the tunnel rewrites its own file after probing,
 # and the reload watcher would restart it in the middle of the measurement.
@@ -90,27 +158,80 @@ pings() { # tries — until one ping crosses the tunnel
   return 1
 }
 copy() { # port — 5 MB across the tunnel, compared byte for byte
-  ip netns exec kharej sh -c "nc -l -p $1 > '$W/got' 2>/dev/null" &
-  local np=$!
-  sleep 0.3
-  local s e
-  s=$(date +%s.%N)
-  ip netns exec iran sh -c "nc -N -w 5 10.200.0.2 $1 < '$W/payload'" 2>/dev/null
-  e=$(date +%s.%N)
+  local np s e
+  if command -v nc >/dev/null 2>&1; then
+    ip netns exec kharej sh -c "nc -l -p $1 > '$W/got' 2>/dev/null" &
+    np=$!
+    sleep 0.3
+    s=$(date +%s.%N)
+    ip netns exec iran sh -c "nc -N -w 5 10.200.0.2 $1 < '$W/payload'" 2>/dev/null
+    e=$(date +%s.%N)
+  else
+    # socat stands in where netcat is not installed. Bounded, so a listener
+    # that misses the connection cannot hang the run.
+    ip netns exec kharej sh -c "timeout 20 socat -u TCP-LISTEN:$1,reuseaddr - > '$W/got'" &
+    np=$!
+    sleep 0.3
+    s=$(date +%s.%N)
+    ip netns exec iran sh -c "socat -u STDIN TCP:10.200.0.2:$1 < '$W/payload'" 2>/dev/null
+    e=$(date +%s.%N)
+  fi
   wait $np 2>/dev/null
   cmp -s "$W/payload" "$W/got" || return 1
-  echo "$e - $s" | bc
+  awk "BEGIN{print $e - $s}"
 }
 
 result=FAIL; detail="the tunnel never carried a ping"
 head -c 5242880 /dev/urandom > "$W/payload"
+guard=""
 if pings 80; then
-  loss=$(ip netns exec iran ping -q -c 20 -i 0.05 10.200.0.2 2>/dev/null | grep -oE '[0-9.]+% packet loss')
-  if secs=$(copy 5001); then
-    result=OK; detail="ping $loss; 5 MB byte-identical in ${secs:0:5}s"
-  else
-    detail="ping $loss; the 5 MB copy arrived different ($(stat -c %s "$W/got" 2>/dev/null) bytes)"
+  # The listener's ICMP echo guard, when this configuration needs one: its
+  # receive direction is the icmp profile. In reply mode its own uplink is Echo
+  # Replies carrying the tunnel's identifier, so the rule must carry the mark
+  # exemption that lets them through — the ping below is what proves they pass.
+  up_icmp=0; case "${UPLINK:-${PROFILE:-udp}}" in icmp) up_icmp=1 ;; esac
+  down_icmp=0; case "${DOWNLINK:-${PROFILE:-udp}}" in icmp) down_icmp=1 ;; esac
+  why=""; guardnote=""; before=""
+  guard=$(ip netns exec kharej iptables -vS OUTPUT 2>/dev/null | grep 'backpack-spoof-icmp' || true)
+  if [ "$up_icmp" = 1 ] && [ -z "${NOGUARD:-}" ]; then
+    if [ -z "$guard" ]; then
+      why="$why; the ICMP echo guard is not installed on the listening end"
+    elif [ "${REPLY:-0}" = 1 ] && [ "$down_icmp" = 1 ] && ! printf '%s' "$guard" | grep -q -- '-m mark'; then
+      why="$why; the guard has no mark exemption, so it would drop the tunnel's own replies"
+    else
+      before=$(printf '%s' "$guard" | sed -nE 's/.*-c ([0-9]+) .*/\1/p')
+      # The carrier says at startup what the guard is doing, and why not when it
+      # could not be installed: silence there is a bug of its own.
+      grep -q "automatic replies to this carrier" "$W/kharej.log" ||
+        why="$why; the listening end logged nothing about the ICMP echo guard"
+    fi
+  elif [ "$up_icmp" = 1 ]; then
+    # No mark can be shown safe: the guard must be left out, and the reason it
+    # was left out has to be in the log. The tunnel itself still has to work.
+    [ -z "$guard" ] || why="$why; a guard was installed although no mark keeps the route"
+    grep -q "NOT suppressed" "$W/kharej.log" ||
+      why="$why; the listening end did not say why its replies are not suppressed"
   fi
+  # A ping straight across the veth, outside the tunnel: the guard matches only
+  # the tunnel's identifier, so this has to keep working.
+  ip netns exec iran ping -c1 -W1 10.99.0.2 >/dev/null 2>&1 || why="$why; a ping to the listening end's real address failed"
+  loss=$(ip netns exec iran ping -q -c 20 -i 0.05 10.200.0.2 2>/dev/null | grep -oE '[0-9.]+% packet loss')
+  if [ -n "$before" ]; then
+    after=$(ip netns exec kharej iptables -vS OUTPUT 2>/dev/null | grep 'backpack-spoof-icmp' | sed -nE 's/.*-c ([0-9]+) .*/\1/p')
+    if [ -n "$after" ] && [ "$after" -gt "$before" ]; then
+      guardnote="; guard dropped the kernel's replies ($before -> $after)"
+    else
+      why="$why; the guard did not drop the kernel's automatic replies ($before -> ${after:-?})"
+    fi
+  fi
+  if secs=$(copy 5001); then
+    copy_note="5 MB byte-identical in ${secs:0:5}s"
+  else
+    copy_note="the 5 MB copy arrived different ($(stat -c %s "$W/got" 2>/dev/null) bytes)"
+    why="$why; $copy_note"
+  fi
+  if [ -z "$why" ]; then result=OK; fi
+  detail="ping $loss; $copy_note$guardnote$why"
 fi
 
 if [ "$result" = OK ] && [ -n "${RESTART:-}" ]; then
@@ -119,7 +240,7 @@ if [ "$result" = OK ] && [ -n "${RESTART:-}" ]; then
   ip netns exec kharej "$BINK" -c "$W/kharej.toml" >> "$W/kharej.log" 2>&1 &
   KP=$!
   if pings 160; then
-    back=$(echo "$(date +%s.%N) - $t0" | bc)
+    back=$(awk "BEGIN{print $(date +%s.%N) - $t0}")
     if copy 5002 >/dev/null; then
       detail="$detail; listener killed and restarted, traffic back in ${back:0:5}s and 5 MB identical again"
     else
@@ -156,7 +277,7 @@ if [ "$result" = OK ] && [ -n "${BLOCKFLOW:-}" ]; then
       match ip protocol 6 0xff match ip sport "$sport" 0xffff action drop
     t0=$(date +%s.%N)
     if pings 800; then
-      back=$(echo "$(date +%s.%N) - $t0" | bc)
+      back=$(awk "BEGIN{print $(date +%s.%N) - $t0}")
       now=$(flowport)
       if copy 5003 >/dev/null; then
         detail="$detail; flow from port $sport blocked on the path, back in ${back:0:5}s from port $now, 5 MB identical"
@@ -170,6 +291,11 @@ if [ "$result" = OK ] && [ -n "${BLOCKFLOW:-}" ]; then
 fi
 
 kill -INT $IP $KP 2>/dev/null; sleep 1; kill -KILL $IP $KP 2>/dev/null; wait 2>/dev/null
+# The guard is installed by the carrier and removed when it closes.
+if [ "$result" = OK ] && [ -n "$guard" ] &&
+   ip netns exec kharej iptables -vS OUTPUT 2>/dev/null | grep -q 'backpack-spoof-icmp'; then
+  result=FAIL; detail="$detail; the guard rule outlived the tunnel"
+fi
 if [ "$result" != OK ]; then
   echo "--- dialling end"; tail -8 "$W/iran.log"
   echo "--- listening end"; tail -8 "$W/kharej.log"

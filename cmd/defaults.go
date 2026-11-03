@@ -491,14 +491,9 @@ func checkSpoofCarrier(sc config.SpoofConfig, listening bool, peerReal string) e
 	// on the download path. The carrier drops exactly those with a targeted
 	// iptables rule (matched on the tunnel's ICMP identifier), so no operator
 	// action is needed and — unlike the old global switch — ICMP arriving on the
-	// tunnel itself is untouched. Noted only so the behaviour is not a surprise.
-	if up == "icmp" || down == "icmp" {
-		if _, err := exec.LookPath("iptables"); err != nil {
-			logger.Warn("spoof_profile icmp: iptables was not found, so the kernel's automatic replies to the forged echo requests cannot be dropped. The tunnel still works; it just wastes some uplink answering pings it never sent. Install iptables to silence them.")
-		} else {
-			logger.Info("spoof_profile icmp: the kernel's automatic replies to the carrier's echo requests are dropped by a targeted iptables rule while the tunnel runs; ICMP on the tunnel itself is unaffected.")
-		}
-	}
+	// tunnel itself is untouched. Whether that rule is really in place, and why
+	// not when it is not, depends on this host's iptables and fwmark rules, so
+	// the carrier itself says so in the tunnel log when it opens.
 	// The icmpv6 profile carries ICMPv6 echo messages (type 128) inside IPv4
 	// packets with protocol 58 — useful where a firewall clamps down on ICMP and
 	// UDP but leaves proto 58 open. The kernel does not answer proto-58-in-IPv4,
