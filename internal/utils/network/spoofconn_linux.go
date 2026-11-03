@@ -78,9 +78,15 @@ type spoofConn struct {
 
 	rst      *rstGuard      // the tcp RST-suppression rule, set when recvProfile is tcp
 	icmpEcho *icmpEchoGuard // the icmp Echo-Reply-suppression rule, set when recvProfile is icmp
-	rot      atomic.Uint32
-	tcpSeq   atomic.Uint32
-	icmpSeq  atomic.Uint32
+
+	// guardNote and guardWarning are what the tunnel log says about that rule:
+	// what it does, or why the kernel's replies are still being answered.
+	guardNote    string
+	guardWarning string
+
+	rot     atomic.Uint32
+	tcpSeq  atomic.Uint32
+	icmpSeq atomic.Uint32
 }
 
 // spoofOverhead is what a profile's headers cost on top of the payload, so KCP
@@ -293,12 +299,36 @@ func newSpoofConn(server bool, o spoofConnOpts) (net.PacketConn, error) {
 	//
 	// In reply mode this side's own uplink is Echo Replies with the same
 	// identifier as the kernel's answers, so the rule can only tell them apart
-	// by the mark on the send socket. Without the mark the rule would drop the
-	// tunnel's own traffic, so a refused mark means no rule: a tunnel that works
-	// and leaks the kernel's replies is the better failure.
+	// by the mark on the send socket. The mark is chosen against the host's own
+	// fwmark rules (see pickICMPReplyMark), not assumed: one that changes this
+	// side's route would break the tunnel to silence a reply. Without a usable
+	// mark no rule is installed: a tunnel that works and leaks the kernel's
+	// replies is the better failure, and either way the reason is logged.
 	if plan := planICMPEchoGuard(c.sendProfile, c.recvProfile, c.sendICMPType, c.recvICMPType); plan.suppress {
-		if !plan.marked || markPacketConn(sendPC, spoofReplyMark) == nil {
-			c.icmpEcho = installICMPEchoGuard(port)
+		var mark uint32
+		why := ""
+		if plan.marked {
+			mark, why = pickICMPReplyMark(c.realPeer, o.iface)
+			if why == "" {
+				if err := markPacketConn(sendPC, int(mark)); err != nil {
+					why = fmt.Sprintf("the send socket could not be marked (%v)", err)
+				}
+			}
+		}
+		// No mark means no rule here: in reply mode a rule without the
+		// exemption would drop the tunnel's own Echo Replies.
+		if why == "" {
+			if g := installICMPEchoGuard(port, mark); g.Installed() {
+				c.icmpEcho = g
+				c.guardNote = "the kernel's automatic replies to this carrier's echo requests are dropped by a targeted iptables rule; ICMP on the tunnel itself is unaffected"
+			} else {
+				_ = markPacketConn(sendPC, 0)
+				why = g.note
+			}
+		}
+		if why != "" {
+			c.guardWarning = "the kernel's automatic replies to this carrier's echo requests are NOT suppressed: " + why +
+				"; the tunnel itself works, but every request it receives is answered a second time on the way out"
 		}
 	}
 	return c, nil
@@ -569,9 +599,22 @@ func (c *spoofConn) Close() error {
 	return c.rawRecv.Close()
 }
 
-// spoofDiag reports whether the XDP fast path is in use, for the tunnel log —
-// the mirror of pck's PckDiag. Empty when no NIC was configured for XDP.
-func (c *spoofConn) spoofDiag() string { return c.xdpNote }
+// spoofDiag reports what this carrier put in place for the log: whether the XDP
+// fast path is in use, and what the ICMP echo guard is doing — the mirror of
+// pck's PckDiag.
+func (c *spoofConn) spoofDiag() string {
+	if c.xdpNote == "" {
+		return c.guardNote
+	}
+	if c.guardNote == "" {
+		return c.xdpNote
+	}
+	return c.xdpNote + "; " + c.guardNote
+}
+
+// spoofWarning reports what this carrier could not do as configured, for the
+// log — today, why the kernel's automatic echo replies are not suppressed.
+func (c *spoofConn) spoofWarning() string { return c.guardWarning }
 
 func (c *spoofConn) LocalAddr() net.Addr {
 	if c.xdp != nil {

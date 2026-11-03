@@ -198,6 +198,7 @@ func openSpoof(cfg Config) (DatagramCarrier, net.Addr, error) {
 		overhead:   overhead,
 		name:       "spoof",
 		note:       network.SpoofDiag(conn),
+		warning:    network.SpoofWarning(conn),
 	}, &net.IPAddr{IP: realPeer}, nil
 }
 

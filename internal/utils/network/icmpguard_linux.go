@@ -4,6 +4,7 @@ package network
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -36,10 +37,15 @@ import (
 //
 // In reply mode (spoof_icmp_reply) the server's own uplink is Echo Replies
 // carrying that same identifier, so type and identifier alone cannot tell its
-// data from the kernel's answers. The carrier therefore marks its send socket
-// with spoofReplyMark, and the rule leaves marked packets alone. The mark is
-// source-agnostic: it works whatever spoof_src_ip / spoof_src_pool rotate
-// through, and with no forged source at all.
+// data from the kernel's answers. The carrier therefore marks its send socket,
+// and the rule leaves marked packets alone. The mark is source-agnostic: it
+// works whatever spoof_src_ip / spoof_src_pool rotate through, and with no
+// forged source at all.
+//
+// A mark is also something `ip rule fwmark` matches, by value/mask and either
+// way round, so it can change routing. The carrier does not trust a constant to
+// be safe: pickICMPReplyMark looks up the route under each candidate and keeps
+// only one that yields the route unmarked traffic gets.
 //
 // It matches the identifier with the u32 module, because iptables has no native
 // icmp-id match. If u32 is unavailable the rule does not install, and — unlike
@@ -50,29 +56,43 @@ type icmpEchoGuard struct {
 	port   uint16
 	rule   []string
 	active bool
+	note   string // why the rule did not take, when it did not
 }
 
-// spoofReplyMark is the fwmark the carrier stamps on its own outgoing Echo
-// Replies so the guard can tell them from the kernel's automatic answers. It is
-// set only on the carrier's send socket, and only in the one configuration
-// where the two are otherwise identical: the server's uplink is Echo Replies
-// (reply mode) and the guard is needed.
+// spoofReplyMark is the mark the carrier prefers to stamp on its own outgoing
+// Echo Replies so the guard can tell them from the kernel's automatic answers.
+// It is set only on the carrier's send socket, and only in the one
+// configuration where the two are otherwise identical: the server's uplink is
+// Echo Replies (reply mode) and the guard is needed.
 //
-// A mark is also what `ip rule fwmark` matches, so it can change routing. This
-// value is deliberately distinctive, outside the small integers an operator's
-// so_mark picks — the spoof carrier does not otherwise use that knob — so it
-// changes routing only if a policy rule names this exact value. The mark is
-// local: it is never written on the wire.
+// It is deliberately distinctive — outside the small integers an operator's
+// so_mark picks — but distinctive is not the same as safe: `fwmark 0x1/0x1`
+// matches every odd mark. So this is only the first candidate, kept whenever no
+// fwmark rule can tell marks apart at all. The mark is local: never on the wire.
 const spoofReplyMark = 0x4241434b
 
 // installICMPEchoGuard adds the reply-drop rule for a tunnel port and returns a
 // handle that remembers whether it took, so remove() only undoes what it added.
-func installICMPEchoGuard(port uint16) *icmpEchoGuard {
-	// A rule a crashed run of an older version left behind has the pre-mark
-	// body, which would drop this version's marked replies too. This process
-	// never installs that body, so anything matching it is stale state.
-	removeStaleEchoRule(legacyICMPEchoRule(port))
-	return installEchoRule(&icmpEchoGuard{port: port, rule: icmpEchoRule(port)})
+// A zero mark leaves the rule with no exemption, which is what a side whose
+// uplink is not Echo Replies needs.
+func installICMPEchoGuard(port uint16, mark uint32) *icmpEchoGuard {
+	// Bodies a crashed run of an earlier version left behind: one from before
+	// the mark existed, and one whose exemption was inverted around the
+	// preferred constant. This process installs neither, so a match is stale —
+	// unless another live carrier here still holds it.
+	for _, stale := range [][]string{legacyICMPEchoRule(port), previousMarkedICMPEchoRule(port)} {
+		if !ruleInUse(stale) {
+			removeStaleEchoRule(stale)
+		}
+	}
+	return installEchoRule(&icmpEchoGuard{port: port, rule: icmpEchoRule(port, mark)})
+}
+
+// ruleInUse reports whether some carrier in this process holds rule.
+func ruleInUse(rule []string) bool {
+	echoRules.Lock()
+	defer echoRules.Unlock()
+	return echoRules.users[strings.Join(rule, " ")] > 0
 }
 
 // installXdiEchoGuard is the same guard for the xdi carrier's server side.
@@ -94,7 +114,9 @@ func installXdiEchoGuard(tag [xdiTagLen]byte) *icmpEchoGuard {
 	return installEchoRule(&icmpEchoGuard{rule: xdiEchoRule(tag)})
 }
 
-// installEchoRule inserts a guard's rule and records whether it took.
+// installEchoRule inserts a guard's rule and records whether it took — and why
+// it did not, in g.note, so the carrier can say so instead of leaving an
+// operator to guess whether the kernel's replies are being answered.
 func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
 	key := strings.Join(g.rule, " ")
 	echoRules.Lock()
@@ -109,6 +131,7 @@ func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
 		return g
 	}
 	if _, err := exec.LookPath("iptables"); err != nil {
+		g.note = "iptables was not found"
 		return g
 	}
 	// A rule already there is one a crashed run left behind — the process
@@ -116,8 +139,10 @@ func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
 	// crash after crash does not stack copies, and this run's exit removes it.
 	if exec.Command("iptables", append([]string{"-C"}, g.rule...)...).Run() == nil {
 		g.active = true
-	} else if exec.Command("iptables", append([]string{"-I"}, g.rule...)...).Run() == nil {
+	} else if out, err := exec.Command("iptables", append([]string{"-I"}, g.rule...)...).CombinedOutput(); err == nil {
 		g.active = true
+	} else {
+		g.note = fmt.Sprintf("iptables refused the rule: %s", strings.TrimSpace(string(out)))
 	}
 	if g.active {
 		echoRules.users[key] = 1
@@ -176,8 +201,14 @@ func planICMPEchoGuard(send, recv SpoofProfile, sendType, recvType byte) icmpEch
 }
 
 // icmpEchoRule is the iptables rule body: drop outbound Echo Replies whose ICMP
-// identifier equals the tunnel port, unless they carry spoofReplyMark — the
-// carrier's own replies in reply mode.
+// identifier equals the tunnel port. With a mark, only the UNMARKED ones are
+// dropped — the kernel's automatic answers, which carry no mark — so the
+// carrier's own marked replies pass. Matching "mark 0" rather than "not our
+// mark" keeps two carriers' rules compatible: whatever mark each stamps, the
+// other's rule leaves it alone.
+//
+// A zero mark leaves the exemption out: the caller has no replies of its own to
+// protect.
 //
 // The u32 expression reads the identifier out of a variable-length IP header:
 //
@@ -189,20 +220,105 @@ func planICMPEchoGuard(send, recv SpoofProfile, sendType, recvType byte) icmpEch
 //
 // Tagged with the same comment shape rstRule uses, so a rule left behind by a
 // crash is identifiable and removable by hand.
-func icmpEchoRule(port uint16) []string {
+func icmpEchoRule(port uint16, mark uint32) []string {
 	p := strconv.Itoa(int(port))
-	return []string{
+	rule := []string{
 		"OUTPUT",
 		"-p", "icmp",
 		"--icmp-type", "echo-reply",
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>16=%d", port),
-		"-m", "mark", "!", "--mark", fmt.Sprintf("0x%08x", uint32(spoofReplyMark)),
+	}
+	if mark != 0 {
+		rule = append(rule, "-m", "mark", "--mark", "0x0")
+	}
+	return append(rule,
 		"-m", "comment", "--comment", fmt.Sprintf("backpack-spoof-icmp-%s", p),
 		"-j", "DROP",
-	}
+	)
 }
 
-// legacyICMPEchoRule is the guard's body before spoofReplyMark was added, kept
+// pickICMPReplyMark returns the mark the carrier should stamp on its own Echo
+// Replies, or the reason there is no safe one. iface is the device the send
+// socket is pinned to, if any, so the lookup is made under the same constraint.
+//
+// `ip rule fwmark` matches value/mask, and either way round, so a constant —
+// however distinctive — can collide with a policy written for other traffic:
+// `fwmark 0x1/0x1` catches every odd mark, `not fwmark 0x0/0x1` likewise.
+// Parsing those rules is beside the point; their outcome is what matters. Each
+// candidate is looked up exactly as the kernel would look it up, and kept only
+// if the route to the peer is the one unmarked traffic gets. On a host with no
+// fwmark rule at all — the usual case — nothing can tell marks apart, and the
+// preferred constant is kept without asking the kernel anything.
+func pickICMPReplyMark(peer net.IP, iface string) (uint32, string) {
+	rules, err := exec.Command("ip", "-4", "rule", "show").Output()
+	if err != nil {
+		return 0, fmt.Sprintf("the host's routing rules could not be read (%v), so a firewall mark cannot be shown to leave routing unchanged", err)
+	}
+	if !strings.Contains(string(rules), "fwmark") {
+		return spoofReplyMark, ""
+	}
+	base, err := routeByMark(peer, iface, 0)
+	if err != nil {
+		return 0, fmt.Sprintf("the route to the peer could not be read (%v)", err)
+	}
+	mark, ok := chooseICMPReplyMark(func(m uint32) bool {
+		got, err := routeByMark(peer, iface, m)
+		return err == nil && got == base
+	})
+	if !ok {
+		return 0, "an ip rule fwmark (masked or inverted) sends every candidate mark somewhere other than where unmarked traffic goes"
+	}
+	return mark, ""
+}
+
+// icmpReplyMarkCandidates is what pickICMPReplyMark tries, in order: the
+// preferred constant, then single-bit marks.
+func icmpReplyMarkCandidates() []uint32 {
+	out := []uint32{spoofReplyMark}
+	for bit := 1; bit < 31; bit++ {
+		out = append(out, 1<<bit)
+	}
+	return out
+}
+
+// chooseICMPReplyMark is the first candidate safe accepts.
+func chooseICMPReplyMark(safe func(uint32) bool) (uint32, bool) {
+	for _, mark := range icmpReplyMarkCandidates() {
+		if safe(mark) {
+			return mark, true
+		}
+	}
+	return 0, false
+}
+
+// routeByMark is the kernel's route lookup for peer under mark — with mark 0
+// meaning no mark at all — normalized so the two can be compared: the mark
+// itself is dropped from the answer, since that is the one expected difference.
+func routeByMark(peer net.IP, iface string, mark uint32) (string, error) {
+	args := []string{"-4", "route", "get", peer.String()}
+	if iface != "" {
+		args = append(args, "oif", iface)
+	}
+	if mark != 0 {
+		args = append(args, "mark", fmt.Sprintf("0x%x", mark))
+	}
+	out, err := exec.Command("ip", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(out))
+	kept := fields[:0]
+	for i := 0; i < len(fields); i++ {
+		if fields[i] == "mark" && i+1 < len(fields) {
+			i++
+			continue
+		}
+		kept = append(kept, fields[i])
+	}
+	return strings.Join(kept, " "), nil
+}
+
+// legacyICMPEchoRule is the guard's body before the mark was added, kept
 // only so an upgrade can clear one that a crashed older run left in the chain.
 func legacyICMPEchoRule(port uint16) []string {
 	p := strconv.Itoa(int(port))
@@ -211,6 +327,23 @@ func legacyICMPEchoRule(port uint16) []string {
 		"-p", "icmp",
 		"--icmp-type", "echo-reply",
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>16=%d", port),
+		"-m", "comment", "--comment", fmt.Sprintf("backpack-spoof-icmp-%s", p),
+		"-j", "DROP",
+	}
+}
+
+// previousMarkedICMPEchoRule is the body this guard shipped with when the mark
+// was a fixed constant and the exemption read "anything but that mark". Kept
+// only so an upgrade can clear one a crashed run left behind: two such rules
+// with different marks would drop each other's packets.
+func previousMarkedICMPEchoRule(port uint16) []string {
+	p := strconv.Itoa(int(port))
+	return []string{
+		"OUTPUT",
+		"-p", "icmp",
+		"--icmp-type", "echo-reply",
+		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>16=%d", port),
+		"-m", "mark", "!", "--mark", fmt.Sprintf("0x%08x", uint32(spoofReplyMark)),
 		"-m", "comment", "--comment", fmt.Sprintf("backpack-spoof-icmp-%s", p),
 		"-j", "DROP",
 	}

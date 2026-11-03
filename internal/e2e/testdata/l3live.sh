@@ -19,10 +19,15 @@
 # would — and require the tunnel to come back on its own, from other ports).
 # For CARRIER=spoof: PROFILE / UPLINK / DOWNLINK choose the profiles,
 # REPLY=1 turns on spoof_icmp_reply, NOSRC=1 omits the forged sources entirely,
-# POOL=N>1 gives each end a rotating pool of N sources. With an icmp receive
+# POOL=N>1 gives each end a rotating pool of N sources, and RULECONFLICT=mask,
+# invert or all puts a policy rule on the listening end that would swallow a
+# blindly chosen fwmark (fwmark 0x1/0x1, not fwmark 0x0/0x1, or not fwmark
+# 0x0/0xffffffff) with a blackhole table behind it. With an icmp receive
 # direction the script also checks the listening end's ICMP echo guard: that it
 # installed, that reply mode exempts the carrier's own marked replies, that it
-# drops the kernel's automatic ones, and that it is removed on exit.
+# drops the kernel's automatic ones, and that it is removed on exit. With
+# NOGUARD=1 it instead requires the guard to be absent and the reason for that
+# to be logged — the honest outcome when no mark keeps the route.
 set -u
 CARRIER="$1"; PATHS="$2"
 mkdir -p "$W"
@@ -87,6 +92,22 @@ spoof_src_pool = [\"198.51.100.66\"]"
       # actually emits its automatic reply where the guard can drop it. The
       # namespaces have no default route; on a real host there always is one.
       ip -n kharej route add 198.51.100.0/24 dev vk
+    fi
+    if [ -n "${RULECONFLICT:-}" ]; then
+      # A mark is what `ip rule fwmark` matches, by mask and either way round.
+      # Both shapes below catch every odd mark — the shape a fixed constant
+      # happened to be — and route it into a blackhole table, while leaving
+      # unmarked traffic (the kernel's automatic replies) on the main table.
+      # The carrier's replies must keep working anyway: it has to pick a mark
+      # this policy does not divert, instead of stamping a constant.
+      case "$RULECONFLICT" in
+        mask)   ip -n kharej rule add fwmark 0x1/0x1 table 100 pref 1000 ;;
+        invert) ip -n kharej rule add not fwmark 0x0/0x1 table 100 pref 1000 ;;
+        # Every marked packet diverted, unmarked traffic left alone: no mark
+        # keeps the route, so the carrier must not install the guard at all.
+        all)    ip -n kharej rule add not fwmark 0x0/0xffffffff table 100 pref 1000 ;;
+      esac
+      ip -n kharej route add blackhole 10.99.0.1 table 100
     fi
     if [ "${REPLY:-0}" = 1 ]; then
       extra_k="$extra_k
@@ -172,14 +193,24 @@ if pings 80; then
   down_icmp=0; case "${DOWNLINK:-${PROFILE:-udp}}" in icmp) down_icmp=1 ;; esac
   why=""; guardnote=""; before=""
   guard=$(ip netns exec kharej iptables -vS OUTPUT 2>/dev/null | grep 'backpack-spoof-icmp' || true)
-  if [ "$up_icmp" = 1 ]; then
+  if [ "$up_icmp" = 1 ] && [ -z "${NOGUARD:-}" ]; then
     if [ -z "$guard" ]; then
       why="$why; the ICMP echo guard is not installed on the listening end"
     elif [ "${REPLY:-0}" = 1 ] && [ "$down_icmp" = 1 ] && ! printf '%s' "$guard" | grep -q -- '-m mark'; then
       why="$why; the guard has no mark exemption, so it would drop the tunnel's own replies"
     else
       before=$(printf '%s' "$guard" | sed -nE 's/.*-c ([0-9]+) .*/\1/p')
+      # The carrier says at startup what the guard is doing, and why not when it
+      # could not be installed: silence there is a bug of its own.
+      grep -q "automatic replies to this carrier" "$W/kharej.log" ||
+        why="$why; the listening end logged nothing about the ICMP echo guard"
     fi
+  elif [ "$up_icmp" = 1 ]; then
+    # No mark can be shown safe: the guard must be left out, and the reason it
+    # was left out has to be in the log. The tunnel itself still has to work.
+    [ -z "$guard" ] || why="$why; a guard was installed although no mark keeps the route"
+    grep -q "NOT suppressed" "$W/kharej.log" ||
+      why="$why; the listening end did not say why its replies are not suppressed"
   fi
   # A ping straight across the veth, outside the tunnel: the guard matches only
   # the tunnel's identifier, so this has to keep working.

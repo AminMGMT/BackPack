@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,16 +22,21 @@ import (
 // show that the mark survives the trip through netfilter, so this sends real
 // packets through a real iptables rule, in a network namespace of its own.
 //
+// It also covers the mark's routing risk: `ip rule fwmark` matches by mask and
+// can be inverted, so a rule such as `fwmark 0x1/0x1` can swallow a blindly
+// chosen mark. The namespace gets exactly such a rule and a blackhole table,
+// and the chosen mark has to keep the route the tunnel's packets had before.
+//
 //	BP_ICMP_GUARD_LIVE=1 go test ./internal/utils/network -run TestICMPEchoGuardExemptsTheCarriersMarkedReplies -v
 //
 // It needs what internal/e2e's live tests need — unprivileged user namespaces,
 // and the unshare, ip and iptables binaries — and, like them, is opt-in.
 const netnsChildEnv = "BP_ICMP_GUARD_NETNS_CHILD"
 
-// testReplyMark is the fwmark the carrier stamps on its own replies. It is a
-// literal rather than the carrier's constant so this test could also be run
-// against the pre-fix rule; TestICMPEchoRuleExemptsTheCarriersMarkedReplies
-// pins the production rule to it, so the two cannot drift apart unseen.
+// testReplyMark is the mark this test stamps on its own replies. It is a
+// literal rather than the carrier's preferred constant so the behaviour does
+// not depend on which candidate the carrier picks; the conflict section below
+// is what proves a fixed constant would have been the wrong choice.
 const testReplyMark = 0x4241434b
 
 func TestICMPEchoGuardExemptsTheCarriersMarkedReplies(t *testing.T) {
@@ -73,8 +79,8 @@ func runICMPEchoGuardNetns(t *testing.T) {
 	}
 
 	const port = 13000
-	guard := installICMPEchoGuard(port)
-	defer guard.remove()
+	guard := installICMPEchoGuard(port, testReplyMark)
+	defer func() { guard.remove() }()
 	if !guard.Installed() {
 		out, _ := exec.Command("iptables", "-S", "OUTPUT").CombinedOutput()
 		t.Fatalf("the guard did not install; OUTPUT is:\n%s", out)
@@ -143,6 +149,74 @@ func runICMPEchoGuardNetns(t *testing.T) {
 	}
 	if !awaitTestEcho(t, recv, icmpTypeEchoReply, port, 1005, 2*time.Second) {
 		t.Fatal("the reply after removing the guard never arrived")
+	}
+
+	// The routing conflict. The carrier marks its own replies, and a mark is
+	// what `ip rule fwmark` matches — by mask, and either way round. `fwmark
+	// 0x1/0x1` catches every odd mark, and the preferred constant is odd, so a
+	// policy written for some other traffic would blackhole the tunnel.
+	//
+	// The peer is a plain routed address rather than 127.0.0.2: the local
+	// table's rule at priority 0 answers for a local address before any policy
+	// rule can, so a conflict written against one could never be observed.
+	peer := net.IPv4(198, 18, 0, 1)
+	mustIP(t, "route", "add", peer.String()+"/32", "dev", "lo")
+	mustIP(t, "route", "add", "blackhole", peer.String(), "table", "100")
+	mustIP(t, "rule", "add", "fwmark", "0x1/0x1", "table", "100", "pref", "1000")
+	base, err := routeByMark(peer, "", 0)
+	if err != nil {
+		t.Fatalf("the unmarked route lookup failed: %v", err)
+	}
+	if got, err := routeByMark(peer, "", testReplyMark); err == nil && got == base {
+		t.Fatal("the mask rule did not divert the odd constant; the test setup is wrong")
+	}
+	// Choosing by outcome has to find a mark that is routed as unmarked
+	// traffic is, rather than stamping the constant and breaking the tunnel.
+	mark, why := pickICMPReplyMark(peer, "")
+	if why != "" {
+		t.Fatalf("no usable mark under fwmark 0x1/0x1: %s", why)
+	}
+	if mark&1 != 0 {
+		t.Fatalf("chose the odd mark %#x, which the mask rule diverts", mark)
+	}
+
+	// The tunnel still works with that mark: it reaches the route, and the
+	// guard installed for it lets the carrier's replies through.
+	guard = installICMPEchoGuard(port, mark)
+	if !guard.Installed() {
+		out, _ := exec.Command("iptables", "-S", "OUTPUT").CombinedOutput()
+		t.Fatalf("the guard did not reinstall; OUTPUT is:\n%s", out)
+	}
+	if err := markTestSocket(markedPC, int(mark)); err != nil {
+		t.Fatalf("marking the send socket with the chosen mark: %v", err)
+	}
+	if err := sendTestEcho(marked, icmpTypeEchoReply, port, 1006); err != nil {
+		t.Fatalf("a reply marked %#x did not reach the route under the conflict rule: %v", mark, err)
+	}
+	if !awaitTestEcho(t, recv, icmpTypeEchoReply, port, 1006, 2*time.Second) {
+		t.Fatalf("a reply marked %#x never arrived under the conflict rule", mark)
+	}
+	// The kernel's unmarked answer is still suppressed by that rule.
+	if err := sendTestEcho(plain, icmpTypeEchoReply, port, 1007); err == nil &&
+		awaitTestEcho(t, recv, icmpTypeEchoReply, port, 1007, 300*time.Millisecond) {
+		t.Fatal("the reinstalled guard let an unmarked automatic reply through")
+	}
+
+	// The inverted shape, routing every marked packet and leaving unmarked
+	// traffic alone: nothing is safe, and the carrier has to say so instead of
+	// picking a mark that reroutes it.
+	mustIP(t, "rule", "add", "not", "fwmark", "0x0/0xffffffff", "table", "100", "pref", "2000")
+	if _, why := pickICMPReplyMark(peer, ""); why == "" {
+		t.Fatal("pickICMPReplyMark found a mark although every marked packet is diverted")
+	}
+}
+
+// mustIP runs ip with the given arguments and fails the test if it does not
+// succeed.
+func mustIP(t *testing.T, args ...string) {
+	t.Helper()
+	if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+		t.Fatalf("ip %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
 

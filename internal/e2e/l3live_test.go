@@ -67,6 +67,16 @@ func TestL3CarriersOverARealTUN(t *testing.T) {
 		{"spoof icmp reply mode", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1"}},
 		{"spoof icmp reply mode, no forged source", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "NOSRC=1"}},
 		{"spoof icmp reply mode, rotating sources", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "POOL=2"}},
+		// The guard stamps a mark on the carrier's replies, and a mark is what
+		// `ip rule fwmark` matches — by mask, and either way round. Both shapes
+		// here catch every odd mark (the old fixed constant's shape) and
+		// blackhole it; the tunnel has to keep working by picking around them.
+		{"spoof icmp reply mode, masked fwmark conflict", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "RULECONFLICT=mask"}},
+		{"spoof icmp reply mode, inverted fwmark conflict", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "RULECONFLICT=invert"}},
+		// Every marked packet diverted and no safe mark left: the guard cannot
+		// be installed without breaking the tunnel, so it must be left out and
+		// the reason logged — and the tunnel itself still has to work.
+		{"spoof icmp reply mode, no safe fwmark mark", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "RULECONFLICT=all", "NOGUARD=1"}},
 		// Asymmetric directions: the listener needs the guard when it receives
 		// icmp, and only collides with it when it also sends icmp replies.
 		{"spoof icmp up, udp down, reply mode", "spoof", "1", []string{"UPLINK=icmp", "DOWNLINK=udp", "REPLY=1"}},
