@@ -33,9 +33,15 @@ func TestL3CarriersOverARealTUN(t *testing.T) {
 	if os.Getenv("BP_L3_LIVE") == "" {
 		t.Skip("set BP_L3_LIVE=1 on a host that allows unprivileged user namespaces to run this")
 	}
-	for _, tool := range []string{"unshare", "ip", "nc", "bc", "tc", "tcpdump", "iptables"} {
+	for _, tool := range []string{"unshare", "ip", "tc", "iptables", "ping", "cmp", "awk"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatalf("%s is needed and not installed", tool)
+		}
+	}
+	// The bulk-copy check takes whichever of the two the host has.
+	if _, ncErr := exec.LookPath("nc"); ncErr != nil {
+		if _, socatErr := exec.LookPath("socat"); socatErr != nil {
+			t.Fatal("nc or socat is needed for the bulk-copy check and neither is installed")
 		}
 	}
 	bin := currentBinary(t)
@@ -52,6 +58,19 @@ func TestL3CarriersOverARealTUN(t *testing.T) {
 		{"sni", "sni", "1", nil},
 		{"xdi", "xdi", "1", nil},
 		{"spoof", "spoof", "1", nil},
+		// The ICMP echo guard, on a real tunnel. Reply mode is the case where
+		// the carrier's own uplink and the kernel's automatic answer are both
+		// outbound Echo Replies with the tunnel's identifier: the guard has to
+		// drop one and pass the other, with a forged pool, with rotating
+		// sources, and with no forged source at all.
+		{"spoof icmp request/request", "spoof", "1", []string{"PROFILE=icmp"}},
+		{"spoof icmp reply mode", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1"}},
+		{"spoof icmp reply mode, no forged source", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "NOSRC=1"}},
+		{"spoof icmp reply mode, rotating sources", "spoof", "1", []string{"PROFILE=icmp", "REPLY=1", "POOL=2"}},
+		// Asymmetric directions: the listener needs the guard when it receives
+		// icmp, and only collides with it when it also sends icmp replies.
+		{"spoof icmp up, udp down, reply mode", "spoof", "1", []string{"UPLINK=icmp", "DOWNLINK=udp", "REPLY=1"}},
+		{"spoof udp up, icmp down, reply mode", "spoof", "1", []string{"UPLINK=udp", "DOWNLINK=icmp", "REPLY=1"}},
 		// A listener that dies without a word, and comes back with no memory of
 		// the session: the dialler has to notice and handshake again.
 		{"udp listener restart", "udp", "1", []string{"RESTART=1"}},

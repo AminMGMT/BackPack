@@ -70,3 +70,39 @@ func TestTheGuardMatchesTheIdentifierTheCarrierSends(t *testing.T) {
 		t.Error("the carrier derived port 0, which the guard cannot distinguish from an unset identifier")
 	}
 }
+
+// In reply mode the carrier's own uplink is Echo Replies carrying the same
+// identifier the rule matches, so the rule must exempt them by the mark the
+// carrier stamps. Without the exemption the guard drops the tunnel it was
+// installed for. The literal is the value the netns test stamps too, so a
+// change to either side has to be deliberate.
+func TestICMPEchoRuleExemptsTheCarriersMarkedReplies(t *testing.T) {
+	rule := strings.Join(icmpEchoRule(13000), " ")
+	if !strings.Contains(rule, "-m mark ! --mark 0x4241434b") {
+		t.Fatalf("the rule does not exempt the carrier's marked replies, so it would drop the tunnel's own packets:\n%s", rule)
+	}
+}
+
+// The guard is chosen from both directions, which need not match: only a side
+// that accepts Echo Requests has a kernel reply to suppress, and only a side
+// whose own uplink is Echo Replies collides with the rule.
+func TestICMPEchoGuardPlanFollowsBothDirections(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		send, recv         SpoofProfile
+		sendType, recvType byte
+		suppress, marked   bool
+	}{
+		{"request/request, either side", SpoofProfileICMP, SpoofProfileICMP, icmpTypeEchoRequest, icmpTypeEchoRequest, true, false},
+		{"reply mode, server", SpoofProfileICMP, SpoofProfileICMP, icmpTypeEchoReply, icmpTypeEchoRequest, true, true},
+		{"reply mode, client", SpoofProfileICMP, SpoofProfileICMP, icmpTypeEchoRequest, icmpTypeEchoReply, false, false},
+		{"send udp, receive icmp requests", SpoofProfileUDP, SpoofProfileICMP, icmpTypeEchoRequest, icmpTypeEchoRequest, true, false},
+		{"send icmpv6 replies, receive icmp requests", SpoofProfileICMPv6, SpoofProfileICMP, icmpv6TypeEchoReply, icmpTypeEchoRequest, true, false},
+		{"receive icmpv6 requests", SpoofProfileICMP, SpoofProfileICMPv6, icmpTypeEchoRequest, icmpv6TypeEchoRequest, false, false},
+	} {
+		got := planICMPEchoGuard(tc.send, tc.recv, tc.sendType, tc.recvType)
+		if got.suppress != tc.suppress || got.marked != tc.marked {
+			t.Errorf("%s: plan = %+v, want suppress=%v marked=%v", tc.name, got, tc.suppress, tc.marked)
+		}
+	}
+}

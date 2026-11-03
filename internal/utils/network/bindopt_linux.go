@@ -46,3 +46,23 @@ func bindToInterface(fd uintptr, name string) error {
 func setFirewallMark(fd uintptr, mark int) error {
 	return unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, mark)
 }
+
+// markPacketConn sets the fwmark on a raw IP socket's packets, reaching its file
+// descriptor the way bindPacketConnToInterface does. The spoof carrier uses it
+// on its send socket in reply mode, so the ICMP echo guard's OUTPUT rule can
+// tell the tunnel's Echo Replies from the kernel's automatic ones.
+func markPacketConn(pc net.PacketConn, mark int) error {
+	ipc, ok := pc.(*net.IPConn)
+	if !ok {
+		return unix.EINVAL
+	}
+	raw, err := ipc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ctrlErr error
+	if err := raw.Control(func(fd uintptr) { ctrlErr = setFirewallMark(fd, mark) }); err != nil {
+		return err
+	}
+	return ctrlErr
+}

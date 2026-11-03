@@ -34,6 +34,13 @@ import (
 // identifier and is untouched. The kernel still stops wasting the uplink; the
 // tunnel's own ICMP still works.
 //
+// In reply mode (spoof_icmp_reply) the server's own uplink is Echo Replies
+// carrying that same identifier, so type and identifier alone cannot tell its
+// data from the kernel's answers. The carrier therefore marks its send socket
+// with spoofReplyMark, and the rule leaves marked packets alone. The mark is
+// source-agnostic: it works whatever spoof_src_ip / spoof_src_pool rotate
+// through, and with no forged source at all.
+//
 // It matches the identifier with the u32 module, because iptables has no native
 // icmp-id match. If u32 is unavailable the rule does not install, and — unlike
 // the old behaviour — nothing falls back to the global switch: a tunnel that
@@ -45,9 +52,26 @@ type icmpEchoGuard struct {
 	active bool
 }
 
+// spoofReplyMark is the fwmark the carrier stamps on its own outgoing Echo
+// Replies so the guard can tell them from the kernel's automatic answers. It is
+// set only on the carrier's send socket, and only in the one configuration
+// where the two are otherwise identical: the server's uplink is Echo Replies
+// (reply mode) and the guard is needed.
+//
+// A mark is also what `ip rule fwmark` matches, so it can change routing. This
+// value is deliberately distinctive, outside the small integers an operator's
+// so_mark picks — the spoof carrier does not otherwise use that knob — so it
+// changes routing only if a policy rule names this exact value. The mark is
+// local: it is never written on the wire.
+const spoofReplyMark = 0x4241434b
+
 // installICMPEchoGuard adds the reply-drop rule for a tunnel port and returns a
 // handle that remembers whether it took, so remove() only undoes what it added.
 func installICMPEchoGuard(port uint16) *icmpEchoGuard {
+	// A rule a crashed run of an older version left behind has the pre-mark
+	// body, which would drop this version's marked replies too. This process
+	// never installs that body, so anything matching it is stale state.
+	removeStaleEchoRule(legacyICMPEchoRule(port))
 	return installEchoRule(&icmpEchoGuard{port: port, rule: icmpEchoRule(port)})
 }
 
@@ -128,8 +152,32 @@ func (g *icmpEchoGuard) remove() {
 // of the two outcomes it got.
 func (g *icmpEchoGuard) Installed() bool { return g != nil && g.active }
 
+// icmpEchoGuardPlan is what a carrier with these directions needs from the
+// guard.
+type icmpEchoGuardPlan struct {
+	// suppress installs the rule: the kernel answers an inbound Echo Request
+	// with one of its own, and nothing should carry that reply.
+	suppress bool
+	// marked exempts the carrier's own replies: its uplink is Echo Replies
+	// carrying the same identifier as the kernel's answers.
+	marked bool
+}
+
+// planICMPEchoGuard decides the guard from the send and receive profiles, which
+// need not match. The kernel only answers IPv4 ICMP Echo Requests — a receive
+// profile that accepts Replies, or rides protocol 58 (icmpv6), generates
+// nothing to suppress — and the carrier only collides with the rule when its
+// own uplink is an IPv4 Echo Reply, which is the server in reply mode.
+func planICMPEchoGuard(send, recv SpoofProfile, sendType, recvType byte) icmpEchoGuardPlan {
+	return icmpEchoGuardPlan{
+		suppress: recv == SpoofProfileICMP && recvType == icmpTypeEchoRequest,
+		marked:   send == SpoofProfileICMP && sendType == icmpTypeEchoReply,
+	}
+}
+
 // icmpEchoRule is the iptables rule body: drop outbound Echo Replies whose ICMP
-// identifier equals the tunnel port.
+// identifier equals the tunnel port, unless they carry spoofReplyMark — the
+// carrier's own replies in reply mode.
 //
 // The u32 expression reads the identifier out of a variable-length IP header:
 //
@@ -148,8 +196,33 @@ func icmpEchoRule(port uint16) []string {
 		"-p", "icmp",
 		"--icmp-type", "echo-reply",
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>16=%d", port),
+		"-m", "mark", "!", "--mark", fmt.Sprintf("0x%08x", uint32(spoofReplyMark)),
 		"-m", "comment", "--comment", fmt.Sprintf("backpack-spoof-icmp-%s", p),
 		"-j", "DROP",
+	}
+}
+
+// legacyICMPEchoRule is the guard's body before spoofReplyMark was added, kept
+// only so an upgrade can clear one that a crashed older run left in the chain.
+func legacyICMPEchoRule(port uint16) []string {
+	p := strconv.Itoa(int(port))
+	return []string{
+		"OUTPUT",
+		"-p", "icmp",
+		"--icmp-type", "echo-reply",
+		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>16=%d", port),
+		"-m", "comment", "--comment", fmt.Sprintf("backpack-spoof-icmp-%s", p),
+		"-j", "DROP",
+	}
+}
+
+// removeStaleEchoRule deletes a rule if it is there, best effort.
+func removeStaleEchoRule(rule []string) {
+	if _, err := exec.LookPath("iptables"); err != nil {
+		return
+	}
+	if exec.Command("iptables", append([]string{"-C"}, rule...)...).Run() == nil {
+		_ = exec.Command("iptables", append([]string{"-D"}, rule...)...).Run()
 	}
 }
 

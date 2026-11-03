@@ -280,17 +280,26 @@ func newSpoofConn(server bool, o spoofConnOpts) (net.PacketConn, error) {
 	if recvProfile == SpoofProfileTCP {
 		c.rst = installRSTGuard(port)
 	}
-	if recvProfile == SpoofProfileICMP {
-		// Silence the kernel's automatic Echo Reply to the data-carrying Echo
-		// Requests this carrier receives. Only real IPv4 ICMP (proto 1) triggers a
-		// kernel reply; the icmpv6 profile rides proto 58 in IPv4, which the kernel
-		// does not answer, so it needs no suppression.
-		//
-		// A targeted iptables rule rather than net.ipv4.icmp_echo_ignore_all: the
-		// global switch also silences ICMP arriving on the tunnel itself, and a
-		// layer-3 tunnel is a private network people ping across. See
-		// icmpguard_linux.go.
-		c.icmpEcho = installICMPEchoGuard(port)
+	// Silence the kernel's automatic Echo Reply to the data-carrying Echo
+	// Requests this carrier receives. Only real IPv4 ICMP (proto 1) triggers a
+	// kernel reply, and only a side that accepts Requests has one to silence: a
+	// client in reply mode receives Replies, and the icmpv6 profile rides proto
+	// 58 in IPv4, which the kernel does not answer.
+	//
+	// A targeted iptables rule rather than net.ipv4.icmp_echo_ignore_all: the
+	// global switch also silences ICMP arriving on the tunnel itself, and a
+	// layer-3 tunnel is a private network people ping across. See
+	// icmpguard_linux.go.
+	//
+	// In reply mode this side's own uplink is Echo Replies with the same
+	// identifier as the kernel's answers, so the rule can only tell them apart
+	// by the mark on the send socket. Without the mark the rule would drop the
+	// tunnel's own traffic, so a refused mark means no rule: a tunnel that works
+	// and leaks the kernel's replies is the better failure.
+	if plan := planICMPEchoGuard(c.sendProfile, c.recvProfile, c.sendICMPType, c.recvICMPType); plan.suppress {
+		if !plan.marked || markPacketConn(sendPC, spoofReplyMark) == nil {
+			c.icmpEcho = installICMPEchoGuard(port)
+		}
 	}
 	return c, nil
 }
