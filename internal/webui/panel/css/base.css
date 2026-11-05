@@ -17,9 +17,9 @@
  * mock is never tabbed through. A visible ring has to come back somewhere, and
  * one rule here covers every control instead of thirty. */
 :focus-visible {
-  outline: 2px solid var(--tx2);
-  outline-offset: 2px;
-  border-radius: 4px;
+  outline: var(--focus-width) solid var(--focus);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-sm);
 }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline-offset: 1px;
@@ -53,4 +53,93 @@ button, a, input, select, textarea, [role="button"], [role="menuitem"] {
 /* A dialog's subtitle on a phone: two lines at most, not four. */
 @media (max-width:560px){
   .dlg .dh small{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+}
+
+/* ===== New Design System Utilities ===== */
+
+/* Button base - using new token system */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: var(--trans-fast);
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--tx); color: var(--bg); border-color: var(--tx); }
+.btn-primary:hover:not(:disabled) { background: var(--tx2); border-color: var(--tx2); }
+.btn-secondary { background: var(--s1); color: var(--tx); border-color: var(--ln); }
+.btn-secondary:hover:not(:disabled) { background: var(--sunk); }
+.btn-accent { background: var(--ac); color: var(--ac-tx); border-color: var(--ac); }
+.btn-accent:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-ghost { background: transparent; color: var(--tx2); }
+.btn-ghost:hover:not(:disabled) { background: var(--sunk); color: var(--tx); }
+.btn-danger { background: color-mix(in srgb, var(--er) 12%, transparent); color: var(--er); border-color: color-mix(in srgb, var(--er) 30%, transparent); }
+.btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--er) 20%, transparent); }
+
+/* Input base */
+.input {
+  width: 100%;
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--ln);
+  background: var(--s1);
+  color: var(--tx);
+  transition: var(--trans-fast);
+}
+.input::placeholder { color: var(--faint); }
+.input:focus { outline: none; border-color: var(--ac); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ac) 20%, transparent); }
+.input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Card */
+.card { background: var(--s1); border: 1px solid var(--ln); border-radius: var(--radius-xl); overflow: hidden; }
+.card-glass { background: var(--glass); border: 1px solid var(--glass-edge); border-radius: var(--radius-xl); backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); }
+
+/* Badge */
+.badge { display: inline-flex; align-items: center; font-size: var(--text-xs); font-weight: var(--weight-medium); padding: var(--space-1) var(--space-2); border-radius: var(--radius-full); }
+.badge-ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); }
+.badge-wr { background: color-mix(in srgb, var(--wr) 15%, transparent); color: var(--wr); border: 1px solid color-mix(in srgb, var(--wr) 30%, transparent); }
+.badge-er { background: color-mix(in srgb, var(--er) 15%, transparent); color: var(--er); border: 1px solid color-mix(in srgb, var(--er) 30%, transparent); }
+.badge-info { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); border: 1px solid color-mix(in srgb, var(--info) 30%, transparent); }
+.badge-neutral { background: var(--sunk); color: var(--tx2); border: 1px solid var(--ln); }
+
+/* Icon sizing */
+.icon-sm { width: 14px; height: 14px; }
+.icon-md { width: 18px; height: 18px; }
+.icon-lg { width: 24px; height: 24px; }
+.icon-xl { width: 32px; height: 32px; }
+.icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Animation keyframes */
+@keyframes spin { to { transform: rotate(1turn); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slide-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-pulse { animation: pulse 2s ease-in-out infinite; }
+.animate-fade-in { animation: fade-in var(--trans-base) forwards; }
+.animate-slide-up { animation: slide-up var(--trans-spring) forwards; }
+.animate-slide-down { animation: slide-down var(--trans-spring) forwards; }
+.animate-scale-in { animation: scale-in var(--trans-spring) forwards; }
+
+/* Screen reader only */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* Print */
+@media print {
+  .no-print { display: none !important; }
 }
