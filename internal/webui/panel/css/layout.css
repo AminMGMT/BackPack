@@ -4,67 +4,67 @@
  */
 
 /* ===================== dashboard shell ===================== */
-.page{max-width:1300px;margin:0 auto;padding:0 clamp(14px,3vw,26px) 70px}
+.page{max-width:var(--container-max);margin:0 auto;padding:0 var(--container-padding) 70px}
 
 /* header */
-.hdr{display:flex;align-items:center;gap:12px;padding:18px 0 16px;position:sticky;top:0;z-index:40;
+.hdr{display:flex;align-items:center;gap:12px;padding:18px 0 16px;position:sticky;top:0;z-index:var(--z-sticky);
   background:color-mix(in srgb,var(--bg) 88%,transparent);
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
-.hdr .mk{width:34px;height:34px;border-radius:10px;background:var(--tx);color:var(--bg);display:grid;place-items:center;flex:none}
+.hdr .mk{width:34px;height:34px;border-radius:var(--radius-md);background:var(--tx);color:var(--bg);display:grid;place-items:center;flex:none}
 .hdr .mk svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.1;stroke-linecap:round}
-.hdr .who b{display:block;font-size:15px;font-weight:650;letter-spacing:-.026em;line-height:1.2}
-.hdr .who small{display:block;font-size:11.5px;color:var(--dim);margin-top:1px}
+.hdr .who b{display:block;font-size:var(--text-lg);font-weight:var(--weight-semibold);letter-spacing:-.026em;line-height:1.2}
+.hdr .who small{display:block;font-size:var(--text-xs);color:var(--dim);margin-top:1px}
 .hdr .sp{flex:1}
-.hdr .upd{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;padding:8px 13px;
-  border-radius:11px;cursor:pointer;background:color-mix(in srgb,var(--wr) 13%,transparent);
+.hdr .upd{display:inline-flex;align-items:center;gap:8px;font-size:var(--text-xs);font-weight:var(--weight-semibold);padding:8px 13px;
+  border-radius:var(--radius-md);cursor:pointer;background:color-mix(in srgb,var(--wr) 13%,transparent);
   border:1px solid color-mix(in srgb,var(--wr) 32%,transparent);color:var(--wr)}
 .hdr .upd svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 
 /* banner for the states that look fine but are not */
-.warnbar{display:flex;align-items:flex-start;gap:12px;padding:13px 15px;border-radius:14px;margin-bottom:12px;
+.warnbar{display:flex;align-items:flex-start;gap:12px;padding:13px 15px;border-radius:var(--radius-lg);margin-bottom:12px;
   border:1px solid color-mix(in srgb,var(--wr) 32%,transparent);
   background:color-mix(in srgb,var(--wr) 8%,transparent)}
 .warnbar.bad{border-color:color-mix(in srgb,var(--er) 32%,transparent);
   background:color-mix(in srgb,var(--er) 8%,transparent)}
-.warnbar .ic{width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:13px;
-  font-weight:700;background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr)}
+.warnbar .ic{width:26px;height:26px;border-radius:var(--radius-sm);flex:none;display:grid;place-items:center;font-size:var(--text-sm);
+  font-weight:var(--weight-bold);background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr)}
 .warnbar.bad .ic{background:color-mix(in srgb,var(--er) 18%,transparent);color:var(--er)}
 .warnbar .tx{flex:1;min-width:0}
-.warnbar .tx b{display:block;font-size:12.5px;font-weight:640;margin-bottom:3px}
-.warnbar .tx span{display:block;font-size:11.5px;color:var(--tx2);line-height:1.55}
-.warnbar .act{flex:none;font:inherit;font-size:11.5px;font-weight:600;padding:7px 12px;border-radius:10px;
+.warnbar .tx b{display:block;font-size:var(--text-sm);font-weight:var(--weight-semibold);margin-bottom:3px}
+.warnbar .tx span{display:block;font-size:var(--text-xs);color:var(--tx2);line-height:1.55}
+.warnbar .act{flex:none;font:inherit;font-size:var(--text-xs);font-weight:var(--weight-semibold);padding:7px 12px;border-radius:var(--radius-sm);
   cursor:pointer;background:var(--sunk);border:1px solid var(--ln2);color:var(--tx)}
 .warnbar .act:hover{background:var(--ln)}
 
 /* the server strip */
-.srv{border:1px solid var(--ln);border-radius:18px;background:var(--s1);overflow:hidden;margin-bottom:22px}
+.srv{border:1px solid var(--ln);border-radius:var(--radius-xl);background:var(--s1);overflow:hidden;margin-bottom:22px}
 .srv .m{background:var(--s1);padding:15px 16px}
-.srv .m .k{font-size:11px;color:var(--dim);font-weight:560}
-.srv .m .v{font-size:23px;font-weight:650;letter-spacing:-.034em;margin:5px 0 9px;font-variant-numeric:tabular-nums}
-.srv .m .v em{font-style:normal;font-size:12px;color:var(--mu);font-weight:560;margin-left:2px;letter-spacing:0}
-.srv .m .tr{height:5px;border-radius:3px;background:var(--sunk);overflow:hidden}
-.srv .m .tr i{display:block;height:100%;border-radius:3px;background:var(--tx2)}
-.srv .m .s{font-size:11px;color:var(--dim);margin-top:7px}
+.srv .m .k{font-size:var(--text-xs);color:var(--dim);font-weight:var(--weight-medium)}
+.srv .m .v{font-size:var(--text-3xl);font-weight:var(--weight-semibold);letter-spacing:-.034em;margin:5px 0 9px;font-variant-numeric:tabular-nums}
+.srv .m .v em{font-style:normal;font-size:var(--text-sm);color:var(--mu);font-weight:var(--weight-medium);margin-left:2px;letter-spacing:0}
+.srv .m .tr{height:5px;border-radius:var(--radius-full);background:var(--sunk);overflow:hidden}
+.srv .m .tr i{display:block;height:100%;border-radius:var(--radius-full);background:var(--tx2)}
+.srv .m .s{font-size:var(--text-xs);color:var(--dim);margin-top:7px}
 .srv .facts{display:flex;align-items:center;gap:0;padding:0;border-top:1px solid var(--ln);background:var(--s2)}
 .srv .facts .sp{flex:1}
 .srv .extra{display:none;border-top:1px solid var(--ln);background:var(--s2);padding:14px 16px;
   grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px 26px}
 .srv.open .extra{display:grid}
-.srv .extra .e{display:flex;align-items:baseline;gap:9px;font-size:12px;padding:5px 0;border-bottom:1px solid var(--ln)}
+.srv .extra .e{display:flex;align-items:baseline;gap:9px;font-size:var(--text-sm);padding:5px 0;border-bottom:1px solid var(--ln)}
 .srv .extra .e .k{color:var(--dim);flex:none;min-width:88px}
-.srv .extra .e .v{margin-left:auto;font-weight:570;font-variant-numeric:tabular-nums;text-align:right}
+.srv .extra .e .v{margin-left:auto;font-weight:var(--weight-medium);font-variant-numeric:tabular-nums;text-align:right}
 #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(336px,1fr));gap:16px}
 
 /* empty state */
-.empty{grid-column:1/-1;border:1px dashed var(--ln2);border-radius:18px;padding:44px 20px;text-align:center}
-.empty b{display:block;font-size:14.5px;font-weight:620;letter-spacing:-.02em;margin-bottom:6px}
-.empty span{display:block;font-size:12.5px;color:var(--dim);line-height:1.6;max-width:52ch;margin:0 auto 16px}
+.empty{grid-column:1/-1;border:1px dashed var(--ln2);border-radius:var(--radius-xl);padding:44px 20px;text-align:center}
+.empty b{display:block;font-size:var(--text-sm);font-weight:var(--weight-semibold);letter-spacing:-.02em;margin-bottom:6px}
+.empty span{display:block;font-size:var(--text-sm);color:var(--dim);line-height:1.6;max-width:52ch;margin:0 auto 16px}
 
 /* ---------- the whole page reacts, not just the header ---------- */
-.page2{container-type:inline-size;container-name:pg;max-width:1300px;margin:0 auto;
-  padding:0 clamp(12px,3vw,26px) 70px}
-.stick{position:sticky;top:0;z-index:40;margin:0 calc(-1 * clamp(12px,3vw,26px));
-  padding:0 clamp(12px,3vw,26px);
+.page2{container-type:inline-size;container-name:pg;max-width:var(--container-max);margin:0 auto;
+  padding:0 var(--container-padding) 70px}
+.stick{position:sticky;top:0;z-index:var(--z-sticky);margin:0 calc(-1 * var(--container-padding));
+  padding:0 var(--container-padding);
   background:color-mix(in srgb,var(--bg) 88%,transparent);
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
 @container pg (max-width:1080px){ .srv .row1{grid-template-columns:repeat(2,1fr)} .srv .traf{grid-column:span 2} }
@@ -92,8 +92,8 @@
   .warnbar{flex-wrap:wrap}
   .warnbar .act{width:100%;margin-top:4px}
 }
-.warnbar .tx code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
-  background:var(--sunk);padding:1px 5px;border-radius:4px}
+.warnbar .tx code{font-family:var(--font-mono);font-size:var(--text-xs);
+  background:var(--sunk);padding:1px 5px;border-radius:var(--radius-xs)}
 [data-state="empty"] #grid{display:none}
 [data-state="normal"] .emptybox{display:none}
 [data-state="warn"] .emptybox{display:none}
@@ -105,7 +105,7 @@
    it show through. Every surface on the page carries its own background, so
    nothing that has to be read sits on the gradient directly. */
 .panel{container-type:inline-size;container-name:pg;background:transparent;color:var(--tx);
-  position:relative;z-index:1}
+  position:relative;z-index:var(--z-base)}
 
 /* ---- the ground ---------------------------------------------------------
  *
@@ -122,7 +122,7 @@
  * an empty page; this one has a panel over it, and a background loud enough to
  * be admired is a background that competes with what it is behind.
  */
-.bgbars{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;
+.bgbars{position:fixed;inset:0;z-index:var(--z-bg);overflow:hidden;pointer-events:none;
   display:flex;transform:translateZ(0);backface-visibility:hidden}
 .bgbars i{flex:1 0 0;min-width:0;height:100%;transform-origin:bottom;
   transform:scaleY(var(--s));
@@ -142,18 +142,18 @@ body[data-t="light"] .bgbars i{
     color-mix(in srgb,var(--ac) 4%,transparent) 45%,
     transparent 78%)}
 @media (prefers-reduced-motion:reduce){ .bgbars i{animation:none} }
-.panel .inner2{padding:0 clamp(12px,3vw,24px) 26px}
-.panel .stickH{position:sticky;top:0;z-index:40;margin:0 calc(-1*clamp(12px,3vw,24px));
-  padding:0 clamp(12px,3vw,24px);background:color-mix(in srgb,var(--bg) 90%,transparent);
+.panel .inner2{padding:0 var(--container-padding) 26px}
+.panel .stickH{position:sticky;top:0;z-index:var(--z-sticky);margin:0 calc(-1*var(--container-padding));
+  padding:0 var(--container-padding);background:color-mix(in srgb,var(--bg) 90%,transparent);
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
 .panel .stickH .HH{background:transparent}
 .panel .sectitle{display:flex;align-items:center;gap:9px;margin:22px 0 11px}
-.panel .sectitle h3{font-size:11px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+.panel .sectitle h3{font-size:var(--text-xs);font-weight:var(--weight-semibold);letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
 .panel .sectitle .ln{flex:1;height:1px;background:var(--ln)}
 
 /* resources — V3 */
 .panel .RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
-  border:1px solid var(--ln);border-radius:15px;overflow:hidden}
+  border:1px solid var(--ln);border-radius:var(--radius-md);overflow:hidden}
 @container pg (max-width:1000px){ .panel .RZ{grid-template-columns:repeat(2,1fr)} }
 /* Two across, never one.
  *
@@ -165,7 +165,7 @@ body[data-t="light"] .bgbars i{
 @container pg (max-width:520px){
   .panel .RZ{grid-template-columns:repeat(2,1fr)}
   .panel .RZ .t4{padding:11px 12px 10px}
-  .panel .RZ .head6 .num{font-size:17px}
+  .panel .RZ .head6 .num{font-size:var(--text-xl)}
 }
 @container pg (max-width:430px){ .panel .RZ .trend{display:none} .panel .RZ .t4{padding:12px 12px 11px} }
 /* A grid item's min-width is auto, so a long figure can widen its own track. */
@@ -174,10 +174,10 @@ body[data-t="light"] .bgbars i{
 
 /* tunnels */
 .panel .sech2{display:flex;align-items:center;gap:11px;margin:22px 0 12px}
-.panel .sech2 h2{font-size:17px;font-weight:650;letter-spacing:-.028em}
-.panel .sech2 .cnt{font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:9px;background:var(--sunk);color:var(--mu)}
+.panel .sech2 h2{font-size:var(--text-xl);font-weight:var(--weight-semibold);letter-spacing:-.028em}
+.panel .sech2 .cnt{font-size:var(--text-xs);font-weight:var(--weight-semibold);padding:3px 10px;border-radius:var(--radius-sm);background:var(--sunk);color:var(--mu)}
 .panel .sech2 .sp{flex:1}
-.panel .sech2 .sb{font:inherit;font-size:12.5px;font-weight:590;padding:9px 15px;border-radius:11px;cursor:pointer;
+.panel .sech2 .sb{font:inherit;font-size:var(--text-sm);font-weight:var(--weight-medium);padding:9px 15px;border-radius:var(--radius-sm);cursor:pointer;
   background:var(--s1);border:1px solid var(--ln);color:var(--tx)}
 .panel .sech2 .sb.primary{background:var(--tx);color:var(--bg);border-color:var(--tx)}
 .panel .grid3{display:grid;grid-template-columns:repeat(auto-fill,minmax(322px,1fr));gap:14px}
@@ -200,7 +200,7 @@ body[data-t="light"] .bgbars i{
 
 /* ---- boot ----------------------------------------------------------------
    Held until the first read of the host and the tunnels resolves. */
-#boot{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+#boot{position:fixed;inset:0;z-index:var(--z-boot);display:flex;align-items:center;justify-content:center;
   background:var(--bg);transition:opacity .55s ease,visibility .55s ease}
 #boot.gone{opacity:0;visibility:hidden;pointer-events:none}
 .boot-stage{display:flex;flex-direction:column;align-items:center;width:min(260px,78vw)}
@@ -209,15 +209,15 @@ body[data-t="light"] .bgbars i{
 .boot-mark .trk{stroke:var(--ln2);stroke-width:2;fill:none}
 .boot-mark .arc{stroke:var(--tx2);stroke-width:2;stroke-linecap:round;fill:none;
   stroke-dasharray:194;stroke-dashoffset:194;transition:stroke-dashoffset .4s var(--spring)}
-.boot-in{width:46px;height:46px;border-radius:15px;background:var(--tx);color:var(--bg);
+.boot-in{width:46px;height:46px;border-radius:var(--radius-md);background:var(--tx);color:var(--bg);
   display:grid;place-items:center}
 .boot-in svg{width:23px;height:23px}
-.boot-title{font-size:20px;font-weight:660;letter-spacing:-.03em}
-.boot-sub{font-size:12.5px;color:var(--dim);margin-top:3px;min-height:18px}
+.boot-title{font-size:var(--text-2xl);font-weight:var(--weight-semibold);letter-spacing:-.03em}
+.boot-sub{font-size:var(--text-sm);color:var(--dim);margin-top:3px;min-height:18px}
 .boot-reads{width:100%;margin-top:20px;display:flex;flex-direction:column;gap:7px}
-.boot-read{display:flex;align-items:center;gap:9px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:11px;color:var(--faint)}
-.boot-read .ln{flex:1;height:2px;border-radius:1px;background:var(--sunk);overflow:hidden}
+.boot-read{display:flex;align-items:center;gap:9px;font-family:var(--font-mono);
+  font-size:var(--text-2xs);color:var(--faint)}
+.boot-read .ln{flex:1;height:2px;border-radius:var(--radius-full);background:var(--sunk);overflow:hidden}
 .boot-read .ln i{display:block;height:100%;width:0;background:var(--ln3);transition:width .3s var(--spring)}
 .boot-read.done{color:var(--mu)}
 .boot-read.done .ln i{width:100%;background:var(--tx2)}
@@ -234,11 +234,11 @@ body[data-t="light"] .bgbars i{
 .panel .factline {
   display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
   margin-top: 10px; padding: 0 2px;
-  font-size: 11.5px; color: var(--dim);
+  font-size: var(--text-sm); color: var(--dim);
 }
-.panel .factline b { font-weight: 620; color: var(--tx2); font-variant-numeric: tabular-nums; }
+.panel .factline b { font-weight: var(--weight-semibold); color: var(--tx2); font-variant-numeric: tabular-nums; }
 .panel .factline .cap { color: var(--faint); }
-.panel .factline .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--faint); }
+.panel .factline .dot { width: 3px; height: 3px; border-radius: var(--radius-full); background: var(--faint); }
 
 /* ---- installed as an app -------------------------------------------------
    body.app is set by js/ui/pwa.js when the panel runs from the home screen:
@@ -248,8 +248,8 @@ body[data-t="light"] .bgbars i{
    what gives a web page away inside an app frame. */
 body.app{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent}
 body.app .panel .stickH{padding-top:env(safe-area-inset-top)}
-body.app .panel .inner2{padding-left:max(clamp(12px,3vw,24px),env(safe-area-inset-left));
-  padding-right:max(clamp(12px,3vw,24px),env(safe-area-inset-right));
+body.app .panel .inner2{padding-left:max(var(--container-padding),env(safe-area-inset-left));
+  padding-right:max(var(--container-padding),env(safe-area-inset-right));
   padding-bottom:calc(26px + env(safe-area-inset-bottom))}
 body.app .toastZ{bottom:calc(26px + env(safe-area-inset-bottom))}
 body.app #boot{padding-top:env(safe-area-inset-top)}
