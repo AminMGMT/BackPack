@@ -26,6 +26,7 @@ func Apply(kind, iface string, mtu, configured int, log *logrus.Logger) {
 		return
 	}
 
+	var installed []Rule
 	for _, r := range Rules(kind, iface, mtu, configured) {
 		// Swept first, so a rule left behind by a process that was killed is
 		// replaced rather than duplicated.
@@ -39,7 +40,14 @@ func Apply(kind, iface string, mtu, configured int, log *logrus.Logger) {
 				kind, iface, r.Cmd, strings.Join(r.Args("-A"), " "), err, strings.TrimSpace(string(out)))
 			continue
 		}
-		log.Infof("%s: %s segments crossing %s are clamped to %d bytes", kind, r.Label, iface, r.MSS)
+		installed = append(installed, r)
+	}
+	// One line per address family, naming every chain it reached. The rules
+	// were installed per chain, but the operator's question is which carrier
+	// got clamped to what, and the chain is only an implementation detail.
+	for _, c := range Group(installed) {
+		log.Infof("%s: %s segments crossing %s are clamped to %d bytes (%s)",
+			kind, c.Label, iface, c.MSS, strings.Join(c.Chains, ", "))
 	}
 }
 

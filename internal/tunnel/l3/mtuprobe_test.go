@@ -71,7 +71,7 @@ func TestTheTunnelMeasuresACappedPathAndSetsTheInterface(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	listener, err := New(Config{
+	listener, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeListen, Addr: "127.0.0.1:0", Token: token, Encap: "gre",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400, AutoMTU: true,
 	}, quietLogger())
@@ -83,7 +83,7 @@ func TestTheTunnelMeasuresACappedPathAndSetsTheInterface(t *testing.T) {
 	}
 	start(t, ctx, cancel, listener, listenDev)
 
-	dialer, err := New(Config{
+	dialer, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeDial, Addr: awaitBind(t, listener).String(), Token: token, Encap: "gre",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400, AutoMTU: true,
 	}, quietLogger())
@@ -157,4 +157,83 @@ func (c *cappedCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
 		return len(p), nil
 	}
 	return c.DatagramCarrier.WriteTo(p, addr)
+}
+
+// blackoutCarrier is a path that carries nothing larger than ceiling and then,
+// after a number of probes have been sent, stops carrying anything at all —
+// the 5 to 30 second outage a flapping link produces mid-search.
+type blackoutCarrier struct {
+	DatagramCarrier
+	ceiling       int
+	blackoutAfter int64
+	probes        atomic.Int64
+}
+
+func (c *blackoutCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if h, _, err := parseHeader(p); err == nil && h.kind == typeProbe {
+		n := c.probes.Add(1)
+		if n > c.blackoutAfter {
+			return len(p), nil
+		}
+	}
+	if len(p)+c.Overhead() > c.ceiling {
+		return len(p), nil
+	}
+	return c.DatagramCarrier.WriteTo(p, addr)
+}
+
+// A search that runs into an outage must not lower the interface. Every probe
+// sent during the outage fails, which the binary search reads as "too big", so
+// without a check on the result it settles near the floor and keeps it.
+func TestAnOutageDuringTheSearchDoesNotLowerTheMTU(t *testing.T) {
+	const token = "an-outage-token"
+
+	listenDev := newFakeDevice(1400)
+	dialDev := newFakeDevice(1400)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	listener, err := New(Config{Carrier: carrierLoopback,
+		Mode: ModeListen, Addr: "127.0.0.1:0", Token: token, Encap: "gre",
+		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
+	}, quietLogger())
+	if err != nil {
+		t.Fatalf("New(listener): %v", err)
+	}
+	listener.openDevice = func(deviceSpec) (packetDevice, error) { return listenDev, nil }
+	start(t, ctx, cancel, listener, listenDev)
+
+	// AutoMTU is off so the background prober stays out of the way; the search
+	// is driven by hand below.
+	dialer, err := New(Config{Carrier: carrierLoopback,
+		Mode: ModeDial, Addr: awaitBind(t, listener).String(), Token: token, Encap: "gre",
+		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
+	}, quietLogger())
+	if err != nil {
+		t.Fatalf("New(dialer): %v", err)
+	}
+	dialer.openDevice = func(deviceSpec) (packetDevice, error) { return dialDev, nil }
+	dialer.probe = probeTiming{timeout: 80 * time.Millisecond, attempts: 1, settle: time.Millisecond, every: time.Hour}
+
+	// The ceiling probe is over the cap and fails, the floor and the first two
+	// sizes of the search get through, and then everything is lost.
+	bc := &blackoutCarrier{ceiling: 1200, blackoutAfter: 3}
+	dialer.wrapCarrier = func(c DatagramCarrier) DatagramCarrier {
+		bc.DatagramCarrier = c
+		return bc
+	}
+	start(t, ctx, cancel, dialer, dialDev)
+	awaitSession(t, dialer, 5*time.Second)
+
+	if _, err := dialer.searchMTU(ctx); err == nil {
+		t.Fatal("a search that ended in an outage returned a figure instead of being discarded")
+	}
+	dialer.measureAndApply(ctx)
+	if got := dialDev.settledMTU(); got != 1400 {
+		t.Fatalf("an outage during the search moved the interface to %d", got)
+	}
+	if got := dialer.currentMTU(); got != 1400 {
+		t.Fatalf("an outage during the search moved the recorded mtu to %d", got)
+	}
 }

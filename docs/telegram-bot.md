@@ -26,6 +26,14 @@ Buttons and commands for **Status**, **System**, **Alerts**, **Backup**,
 **Web UI** and **Support**. Internal plumbing — the relay port, any SOCKS port,
 the API host — never appears in a message.
 
+Once a week, on **Friday from noon Tehran time**, every admin also receives the
+sponsored image the panel's overview shows, with its link as a button under it
+— a GIF plays in the chat. It is uploaded once and sent to the other admins by
+Telegram's own file id, so the relay carries it a single time. A Friday the
+monitor service was not running for is skipped, not sent late; an admin whose
+delivery failed is tried again later the same Friday, and nobody receives it
+twice.
+
 ## Who may do what
 
 The admin set up with the bot is its **owner**. Further admins can be added
@@ -74,4 +82,4 @@ forward می‌شود و **سمت خارج** اتصال بیرونی را برق
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

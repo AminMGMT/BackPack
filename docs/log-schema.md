@@ -54,8 +54,8 @@ A message may carry extra fields of its own. Where one uses a name from the
 table above it means it — a line about a transport rotation says which transport
 it rotated *to*, and that wins over the process's own.
 
-**All three engines honour `log_format`**: the reverse tunnel, the direct
-tunnel, and layer-3.
+**The engines honour `log_format`**: the reverse tunnel and layer-3 (the old
+layer-4 direct engine was removed in v2.0.0).
 
 ## Shipping it
 
@@ -165,4 +165,4 @@ vector در بالا آمده؛ هر دو journald را می‌خوانند.
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

@@ -1,203 +1,45 @@
 # Direct tunnel (stream transports)
 
-> **The wizard no longer builds this one.** Since v1.7.3, **Setup Iran → Direct**
-> creates a [full IP tunnel](l3-direct-tunnel.md) — one carrier question, always
-> Backpack's own GRE — because that shape covers the same job and measures its
-> own MTU. The `[direct]` engine below is unchanged and still runs: an existing
-> tunnel keeps working, the panel and the menu still manage, edit and restart
-> it, and a hand-written config still starts. Only the wizard entry is gone.
+> **Removed in v2.0.0.** The layer-4 `[direct]` engine described on this page no
+> longer exists. For a direct tunnel use **Setup Iran → Direct**, which builds the
+> [layer-3 direct tunnel](l3-direct-tunnel.md).
 
-The same forwarded ports Backpack has always served, with the tunnel dialled
-the other way round.
+## What it was
 
-In the **reverse** tunnel the Iran server listens and kharej dials in. That is
-right when Iran can accept an inbound connection on the tunnel port. Where it
-cannot — a provider that filters connections arriving from abroad, a port
-blocked in one direction only — the tunnel never comes up, even though the
-user-facing ports on Iran work perfectly well.
+The same forwarded ports as the reverse tunnel, with the tunnel dialled the other
+way round: Iran dialled out and kharej listened, over `tcp`, `stealth`, `ws` or
+`wss`, with one smux session carrying every user connection. Since v1.7.3 the
+wizard no longer offered it; it only survived as a hand-written `[direct]` file
+and for tunnels built before then.
 
-**Direct** turns it around. Iran dials out, which is the ordinary direction and
-the one a filter is least likely to touch:
+## What happens to an existing `[direct]` file
 
-```
-reverse:  users ──▶ [ IRAN: listens ] ◀── dials ── [ KHAREJ ] ──▶ service
-direct:   users ──▶ [ IRAN: dials   ] ── dials ──▶ [ KHAREJ: listens ] ──▶ service
-```
+The file is still recognised, so nothing disappears silently:
 
-**The ports do not move.** Iran still exposes them, kharej still holds the real
-service. Only who reaches out first has changed.
+- the tunnel is **still listed** in the menu, the health check and the web panel;
+- it **cannot run**: starting it, reloading it and `backpack check` all refuse it
+  with a clear error saying the `[direct]` engine was removed in v2.0.0;
+- it **can still be deleted**, from the menu or the panel.
 
-> Not to be confused with the [layer-3 direct tunnel](l3-direct-tunnel.md),
-> which carries whole IP packets over a TUN interface. This one forwards ports,
-> exactly like the reverse tunnel.
+There is no automatic conversion. The two engines work differently (a stream
+tunnel against a packet tunnel with its own carriers and addresses), so a
+`[direct]` file cannot be translated line by line.
 
----
+## How to rebuild it
 
-## Setting one up
+1. Delete the old tunnel (**Manage → Manage Tunnels → the tunnel → Delete**, or in
+   the panel).
+2. On the Iran server run `sudo backpack` → **Setup Iran** → **Direct**, pick a
+   carrier (`pck` — ports only, no TUN, see [Direct PCK](direct-pck.md) — or `xdi`, `sni`, `spoof`, or the unencrypted kernel `gre`), and paste the **Setup Link** it
+   prints on the kharej server under **Setup Kharej → Direct**.
 
-**From the menu — the easy way.** Run `sudo backpack` and choose **Setup Iran** or
-**Setup Kharej** — whichever machine you are on. It asks which direction you
-want, then what kind of tunnel and how it should travel, and writes the config
-and starts the service for you. Run it on the kharej server first, copy the
-token it shows you, then run it on the Iran server.
+The new tunnel keeps the same shape — Iran dials out, kharej listens, and
+**Forwarded Ports** exposes the same ports on Iran — but it needs root or
+`CAP_NET_RAW` on both servers and runs on Linux only. Everything about it is in
+[Direct layer-3 tunnel](l3-direct-tunnel.md).
 
-The rest of this page is what it writes, for anyone who would rather edit the
-file directly.
-
-Two files. They must agree on the token and the transport.
-
-**Iran** — dials out, needs no inbound port of its own:
-
-```toml
-[direct]
-role  = "iran"
-addr  = "KHAREJ_IP:8443"
-token = "USE_A_LONG_RANDOM_TOKEN"
-ports = ["443", "2053-2060", "8080=80"]
-```
-
-**Kharej** — listens, so port 8443 must be open inbound:
-
-```toml
-[direct]
-role  = "kharej"
-addr  = "0.0.0.0:8443"
-token = "USE_A_LONG_RANDOM_TOKEN"
-```
-
-Start both. Port 443 on Iran now reaches port 443 on kharej.
-
-Note that **kharej needs no `ports`**. Every target arrives on the stream that
-asks for it, so what is forwarded is a change to the Iran config alone.
-
----
-
-## Options
-
-| Key | Default | What it does |
-|---|---|---|
-| `role` | *required* | `iran` or `kharej`. Its absence is what tells Backpack there is no direct tunnel here |
-| `addr` | *required* | Kharej's `host:port` on Iran; the bind address on kharej |
-| `token` | *required* | The shared secret. Never sent on the wire |
-| `transport` | `tcp` | `tcp`, `stealth`, `ws` or `wss` |
-| `ports` | *required on Iran* | Forwarded mappings — same syntax as the reverse tunnel |
-| `sessions` | `1` | How many mux sessions to keep open |
-| `nodelay` | `false` | Disable Nagle on the tunnel connection |
-| `keepalive_period` | none | TCP keepalive, in seconds |
-| `dial_timeout` | `10` | Seconds to allow for a dial |
-| `retry_interval` | `3` | Seconds before redialling a dropped session |
-| `accept_udp` | `false` | Forward UDP as well as TCP on those ports |
-| `server_name` | none | SNI and Host on `ws`/`wss` — the domain in front of a CDN |
-| `tls_cert`, `tls_key` | generated | The kharej side's certificate for `wss` |
-| `acme_domain`, `acme_email` | none | Let's Encrypt instead of a generated certificate |
-| `mux_version`, `mux_framesize`, `mux_recievebuffer`, `mux_streambuffer` | auto | The same mux tuning the reverse transports take |
-
-### Port mappings
-
-Identical to the reverse tunnel, so a config moves across unchanged:
-
-| Mapping | Effect |
-|---|---|
-| `443` | `:443` on Iran → `127.0.0.1:443` on kharej |
-| `443=8443` | a different port at the far end |
-| `443=10.0.0.5:8443` | an explicit host on the kharej network |
-| `127.0.0.1:443=8443` | bind to one local address on Iran only |
-| `10000-10009` | a range, each to the same port |
-| `10000-10009=20000-20009` | a range, preserving the offset |
-| `85.11.12.13:10000-10009` | a range bound to one local address |
-| `443=10.0.0.1:80\|10.0.0.2:80` | two backends, load-balanced |
-
-A target with no host of its own means the **loopback of the kharej machine**,
-which is where the real service almost always listens.
-
-Full reference, including what a bind address does and does not fix on a
-multi-homed server: [Port mappings](port-mappings.md).
-
-### Which transport
-
-| | What is on the wire | Take it when |
-|---|---|---|
-| `tcp` | a plain stream | the payload is already TLS, and nothing is filtering |
-| `stealth` | Noise — no handshake, no fingerprint, random-looking | inspection is the concern |
-| `ws` | an HTTP upgrade, then the stream | something in the path wants to see HTTP |
-| `wss` | the same upgrade inside TLS | you are going through a CDN, or want ordinary HTTPS on the wire |
-
-All four carry exactly the same thing; only the way the connection opens
-differs. Once it is open, `ws` and `wss` stop using websocket framing and use
-the stream underneath — the upgrade is camouflage, not a data format.
-
-**On `wss` and certificates.** The kharej side generates a certificate in
-memory if none is configured, which is what a direct connection to an IP wants.
-That is safe because TLS here is transport and camouflage, not the trust
-anchor: the token is, proved inside the connection, over every transport alike.
-
-Set `server_name` on the Iran side to send that name in SNI and the Host header
-— which is how a CDN knows which origin a connection belongs to. Doing so also
-**turns certificate verification on**, so pair it with `acme_domain` or a real
-`tls_cert`/`tls_key` on the kharej side.
-
-### UDP
-
-`accept_udp = true` forwards UDP alongside TCP on the same mappings. Each
-client gets a stream of its own, so two clients are never mixed together, and
-datagram boundaries are preserved end to end — a datagram that goes in whole
-comes out whole. A flow with no traffic in either direction for two minutes is
-released.
-
-### `sessions`
-
-One mux session carries every connection, so one is enough for most traffic.
-Raise it where a single long-lived connection is being shaped or throttled, or
-where head-of-line blocking in the transport underneath starts to show. New
-connections are spread across whichever sessions are live.
-
----
-
-## How it works
-
-The reverse tunnel needs a control channel, a pool of pre-dialled connections,
-a nonce to tell a pool connection from a stranger's, and a signal protocol
-between the two ends. **None of that exists here**, because of one property of
-stream multiplexing: once a mux session is up, *either* end can open a stream
-on it.
-
-So Iran dials one session, and every user connection becomes a stream on it,
-opened on demand. There is nothing to pool and nothing to signal.
-
-**Authentication.** The token never travels. Each end draws a nonce and proves
-it holds the token by returning an HMAC over both:
-
-```
-Iran   -> kharej   nonceI
-kharej -> Iran     nonceK, HMAC(token, "origin" || nonceI || nonceK)
-Iran   -> kharej   HMAC(token, "edge"   || nonceI || nonceK)
-```
-
-It is mutual, so Iran learns kharej holds the token before sending a proof of
-its own; it cannot be replayed, because both ends contribute freshness; and the
-two directions use different labels, so a captured proof is not valid in the
-other direction. A peer without the token gets no reply at all.
-
-**Reconnection.** If the session drops, Iran redials on its own. The forwarded
-ports stay bound throughout — a port that vanished on every reconnect would be
-worse than one that accepts and refuses — and while no session is up, a
-connection is refused promptly rather than left hanging.
-
----
-
-## Limits
-
-- **KCP and QUIC are reverse-only.** The four transports above are what a
-  direct tunnel has.
-
-## It cannot disturb a reverse tunnel
-
-The direct tunnel lives in its own `[direct]` table and its own package. A
-configuration that does not mention `[direct]` cannot reach any of this code,
-and one that does never reaches the reverse engine. They share no keys, no
-sockets and no state.
-
-If something here misbehaves, delete the `[direct]` file. Nothing else changes.
+If you want the reverse direction instead, the reverse tunnel is untouched: see
+[Choosing a transport](choosing-a-transport.md).
 
 ---
 
@@ -205,49 +47,14 @@ If something here misbehaves, delete the `[direct]` file. Nothing else changes.
 
 ## خلاصهٔ فارسی
 
-**ویزارد دیگر این را نمی‌سازد.** از نسخهٔ ۱.۷.۳، `Setup Iran → Direct` یک
-[تونل کامل IP](l3-direct-tunnel.md) می‌سازد. موتور `[direct]` دست‌نخورده باقی
-مانده و هنوز کار می‌کند: تونل موجود کار می‌کند، پنل و منو مدیریت و ویرایش و
-ری‌استارتش می‌کنند و کانفیگ دستی هم بالا می‌آید. فقط ورودی ویزارد حذف شده.
-
-**چه فرقی با تونل معکوس دارد:** در تونل **معکوس** سرور ایران گوش می‌دهد و خارج
-زنگ می‌زند. این وقتی درست است که ایران بتواند روی پورت تونل اتصال ورودی بپذیرد.
-جایی که نتواند — ارائه‌دهنده‌ای که اتصال‌های از خارج را فیلتر می‌کند، یا پورتی که
-فقط در یک جهت بسته است — تونل اصلاً بالا نمی‌آید، هرچند پورت‌های کاربری روی ایران
-سالم‌اند. **Direct** جهت را برعکس می‌کند: ایران زنگ می‌زند، که جهت عادی است و
-فیلتر کمتر به آن کار دارد.
-
-```
-معکوس: کاربر ──▶ [ ایران: گوش می‌دهد ] ◀── زنگ ── [ خارج ] ──▶ سرویس
-مستقیم: کاربر ──▶ [ ایران: زنگ می‌زند ] ── زنگ ──▶ [ خارج: گوش می‌دهد ] ──▶ سرویس
-```
-
-**پورت‌ها جابه‌جا نمی‌شوند.** ایران همچنان آن‌ها را عرضه می‌کند و خارج همچنان
-سرویس واقعی را دارد؛ فقط «چه کسی اول دست دراز می‌کند» عوض شده. این را با
-[تونل مستقیم لایه‌۳](l3-direct-tunnel.md) اشتباه نگیر — آن یکی پکت کامل IP را روی
-TUN حمل می‌کند، این یکی دقیقاً مثل تونل معکوس پورت forward می‌کند.
-
-**چطور کار می‌کند:** تونل معکوس به کانال کنترل، استخر اتصال‌های از پیش زده‌شده،
-nonce و یک پروتکل سیگنال بین دو سر نیاز دارد. **هیچ‌کدام اینجا وجود ندارد**، به
-خاطر یک خاصیت mux: وقتی سشن بالا آمد، **هر دو** سر می‌توانند رویش stream باز
-کنند. پس ایران یک سشن می‌زند و هر اتصال کاربر یک stream روی همان است. چیزی برای
-استخر کردن و چیزی برای سیگنال دادن نمی‌ماند.
-
-**احراز هویت:** توکن هیچ‌وقت روی سیم نمی‌رود. هر طرف یک nonce می‌کشد و با
-برگرداندن HMAC روی هر دو ثابت می‌کند توکن را دارد. دوطرفه است، قابل replay نیست
-(هر دو سر تازگی اضافه می‌کنند) و دو جهت برچسب متفاوت دارند، پس اثباتِ ضبط‌شده در
-جهت دیگر معتبر نیست. طرفی که توکن ندارد اصلاً جوابی نمی‌گیرد.
-
-**اتصال مجدد:** اگر سشن بیفتد، ایران خودش دوباره می‌زند. پورت‌های forward در تمام
-مدت bind می‌مانند — پورتی که با هر reconnect ناپدید شود بدتر از پورتی است که قبول
-و رد کند — و تا وقتی سشنی بالا نیست، اتصال سریع رد می‌شود نه اینکه معلق بماند.
-
-**محدودیت:** KCP و QUIC فقط روی تونل معکوس‌اند؛ تونل مستقیم چهار ترنسپورت دارد.
-
-**نمی‌تواند به تونل معکوس آسیب بزند:** در جدول `[direct]` و پکیج خودش زندگی
-می‌کند. کانفیگی که `[direct]` ندارد اصلاً به این کد نمی‌رسد و آنکه دارد هیچ‌وقت به
-موتور معکوس نمی‌رسد. اگر اینجا چیزی بد رفتار کرد، فایل `[direct]` را پاک کن؛ هیچ
-چیز دیگری عوض نمی‌شود.
+**در v2.0.0 حذف شد.** موتور لایه ۴ `[direct]` (ایران dial می‌کرد؛ `tcp`، `stealth`،
+`ws`، `wss` با یک سشن smux) دیگر وجود ندارد. فایلی که جدول `[direct]` دارد هنوز
+شناخته می‌شود: تونل در لیست می‌ماند و قابل حذف است، ولی اجرا نمی‌شود و با پیام
+روشن رد می‌شود. تبدیل خودکار وجود ندارد. برای ساختن دوباره: **Setup Iran ← Direct**
+(تونل [direct لایه ۳](l3-direct-tunnel.md)) با یکی از حامل‌های `pck`، `xdi`، `sni`
+یا `spoof`؛ لینک را روی خارج در **Setup Kharej ← Direct** پیست کن. به root یا
+`CAP_NET_RAW` روی هر دو سرور نیاز دارد و فقط روی لینوکس کار می‌کند. تونل معکوس
+دست‌نخورده است.
 
 </div>
 
@@ -256,4 +63,4 @@ nonce و یک پروتکل سیگنال بین دو سر نیاز دارد. **ه
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

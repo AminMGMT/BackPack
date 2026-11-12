@@ -47,6 +47,24 @@ func TestLinkApplyTakesTheLinkAndSaysWhetherItConnected(t *testing.T) {
 	}
 }
 
+// A GRE kharej neither dials nor waits to be dialled: the report says what a
+// GRE link does instead of "as soon as the Iran server dials in".
+func TestLinkApplyReportsAGRETunnelAsALink(t *testing.T) {
+	prevApply, prevRoot := applyLink, isRoot
+	t.Cleanup(func() { applyLink, isRoot = prevApply, prevRoot })
+	isRoot = func() bool { return true }
+	for _, tr := range []string{"gre", "ip6gre"} {
+		applyLink = func(string, manage.LinkApplyOptions) (manage.LinkApplied, error) {
+			return manage.LinkApplied{Name: "gre-kharej", Service: "backpack-gre-kharej.service", Kind: "direct",
+				Transport: tr, Active: true}, nil
+		}
+		r := Run([]string{"link", "apply", "backpack://x"})
+		if r.Code != CodeOK || !strings.Contains(r.Out, "The GRE link is up here") || strings.Contains(r.Out, "dials in") {
+			t.Errorf("%s: exit %d\n%s", tr, r.Code, r.Out)
+		}
+	}
+}
+
 func TestLinkApplyRefusesWhatItCannotDo(t *testing.T) {
 	prevApply, prevRoot := applyLink, isRoot
 	t.Cleanup(func() { applyLink, isRoot = prevApply, prevRoot })

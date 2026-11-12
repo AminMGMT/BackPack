@@ -11,32 +11,18 @@ import (
 // around. If Iran ever ended up listening for the tunnel, the feature would be
 // a reverse tunnel with different key names.
 func TestDirectMeansIranDialsOut(t *testing.T) {
-	iran := directSpec{Side: sideIran, Transport: "tcp", Addr: "203.0.113.9:8443",
-		Token: "t", Ports: []string{"443"}}.Render()
-	kharej := directSpec{Side: sideKharej, Transport: "tcp", Addr: "0.0.0.0:8443",
-		Token: "t"}.Render()
-
-	// Iran is given the kharej server's real address to reach out to.
-	if !strings.Contains(iran, `addr         = "203.0.113.9:8443"`) {
-		t.Fatalf("the Iran side was not given the kharej address to dial:\n%s", iran)
-	}
-	// Kharej is given a bind address, which is what listening looks like.
-	if !strings.Contains(kharej, `addr         = "0.0.0.0:8443"`) {
-		t.Fatalf("the kharej side is not binding:\n%s", kharej)
-	}
-	// And Iran must never be handed a bind address for the tunnel.
-	if strings.Contains(iran, "0.0.0.0") {
-		t.Fatalf("the Iran side looks like it is listening for the tunnel:\n%s", iran)
-	}
-
-	// Layer 3 says the same thing in its own words.
-	l3iran := l3Spec{Side: sideIran, Carrier: "pck", Encap: "gre",
+	l3iran := l3Spec{Side: sideIran, Carrier: "xdi", Encap: "gre",
 		Addr: "203.0.113.9:9000", Token: "t", Iface: "bp0",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371}.Render()
-	l3kharej := l3Spec{Side: sideKharej, Carrier: "pck", Encap: "gre",
+	l3kharej := l3Spec{Side: sideKharej, Carrier: "xdi", Encap: "gre",
 		Addr: "0.0.0.0:9000", Token: "t", Iface: "bp0",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1371}.Render()
 
+	// Iran is given the kharej server's real address to reach out to, and is
+	// never handed a bind address for the tunnel.
+	if !strings.Contains(l3iran, `addr         = "203.0.113.9:9000"`) || strings.Contains(l3iran, "0.0.0.0") {
+		t.Fatalf("the Iran side was not given the kharej address to dial:\n%s", l3iran)
+	}
 	if !strings.Contains(l3iran, `mode         = "dial"`) {
 		t.Fatalf("the Iran side of a layer-3 tunnel does not dial:\n%s", l3iran)
 	}

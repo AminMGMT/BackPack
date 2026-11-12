@@ -27,7 +27,7 @@ import (
 // carrier, for two reasons. The MTU falls out for free: Overhead() adds this
 // layer's bytes to the one below, and the tunnel's existing calculation carries
 // it through. And loss is a property of the path, not of the disguise the
-// packets wear, so udp, spoof, pck and xdi all get it from one implementation.
+// packets wear, so spoof, pck, sni and xdi all get it from one implementation.
 //
 // # What it does not do
 //

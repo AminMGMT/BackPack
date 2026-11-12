@@ -29,7 +29,7 @@ const ctBarSegments = 8
 var ctTransportNames = map[string]string{
 	"tcp": "TCP", "tcpmux": "TCP MUX", "stealth": "Stealth", "pck": "PCK",
 	"ws": "WS", "wss": "WSS", "wsmux": "WS MUX", "wssmux": "WSS MUX",
-	"kcp": "KCP FEC", "quic": "QUIC", "udp": "UDP", "xdi": "xDi", "sni": "SNI",
+	"kcp": "KCP FEC", "quic": "QUIC", "udp": "UDP", "xdi": "xDi", "sni": "SNI", "gre": "GRE",
 	"naive": "Naive / HTTP2", "xhttp": "XHTTP / TLS", "reality": "REALITY / Vision",
 	ctSpoofToKharej: "Iran→Kharej", ctSpoofToIran: "Kharej→Iran",
 }
@@ -130,7 +130,10 @@ func ConnTestTable(results []ConnTestResult) string {
 			if r.Mbps > 0 {
 				speed = fmt.Sprintf("%.1f Mbps", r.Mbps)
 				if r.UploadMbps > 0 {
-					speed = fmt.Sprintf("↓ %.1f / ↑ %.1f Mbps (4 streams)", r.Mbps, r.UploadMbps)
+					speed = fmt.Sprintf("↓ %.1f / ↑ %.1f Mbps", r.Mbps, r.UploadMbps)
+				}
+				if r.PeakMbps > 0 {
+					speed += fmt.Sprintf(" · max ↓ %.1f / ↑ %.1f", r.PeakMbps, r.UploadPeakMbps)
 				}
 			}
 			fmt.Fprintf(&b, "%s %-26s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)

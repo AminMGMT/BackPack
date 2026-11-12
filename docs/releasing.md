@@ -31,8 +31,8 @@ written down, so a release made in a hurry is the same release.
       BP_L3_LIVE=1 BACKPACK_PREV_BINARY=/tmp/backpack-prev \
         go test ./internal/e2e -run TestL3CarriersOverARealTUN -count=1 -v
       ```
-      Every carrier, a listener killed and restarted, a lossy path, and udp,
-      quic and pck across versions both ways. On Ubuntu this needs
+      Every carrier, a listener killed and restarted, a lossy path, and pck
+      and xdi across versions both ways. On Ubuntu this needs
       `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` first; it
       resets on reboot.
 
@@ -77,9 +77,11 @@ rolls back when the tunnels do not come back. For anything worse:
 
 ## Reproducible builds and the bill of materials
 
-A release is built with `CGO_ENABLED=0`, `-trimpath` and a version stamped from
-`VERSION` rather than from the clock, so two builds of the same source are
-byte-identical. That is a property anybody can check rather than a claim to be
+A release is built with `-trimpath`, a version stamped from `VERSION` rather
+than from the clock, and — since PCK moved to paqet — cgo with a **static
+libpcap** pinned to one version (`scripts/build-linux.sh`, which builds it with
+Zig's compiler for each architecture), so the binary is still one file that needs
+nothing installed. Two builds of the same source are byte-identical. That is a property anybody can check rather than a claim to be
 believed, which is the only kind worth making:
 
 ```
@@ -135,7 +137,8 @@ during the incident.
 منتشر نمی‌کند و هر updaterای که کلید عمومی را دارد آن را رد می‌کند** — که از
 حالتِ قبل از وجود کلید هم بدتر است.
 
-**ساخت تکرارپذیر:** انتشار با `CGO_ENABLED=0`، `-trimpath` و نسخه‌ای که از
+**ساخت تکرارپذیر:** انتشار با `-trimpath`، با cgo و یک libpcap **استاتیک** با نسخهٔ
+ثابت (برای PCK روی paqet؛ باز هم یک فایل بدون وابستگی) و نسخه‌ای که از
 `VERSION` می‌آید نه از ساعت ساخته می‌شود، پس دو build از یک سورس بایت‌به‌بایت
 یکی‌اند. این خاصیتی است که هر کسی می‌تواند خودش بررسی کند — تنها نوع ادعایی که
 ارزش گفتن دارد. با `make reproducible` امتحانش کن.
@@ -151,4 +154,4 @@ during the incident.
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

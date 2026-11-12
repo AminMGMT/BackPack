@@ -11,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/internal/tunnel/bridge"
 	"github.com/backpack/backpack/internal/tunnel/limits"
+	"github.com/backpack/backpack/internal/tunnel/paqet"
 	"github.com/backpack/backpack/internal/tunnel/portmap"
 	"github.com/sirupsen/logrus"
 )
@@ -85,6 +86,9 @@ type Forwarder struct {
 	ready     chan struct{}
 	readyOnce sync.Once
 
+	// dial, when set, replaces dialling the targets from this host.
+	dial DialFunc
+
 	// tunnelUp says whether the tunnel has a session, so a refused port is not
 	// blamed on the far end's service while the tunnel itself is down. Nil
 	// when nobody said, which is read as unknown.
@@ -113,7 +117,18 @@ func NewForwarder(cfg Config, log *logrus.Logger) (*Forwarder, error) {
 	if len(cfg.Ports) == 0 {
 		return nil, nil
 	}
-	mappings, err := portmap.Expand(cfg.Ports, cfg.PeerIP)
+	// A pck tunnel serves ports from the dialling side only; on the listening
+	// side the file's ports have nothing to dial through (see PckNotes).
+	if cfg.Carrier == CarrierPck && cfg.Mode == ModeListen {
+		return nil, nil
+	}
+	// A pck tunnel has no address for the far end on a TUN: a target with no
+	// host is dialled on the far server's own loopback. See pck.go.
+	defaultHost := cfg.PeerIP
+	if cfg.Carrier == CarrierPck {
+		defaultHost = loopbackTarget
+	}
+	mappings, err := portmap.Expand(cfg.Ports, defaultHost)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +148,17 @@ func NewForwarder(cfg Config, log *logrus.Logger) (*Forwarder, error) {
 			BandwidthMbps:  cfg.BandwidthMbps,
 		}),
 	}, nil
+}
+
+// SetDialer makes the forwarder reach its targets through dial instead of
+// dialling them itself. The pck engine uses it: its far side makes the
+// connection. Called before Run.
+func (f *Forwarder) SetDialer(dial DialFunc) { f.dial = dial }
+
+func (f *Forwarder) newPool(targets []string) *backendPool {
+	p := newBackendPool(targets)
+	p.dialFn = f.dial
+	return p
 }
 
 // SetTunnelState tells the forwarder how to ask whether the tunnel is up.
@@ -242,7 +268,7 @@ func (f *Forwarder) serveTCP(ctx context.Context, m portmap.Mapping, bound func(
 
 	f.log.Infof("l3: forwarding tcp %s", m)
 
-	pool := newBackendPool(m.Targets)
+	pool := f.newPool(m.Targets)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -269,7 +295,7 @@ func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Map
 	f.stats.active.Add(1)
 	defer f.stats.active.Add(-1)
 
-	backend, member, err := pool.dial(ctx, "tcp")
+	backend, member, err := pool.dialReport(ctx, "tcp", func(err error) { f.noteBackend(m, err) })
 	if err != nil {
 		f.stats.refused.Add(1)
 		f.noteBackend(m, err)
@@ -277,7 +303,12 @@ func (f *Forwarder) handleTCP(ctx context.Context, local net.Conn, m portmap.Map
 	}
 	defer member.done()
 	defer backend.Close()
-	f.noteBackend(m, nil)
+	// A connection made by the far side (pck) has not heard from the target
+	// yet: it reports the verdict itself, once the first read learns it, and
+	// saying the backend answers before that would be a guess.
+	if sp, ok := backend.(interface{ StatusPending() bool }); !ok || !sp.StatusPending() {
+		f.noteBackend(m, nil)
+	}
 	f.stats.accepted.Add(1)
 
 	bridge.Join(ctx, local, backend)
@@ -331,6 +362,12 @@ func (f *Forwarder) noteBackend(m portmap.Mapping, err error) {
 		f.log.Warnf("l3: connections to %s are being refused because the tunnel is not up yet — "+
 			"no handshake with the other server has completed. See the handshake lines above: "+
 			"the other server is not answering, or the token or carrier differ.", m.Listen)
+		return
+	}
+	if first && paqet.RefusedByPolicy(err) {
+		// Not a service that is down: the kharej would not dial it at all.
+		f.log.Warnf("l3: the kharej server will not connect to %s, so connections to %s are being refused: %v",
+			strings.Join(m.Targets, ", "), m.Listen, err)
 		return
 	}
 	if first {
@@ -403,7 +440,7 @@ func (f *Forwarder) serveUDP(ctx context.Context, m portmap.Mapping, bound func(
 
 	go f.reapUDPFlows(ctx, &flows)
 
-	pool := newBackendPool(m.Targets)
+	pool := f.newPool(m.Targets)
 	buf := make([]byte, udpBufferSize)
 	for {
 		n, client, err := conn.ReadFrom(buf)
@@ -456,16 +493,9 @@ func (f *Forwarder) udpFlowFor(
 		f.limiter.Release()
 		return nil, err
 	}
-	udpConn, ok := conn.(*net.UDPConn)
-	if !ok {
-		conn.Close()
-		member.done()
-		f.limiter.Release()
-		return nil, errors.New("udp backend did not yield a UDP socket")
-	}
 
 	flowCtx, cancelFlow := context.WithCancel(ctx)
-	flow := &udpFlow{backend: f.limiter.Wrap(flowCtx, udpConn), member: member, cancel: cancelFlow}
+	flow := &udpFlow{backend: f.limiter.Wrap(flowCtx, conn), member: member, cancel: cancelFlow}
 	flow.touch()
 
 	// Two goroutines could reach here for the same client at once; only one

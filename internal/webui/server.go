@@ -483,6 +483,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/autobackup", s.requireAuth(s.handleAutoBackup))
 	mux.HandleFunc("/api/history", s.requireAuth(s.handleHistory))
 	mux.HandleFunc("/api/channel", s.requireAuth(s.handleChannel))
+	// The overview's showcase box, served from the cache the panel keeps of
+	// it. See handlers_showcase.go.
+	mux.HandleFunc("/api/showcase", s.requireAuth(s.handleShowcase))
+	mux.HandleFunc("/api/showcase/image", s.requireAuth(s.handleShowcaseImage))
 	// The manifest, icons and service worker are what let the panel install as
 	// an app; the browser fetches them before any login, so they carry no data
 	// and no auth. The worker is required for an install offer and must be

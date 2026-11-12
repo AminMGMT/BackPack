@@ -9,12 +9,13 @@ import (
 
 // The obfuscated carriers.
 //
-// Plain UDP is the right carrier on a path that does not interfere. On one
-// that does, it is the first thing to go: a long-lived UDP flow to a foreign
-// address is among the easiest patterns to rate-limit or drop. These three
-// carry the same sealed datagrams somewhere less obvious.
+// A long-lived UDP flow to a foreign address is among the easiest patterns to
+// rate-limit or drop, which is why plain UDP is no longer a carrier at all
+// (removed in v2.0.0). These three carry the sealed datagrams somewhere less
+// obvious.
 //
-//	pck    raw TCP segments this process builds itself — no socket, no
+//	pck    (sni's carrier now; "pck" itself is paqet's engine, see pck.go)
+//	       raw TCP segments this process builds itself — no socket, no
 //	       handshake, no connection state for netfilter to interfere with,
 //	       but everything a capture sees is an ordinary TCP flow
 //	xdi    ICMP echo, for a path that filters UDP and TCP but not ping
@@ -67,8 +68,10 @@ func (c *obfuscatedCarrier) CarrierName() string { return c.name }
 // happened while nothing called this — is the same as not computing it.
 func (c *obfuscatedCarrier) Diag() string { return c.note }
 
-// openPck builds the packet-level TCP carrier.
-func openPck(cfg Config) (DatagramCarrier, net.Addr, error) {
+// openRawPck builds the raw-datagram packet-level TCP carrier. Only sni uses it
+// now: carrier = "pck" is paqet's engine (pck.go) and never reaches a datagram
+// carrier.
+func openRawPck(cfg Config) (DatagramCarrier, net.Addr, error) {
 	conn, peer, err := network.NewPckPacketConn(
 		cfg.Mode == ModeListen, cfg.Token, cfg.Addr, cfg.Pck)
 	if err != nil {

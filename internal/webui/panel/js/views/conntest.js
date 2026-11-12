@@ -105,8 +105,9 @@ function startPane(v) {
   return `<div class="ct-l-in fade">
     <span class="ct-kick">New test</span>
     <div class="tl-lede"><b>Every transport, tried for real between this server and one kharej.</b>
-      <span>Five minutes of stability checks, then about 8–12 seconds of speed testing per healthy tunnel.
-        Download and upload use four connections and run one tunnel at a time. The test tunnels run on free ports and are
+      <span>Five minutes of stability checks, then about 16–25 seconds of speed testing per healthy tunnel.
+        Download and upload are measured with four connections and again with sixteen, one tunnel at a time;
+        the max is the best second the tunnel carried. The test tunnels run on free ports and are
         removed when it ends — nothing is left behind on either server.</span></div>
     <div class="tl-f ct-field"><span>IP paths to test</span>
       <div class="tl-seg" id="ctPathMode">${[['both','Both, sequentially'],['ipv4','IPv4'],['ipv6','IPv6'],['manual','One address']].map(([value,label]) =>
@@ -198,6 +199,8 @@ function bestPane(v) {
       ${cell('Server address', b.host || '')}
       ${cell('Download', b.mb ? b.mb.toFixed(b.mb < 10 ? 1 : 0) : '', 'Mb/s')}
       ${cell('Upload', b.upload_mb ? b.upload_mb.toFixed(b.upload_mb < 10 ? 1 : 0) : '', 'Mb/s')}
+      ${cell('Max download', b.peak_mb ? mbps(b.peak_mb) : '', 'Mb/s')}
+      ${cell('Max upload', b.upload_peak_mb ? mbps(b.upload_peak_mb) : '', 'Mb/s')}
       ${cell('Round trip', b.rt, 'ms')}
       ${cell('Jitter', b.ji, 'ms')}
       ${cell('Worst', b.wo, 'ms')}
@@ -239,6 +242,11 @@ function rowHTML() {
     <span class="st"></span>`;
 }
 
+/* A rate as the rows print it: one decimal under ten, whole above. */
+const mbps = v => v.toFixed(v < 10 ? 1 : 0);
+/* The best second beside the sustained rate, when the test measured one. */
+const maxOf = v => v ? ` <span class="mx">max <b>${mbps(v)}</b></span>` : '';
+
 /* A row is patched, never redrawn, so its bar slides from where it was and the
    list does not flicker every two seconds. */
 function fillRow(n, r) {
@@ -246,16 +254,18 @@ function fillRow(n, r) {
   const testing = r.status === 'testing';
   const share = Math.max(0, Math.min(1, testing ? (r.tried / total) : (r.ok / total)));
   n.className = `ct-row ${tone(r.status)}${r.uploadMbps ? ' has-speed' : ''}`;
-  n.querySelector('.nm b').textContent = r.name;
+  const nb = n.querySelector('.nm b');
+  nb.textContent = r.name;
+  nb.title = r.name;
   const sm = n.querySelector('.nm small');
-  sm.textContent = r.detail || (r.uploadMbps ? '4 connections · download / upload' : '');
+  sm.textContent = r.detail || (r.uploadMbps ? 'sustained · max is the best second' : '');
   sm.title = r.detail || '';
   n.querySelector('.bar i').style.setProperty('--w', (share * 100).toFixed(1) + '%');
   n.querySelector('.ec').textContent = r.status === 'skipped' ? '—' : `${testing ? r.tried : r.ok}/${total}`;
   n.querySelector('.fg').innerHTML = [
     r.rtt ? `<span><b>${r.rtt}</b> ms</span>` : '',
-    r.mbps ? `<span>↓ <b>${r.mbps.toFixed(r.mbps < 10 ? 1 : 0)}</b> Mb/s</span>` : '',
-    r.uploadMbps ? `<span>↑ <b>${r.uploadMbps.toFixed(r.uploadMbps < 10 ? 1 : 0)}</b> Mb/s</span>` : '',
+    r.mbps ? `<span>↓ <b>${mbps(r.mbps)}</b>${maxOf(r.peakMbps)} Mb/s</span>` : '',
+    r.uploadMbps ? `<span>↑ <b>${mbps(r.uploadMbps)}</b>${maxOf(r.uploadPeakMbps)} Mb/s</span>` : '',
   ].join('');
   n.querySelector('.st').textContent = r.phase === 'speed' ? 'Speed test' : r.phase === 'speed-queued' ? 'Queued' : statusWord(r.status);
 }

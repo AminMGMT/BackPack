@@ -2,7 +2,18 @@ BIN      := backpack
 BIN_PATH := /usr/local/bin/backpack
 LDFLAGS  := -s -w
 
-.PHONY: all build install uninstall clean tidy run vendor release-linux release version sbom reproducible check
+# The PCK carrier is paqet's engine, which captures packets with libpcap
+# through cgo, so a build that is meant to run it needs libpcap's headers and a
+# static libpcap.a. `make libpcap` builds them into LIBPCAP_PREFIX without root
+# (see scripts/build-libpcap.sh and CONTRIBUTING.md). A build without them still
+# compiles and runs everything but PCK, which says so when it starts.
+LIBPCAP_PREFIX ?= $(HOME)/.local/libpcap
+GOTAGS         := netgo,osusergo
+# Present only when libpcap is where LIBPCAP_PREFIX says. Without it the build
+# is CGO-free, as it was before PCK moved to paqet.
+PCAP_ENV = $(if $(wildcard $(LIBPCAP_PREFIX)/include/pcap.h),CGO_ENABLED=1 CGO_CFLAGS="-I$(LIBPCAP_PREFIX)/include" CGO_LDFLAGS="-L$(LIBPCAP_PREFIX)/lib -lpcap",CGO_ENABLED=0)
+
+.PHONY: all build install uninstall clean tidy run vendor release-linux release version sbom reproducible check libpcap
 
 all: build
 
@@ -15,14 +26,31 @@ version:
 	@grep -oE 'Version = "[^"]+"' internal/app/app.go | grep -oE 'v[0-9.]+' > VERSION
 	@echo "VERSION -> $$(cat VERSION)"
 
+# libpcap builds libpcap.a and its headers into LIBPCAP_PREFIX with the host
+# compiler. No root. Needs flex and bison, which the script builds itself when
+# the machine has none.
+libpcap:
+	LIBPCAP_PREFIX=$(LIBPCAP_PREFIX) scripts/build-libpcap.sh
+
+# build links libpcap statically when `make libpcap` has been run, and builds
+# without PCK support when it has not (and says so).
 build: tidy
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
+	@if [ -z "$(wildcard $(LIBPCAP_PREFIX)/include/pcap.h)" ]; then \
+	  echo "note: no libpcap in $(LIBPCAP_PREFIX) — building WITHOUT the PCK carrier (run 'make libpcap' first to include it)"; fi
+	$(PCAP_ENV) go build -trimpath -tags $(GOTAGS) -ldflags "$(LDFLAGS)" -o $(BIN) .
 
 vendor:
 	go mod tidy
 	go mod vendor
 
 # Cross-compile static Linux binaries (no libc / no Go needed to run).
+#
+# Every one is linked with libpcap, because the PCK carrier needs it, and every
+# one is still a single static file: scripts/build-linux.sh builds a libpcap for
+# each target with Zig's C compiler (or, for ARMv5, which Zig's musl cannot
+# target, with arm-linux-gnueabi-gcc) and links it in. `make release-linux`
+# therefore needs zig on PATH, plus gcc-arm-linux-gnueabi for armv5; neither
+# needs root to run. CI installs both.
 #
 # The three 32-bit ARM variants are built and named apart because they are not
 # interchangeable: a v7 binary on a v5 board is an illegal instruction, not a
@@ -35,8 +63,15 @@ ARMS   := 5 6 7
 
 release-linux:
 	mkdir -p dist
-	@for a in $(ARCHES); do 	  echo "  building linux/$$a"; 	  CGO_ENABLED=0 GOOS=linux GOARCH=$$a 	    go build -trimpath -ldflags "$(LDFLAGS)" -o dist/backpack-linux-$$a . || exit 1; 	done
-	@for v in $(ARMS); do 	  echo "  building linux/armv$$v"; 	  CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=$$v 	    go build -trimpath -ldflags "$(LDFLAGS) -X github.com/backpack/backpack/internal/app.GOARM=$$v" 	    -o dist/backpack-linux-armv$$v . || exit 1; 	done
+	@for a in $(ARCHES); do \
+	  echo "  building linux/$$a"; \
+	  VERSION_LDFLAGS="" scripts/build-linux.sh $$a dist/backpack-linux-$$a || exit 1; \
+	done
+	@for v in $(ARMS); do \
+	  echo "  building linux/armv$$v"; \
+	  VERSION_LDFLAGS="-X github.com/backpack/backpack/internal/app.GOARM=$$v" \
+	    scripts/build-linux.sh armv$$v dist/backpack-linux-armv$$v || exit 1; \
+	done
 
 # GitHub release assets: backpack_linux_<arch>.tar.gz, each containing a single
 # `backpack` binary. These are what install.sh and the in-app updater download.
@@ -80,14 +115,15 @@ sbom:
 
 # reproducible checks that two builds of the same source are byte-identical.
 #
-# They are, and have been: CGO is off, -trimpath removes the build directory,
-# and the version is stamped from a file rather than from the clock. This makes
-# that a thing somebody can check rather than a claim in a document — which is
+# They are, and have been: -trimpath removes the build directory, the version
+# is stamped from a file rather than from the clock, and the C side is built by
+# Zig's compiler with a pinned libpcap, which embeds neither paths nor times.
+# This makes that a thing somebody can check rather than a claim in a document — which is
 # the whole point of a reproducible build, since the property is only useful if
 # a third party can confirm it.
 reproducible:
-	@CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o /tmp/backpack-repro-a .
-	@CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o /tmp/backpack-repro-b .
+	@scripts/build-linux.sh amd64 /tmp/backpack-repro-a >/dev/null
+	@scripts/build-linux.sh amd64 /tmp/backpack-repro-b >/dev/null
 	@if cmp -s /tmp/backpack-repro-a /tmp/backpack-repro-b; then 	  echo "reproducible: two builds are byte-identical"; 	else 	  echo "NOT reproducible: two builds of the same source differ"; exit 1; 	fi
 	@rm -f /tmp/backpack-repro-a /tmp/backpack-repro-b
 
@@ -113,10 +149,10 @@ run: build
 # with a note when it is not installed.
 check:
 	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "not gofmt'd:"; echo "$$unformatted"; exit 1; fi
-	go vet ./...
+	$(PCAP_ENV) go vet ./...
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed: go install honnef.co/go/tools/cmd/staticcheck@latest"; fi
-	go test ./... -timeout 20m
-	go test ./... -race -timeout 20m
+	$(PCAP_ENV) go test ./... -timeout 20m
+	$(PCAP_ENV) go test ./... -race -timeout 20m
 
 clean:
 	rm -f $(BIN)

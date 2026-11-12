@@ -72,6 +72,7 @@ const samples = {
   logs: [['t1'], ['t1', 'peer']], history: [['t1'], ['t1', 30]],
   confHistory: [['t1']], confRestore: [['t1', 1790000000]],
   backupImport: [[new Blob(['{}'])]], autoBackup: [[]], setAutoBackup: [[true], [false]],
+  showcase: [[]],
   sessions: [[]], sessionRevoke: [['s1']], sessionRevokeOthers: [[]],
   setPassword: [[{ password: 'a-new-password' }]],
   totp: [[]], totpStart: [[]], totpConfirm: [['123456']], totpDisable: [['pw']], totpRecovery: [['pw']],
@@ -103,7 +104,7 @@ const samples = {
 };
 // Exports that build an address instead of fetching one; the address is
 // checked as the GET a browser makes when it follows it.
-const addresses = { backupExportURL: [[]], savedBackupURL: [['backpack-backup-1.tar.gz']] };
+const addresses = { backupExportURL: [[]], savedBackupURL: [['backpack-backup-1.tar.gz']], showcaseImage: [['0123abcd']] };
 const notRoutes = new Set(['base', 'terminalURL']);
 
 const api = await import(new URL('../panel/js/api.js', import.meta.url));

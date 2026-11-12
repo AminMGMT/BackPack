@@ -130,9 +130,9 @@ func (t *Tunnel) setCurrentMTU(mtu int) {
 // publishPeer records where the far end is, for the management screens.
 //
 // Nothing in the kernel can answer "is this tunnel up?" for a layer-3 tunnel:
-// udp holds an unconnected socket and the raw carriers do not go through the
-// stack at all, so the socket table — which is what the health check and the
-// watchdog read for every other kind — has nothing to show. Left at that, a
+// the raw carriers do not go through the stack at all, so the socket table —
+// which is what the health check and the watchdog read for every other kind —
+// has nothing to show. Left at that, a
 // perfectly healthy tunnel appears on the panel as a grey card with no state.
 //
 // The engine does know, so it writes it down. This is the same channel the

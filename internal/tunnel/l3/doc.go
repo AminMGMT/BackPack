@@ -20,13 +20,30 @@
 // own, and the delivery happens over the same obfuscated carriers the rest of
 // the tunnel already uses.
 //
+// The kernel's own GRE is offered as well, as the gre and ip6gre carriers, for
+// a route that does pass protocol 47 and an operator who wants the cheapest
+// tunnel there is and brings encryption of their own. Everything said above
+// about it still holds, and the screens say so where it is chosen. It is not a
+// carrier in the sense below — the kernel encapsulates, so there is no TUN and
+// no session — and the engine runs it on a path of its own; see kernelgre.go.
+//
+// # pck is not on this stack
+//
+// Since v2.0.0 carrier = "pck" is a different engine — paqet's, in
+// internal/tunnel/paqet — that carries forwarded ports over crafted TCP
+// segments with KCP and smux, and has no TUN device and no session of this
+// package's. It shares the configuration table, the forwarder, Up() and Stats()
+// with everything here, and takes a path of its own through Run, as the kernel
+// GRE carriers do; see pck.go. Everything below, and the raw-datagram pck it
+// replaced, is now sni's (sni is that carrier with a ClientHello in front).
+//
 // # The stack
 //
 //	[ inner IP packet ]                      read from the TUN device
 //	[ encap header    ]  0 or 4-12 bytes     ipip adds nothing; gre names the
 //	                                         payload and can carry a key
 //	[ AEAD + header   ]  29 bytes            see wire.go and session.go
-//	[ carrier         ]  28-40 bytes         udp today; spoof/pck/xdi next
+//	[ carrier         ]  28-60 bytes         pck, sni, xdi or spoof
 //
 // # Why the carrier must be a datagram carrier
 //
@@ -36,8 +53,9 @@
 // path, and under loss they fight: the inner one gives up waiting while the
 // outer one is still resending, so throughput collapses instead of degrading.
 // This is the classic TCP-over-TCP meltdown, and it is why a layer-3 tunnel
-// may only ride on udp, quic datagrams, or the raw carriers — never on tcp,
-// ws, or kcp, all of which retransmit.
+// may only ride on the raw datagram carriers — never on tcp, ws, or kcp, all
+// of which retransmit. (Plain udp and quic datagrams were carriers too, until
+// v2.0.0 removed them.)
 //
 // # Relationship to the rest of the tree
 //

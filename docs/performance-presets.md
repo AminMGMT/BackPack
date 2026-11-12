@@ -36,6 +36,29 @@ what they are for, and on a TCP transport every knob it changes belongs to the
 kernel rather than to this process. Choosing it elsewhere is **refused with a
 message saying so**, rather than written to the config and quietly ignored.
 
+## On a direct PCK tunnel
+
+The same three names set the PCK engine's own parameters — KCP sessions, speed
+mode, windows, buffers and capture ring — instead of a queue and a socket
+buffer: Balance is 1 session, `fast`, 256/512-packet windows; Turbo 2, `fast2`,
+1024; Aggressive 4, `fast3`, 4096. The wizard and the panel show each with what
+it sets, and Edit moves a tunnel from one to another. Aggressive is for long,
+lossy routes and is slower than Turbo on a clean path. Turbo with `pck_conns = 4`
+carries more at 1-10% loss (about 13/15 Mbit/s against 9/8 at 10%, probe median
+550 ms against 900) and no more on a clean path, so it is worth setting on a
+lossy route only. The table, and the
+`pck_*` keys that override it, are in [Direct PCK](direct-pck.md#presets).
+
+## On a reverse PCK tunnel
+
+`TCP + PCK` takes the KCP numbers above like `kcp` and `xdi`, with one
+difference since v2.0.0: the send window a preset sets is the **ceiling** the
+tunnel works under, not what it sends. The tunnel moves the window with the
+path's queue, paces its output, and batches acknowledgements where the round
+trip is longer than the KCP tick, so `kcp_acknodelay` does not make a Turbo pck
+tunnel acknowledge every packet. None of it changes the wire, so the two ends
+need not run the same version. See [TCP + PCK](tcp-pck.md#on-a-busy-or-lossy-link).
+
 ## Changing it later
 
 **Edit → Change performance preset**, and apply the **same preset on both ends**.
@@ -61,7 +84,7 @@ pool، بافر سوکت، پنجره‌های دریافت و mux، و روی K
 
 **Balance** برای VPS کوچک یا اشتراکی · **Turbo** پیشنهادی برای اکثر آدم‌ها (دقیقاً
 همان چیزی که قبلاً «Best Performance» بود) · **Aggressive** حداکثر فضای تنفس برای
-بازی با مصرف CPU بیشتر · **Throughput** فقط روی ترنسپورت `kcp` و فقط برای
+بازی با مصرف CPU بیشتر (روی PCK مستقیم: برای مسیر طولانی و پرتلفات، و روی مسیر تمیز کندتر از Turbo) · **Throughput** فقط روی ترنسپورت `kcp` و فقط برای
 **پهنای باند، نه بازی**.
 
 **دربارهٔ Throughput:** سه پریست دیگر همه پروفایل *بازی* هستند و پهنای باند خرج
@@ -83,4 +106,4 @@ Turbo یا Aggressive، برای انتقال فایل Throughput. انتخاب�
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

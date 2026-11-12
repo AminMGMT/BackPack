@@ -22,7 +22,7 @@ func TestTheSameAddressAtBothEndsIsRefused(t *testing.T) {
 	if err := CheckTunnelEnds("10.10.2.2/30", ""); err != nil {
 		t.Fatalf("an omitted peer was refused: %v", err)
 	}
-	cfg := Config{Mode: ModeListen, Addr: "0.0.0.0:9000", Token: "t", LocalIP: "10.10.2.2/30", PeerIP: "10.10.2.2"}
+	cfg := Config{Mode: ModeListen, Addr: "0.0.0.0:9000", Token: "t", Carrier: CarrierXdi, LocalIP: "10.10.2.2/30", PeerIP: "10.10.2.2"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted the same address at both ends")
 	}

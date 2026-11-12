@@ -1,6 +1,6 @@
 # Setting up REALITY / Vision
 
-Last verified against Backpack v1.9.0, 2026-10-11.
+Last verified against Backpack v2.0.0, 2026-10-11.
 
 On Iran, open **Setup Iran → Reverse → HTTPS → REALITY / Vision**. The wizard
 suggests the detected public address and a free HTTPS port (443 when available).

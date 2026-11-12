@@ -38,7 +38,7 @@ func TestASecondHandshakeDoesNotMoveAnEstablishedPeer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	listener, err := New(Config{
+	listener, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeListen, Addr: "127.0.0.1:0", Token: token, Encap: "gre",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 	}, quietLogger())

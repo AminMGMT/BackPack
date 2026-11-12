@@ -14,7 +14,7 @@ func TestTheKharejGetsEveryPairedSettingFromTheLink(t *testing.T) {
 	off := false
 	sent := ShareLink{
 		Kind: "direct", From: "iran", Name: "almani",
-		Tok: strings.Repeat("k", 64), Tr: "pck", Encap: "gre", Port: "5376",
+		Tok: strings.Repeat("k", 64), Tr: "xdi", Encap: "gre", Port: "5376",
 		LocalIP: "10.10.2.1/30", PeerIP: "10.10.2.2",
 		FECData: 12, FECParity: 5, MTU: 1380,
 		GREKey: 7, L3MSS: 1300, AutoMTU: &off,

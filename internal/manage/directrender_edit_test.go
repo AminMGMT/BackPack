@@ -29,8 +29,9 @@ func TestTokensSurviveBeingWritten(t *testing.T) {
 		`both\and"together`,
 		`trailing\`,
 	} {
-		body := directSpec{
-			Side: sideKharej, Transport: "tcp", Addr: "0.0.0.0:8443", Token: token,
+		body := l3Spec{
+			Side: sideKharej, Carrier: "xdi", Addr: "0.0.0.0:9000", Token: token,
+			Iface: "bp0", LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 		}.Render()
 
 		var back config.Config
@@ -38,23 +39,9 @@ func TestTokensSurviveBeingWritten(t *testing.T) {
 			t.Errorf("token %q produced a config that does not parse: %v", token, err)
 			continue
 		}
-		if back.Direct.Token != token {
-			t.Errorf("token %q was written and read back as %q", token, back.Direct.Token)
+		if back.L3.Token != token {
+			t.Errorf("token %q was written and read back as %q", token, back.L3.Token)
 		}
-	}
-
-	// And the same for the layer-3 renderer, which shares the quoting but not
-	// the rest of the file.
-	body := l3Spec{
-		Side: sideIran, Carrier: "udp", Encap: "ipip", Addr: "1.2.3.4:9000",
-		Token: `l3\token`, Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
-	}.Render()
-	var back config.Config
-	if _, err := toml.Decode(body, &back); err != nil {
-		t.Fatalf("the layer-3 renderer produced a config that does not parse: %v", err)
-	}
-	if back.L3.Token != `l3\token` {
-		t.Fatalf("layer-3 token read back as %q", back.L3.Token)
 	}
 }
 
@@ -111,124 +98,11 @@ pck_flags           = ["PA", "A"]
 	}
 }
 
-// The same for a direct tunnel, whose editor offers four changes and whose spec
-// did not hold the certificate, the mux version or either timeout.
-func TestEditingADirectTunnelKeepsWhatItWasNotAsked(t *testing.T) {
-	original := `
-[direct]
-role              = "iran"
-addr              = "1.2.3.4:8443"
-token             = "tok"
-transport         = "wss"
-ports             = ["443"]
-server_name       = "cdn.example.com"
-tls_cert          = "/etc/ssl/tunnel.crt"
-tls_key           = "/etc/ssl/tunnel.key"
-mux_version       = 2
-dial_timeout      = 20
-retry_interval    = 7
-keepalive_period  = 75
-nodelay           = true
-`
-	var before config.Config
-	if _, err := toml.Decode(original, &before); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	changed := before.Direct
-	changed.Ports = []string{"443", "8080"}
-
-	var after config.Config
-	if _, err := toml.Decode(renderDirectFor(changed), &after); err != nil {
-		t.Fatalf("the edit produced a config that does not parse: %v", err)
-	}
-
-	for _, c := range []struct {
-		key        string
-		want, have any
-	}{
-		{"tls_cert", before.Direct.TLSCertFile, after.Direct.TLSCertFile},
-		{"tls_key", before.Direct.TLSKeyFile, after.Direct.TLSKeyFile},
-		{"mux_version", before.Direct.MuxVersion, after.Direct.MuxVersion},
-		{"dial_timeout", before.Direct.DialTimeout, after.Direct.DialTimeout},
-		{"retry_interval", before.Direct.RetryInterval, after.Direct.RetryInterval},
-		{"keepalive_period", before.Direct.Keepalive, after.Direct.Keepalive},
-		{"nodelay", before.Direct.Nodelay, after.Direct.Nodelay},
-		{"server_name", before.Direct.ServerName, after.Direct.ServerName},
-	} {
-		if c.want != c.have {
-			t.Errorf("changing the ports lost %s: was %v, now %v", c.key, c.want, c.have)
-		}
-	}
-	if len(after.Direct.Ports) != 2 {
-		t.Errorf("the edit did not take: ports = %v", after.Direct.Ports)
-	}
-}
-
-// Every preset must turn Nagle off.
-//
-// The engine calls SetNoDelay(cfg.Nodelay), so leaving the key unset does not
-// leave the socket alone — it turns Nagle on, over Go's own default of off. On
-// a tunnel where one mux session carries every connection, that delays every
-// stream at once. The reverse presets have always set it; these did not.
-func TestEveryDirectPresetDisablesNagle(t *testing.T) {
-	for _, p := range directPresets {
-		var spec directSpec
-		p.apply(&spec)
-		if !spec.Nodelay {
-			t.Errorf("preset %q leaves Nagle on", p.Name)
-		}
-
-		body := directSpec{
-			Side: sideIran, Transport: "tcp", Addr: "1.2.3.4:8443",
-			Token: "t", Ports: []string{"443"}, Nodelay: spec.Nodelay,
-			Preset: p.Name, MuxFrameSize: p.MuxFrameSize,
-			MuxReceiveBuffer: p.MuxReceiveBuffer, MuxStreamBuffer: p.MuxStreamBuffer,
-		}.Render()
-		if !strings.Contains(body, "nodelay") {
-			t.Errorf("preset %q does not write nodelay into the file", p.Name)
-		}
-	}
-}
-
-// renderL3For and renderDirectFor are what saveL3 and saveDirect do, reduced to
-// the rendering so a test can call it without a tunnel on disk. They must stay
-// in step with those two; the tests above are what notices if they do not.
-func renderL3For(l config.L3Config) string {
-	side := sideIran
-	if strings.EqualFold(strings.TrimSpace(l.Mode), "listen") {
-		side = sideKharej
-	}
-	return l3Spec{
-		Side: side, Carrier: orDefault(l.Carrier, "udp"),
-		Encap: orDefault(l.Encap, "ipip"), GREKey: l.GREKey,
-		Addr: l.Addr, Token: l.Token, Iface: orDefault(l.Iface, "bp0"),
-		LocalIP: l.LocalIP, PeerIP: l.PeerIP, MTU: l.MTU, SockBuf: l.SockBuf,
-		Ports: l.Ports, AcceptUDP: l.AcceptUDP,
-		MaxConnections: l.MaxConnections, BandwidthMbps: l.BandwidthMbps,
-		Spoof: l.SpoofConfig, Pck: l.PckConfig,
-	}.Render()
-}
-
-func renderDirectFor(d config.DirectConfig) string {
-	side := sideIran
-	if d.ResolvedRole() == "origin" {
-		side = sideKharej
-	}
-	return directSpec{
-		Side: side, Transport: orDefault(d.Transport, "tcp"),
-		Addr: d.Addr, Token: d.Token, Ports: d.Ports, AcceptUDP: d.AcceptUDP,
-		MaxConnections: d.MaxConnections, BandwidthMbps: d.BandwidthMbps,
-		Sessions: d.Sessions, Preset: d.Preset,
-		MuxFrameSize: d.MaxFrameSize, MuxReceiveBuffer: d.MaxReceiveBuffer,
-		MuxStreamBuffer: d.MaxStreamBuffer, Keepalive: d.Keepalive,
-		Nodelay: d.Nodelay, ServerName: d.ServerName,
-		ACMEDomain: d.ACMEDomain, ACMEEmail: d.ACMEEmail,
-		TLSCertFile: d.TLSCertFile, TLSKeyFile: d.TLSKeyFile,
-		MuxVersion:  d.MuxVersion,
-		DialTimeout: d.DialTimeout, RetryInterval: d.RetryInterval,
-	}.Render()
-}
+// renderL3For is what saveL3 writes, reduced to the rendering so a test can
+// call it without a tunnel on disk. It used to be a hand-written copy of the
+// mapping, which could stay right while the real one drifted; it is the real
+// one now.
+func renderL3For(l config.L3Config) string { return directSpecFrom("", l).Render() }
 
 // compareL3 names the first field that differs, so a failure says which key was
 // lost rather than printing two structs.

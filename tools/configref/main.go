@@ -148,8 +148,10 @@ func sectionOf(name string) string {
 		return "[server]"
 	case "ClientConfig":
 		return "[client]"
-	case "DirectConfig":
-		return "[direct]"
+	case "LegacyDirectConfig":
+		// Still read, so that a file with one is refused by name; see
+		// config/legacydirect.go.
+		return "[direct] — removed in v2.0.0, read only to refuse it"
 	case "L3Config":
 		return "[l3]"
 	case "NaiveClientConfig":

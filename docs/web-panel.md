@@ -1,11 +1,12 @@
 # Web panel
 
-A **monitoring-only** dashboard on **port 7777**, matching the CLI's look. It
+A dashboard on **port 7777**, matching the CLI's look. It
 shows live CPU / RAM / disk / traffic, each tunnel's state, real ping, and logs.
 Backup, Telegram setup and the panel password live in **Settings**.
 
-Run it on the **Iran** server, where you watch things from. It does not create
-or change tunnels — that is the CLI's job.
+Run it on the **Iran** server, where you watch things from. It can also add a
+tunnel's Iran end, edit a tunnel and hand over its setup link — the same calls
+the CLI makes; see [screen by screen](web-panel-screens.md).
 
 ## Getting in
 
@@ -98,12 +99,13 @@ the same Security pane if that matters.
 
 ## خلاصهٔ فارسی
 
-یک داشبورد **فقط-پایشی** روی **پورت ۷۷۷۷** با ظاهری هماهنگ با CLI: پردازنده،
+یک داشبورد روی **پورت ۷۷۷۷** با ظاهری هماهنگ با CLI: پردازنده،
 حافظه، دیسک و ترافیک زنده، وضعیت هر تونل، پینگ واقعی و لاگ‌ها. پشتیبان‌گیری،
 تنظیمات تلگرام و رمز پنل در بخش **Settings** است.
 
-روی سرور **ایران** اجرایش کن، همان‌جا که از آن نظارت می‌کنی. تونل نمی‌سازد و
-تغییر نمی‌دهد — آن کارِ CLI است.
+روی سرور **ایران** اجرایش کن، همان‌جا که از آن نظارت می‌کنی. سمت ایرانِ یک
+تونل را هم می‌سازد، تونل را ویرایش می‌کند و لینک راه‌اندازی‌اش را می‌دهد — همان
+کارهایی که CLI می‌کند.
 
 **ورود دو مرحله‌ای:** پنل روی این سرور root است و به‌صورت پیش‌فرض فقط یک رمز
 جلوی آن است. از `Settings → Security → Two-factor sign-in` می‌توانی کد یک‌بارمصرف
@@ -128,4 +130,4 @@ that does the same job — is in
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

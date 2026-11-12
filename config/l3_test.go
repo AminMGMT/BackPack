@@ -48,66 +48,47 @@ spoof_forward = "127.0.0.1:51820"
 		if cfg.L3.Enabled() {
 			t.Fatalf("%s: a configuration with no [l3] table reports a layer-3 tunnel", name)
 		}
-		if cfg.Direct.Enabled() {
+		if cfg.Direct.Present() {
 			t.Fatalf("%s: a configuration with no [direct] table reports a direct tunnel", name)
 		}
 	}
 }
 
-func TestDirectTableEnablesTheTunnel(t *testing.T) {
+// The [direct] stream tunnel was removed in v2.0.0, and its table is still
+// read — just enough for a file that has one to be recognised and refused by
+// name, rather than decoding as a file with no tunnel in it.
+func TestARemovedDirectTableIsStillRecognised(t *testing.T) {
 	const text = `
 [direct]
-role      = "iran"
-addr      = "1.2.3.4:8443"
+role      = "kharej"
+addr      = "0.0.0.0:8443"
 token     = "a-long-token"
 transport = "stealth"
 ports     = ["443", "2053-2060"]
 sessions  = 4
+mux_recievebuffer = 4194304
 `
 	var cfg Config
 	if _, err := toml.Decode(text, &cfg); err != nil {
-		t.Fatalf("decode: %v", err)
+		t.Fatalf("a [direct] file with keys that are no longer read does not decode: %v", err)
 	}
-	if !cfg.Direct.Enabled() {
-		t.Fatal("a configuration with a [direct] table does not report a direct tunnel")
+	if !cfg.Direct.Present() {
+		t.Fatal("a configuration with a [direct] table does not report one")
 	}
-	if cfg.L3.Enabled() {
-		t.Fatal("a [direct] config also reported a layer-3 tunnel")
+	if cfg.L3.Enabled() || cfg.Server.BindAddr != "" || cfg.Client.RemoteAddr != "" {
+		t.Fatal("a [direct]-only file reported another kind of tunnel")
 	}
-	if cfg.Direct.ResolvedRole() != "edge" {
-		t.Fatalf("role %q resolved to %q, want edge", cfg.Direct.Role, cfg.Direct.ResolvedRole())
-	}
-	if cfg.Direct.Transport != "stealth" || cfg.Direct.Sessions != 4 || len(cfg.Direct.Ports) != 2 {
+	if cfg.Direct.OnIran() || cfg.Direct.Transport != "stealth" || len(cfg.Direct.Ports) != 2 {
 		t.Fatalf("decoded [direct] = %+v", cfg.Direct)
 	}
-	if cfg.Server.BindAddr != "" || cfg.Client.RemoteAddr != "" {
-		t.Fatal("a [direct]-only file populated [server] or [client]")
-	}
-}
-
-// Geography is what an operator writes; edge and origin are what the engine
-// calls the same two roles. Both must work.
-func TestDirectRoleSynonyms(t *testing.T) {
-	cases := map[string]string{
-		"iran": "edge", "IRAN": "edge", " edge ": "edge",
-		"kharej": "origin", "Kharej": "origin", "origin": "origin",
-	}
-	for written, want := range cases {
-		if got := (DirectConfig{Role: written}).ResolvedRole(); got != want {
-			t.Fatalf("role %q resolved to %q, want %q", written, got, want)
+	for _, role := range []string{"", " ", "\t"} {
+		if (LegacyDirectConfig{Role: role}).Present() {
+			t.Fatalf("role %q reports a [direct] table", role)
 		}
 	}
-	// An unknown role is passed through so the engine reports it with the list
-	// of what it accepts, rather than being silently rewritten.
-	if got := (DirectConfig{Role: "middle"}).ResolvedRole(); got != "middle" {
-		t.Fatalf("an unknown role resolved to %q", got)
-	}
-}
-
-func TestDirectBlankRoleIsDisabled(t *testing.T) {
-	for _, role := range []string{"", " ", "\t"} {
-		if (DirectConfig{Role: role}).Enabled() {
-			t.Fatalf("role %q reports a direct tunnel", role)
+	for _, role := range []string{"iran", "IRAN", " edge "} {
+		if !(LegacyDirectConfig{Role: role}).OnIran() {
+			t.Errorf("role %q is the Iran side", role)
 		}
 	}
 }

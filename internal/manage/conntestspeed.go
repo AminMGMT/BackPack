@@ -18,19 +18,49 @@ import (
 const (
 	ctSpeedMagic    = "BP-SPEED/1\n"
 	ctSpeedAck      = "BP-SPEED/1 OK\n"
-	ctSpeedStreams  = 4
 	ctSpeedBlock    = 32 << 10
 	ctSpeedWarmup   = 2 * time.Second
 	ctSpeedMinimum  = 2 * time.Second
 	ctSpeedMaximum  = 4 * time.Second
 	ctSpeedInterval = 500 * time.Millisecond
-	// Includes concurrent connection setup, both directions and cleanup.
-	ctSpeedBudget = 20 * time.Second
+	// ctSpeedPeakWindow is the span the peak is taken over: the best this
+	// long a stretch the tunnel carried. Shorter would report a socket buffer
+	// draining at once, not a rate the path holds.
+	ctSpeedPeakWindow = time.Second
+	// Includes concurrent connection setup, both stages of both directions
+	// and cleanup.
+	ctSpeedBudget = 40 * time.Second
+
+	// ctSpeedAckEvery is how often the receiving end of an upload reports its
+	// running count. It used to answer every read with eight bytes — a write
+	// for each 32 KB received, plus the read for it on the Iran side — so a
+	// fast upload spent half its CPU on the counts and the test measured that
+	// instead of the tunnel. Measured on loopback, 4 streams: upload 25.6
+	// Gb/s with a count per read, 50.5 with one every 5 ms, against 51.0 for
+	// a plain bulk copy; download, which has no counts, 53.5 either way. The
+	// Iran side samples every ctSpeedInterval, so a count at most this old is
+	// as good as one per read, and older Iran servers read the counts the
+	// same way however often they come.
+	ctSpeedAckEvery = 5 * time.Millisecond
 )
+
+// ctSpeedStages are the connection counts each direction is measured with,
+// in order. Four is what one user's few connections look like; sixteen loads
+// the tunnel until the path, not the number of connections, is what limits
+// it — on a long round trip a handful of TCP windows cannot fill a fast link,
+// and the figure that answers "how much can this tunnel carry" is the loaded
+// one. Both are run and the better kept: some carriers do worse with more
+// connections, and that should not be read as their limit.
+var ctSpeedStages = []int{4, 16}
 
 type ctSpeedResult struct {
 	download, upload float64
-	stable           bool
+	// downloadPeak and uploadPeak are the most the tunnel carried over any
+	// ctSpeedPeakWindow of either stage: the maximum it can be got to move.
+	downloadPeak, uploadPeak float64
+	// streams is how many connections the download figure came from.
+	streams int
+	stable  bool
 }
 
 // ctSpeed measures one tunnel at a time. Streams share the same sampling
@@ -39,29 +69,68 @@ func ctSpeed(ctx context.Context, dial func() (net.Conn, error)) (ctSpeedResult,
 	var r ctSpeedResult
 	ctx, cancel := context.WithTimeout(ctx, ctSpeedBudget)
 	defer cancel()
-	download, downStable, err := ctSpeedDirection(ctx, dial, 'D')
+	down, err := ctSpeedStaged(ctx, dial, 'D')
 	if err != nil {
 		return r, fmt.Errorf("download: %w", err)
 	}
-	upload, upStable, err := ctSpeedDirection(ctx, dial, 'U')
+	up, err := ctSpeedStaged(ctx, dial, 'U')
 	if err != nil {
 		return r, fmt.Errorf("upload: %w", err)
 	}
-	r.download, r.upload, r.stable = download, upload, downStable && upStable
+	r.download, r.downloadPeak, r.streams = down.avg, down.peak, down.streams
+	r.upload, r.uploadPeak = up.avg, up.peak
+	r.stable = down.stable && up.stable
 	return r, nil
 }
 
-func ctSpeedDirection(parent context.Context, dial func() (net.Conn, error), direction byte) (float64, bool, error) {
+// ctSpeedRun is one direction measured at one connection count.
+type ctSpeedRun struct {
+	avg, peak float64
+	streams   int
+	stable    bool
+}
+
+// ctSpeedStaged measures one direction at every stage and keeps the best.
+//
+// The first stage has to succeed: it is the measurement the test has always
+// made, and a tunnel that cannot carry it has failed the speed test. A later
+// stage may fail — a carrier whose pool will not open sixteen connections at
+// once is still a carrier that works — and then the earlier figures stand.
+func ctSpeedStaged(ctx context.Context, dial func() (net.Conn, error), direction byte) (ctSpeedRun, error) {
+	var best ctSpeedRun
+	for i, n := range ctSpeedStages {
+		run, err := ctSpeedDirection(ctx, dial, direction, n)
+		if err != nil {
+			if i == 0 {
+				return best, err
+			}
+			if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
+				return best, ctx.Err()
+			}
+			break
+		}
+		if run.avg > best.avg {
+			peak := max(best.peak, run.peak)
+			best = run
+			best.peak = peak
+		} else {
+			best.peak = max(best.peak, run.peak)
+		}
+	}
+	return best, nil
+}
+
+func ctSpeedDirection(parent context.Context, dial func() (net.Conn, error), direction byte, n int) (ctSpeedRun, error) {
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
 	var received atomic.Uint64
-	var streams [ctSpeedStreams]atomic.Uint64
-	ready := make(chan error, ctSpeedStreams)
-	failures := make(chan error, ctSpeedStreams)
+	streams := make([]atomic.Uint64, n)
+	ready := make(chan error, n)
+	failures := make(chan error, n)
 	// Negotiate all streams concurrently, then release them together.
 	start := make(chan struct{})
-	for i := range ctSpeedStreams {
+	for i := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -129,14 +198,14 @@ func ctSpeedDirection(parent context.Context, dial func() (net.Conn, error), dir
 			}
 		}()
 	}
-	for range ctSpeedStreams {
+	for range n {
 		select {
 		case err := <-ready:
 			if err != nil {
-				return 0, false, err
+				return ctSpeedRun{}, err
 			}
 		case <-ctx.Done():
-			return 0, false, ctx.Err()
+			return ctSpeedRun{}, ctx.Err()
 		}
 	}
 	close(start)
@@ -145,13 +214,13 @@ func ctSpeedDirection(parent context.Context, dial func() (net.Conn, error), dir
 	select {
 	case <-warmup.C:
 	case err := <-failures:
-		return 0, false, err
+		return ctSpeedRun{}, err
 	case <-ctx.Done():
-		return 0, false, ctx.Err()
+		return ctSpeedRun{}, ctx.Err()
 	}
 	started, previous := time.Now(), time.Now()
 	baseline := received.Load()
-	var streamBaseline [ctSpeedStreams]uint64
+	streamBaseline := make([]uint64, n)
 	for i := range streams {
 		streamBaseline[i] = streams[i].Load()
 	}
@@ -159,40 +228,69 @@ func ctSpeedDirection(parent context.Context, dial func() (net.Conn, error), dir
 	tick := time.NewTicker(ctSpeedInterval)
 	defer tick.Stop()
 	var samples []float64
+	var ticks []ctSpeedTick
 	for {
 		select {
 		case <-ctx.Done():
-			return 0, false, ctx.Err()
+			return ctSpeedRun{}, ctx.Err()
 		case err := <-failures:
-			return 0, false, err
+			return ctSpeedRun{}, err
 		case <-tick.C:
 			now, count := time.Now(), received.Load()
 			samples = append(samples, float64(count-last)/now.Sub(previous).Seconds())
+			ticks = append(ticks, ctSpeedTick{bytes: count - last, span: now.Sub(previous)})
 			previous, last = now, count
 			elapsed := now.Sub(started)
 			stable := ctSpeedConverged(samples)
 			if elapsed >= ctSpeedMinimum && stable || elapsed >= ctSpeedMaximum {
 				select {
 				case err := <-failures:
-					return 0, false, err
+					return ctSpeedRun{}, err
 				default:
 				}
 				for i := range streams {
 					if streams[i].Load() == streamBaseline[i] {
-						return 0, false, errors.New("a speed stream carried no verified traffic")
+						return ctSpeedRun{}, errors.New("a speed stream carried no verified traffic")
 					}
 				}
 				if count == baseline {
-					return 0, false, errors.New("no verified traffic during measurement")
+					return ctSpeedRun{}, errors.New("no verified traffic during measurement")
 				}
 				// Cancellation can race the last sample; never publish a partial run.
 				if err := parent.Err(); err != nil {
-					return 0, false, err
+					return ctSpeedRun{}, err
 				}
-				return float64(count-baseline) * 8 / elapsed.Seconds() / 1e6, stable, nil
+				avg := float64(count-baseline) * 8 / elapsed.Seconds() / 1e6
+				return ctSpeedRun{avg: avg, peak: max(avg, ctSpeedPeak(ticks)), streams: n, stable: stable}, nil
 			}
 		}
 	}
+}
+
+// ctSpeedTick is what one sampling interval carried.
+type ctSpeedTick struct {
+	bytes uint64
+	span  time.Duration
+}
+
+// ctSpeedPeak is the best rate, in Mb/s, over any run of consecutive ticks
+// spanning at least ctSpeedPeakWindow. Zero when the run was shorter than one
+// window, which the caller covers with the average.
+func ctSpeedPeak(ticks []ctSpeedTick) float64 {
+	var best float64
+	for i := range ticks {
+		var b uint64
+		var span time.Duration
+		for j := i; j < len(ticks); j++ {
+			b += ticks[j].bytes
+			span += ticks[j].span
+			if span >= ctSpeedPeakWindow {
+				best = max(best, float64(b)*8/span.Seconds()/1e6)
+				break
+			}
+		}
+	}
+	return best
 }
 
 func ctSpeedConverged(samples []float64) bool {
@@ -273,18 +371,45 @@ func ctServeSpeedOrEcho(c net.Conn) {
 		_ = ctSpeedSend(c, payload)
 		return
 	}
-	var total uint64
-	var ack [8]byte
+	// The running count goes back every ctSpeedAckEvery from a goroutine of
+	// its own, and only when it has moved; the reader only adds to it.
+	var total atomic.Uint64
+	stop, acked := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(acked)
+		tick := time.NewTicker(ctSpeedAckEvery)
+		defer tick.Stop()
+		var sent uint64
+		var ack [8]byte
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+			}
+			if n := total.Load(); n != sent {
+				binary.BigEndian.PutUint64(ack[:], n)
+				if _, err := c.Write(ack[:]); err != nil {
+					return
+				}
+				sent = n
+			}
+		}
+	}()
 	// ctSpeedReceive returns only when the stream ends — a read error, bytes
 	// that came back different, or the deadline — so the failure marker always
 	// follows it. A client that finished measuring has already closed the
 	// connection and stopped counting; one still measuring is told to stop.
 	_ = ctSpeedReceive(c, payload, func(n uint64) error {
-		total += n
-		binary.BigEndian.PutUint64(ack[:], total)
-		_, err := io.Copy(c, bytes.NewReader(ack[:]))
-		return err
+		total.Add(n)
+		return nil
 	})
+	close(stop)
+	<-acked
+	// The last count, then the marker: a count never trails what arrived.
+	var ack [8]byte
+	binary.BigEndian.PutUint64(ack[:], total.Load())
+	_, _ = c.Write(ack[:])
 	binary.BigEndian.PutUint64(ack[:], math.MaxUint64)
 	_, _ = c.Write(ack[:])
 }

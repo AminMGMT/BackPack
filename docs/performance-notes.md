@@ -104,7 +104,7 @@ the datagrams. A tunnel losing packets inside its own receive loop is
 indistinguishable from a lossy path when you are looking at it from outside,
 which is the most expensive kind of fault to chase.
 
-Linux only, plain `udp` carrier only. Every other carrier reads as it did
+Linux only, plain `udp` carrier only (the carrier was removed in v2.0.0; the measurement is kept as history). Every other carrier reads as it did
 before, including if the batch path refuses at runtime — losing the
 optimisation costs throughput, never the tunnel.
 
@@ -185,7 +185,7 @@ Shipped with two conditions, both in `internal/tunnel/l3/gso.go`:
 `TestGSOSendRate` is the measurement and it is kept, so the next person to ask
 gets a number from their own machine.
 
-**Shipped, and until v1.8.5 not reached.** The default `udp` carrier was wrapped
+**Shipped, and until v1.8.5 not reached.** (Historical: the `udp` carrier was removed in v2.0.0.) The default `udp` carrier was wrapped
 in a peer-pinning layer that exposed neither batch method, so recvmmsg, sendmmsg
 and `UDP_SEGMENT` above ran only in their own tests; every production packet was
 its own system call. v1.8.5 hands a single path to the tunnel unwrapped
@@ -317,6 +317,10 @@ the live sockets and compares it to the path (`internal/manage/diagnose_path.go`
 
 ## pck: a clock read nobody used, and batches at both ends
 
+> This section is about the **previous PCK**, a layer-3 carrier over a TUN. Since
+> v2.0.0 the direct `pck` carrier is paqet's engine ([Direct PCK](direct-pck.md));
+> the raw-datagram carrier measured here lives on as `sni`.
+
 Profiled on 2026-09-25, a layer-3 `pck` tunnel between two network namespaces,
 512 MB echoed and 16 parallel 64 MB downloads, three runs of each. `pprof`
 of the loaded kharej side, before anything changed:
@@ -413,4 +417,4 @@ See `internal/tunnel/l3/bench_gate_test.go`.
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

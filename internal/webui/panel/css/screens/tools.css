@@ -210,7 +210,9 @@ body[data-accent] .panel .ct-steps li.on .n{background:var(--ac);border-color:va
 .panel .ct-gh b{font-size:10.5px;font-weight:660;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
 .panel .ct-gh small{font-size:10.5px;color:var(--faint)}
 .panel .ct-gh .ln{flex:1;height:1px;background:var(--ln)}
-.panel .ct-row{display:grid;grid-template-columns:10px minmax(80px,1fr) minmax(60px,1fr) 44px 118px 62px;
+/* The figures column fits "↓ 34441 max 34441 Mb/s": a GRE tunnel on a fast
+   path measures five digits, and at 118px they ran left over the 60/60. */
+.panel .ct-row{display:grid;grid-template-columns:10px minmax(80px,1fr) minmax(60px,1fr) 44px 152px 62px;
   align-items:center;gap:10px;padding:8px 8px;border-radius:10px;transition:background .15s;
   animation:ct-row-in .5s var(--spring) both;animation-delay:var(--d,0ms)}
 @keyframes ct-row-in{from{opacity:0;transform:translateX(10px)}}
@@ -222,7 +224,10 @@ body[data-accent] .panel .ct-steps li.on .n{background:var(--ac);border-color:va
 .panel .ct-row.run .dot{background:var(--ac);animation:ct-pulse 1.4s ease-in-out infinite}
 @keyframes ct-pulse{50%{opacity:.35}}
 .panel .ct-row .nm{min-width:0}
-.panel .ct-row .nm b{display:block;font-size:12.5px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Two lines, then the ellipsis: "Naive / HTTP/2 over TLS" is not a name to
+   cut at ten characters. The full name is also the title. */
+.panel .ct-row .nm b{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;font-size:12.5px;
+  font-weight:620;line-height:1.3;overflow:hidden;overflow-wrap:anywhere}
 .panel .ct-row .nm small{display:block;font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel .ct-row .nm small:empty{display:none}
 .panel .ct-row .bar{height:6px;border-radius:3px;background:var(--sunk);overflow:hidden}
@@ -236,6 +241,8 @@ body[data-accent] .panel .ct-steps li.on .n{background:var(--ac);border-color:va
 .panel .ct-row .fg{display:flex;gap:9px;font-size:11.5px;color:var(--dim);white-space:nowrap;justify-content:flex-end}
 .panel .ct-row.has-speed .fg{flex-direction:column;align-items:flex-end;gap:2px}
 .panel .ct-row .fg b{color:var(--tx);font-weight:620;font-variant-numeric:tabular-nums}
+.panel .ct-row .fg .mx{color:var(--dim)}
+.panel .ct-row .fg .mx b{color:var(--tx2)}
 .panel .ct-row .st{font-size:10px;font-weight:660;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);text-align:right}
 .panel .ct-row.ok .st{color:var(--ok)} .panel .ct-row.wr .st{color:var(--wr)} .panel .ct-row.er .st{color:var(--er)}
 .panel .ct-row.sk{opacity:.55}

@@ -143,6 +143,16 @@ body[data-t="light"] .bgbars i{
     transparent 78%)}
 @media (prefers-reduced-motion:reduce){ .bgbars i{animation:none} }
 .panel .inner2{padding:0 clamp(12px,3vw,24px) 26px}
+/* One width on every desktop. A laptop and an ultrawide monitor draw the same
+   page at the same size, centred, with the rest of the window left clear —
+   stretched across 3440 pixels the cards were long thin strips. Below that
+   width (a tablet, a phone) the panel fills the screen as before, with only
+   the usual gutter at its edges.
+
+   It is a limit on .panel itself, not on .inner2, because .panel is the
+   container every layout below queries: a limit inside it would leave those
+   queries measuring a width the content no longer has. */
+.panel{max-width:1100px;margin:0 auto}
 .panel .stickH{position:sticky;top:0;z-index:40;margin:0 calc(-1*clamp(12px,3vw,24px));
   padding:0 clamp(12px,3vw,24px);background:color-mix(in srgb,var(--bg) 90%,transparent);
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}

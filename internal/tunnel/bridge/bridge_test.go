@@ -85,3 +85,50 @@ func TestJoinEndsWithItsContext(t *testing.T) {
 		t.Fatal("Join outlived its context")
 	}
 }
+
+// halfConn is a connection that is not a *net.TCPConn but can end one direction
+// by itself, as a PCK stream can.
+type halfConn struct {
+	net.Conn
+	ended chan struct{}
+}
+
+func (h *halfConn) CloseWrite() error {
+	close(h.ended)
+	return h.Conn.(*net.TCPConn).CloseWrite()
+}
+
+// An end of the request reaches a connection that is not a TCP connection by its
+// own CloseWrite, and the response still comes back: the PCK engine's streams
+// rely on this to keep a half-close.
+func TestJoinPassesAnEndToAnyConnectionThatCanHalfClose(t *testing.T) {
+	user, userEnd := tcpPair(t)
+	backendEnd, backend := tcpPair(t)
+	h := &halfConn{Conn: backendEnd, ended: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { Join(context.Background(), userEnd, h); close(done) }()
+
+	user.Write([]byte("request"))
+	user.(*net.TCPConn).CloseWrite()
+	select {
+	case <-h.ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request's end never reached the connection that can half-close")
+	}
+	got, err := io.ReadAll(backend)
+	if err != nil || string(got) != "request" {
+		t.Fatalf("backend read %q, %v", got, err)
+	}
+	backend.Write([]byte("response"))
+	backend.Close()
+	_ = user.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reply, err := io.ReadAll(user)
+	if err != nil || string(reply) != "response" {
+		t.Fatalf("response after the request's end: %q, %v", reply, err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Join did not return")
+	}
+}

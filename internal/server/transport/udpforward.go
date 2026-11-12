@@ -256,6 +256,7 @@ func (f *udpFlow) touch() { f.lastSeen.Store(time.Now().UnixNano()) }
 // deliver queues a datagram for the tunnel. A full queue means the tunnel is
 // not keeping up; dropping is what a congested UDP path does anyway, and it is
 // better than blocking the one goroutine that serves every flow on this port.
+// What is dropped is the oldest queued datagram.
 func (f *udpFlow) deliver(payload []byte) {
 	f.queueMu.Lock()
 	defer f.queueMu.Unlock()
@@ -266,7 +267,14 @@ func (f *udpFlow) deliver(payload []byte) {
 	}
 	f.touch()
 	if len(f.in) == cap(f.in) {
-		return
+		// Full: the tunnel is not keeping up. The datagram that has waited
+		// longest is the one least worth sending — a reply to it is already
+		// late — so it is the one dropped, not the newest.
+		select {
+		case old := <-f.in:
+			network.PutDatagramBuffer(old)
+		default:
+		}
 	}
 	frame := network.GetDatagramBuffer(2 + len(payload))
 	frame[0] = byte(len(payload) >> 8)
@@ -294,14 +302,38 @@ func (f *udpFlow) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 	}
+	n := f.drain(p)
+	// Whatever else is already queued rides the same Read, so one write into
+	// the tunnel carries all of it. The relay writes each Read to the stream
+	// and waits for the write to finish; a datagram per write caps a flow at
+	// one datagram per write latency, and above that rate the queue stands
+	// full and every datagram waits behind it. Nothing is delayed to make a
+	// batch: only datagrams that are already waiting are taken.
+	for n < len(p) && len(f.pending) == 0 {
+		select {
+		case frame := <-f.in:
+			f.pendingFrame = frame
+			f.pending = frame
+			n += f.drain(p[n:])
+		default:
+			f.touch()
+			return n, nil
+		}
+	}
+	f.touch()
+	return n, nil
+}
+
+// drain copies from the frame being read into p, releasing the frame when it
+// is used up. The caller holds readMu.
+func (f *udpFlow) drain(p []byte) int {
 	n := copy(p, f.pending)
 	f.pending = f.pending[n:]
 	if len(f.pending) == 0 {
 		network.PutDatagramBuffer(f.pendingFrame)
 		f.pendingFrame = nil
 	}
-	f.touch()
-	return n, nil
+	return n
 }
 
 // Write reassembles framed datagrams out of whatever the tunnel hands over and

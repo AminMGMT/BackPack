@@ -46,7 +46,7 @@ import (
 
 // openSNI builds the pck carrier and puts a hello in front of it.
 func openSNI(cfg Config) (DatagramCarrier, net.Addr, error) {
-	below, peer, err := openPck(cfg)
+	below, peer, err := openRawPck(cfg)
 	if err != nil {
 		return nil, nil, err
 	}

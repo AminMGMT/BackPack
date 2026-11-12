@@ -1,0 +1,32 @@
+name: libpcap
+description: >
+  Builds libpcap (static, no root) for the runner and points cgo at it. The PCK
+  carrier is paqet's engine, which captures with libpcap through cgo, so every
+  job that compiles the module needs the headers. Built once and cached by
+  version; flex and bison are what libpcap's own build needs.
+
+runs:
+  using: composite
+  steps:
+    - name: Install flex and bison
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends flex bison
+
+    - name: Cache libpcap
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/libpcap
+        key: libpcap-1.10.6-${{ runner.os }}-${{ hashFiles('scripts/build-libpcap.sh') }}
+
+    - name: Build libpcap
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: scripts/build-libpcap.sh "$HOME/libpcap"
+
+    - name: Point cgo at libpcap
+      shell: bash
+      run: |
+        echo "CGO_ENABLED=1" >> "$GITHUB_ENV"
+        echo "CGO_CFLAGS=-I$HOME/libpcap/include" >> "$GITHUB_ENV"
+        echo "CGO_LDFLAGS=-L$HOME/libpcap/lib -lpcap" >> "$GITHUB_ENV"

@@ -118,7 +118,7 @@ func (d *gsoDevice) smallestBuffer() int {
 // and the split writes each one in whole.
 func TestPumpOffersBuffersBigEnoughForAnySegment(t *testing.T) {
 	dev := newGSODevice()
-	tunnel, err := New(Config{
+	tunnel, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeListen, Addr: "127.0.0.1:0", Token: "t", Encap: "gre",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 	}, quietLogger())
@@ -159,7 +159,7 @@ func TestASegmentLargerThanTheMTUCrossesIntact(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	listener, err := New(Config{
+	listener, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeListen, Addr: "127.0.0.1:0", Token: "gso-token", Encap: "gre",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 	}, quietLogger())
@@ -169,7 +169,7 @@ func TestASegmentLargerThanTheMTUCrossesIntact(t *testing.T) {
 	listener.openDevice = func(deviceSpec) (packetDevice, error) { return recvDev, nil }
 	start(t, ctx, cancel, listener, recvDev)
 
-	dialer, err := New(Config{
+	dialer, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeDial, Addr: awaitBind(t, listener).String(), Token: "gso-token", Encap: "gre",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 	}, quietLogger())

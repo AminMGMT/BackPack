@@ -142,32 +142,49 @@ func tunnelToBackend(stream net.Conn, backend *net.UDPConn, logger *logrus.Logge
 	}
 }
 
-// backendToTunnel frames the backend's replies and writes them to the tunnel.
+// udpBackendQueue is how many replies may wait for the tunnel.
+const udpBackendQueue = 256
+
+// batchLimit is the most a single stream write carries.
+const batchLimit = 32 * 1024
+
+// backendToTunnel frames the backend's replies and writes them to the tunnel,
+// through a queue between the socket and the stream: see datagramBatch.
 func backendToTunnel(stream net.Conn, backend *net.UDPConn, logger *logrus.Logger, usage *web.Usage, port int, sniffer bool, activity ...*atomic.Int64) {
-	buf := make([]byte, network.MaxDatagram)
-	for {
-		// The deadline is what ends a flow the far side abandoned without
-		// closing the stream — otherwise this read would block forever on a
-		// socket nobody will ever send to again.
-		_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
-		n, err := backend.Read(buf)
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() && len(activity) > 0 && time.Since(time.Unix(0, activity[0].Load())) < udpBackendIdle {
-				continue
+	q := newDatagramBatch(udpBackendQueue)
+	defer q.close()
+	go func() {
+		defer q.close()
+		buf := make([]byte, network.MaxDatagram)
+		for {
+			_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
+			n, err := backend.Read(buf)
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() && len(activity) > 0 && time.Since(time.Unix(0, activity[0].Load())) < udpBackendIdle {
+					continue
+				}
+				logger.Tracef("UDP backend %s ended: %v", backend.RemoteAddr(), err)
+				return
 			}
-			logger.Tracef("UDP backend %s ended: %v", backend.RemoteAddr(), err)
+			q.put(buf[:n])
+			if len(activity) > 0 {
+				activity[0].Store(time.Now().UnixNano())
+			}
+			if sniffer {
+				usage.AddOrUpdatePort(port, uint64(n))
+			}
+		}
+	}()
+	var out []byte
+	for {
+		var ok bool
+		out, ok = q.take(out, batchLimit)
+		if !ok {
 			return
 		}
-		if err := network.WriteDatagram(stream, buf[:n]); err != nil {
+		if _, err := stream.Write(out); err != nil {
 			logger.Debugf("failed to write a datagram to the tunnel: %v", err)
 			return
-		}
-		if len(activity) > 0 {
-			activity[0].Store(time.Now().UnixNano())
-			_ = backend.SetReadDeadline(time.Now().Add(udpBackendIdle))
-		}
-		if sniffer {
-			usage.AddOrUpdatePort(port, uint64(n))
 		}
 	}
 }

@@ -8,8 +8,9 @@ import (
 
 // Presets for a full IP tunnel.
 //
-// The reverse presets and the direct layer-4 ones both tune a mux and a KCP
-// layer. A layer-3 tunnel has neither, so none of those fields exist here and
+// The reverse presets tune a mux and a KCP layer (and so did the presets of the
+// [direct] stream tunnel, until v2.0.0 removed it). A layer-3 tunnel has
+// neither, so none of those fields exist here and
 // copying them would produce a config full of keys the engine ignores.
 //
 // What actually decides how a layer-3 tunnel feels is the queue between the

@@ -116,7 +116,7 @@ func tunnelHealthWith(t core.Tunnel, pairs [][2]string) Health {
 		// rather than showing green — a light that is on because nothing
 		// looked is worse than one that admits it does not know.
 		if tunnelspec.IsDirectKind(t) {
-			connected, known := directHealthy(t, pairs)
+			connected, known := directHealthy(t)
 			h.Connected = connected && known
 			h.Detail = directStateDetail(t, connected, known)
 			h.State = "offline"
@@ -124,6 +124,11 @@ func tunnelHealthWith(t core.Tunnel, pairs [][2]string) Health {
 				h.State = "online"
 			} else if !known {
 				h.State = "unknown"
+			}
+			// A tunnel v2.0.0 left unable to start is offline for a reason
+			// that is not the path's, and the reason is the detail.
+			if t.Unrunnable != "" {
+				h.State, h.Detail = "offline", t.Unrunnable
 			}
 			return h
 		}

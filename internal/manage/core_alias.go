@@ -77,7 +77,6 @@ var (
 	orDefault  = core.OrDefault
 	writeUnit  = core.WriteUnit
 	validName  = core.ValidName
-	directRole = core.DirectRole
 	l3Role     = core.L3Role
 )
 

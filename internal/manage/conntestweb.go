@@ -24,9 +24,11 @@ func ConnTestRunTime() time.Duration {
 		ConnTestSpeedTime(len(connTestReverse)-1+len(connTestDirect))
 }
 
-// ConnTestSpeedTime estimates the serial speed phase for healthy tunnels.
+// ConnTestSpeedTime estimates the serial speed phase for healthy tunnels:
+// both directions, at every connection count.
 func ConnTestSpeedTime(tunnels int) time.Duration {
-	return time.Duration(tunnels) * (2*(ctSpeedWarmup+ctSpeedMaximum) + time.Second)
+	runs := time.Duration(2 * len(ctSpeedStages))
+	return time.Duration(tunnels) * (runs*(ctSpeedWarmup+ctSpeedMaximum) + time.Second)
 }
 
 // ConnTestName is a tested transport's name as the menus print it: "TCP MUX",

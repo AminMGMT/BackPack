@@ -38,6 +38,9 @@ var fa = map[string]string{
 	"🟢 Tunnel <b>%s</b> is back up":       "🟢 تونل <b>%s</b> دوباره وصل شد",
 	"🗑 Tunnel <b>%s</b> no longer exists": "🗑 تونل <b>%s</b> دیگر وجود ندارد",
 
+	// The weekly showcase's button, when it has no title of its own
+	"Open": "مشاهده",
+
 	// Release announcement
 	"⬆️ Backpack %s has been released (you are on %s).":                                            "⬆️ نسخه %s بک‌پک منتشر شد (نسخه فعلی شما %s است).",
 	"Update from the CLI: sudo backpack → Update.":                                                 "برای به‌روزرسانی در ترمینال: sudo backpack ← Update.",

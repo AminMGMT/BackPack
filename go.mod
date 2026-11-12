@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/cilium/ebpf v0.22.0
 	github.com/flynn/noise v1.1.0
+	github.com/gopacket/gopacket v1.7.4
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/reedsolomon v1.14.2
 	github.com/quic-go/quic-go v0.63.0
@@ -37,3 +38,16 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 )
+
+// smux with two changes for the pck transport: window updates are sent by a
+// goroutine of their own, and control frames go ahead of data in the write
+// queue. See internal/thirdparty/smux/stream.go and shaper.go.
+replace github.com/xtaci/smux => ./internal/thirdparty/smux
+
+// kcp-go with four additions for the pck transport, none of which is on until a
+// session asks for it (the other users of kcp-go are unchanged): a settable
+// retransmission margin, a fast retransmission that can itself be
+// fast-retransmitted, a reading of the delay the received data met, and a larger
+// output queue for the rate limiter. See internal/thirdparty/kcp-go/kcp.go and
+// sess.go.
+replace github.com/xtaci/kcp-go/v5 => ./internal/thirdparty/kcp-go

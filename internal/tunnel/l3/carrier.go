@@ -5,11 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 )
 
 // Carriers.
@@ -17,8 +13,8 @@ import (
 // A carrier is how a datagram reaches the peer. The tunnel above does not care
 // which one it is holding: it hands over a sealed datagram and an address, and
 // gets datagrams back. That indirection is what lets the same layer-3 engine
-// run over plain UDP today and over the forged-source and raw-TCP carriers
-// next, without the engine learning anything about them.
+// run over raw TCP segments, ICMP echo and forged-source packets without the
+// engine learning anything about them.
 //
 // Only datagram carriers may appear here. See the package doc for why a
 // reliable carrier is not merely a poor fit but actively harmful.
@@ -36,128 +32,93 @@ type DatagramCarrier interface {
 	CarrierName() string
 }
 
-// Byte costs of the headers a carrier puts on the wire. IPv6 is 40 rather than
-// 20, which matters enough to a 1500-byte path to be worth distinguishing.
-const (
-	ipv4HeaderLen = 20
-	ipv6HeaderLen = 40
-	udpHeaderLen  = 8
-)
-
-// udpCarrier is the plain UDP carrier: no obfuscation, nothing hidden. It is
-// the right choice on a path that does not filter, and it is the reference the
-// other carriers are measured against.
-type udpCarrier struct {
-	*net.UDPConn
-	overhead int
-
-	// The recvmmsg wrapper, on the family this socket ended up on, plus the
-	// message array it reuses. Linux only; nil everywhere else, and nil here
-	// means the pump reads one datagram at a time. See batchread.go.
-	v4      *ipv4.PacketConn
-	v6      *ipv6.PacketConn
-	batchMu sync.Mutex
-	msgs    []ipv4.Message
-	// The send side's own array and lock. Separate from the receive side's:
-	// the two pumps are different goroutines and run at the same time, so one
-	// shared array would serialise them against each other for no reason.
-	wbatchMu sync.Mutex
-	wmsgs    []ipv4.Message
-	// The segmented-write scratch, under the send lock with the array above.
-	// gsoOff is set by the first refusal and never cleared: see gso.go for why
-	// support is found out by trying rather than by asking.
-	gsoBuf  []byte
-	gsoCmsg []byte
-	gsoOff  bool
-}
-
-func (c *udpCarrier) Overhead() int       { return c.overhead }
-func (c *udpCarrier) CarrierName() string { return "udp" }
-
-// udpOverhead is the outer IP header plus the UDP header, chosen by the family
-// the socket actually ended up on.
-func udpOverhead(addr net.Addr) int {
-	if ua, ok := addr.(*net.UDPAddr); ok && ua.IP.To4() == nil && ua.IP != nil {
-		return ipv6HeaderLen + udpHeaderLen
-	}
-	return ipv4HeaderLen + udpHeaderLen
-}
-
-// listenUDP binds the carrier for the side that waits to be dialled.
-func listenUDP(bind string, sockBuf int) (DatagramCarrier, error) {
-	addr, err := net.ResolveUDPAddr("udp", bind)
-	if err != nil {
-		return nil, fmt.Errorf("l3: resolving the bind address %q: %w", bind, err)
-	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("l3: listening on %q: %w", bind, err)
-	}
-	sizeUDPBuffers(conn, sockBuf)
-	c := &udpCarrier{UDPConn: conn, overhead: udpOverhead(addr)}
-	c.enableBatch()
-	return c, nil
-}
-
-// dialUDP binds the carrier for the side that reaches out, and resolves the
-// peer it will send to.
-//
-// The socket is not connected, so it can still receive from an address other
-// than the one it sends to. That matters for a peer whose source address is
-// not what was dialled — a NAT, or a carrier that rewrites it — and it keeps
-// this path identical in shape to the listening one.
-func dialUDP(remote string, sockBuf int) (DatagramCarrier, net.Addr, error) {
-	peer, err := net.ResolveUDPAddr("udp", remote)
-	if err != nil {
-		return nil, nil, fmt.Errorf("l3: resolving the remote address %q: %w", remote, err)
-	}
-	local := &net.UDPAddr{IP: net.IPv4zero, Port: 0}
-	if peer.IP != nil && peer.IP.To4() == nil {
-		local = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
-	}
-	conn, err := net.ListenUDP("udp", local)
-	if err != nil {
-		return nil, nil, fmt.Errorf("l3: opening a local socket: %w", err)
-	}
-	sizeUDPBuffers(conn, sockBuf)
-	c := &udpCarrier{UDPConn: conn, overhead: udpOverhead(peer)}
-	c.enableBatch()
-	return c, peer, nil
-}
-
-// sizeUDPBuffers asks the kernel for larger socket buffers. A burst off the
-// TUN device arrives faster than the read loop drains it, and without room to
-// park those datagrams the kernel drops them — which shows up as a tunnel that
-// cannot reach line rate for no visible reason. Best effort: a kernel that
-// refuses the size still gives a working tunnel, just a slower one.
-func sizeUDPBuffers(conn *net.UDPConn, sockBuf int) {
-	if sockBuf <= 0 {
-		sockBuf = defaultSockBuf
-	}
-	_ = conn.SetReadBuffer(sockBuf)
-	_ = conn.SetWriteBuffer(sockBuf)
-}
-
-// defaultSockBuf matches what the spoof carrier already asks for, for the same
-// reason it does.
-const defaultSockBuf = 4 << 20
-
 // Carrier names accepted in a configuration. A reliable transport — tcp, ws,
 // kcp — is deliberately absent and can never be added: see the package doc.
 const (
-	CarrierUDP   = "udp"
+	// CarrierPck is paqet's engine since v2.0.0, not a datagram carrier: see
+	// pck.go. The raw-datagram pck it replaced lives on only inside sni.
 	CarrierPck   = "pck"
 	CarrierXdi   = "xdi"
 	CarrierSpoof = "spoof"
-	// CarrierQuic is a real QUIC connection carrying the tunnel in DATAGRAM
-	// frames — unreliable, so it is a carrier and not a transport. See
-	// carrier_quic.go.
-	CarrierQuic = "quic"
 	// CarrierSNI is pck with a fake TLS ClientHello at the start of the flow,
 	// so a box that classifies by server name lets the rest through. See
 	// carrier_sni.go.
 	CarrierSNI = "sni"
 )
+
+// Carriers that existed and were taken out, kept by name so a config that
+// still asks for one is refused in words that say what happened rather than
+// as a typo. See RemovedCarrierError.
+const (
+	// removedCarrierUDP was the plain UDP carrier, and the default: a config
+	// that names no carrier at all was a udp tunnel, so an empty name is
+	// refused on the same terms rather than quietly moved onto another one.
+	removedCarrierUDP = "udp"
+	// removedCarrierQuic was a QUIC connection carrying the tunnel in DATAGRAM
+	// frames.
+	removedCarrierQuic = "quic"
+)
+
+// Carriers lists what this engine can open, in the order the screens offer
+// them. It is the one list the error messages below are written from. The two
+// kernel GRE links are last: they are not datagram carriers, but a config names
+// them in the same key — see kernelgre.go.
+func Carriers() []string {
+	return append(DatagramCarriers(), CarrierGRE, CarrierIP6GRE)
+}
+
+// DatagramCarriers is Carriers without the kernel GRE links: the carriers a
+// tunnel built on a removed one can be moved onto by changing its carrier
+// alone. A GRE link names both servers' real addresses and has no port and no
+// token, so a tunnel becomes one by being set up again, not by an edit.
+func DatagramCarriers() []string { return []string{CarrierPck, CarrierXdi, CarrierSNI, CarrierSpoof} }
+
+// RemovedCarrier reports whether a carrier name — lower-cased and trimmed, as
+// Validate leaves it — is one Backpack v2.0.0 took out. An empty name counts:
+// it meant udp.
+func RemovedCarrier(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", removedCarrierUDP, removedCarrierQuic:
+		return true
+	}
+	return false
+}
+
+// RemovedCarrierError is what a tunnel on a removed carrier is refused with.
+//
+// No migration: the owner's decision for v2.0.0 was a clear refusal rather
+// than a silent switch, because every remaining carrier needs CAP_NET_RAW and
+// looks different on the wire, and choosing one for an operator is choosing
+// what their path sees. So the message names what is left and where to change
+// it, on both ends.
+//
+// Exported so the management screens that say why a tunnel cannot start use
+// the same words the engine refuses it with.
+func RemovedCarrierError(name string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	was := fmt.Sprintf("carrier %q", name)
+	if name == "" {
+		// The file says nothing, which is how a udp tunnel was written before
+		// the wizard started naming its carrier. Quoting an empty name would
+		// send an operator looking for a key that is not there.
+		was = "no carrier, which meant udp,"
+	}
+	return fmt.Errorf("l3: this tunnel names %s and the udp and quic carriers were removed in "+
+		"Backpack v2.0.0. Choose one of %s instead, the same on both servers: "+
+		"sudo backpack → Manage → Manage Tunnels → the tunnel → Edit → Carrier, or Edit on "+
+		"the tunnel in the web panel, or set carrier = \"pck\" in its [l3] table by hand",
+		was, strings.Join(DatagramCarriers(), ", "))
+}
+
+// testCarriers are carriers only this package's own tests can name.
+//
+// Every carrier left in production opens a raw socket and needs CAP_NET_RAW,
+// and the engine's tests — the handshake, replay, error correction, the MTU
+// probe, the pumps — are about the engine, not the carrier, and have to run as
+// an ordinary user. A _test.go file registers a loopback carrier here; nothing
+// else may, so in every build that is not a test this is empty and a name in
+// it can never come from a config.
+var testCarriers = map[string]func(context.Context, Config) (DatagramCarrier, net.Addr, error){}
 
 // KnownCarrier reports whether a carrier name is one this engine can open.
 //
@@ -169,10 +130,11 @@ func KnownCarrier(name string) bool { return knownCarrier(name) }
 // refused before anything is created rather than after.
 func knownCarrier(name string) bool {
 	switch name {
-	case CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic, CarrierSNI:
+	case CarrierPck, CarrierXdi, CarrierSpoof, CarrierSNI, CarrierGRE, CarrierIP6GRE:
 		return true
 	}
-	return false
+	_, ok := testCarriers[name]
+	return ok
 }
 
 // openCarrier builds the carrier named in the config. The returned address is
@@ -182,7 +144,8 @@ func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
 	return openCarrierContext(context.Background(), cfg)
 }
 
-// openCarrierContext lets Run cancel a pending QUIC handshake at shutdown.
+// openCarrierContext lets Run cancel a carrier that is still being opened at
+// shutdown.
 func openCarrierContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
 	carrier, peer, err := openBareCarrier(ctx, cfg)
 	if err != nil {
@@ -193,7 +156,7 @@ func openCarrierContext(ctx context.Context, cfg Config) (DatagramCarrier, net.A
 		return nil, nil, err
 	}
 	// Error correction wraps whichever carrier was opened, so the scheme is the
-	// same over udp, spoof, pck and xdi and the MTU calculation picks up its
+	// same over spoof, pck, sni and xdi and the MTU calculation picks up its
 	// cost through Overhead(). Disabled, this hands the carrier straight back.
 	wrapped, err := newFECCarrier(carrier, cfg.FEC)
 	if err != nil {
@@ -206,177 +169,69 @@ func openCarrierContext(ctx context.Context, cfg Config) (DatagramCarrier, net.A
 // openBareCarrier builds the carrier the config names, without the layers that
 // wrap it.
 func openBareCarrier(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Carrier)) {
-	case "", CarrierUDP:
-		return openUDPPathsContext(ctx, cfg)
+	name := strings.ToLower(strings.TrimSpace(cfg.Carrier))
+	switch name {
 	case CarrierPck:
-		return openPck(cfg)
+		// Run takes the paqet engine before it would get here; see pck.go.
+		return nil, nil, fmt.Errorf("l3: carrier %q is the paqet engine, not a datagram carrier", name)
 	case CarrierXdi:
 		return openXdi(cfg)
 	case CarrierSpoof:
 		return openSpoof(cfg)
-	case CarrierQuic:
-		return openQuicContext(ctx, cfg)
 	case CarrierSNI:
 		return openSNI(cfg)
-	default:
-		// Refusing by name is better than accepting one and quietly running it
-		// over UDP, which would look like it worked until the path filtered it.
-		return nil, nil, fmt.Errorf(
-			"l3: carrier %q is not available (have %q, %q, %q, %q, %q, %q)",
-			cfg.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic, CarrierSNI)
+	case CarrierGRE, CarrierIP6GRE:
+		// Run takes the kernel path before it would get here; a caller that
+		// does not is asking a link type for a socket it does not have.
+		return nil, nil, fmt.Errorf("l3: carrier %q is a kernel GRE link, not a datagram carrier", name)
 	}
+	if open, ok := testCarriers[name]; ok {
+		return open(ctx, cfg)
+	}
+	if RemovedCarrier(name) {
+		return nil, nil, RemovedCarrierError(name)
+	}
+	// Refusing by name is better than accepting one and quietly running it
+	// over another carrier, which would look like it worked until the path
+	// filtered it.
+	return nil, nil, fmt.Errorf("l3: carrier %q is not available (have %s)",
+		cfg.Carrier, strings.Join(Carriers(), ", "))
 }
 
-// Bound DNS before allocating sockets. Resolve the host once for all paths so
-// a rotating DNS answer cannot send different paths to different tunnel peers.
+// carrierResolveTimeout bounds the lookup of the peer's name, so a resolver
+// that never answers cannot hold a generation open past its own shutdown.
 const carrierResolveTimeout = 12 * time.Second
 
-// openUDPPathsContext opens the plain UDP carrier — one socket, or several
-// spread over consecutive ports when the configuration asks for them. See
-// multipath.go for why several, and why only this carrier gets the option.
-func openUDPPathsContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {
-	ctx, cancel := context.WithTimeout(ctx, carrierResolveTimeout)
-	defer cancel()
-	endpoint, _, err := resolveDatagramEndpoint(ctx, cfg.Addr)
+// resolveDatagramEndpoint resolves a host:port the way net.ResolveUDPAddr
+// does, but under the caller's context, so the lookup is cancelled with the
+// generation that asked for it rather than outliving it.
+func resolveDatagramEndpoint(ctx context.Context, address string) (*net.UDPAddr, error) {
+	host, service, err := net.SplitHostPort(address)
 	if err != nil {
-		return nil, nil, fmt.Errorf("l3: resolving the UDP endpoint %q: %w", cfg.Addr, err)
+		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+	port, err := net.DefaultResolver.LookupPort(ctx, "udp", service)
+	if err != nil {
+		return nil, err
 	}
-	cfg.Addr = endpoint.String()
-	n := cfg.Multipath.Paths
-	if n <= 1 {
-		// One socket is handed to the tunnel bare. The tunnel already knows
-		// where its peer is — it moves it only on a datagram that decrypted
-		// (notePeer) — and it is the batch read, the batch write and the
-		// segmentation offload of this carrier that the wrapper below hid.
-		//
-		// It used to be wrapped in pinnedCarrier like every multipath path.
-		// That wrapper learns its peer from whatever arrives, before anything
-		// is authenticated, and then sends there regardless of the address it
-		// is given: one datagram from anywhere pointed the listener's whole
-		// egress at the sender.
-		if cfg.Mode == ModeDial {
-			return dialUDP(cfg.Addr, cfg.SockBuf)
-		}
-		c, err := listenUDP(cfg.Addr, cfg.SockBuf)
-		return c, nil, err
+	if host == "" {
+		return &net.UDPAddr{Port: port}, nil
 	}
-	if cfg.Mode == ModeDial {
-		paths := make([]DatagramCarrier, 0, n)
-		var first net.Addr
-		for i := 0; i < n; i++ {
-			addr, err := pathAddr(cfg.Addr, i)
-			if err != nil {
-				closeAll(paths)
-				return nil, nil, err
-			}
-			c, peer, err := dialUDP(addr, cfg.SockBuf)
-			if err != nil {
-				closeAll(paths)
-				return nil, nil, err
-			}
-			// Each path sends to its own port; a connected sub-carrier keeps
-			// that itself, so nothing above has to route between them.
-			paths = append(paths, &pinnedCarrier{DatagramCarrier: c, peer: peer})
-			if i == 0 {
-				first = peer
-			}
-		}
-		return newMultipathCarrier(paths, first), first, nil
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
 	}
-
-	paths := make([]DatagramCarrier, 0, n)
-	for i := 0; i < n; i++ {
-		addr, err := pathAddr(cfg.Addr, i)
-		if err != nil {
-			closeAll(paths)
-			return nil, nil, err
-		}
-		c, err := listenUDP(addr, cfg.SockBuf)
-		if err != nil {
-			closeAll(paths)
-			return nil, nil, err
-		}
-		// The listening side learns each path's peer from what arrives on it.
-		paths = append(paths, &pinnedCarrier{DatagramCarrier: c})
+	if len(ips) == 0 {
+		return nil, &net.AddrError{Err: "no suitable address found", Addr: address}
 	}
-	return newMultipathCarrier(paths, nil), nil, nil
-}
-
-// pinnedCarrier remembers the address one path talks to, so the multipath layer
-// above can hand it a datagram without saying where it goes.
-//
-// Only multipath (paths > 1, opt-in) uses it. It learns from unauthenticated
-// datagrams, which is the price of spreading one tunnel over several sockets
-// the tunnel above cannot tell apart; a single path is never wrapped.
-//
-// The dialling side is given its peer up front. The listening side learns it
-// from the first datagram that arrives on that path and answers there, which is
-// also how it follows a peer whose address changes — per path, without the
-// tunnel above seeing an address move.
-type pinnedCarrier struct {
-	DatagramCarrier
-	mu   sync.Mutex
-	peer net.Addr
-}
-
-func (c *pinnedCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
-	c.mu.Lock()
-	dst := c.peer
-	c.mu.Unlock()
-	if dst == nil {
-		dst = addr
-	}
-	if dst == nil {
-		// Nothing has arrived on this path yet and nobody said where to send:
-		// dropping is right, and the other paths carry the tunnel meanwhile.
-		return 0, fmt.Errorf("l3: this path has not learned its peer yet")
-	}
-	return c.DatagramCarrier.WriteTo(p, dst)
-}
-
-func (c *pinnedCarrier) ReadFrom(p []byte) (int, net.Addr, error) {
-	n, addr, err := c.DatagramCarrier.ReadFrom(p)
-	if err == nil && addr != nil {
-		c.mu.Lock()
-		c.peer = addr
-		c.mu.Unlock()
-	}
-	return n, addr, err
-}
-
-// closeAll shuts the paths opened so far, for the error paths above.
-func closeAll(paths []DatagramCarrier) {
-	for _, p := range paths {
-		p.Close()
-	}
-}
-
-// WriteBatch uses the learned path address without discarding sendmmsg/GSO.
-func (c *pinnedCarrier) WriteBatch(bufs [][]byte, addr net.Addr) (int, error) {
-	c.mu.Lock()
-	dst := c.peer
-	c.mu.Unlock()
-	if dst == nil {
-		dst = addr
-	}
-	if dst == nil {
-		return 0, fmt.Errorf("l3: this path has not learned its peer yet")
-	}
-	if writer := asBatchWriter(c.DatagramCarrier); writer != nil {
-		return writer.WriteBatch(bufs, dst)
-	}
-	for i, p := range bufs {
-		n, err := c.DatagramCarrier.WriteTo(p, dst)
-		if err != nil {
-			return i, err
-		}
-		if n != len(p) {
-			return i, fmt.Errorf("l3: short datagram write")
+	// Match ResolveUDPAddr: IPv4 is preferred except for bracketed addresses.
+	chosen := ips[0]
+	want6 := strings.Contains(address, "[")
+	for _, ip := range ips {
+		if (ip.IP.To4() == nil) == want6 {
+			chosen = ip
+			break
 		}
 	}
-	return len(bufs), nil
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
 }

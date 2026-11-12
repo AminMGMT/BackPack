@@ -12,15 +12,15 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [Server layout (file locations)](server-layout.md)
 
 ### Tunnel direction
-- [Direct tunnel — stream transports](direct-tunnel.md) — the `[direct]` engine, no longer offered by the wizard; the same forwarded ports, with Iran dialling
-  out instead of waiting to be dialled
+- [Direct tunnel — stream transports](direct-tunnel.md) — the old `[direct]` engine, removed in v2.0.0: what happens to an existing file and how to rebuild it
 - [Direct tunnel](l3-direct-tunnel.md) — **what the wizard builds**: a private network between the two
   servers, carrying whole IP packets (GRE/IPIP over a TUN device)
 
 ### Transports
 - [Transports — every one explained](transports.md)
 - [Choosing a transport (Link Test)](choosing-a-transport.md)
-- [TCP + PCK](tcp-pck.md) — TCP without the kernel's TCP stack
+- [TCP + PCK](tcp-pck.md) — TCP without the kernel's TCP stack (the reverse transport)
+- [Direct PCK](direct-pck.md) — port forwarding over KCP in crafted TCP packets, on paqet (the direct carrier)
 - [IP Spoofing](ip-spoofing.md) — the forged-source carrier, setting by setting
 - [Decoy site (WSS camouflage)](camouflage.md)
 - [When a server is filtered, blocked, or dirty](filtered-or-dirty-ip.md)
@@ -90,4 +90,4 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

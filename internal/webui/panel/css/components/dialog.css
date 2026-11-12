@@ -51,6 +51,8 @@ body.modal #grid{transform:scale(.988)}
 .dlg .f:last-child{margin-bottom:0}
 .dlg .f label{display:block;font-size:12px;color:var(--mu);margin-bottom:6px;font-weight:550}
 .dlg .f .hint{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
+/* A reason the tunnel cannot start, said where it is fixed. */
+.dlg .f .hint.warn{color:var(--wr)}
 .dlg .f .tdesc{font-size:11px;color:var(--tx2);margin-top:6px;line-height:1.5;
   padding:8px 10px;background:var(--sunk);border-radius:8px}
 .dlg input[type=text],.dlg .sel{width:100%;background:var(--field);border:1px solid var(--ln);border-radius:10px;

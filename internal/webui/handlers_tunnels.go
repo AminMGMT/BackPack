@@ -366,6 +366,9 @@ func (s *server) handleDirectOptions(w http.ResponseWriter, r *http.Request) {
 		// The forged-source carrier's packet profiles, so the form offers the
 		// same list the CLI does rather than a copy that drifts.
 		"spoofProfiles": manage.SpoofProfiles(),
+		// PCK's KCP speed modes and ciphers, for its fine-tune menus.
+		"pckModes":  manage.PckModes(),
+		"pckBlocks": manage.PckBlocks(),
 	})
 }
 

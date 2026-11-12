@@ -202,6 +202,23 @@ function quickActions() {
   }).join('')}</div>`;
 }
 
+/* The showcase: a square image with a link, published by the developer and
+ * cached by this server (see manage/showcase.go). It sits beside the traffic,
+ * the first thing on the page, and it is always there when there is something
+ * to show; with nothing cached the traffic takes the row back as if it had
+ * never been. It is labelled as what it is, so it is never mistaken for a
+ * part of the panel. */
+function showcaseBox(sc) {
+  if (!sc?.v) return '';
+  const img = `<img src="${esc(api.showcaseImage(sc.v))}" alt="${esc(sc.title || 'Sponsored')}"
+    width="512" height="512" decoding="async">`;
+  const tag = `<span class="sc-tag">Sponsored</span>`;
+  return sc.link
+    ? `<a class="sc" href="${esc(sc.link)}" target="_blank" rel="noopener noreferrer"
+         title="${esc(sc.title || sc.link)}">${img}${tag}</a>`
+    : `<div class="sc" title="${esc(sc.title || '')}">${img}${tag}</div>`;
+}
+
 function facts(s) {
   /* Where the address came from decides how plainly the rows derived from it
      can be stated. An address this machine holds on an interface is a fact; one
@@ -281,6 +298,7 @@ export function overview(ctx) {
   const view = $('#view');
   let fleet = null;
   let backup = null;
+  let show = null;
   let counted = false;   // the total has had its one run
 
   /* The page is built once and then edited.
@@ -322,6 +340,9 @@ export function overview(ctx) {
           </div>
           <div id="ovDays"></div>
         </div>
+
+        <!-- Beside the traffic on a desktop; see overview.css. -->
+        <div id="ovShow"></div>
 
         ${quickActions()}
         <div id="ovFacts"></div>
@@ -384,6 +405,9 @@ export function overview(ctx) {
              ${up} of ${tuns.length} tunnels up${nodes.length
                ? ` · ${onlineNodes}/${nodes.length} servers connected` : ''}</span>`);
 
+    region('ovShow', JSON.stringify(show), showcaseBox(show));
+    view.querySelector('.ov-srv').classList.toggle('has-show', !!show?.v);
+
     region('ovFacts', JSON.stringify([s.hostname, s.version, s.os, s.location, s.isp,
       // The source is in the signature because it is in what facts() draws: a
       // panel whose address stops being inferred and becomes known has to lose
@@ -420,6 +444,10 @@ export function overview(ctx) {
      is unrecoverable, and it is silent while it is fine — a row that appears
      only when something is wrong is a row people believe. */
   api.autoBackup().then(b => { backup = b; paint(); }).catch(() => {});
+
+  /* The showcase is read once per visit. Asking is also what tells the server
+     its cached copy may be stale, so the next visit has the newer one. */
+  api.showcase().then(sc => { show = sc; paint(); }).catch(() => {});
 
   /* The month of traffic is one request per tunnel, so it waits for the first
      tunnel list rather than asking once and giving up. */

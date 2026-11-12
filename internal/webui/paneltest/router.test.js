@@ -83,3 +83,15 @@ test('the page a dialog returns to is the one that was set, not a default', () =
   assert.equal(router.getHome(), '/servers');
   router.setHome('/');
 });
+
+/* Typing a route over an open dialog runs the dialog's teardown, and its close
+ * navigates back to the page underneath. That used to overwrite the route that
+ * was typed, so #/tunnels landed on #/. The teardown's navigation is dropped. */
+test('a teardown that navigates does not override the route being resolved', () => {
+  router.route('/dlg', ctx => ctx.setTeardown(() => router.go('/')));
+  globalThis.location.hash = '#/dlg';
+  router.resolve();
+  globalThis.location.hash = '#/tunnels';
+  router.resolve();
+  assert.equal(globalThis.location.hash, '#/tunnels');
+});

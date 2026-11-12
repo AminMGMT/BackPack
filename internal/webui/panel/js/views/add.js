@@ -168,11 +168,14 @@ export function addView(ctx) {
          carrier added to the others was offered nowhere here, and the endpoint
          behind this screen refused what this screen did not know about. There
          is one list now and this reads it. */
+      /* What /api/direct/options said: the presets with what each sets in the PCK
+         engine, and the lists its fine-tune menus offer. */
+      let directOpts = null;
       async function paintCarriers() {
         const grid = root.querySelector('.step3direct .trgrid');
         if (!grid) return;
         let carriers = [];
-        try { carriers = (await api.directOptions()).carriers || []; } catch (e) { return; }
+        try { directOpts = await api.directOptions(); carriers = directOpts.carriers || []; } catch (e) { return; }
         if (!carriers.length) return;
         grid.innerHTML = carriers.map((c, i) => {
           const needsRoot = c.needsRoot ? '<span class="root2">needs root</span>' : '';
@@ -183,6 +186,7 @@ export function addView(ctx) {
         }).join('');
         chosen.carrier = carriers[0].value;
         applyShape();
+        showPresetDefaults();
       }
       paintCarriers();
 
@@ -245,6 +249,12 @@ export function addView(ctx) {
           case 'sp-downlink':
             return [{ value: '', label: 'Same as the packet profile' },
               ...(opts.spoofProfiles || []).map(v => ({ value: v, label: v }))];
+          case 'pck-mode':
+            return [{ value: '', label: 'From the preset' },
+              ...(directOpts?.pckModes || []).map(v => ({ value: v, label: v }))];
+          case 'pck-block':
+            return [{ value: '', label: 'From the preset (aes)' },
+              ...(directOpts?.pckBlocks || []).filter(v => v !== 'aes').map(v => ({ value: v, label: v }))];
           case 'pk-flags':
             return [{ value: '', label: 'Default — push+ack, what a connection carrying data sends' },
               ...(opts.pckFlags || []).map(v => ({ value: v, label: v }))];
@@ -390,6 +400,13 @@ export function addView(ctx) {
             if (!f.value) f.value = value;
           }
         }
+        /* A free tunnel port too, but only on the direct form (the row marked !gre; the reverse
+           form has a tunnel port of its own, which this is not the answer to). */
+        if (suggestion.tunnelPort) {
+          for (const f of root.querySelectorAll('[data-when="!gre"] [name="tunnelPort"]')) {
+            if (!f.value) f.value = suggestion.tunnelPort;
+          }
+        }
       }
 
       async function suggestDirect(side) {
@@ -409,6 +426,13 @@ export function addView(ctx) {
         const direct = chosen.direction === 'direct';
         show('.step3rev', !direct);
         show('.step3direct', direct);
+        /* The line above the carriers was the markup's, written for Reverse,
+           and nothing changed it: a direct tunnel — GRE included — was set up
+           under "Reverse — the kharej server dials in to Iran". */
+        const note = root.querySelector('#dirnote');
+        if (note) note.textContent = direct
+          ? 'Direct — this server dials out to the kharej over a layer-3 carrier. For paths where reverse is filtered.'
+          : 'Reverse — the kharej server dials in to Iran. The usual choice, and what to try first.';
         if (direct) suggestDirect(chosen.side);
 
         /* "server" is the Iran side, "client" the kharej side — the words the
@@ -425,11 +449,21 @@ export function addView(ctx) {
           const when = n.dataset.when;
           if (when === 'server' || when === 'client' || when === 'tls') return;
           const row = n.closest('.f3, .tg3, .f, .row') || n;
+          /* "!gre" is every carrier but that one: the rows a kernel GRE link
+             has no use for — a tunnel port, a token, error correction. */
           const ok = when.split('-').every(part => {
             if (part === 'server' || part === 'client') return chosen.side === part;
+            if (part.startsWith('!')) return chosen.carrier !== part.slice(1);
             return chosen.carrier === part;
           });
           row.hidden = !ok;
+        });
+        /* A group every one of whose rows that rule hid is a heading over
+           nothing — GRE's "Carrier tuning", whose two switches are both
+           "!gre". It goes with them, and comes back with them. */
+        root.querySelectorAll('.grp3').forEach(g => {
+          const rows = [...g.querySelectorAll(':scope > .fgrid > *')];
+          if (rows.length) g.style.display = rows.every(r => r.hidden) ? 'none' : '';
         });
         /* Groups that were moved out of .step3rev / .step3direct carry the mode
            they belong to, because the container that used to decide it is no
@@ -454,6 +488,16 @@ export function addView(ctx) {
           const wanted = direct && chosen.carrier === 'spoof';
           sp.hidden = !wanted;
           if (!wanted) sp.classList.remove('open');
+        }
+
+        /* PCK's fine-tuning belongs to PCK, on the same terms as the spoof
+           drawer above: a drawer left open in another carrier's form would post
+           pck_* keys that carrier never reads. */
+        const pk = drawer('pck');
+        if (pk) {
+          const wanted = direct && chosen.carrier === 'pck';
+          pk.hidden = !wanted;
+          if (!wanted) pk.classList.remove('open');
         }
 
         /* The forged source cannot be learned from the traffic, so the kharej
@@ -607,7 +651,7 @@ export function addView(ctx) {
         if (fn === 'setPre') chosen.preset = (el.querySelector('.key2, .k3')?.textContent
           || el.textContent).trim().toLowerCase().split(/\s+/)[0];
         applyShape();
-        if (fn === 'setPre' || fn === 'setTr' || fn === 'setSide' || fn === 'mode3') showPresetDefaults();
+        if (fn === 'setPre' || fn === 'setTr' || fn === 'setSide' || fn === 'mode3' || fn === 'setCar') showPresetDefaults();
       });
 
       /* The Fine Tune drawer calls itself "preset defaults" and showed empty
@@ -630,6 +674,34 @@ export function addView(ctx) {
           inp.placeholder = (v === undefined || v === null || v === '') ? '' : String(v);
         });
         paintPresetSets(d);
+        paintPckDefaults();
+      }
+
+      /* The fine-tune boxes show what the chosen preset sets as their grey text,
+         and choosing another preset clears whatever was typed in them: a value
+         left from the previous preset would hold the new one to the old numbers,
+         which is not what choosing a preset means. A value is posted only while
+         it is typed. */
+      let pckPresetShown = null;
+      function paintPckDefaults() {
+        const p = chosen.preset || 'turbo';
+        const o = (directOpts?.presets || []).find(x => x.value === p);
+        if (!o || !o.pckConns) return;
+        const set = (name, v) => root.querySelectorAll(`input[name="${name}"]`).forEach(i => {
+          i.placeholder = v;
+          if (pckPresetShown !== null && pckPresetShown !== p) i.value = '';
+        });
+        set('pckConns', o.pckConns); set('pckKcpSndWnd', o.pckSndWnd);
+        set('pckKcpRcvWnd', o.pckRcvWnd); set('pckKcpMtu', o.pckMtu);
+        if (pckPresetShown !== null && pckPresetShown !== p) {
+          const mode = root.querySelector('input[name="pckKcpMode"]');
+          const menu = root.querySelector('#pck-mode');
+          if (mode && menu) {
+            mode.value = ''; mode.dataset.drawn = '1';
+            menu.childNodes[0].textContent = 'From the preset';
+          }
+        }
+        pckPresetShown = p;
       }
 
       /* Under the preset cards: what the chosen one actually sets on this
@@ -651,7 +723,14 @@ export function addView(ctx) {
           const direct = !!grid.closest('[data-mode="dir"], .step3direct');
           const p = chosen.preset || 'turbo';
           let cells;
-          if (direct) cells = DIRECT_SETS[p] || [];
+          if (direct && chosen.carrier === 'pck') {
+            /* PCK has no queue and no socket buffer: what a preset sets is the
+               KCP engine's own parameters, which the server spells out. */
+            const o = (directOpts?.presets || []).find(x => x.value === p) || {};
+            cells = o.pckConns ? [['KCP sessions', o.pckConns], ['Speed mode', o.pckMode],
+              ['Window', `${o.pckSndWnd} packets`], ['Buffers', o.pckBuf], ['Capture ring', o.pckCapture],
+              ...(o.pckSuits ? [['Suits', o.pckSuits]] : [])] : [];
+          } else if (direct) cells = DIRECT_SETS[p] || [];
           else {
             const n = (k, unit = '') => (d[k] ? [d[k] + unit] : []);
             cells = [
@@ -666,7 +745,7 @@ export function addView(ctx) {
           }
           const label = p[0].toUpperCase() + p.slice(1);
           box.innerHTML = `<div class="rp-sets-h"><b>What ${esc(label)} sets</b>
-              <small>${direct ? 'on this direct tunnel' : `on ${esc((chosen.transport || '').toUpperCase())}`} · change any of it under Optional → Fine Tune</small></div>
+              <small>${direct ? (chosen.carrier === 'pck' ? 'on PCK' : 'on this direct tunnel') : `on ${esc((chosen.transport || '').toUpperCase())}`} · change any of it under ${direct && chosen.carrier === 'pck' ? 'PCK fine-tune' : 'Optional → Fine Tune'}</small></div>
             <div class="rp-sets-g">${cells.map(([k, v], i) =>
               `<div style="--d:${i * 35}ms"><span>${esc(k)}</span><b>${esc(String(v))}</b></div>`).join('')}</div>`;
         });
@@ -975,6 +1054,10 @@ export function addView(ctx) {
           if (head === 'Performance') perf.append(g);
           if (head === 'Optional') opt.append(g);
         });
+        /* PCK's fine-tuning goes with the presets it overrides, on the same
+           step, rather than among the fields that name the tunnel. */
+        const pckDrawer = root.querySelector('#dw-pck');
+        if (pckDrawer) perf.append(pckDrawer);
         details.after(perf);
         perf.after(opt);
 

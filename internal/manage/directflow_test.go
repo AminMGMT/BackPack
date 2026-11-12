@@ -41,7 +41,7 @@ func TestDirectAsksTheCarrierAndNothingElseFirst(t *testing.T) {
 func TestTheWizardAlwaysWritesGRE(t *testing.T) {
 	for _, side := range []directSide{sideIran, sideKharej} {
 		spec := l3Spec{
-			Side: side, Carrier: "pck", Encap: "gre",
+			Side: side, Carrier: "xdi", Encap: "gre",
 			Addr: "1.2.3.4:9000", Token: "t", Iface: "bp0",
 			LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 		}
@@ -54,7 +54,7 @@ func TestTheWizardAlwaysWritesGRE(t *testing.T) {
 	// The label the screens show has to name what it actually is, so nobody
 	// confuses it with the kernel's protocol 47.
 	if got := l3EncapLabel(decode(t, l3Spec{
-		Side: sideIran, Carrier: "pck", Encap: "gre", Addr: "1.2.3.4:9000",
+		Side: sideIran, Carrier: "xdi", Encap: "gre", Addr: "1.2.3.4:9000",
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 	}.Render()).L3); got != "GRE + Noise" {
 		t.Errorf("label = %q, want \"GRE + Noise\"", got)
@@ -71,7 +71,7 @@ func TestTheWizardAlwaysWritesGRE(t *testing.T) {
 // not, which is the loud failure the old silent one was replaced with.
 func TestAConfigThatStillSaysIPIPLoadsAndRunsAsGRE(t *testing.T) {
 	cfg := decode(t, l3Spec{
-		Side: sideIran, Carrier: "pck", Encap: "ipip",
+		Side: sideIran, Carrier: "xdi", Encap: "ipip",
 		Addr: "1.2.3.4:9000", Token: "t", Iface: "bp0",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 	}.Render())

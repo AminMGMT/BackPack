@@ -66,9 +66,7 @@ table is the whole compatibility contract:
 | Error correction (`fec_data` / `fec_parity`) | **yes** — a receiver expecting a different scheme rebuilds nothing |
 
 The last row is a **carrier** setting, not a spoof one: it lives on the tunnel
-and works over every carrier. IP spoofing does not add a way to spread over
-several sockets (`paths`) — that carrier already varies its source per packet,
-so spreading it would add nothing. Both are documented in
+and works over every carrier. It is documented in
 [the direct tunnel reference](l3-direct-tunnel.md#error-correction).
 
 ---
@@ -353,4 +351,4 @@ If you set it, nothing changes: it was never doing anything.
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

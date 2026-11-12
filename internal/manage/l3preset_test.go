@@ -11,7 +11,7 @@ import (
 func TestL3PresetsReachTheEngine(t *testing.T) {
 	for _, p := range l3Presets {
 		spec := l3Spec{
-			Side: sideIran, Carrier: "pck", Encap: "gre",
+			Side: sideIran, Carrier: "xdi", Encap: "gre",
 			Addr: "1.2.3.4:9000", Token: "t", Iface: "bp0",
 			LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 		}
@@ -85,7 +85,7 @@ func TestL3PresetsAreOrdered(t *testing.T) {
 // implying something false about how the tunnel works.
 func TestL3PresetsCarryNoKCPTuning(t *testing.T) {
 	spec := l3Spec{
-		Side: sideIran, Carrier: "pck", Encap: "gre", Addr: "1.2.3.4:9000",
+		Side: sideIran, Carrier: "xdi", Encap: "gre", Addr: "1.2.3.4:9000",
 		Token: "t", Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 	}
 	findL3Preset(PresetAggressive).apply(&spec)

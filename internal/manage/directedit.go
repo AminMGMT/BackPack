@@ -9,20 +9,22 @@ import (
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/tui"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
 // Editing a direct tunnel after it exists.
 //
-// The two things an operator actually comes back to change are the forwarded
-// ports and whether UDP rides along. Everything else — the token, the
-// addresses, the transport — has to match the other machine, so changing it
-// here alone would only break the tunnel; those are shown but not offered.
+// The things an operator actually comes back to change are the forwarded
+// ports, whether UDP rides along, the MTU — and, since v2.0.0 took the udp and
+// quic carriers out, the carrier of a tunnel built on one of them. Anything
+// that has to match the other machine is either shown and not offered, or
+// offered with a warning to change it there too.
 //
 // Edits go through the parsed config and are written back through the same
 // renderer the wizard uses, so an edited file looks exactly like a fresh one
 // and keeps its comments.
 
-// editDirectMenu is the per-tunnel editor for the two direct kinds.
+// editDirectMenu is the per-tunnel editor for a direct tunnel.
 func editDirectMenu(t Tunnel) {
 	for {
 		cfg, err := LoadTunnelConfig(t.Name)
@@ -36,11 +38,9 @@ func editDirectMenu(t Tunnel) {
 		tui.Title("Edit — " + t.Name)
 		fmt.Println()
 
-		if cfg.Direct.Enabled() {
-			if !editDirectPorts(t, cfg) {
-				return
-			}
-			continue
+		if !cfg.L3.Enabled() {
+			showRemovedDirect(cfg.Direct)
+			return
 		}
 		if !editL3Ports(t, cfg) {
 			return
@@ -48,136 +48,78 @@ func editDirectMenu(t Tunnel) {
 	}
 }
 
-// editDirectPorts shows a [direct] tunnel and offers what is safe to change.
-// It returns false when the operator is done.
-func editDirectPorts(t Tunnel, cfg config.Config) bool {
-	d := cfg.Direct
-	iran := d.ResolvedRole() == "edge"
-
-	tui.Info("Kind         : Direct, Forwarded Ports")
-	tui.Info("This Server  : " + directRole(d.ResolvedRole()))
+// showRemovedDirect is all the editor has for a [direct] stream tunnel, which
+// v2.0.0 removed: what it was, so the operator can rebuild it, and why it
+// cannot run. There is nothing left to edit it into — Delete is on the menu
+// above, and Setup → Direct builds its replacement.
+func showRemovedDirect(d config.LegacyDirectConfig) {
+	side := "Iran"
+	if !d.OnIran() {
+		side = "Kharej"
+	}
+	tui.Info("Kind         : Direct stream tunnel (removed in v2.0.0)")
+	tui.Info("This Server  : " + side)
 	tui.Info("Transport    : " + orDefault(d.Transport, "tcp"))
-	if iran {
-		tui.Info("Dials        : " + d.Addr)
+	tui.Info("Address      : " + d.Addr)
+	if len(d.Ports) > 0 {
 		tui.Info("Ports        : " + strings.Join(d.Ports, ", "))
-		tui.Info("UDP          : " + onOff(d.AcceptUDP))
-		tui.Info("Tuning       : " + presetLabel(d.Preset) + fmt.Sprintf(", %d session(s)", max(d.Sessions, 1)))
-		tui.Info("Limits       : " + limitsLabel(d.MaxConnections, d.BandwidthMbps))
-	} else {
-		tui.Info("Listens On   : " + d.Addr)
-		fmt.Println()
-		tui.Warn("Ports Are Set On The Iran Server.")
 	}
 	fmt.Println()
-
-	if !iran {
-		tui.PressEnter()
-		return false
-	}
-
-	switch tui.ChooseOpt("Edit", []tui.Option{
-		{Title: "Forwarded Ports", Desc: ""},
-		{Title: "UDP Forwarding", Desc: "now " + onOff(d.AcceptUDP)},
-		{Title: "Limits", Desc: "now " + limitsLabel(d.MaxConnections, d.BandwidthMbps)},
-		{Title: "Preset", Desc: "now " + presetLabel(d.Preset)},
-		{Title: "TCP MSS Clamp", Desc: "now " + directMSSLabel(d.MSS)},
-		{Title: "Show Token", Desc: ""},
-		{Title: "Kharej Address", Desc: "now " + d.Addr},
-	}) {
-	case 0:
-		raw := tui.Prompt("Forwarded Ports (e.g. 443,8080=80): ")
-		ports := parsePorts(raw)
-		if len(ports) == 0 {
-			tui.Error("No valid ports.")
-			tui.PressEnter()
-			return true
-		}
-		if err := validatePortSpecs(ports); err != nil {
-			tui.Error(err.Error())
-			tui.PressEnter()
-			return true
-		}
-		d.Ports = ports
-		showForwardTargets(ports, d.AcceptUDP)
-		saveDirect(t, d)
-	case 1:
-		d.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP", d.AcceptUDP)
-		saveDirect(t, d)
-	case 2:
-		d.MaxConnections = tui.PromptInt("Max Connections (0 = No Limit)", d.MaxConnections)
-		d.BandwidthMbps = tui.PromptInt("Bandwidth Mbit/s (0 = No Limit)", d.BandwidthMbps)
-		saveDirect(t, d)
-	case 3:
-		p := chooseDirectPreset()
-		d.Preset = p.Name
-		d.MaxFrameSize = p.MuxFrameSize
-		d.MaxReceiveBuffer = p.MuxReceiveBuffer
-		d.MaxStreamBuffer = p.MuxStreamBuffer
-		if p.Sessions > d.Sessions {
-			d.Sessions = p.Sessions
-		}
-		saveDirect(t, d)
-	case 4:
-		fmt.Println()
-		tui.Warn("Same Value On Both Servers; 1360 Is A Safe First Try.")
-		mss := tui.PromptInt("TCP MSS Clamp (0 = Auto)", d.MSS)
-		if mss != 0 && (mss < minMSS || mss > maxMSS) {
-			tui.Error(fmt.Sprintf("Between %d and %d, or 0.", minMSS, maxMSS))
-			tui.PressEnter()
-			return true
-		}
-		d.MSS = mss
-		saveDirect(t, d)
-	case 5:
-		fmt.Println()
-		tui.Info("Token (Copy Exactly):")
-		fmt.Println("  " + tui.Color(tui.Bold+tui.White, d.Token))
-		tui.PressEnter()
-	case 6:
-		addr, ok := askPeerAddress("Kharej", d.Addr)
-		if !ok {
-			return true
-		}
-		d.Addr = addr
-		saveDirect(t, d)
-	default:
-		return false
-	}
-	return true
-}
-
-// directMSSLabel renders the setting for a menu line, saying what a zero
-// actually means rather than printing it.
-func directMSSLabel(mss int) string {
-	if mss <= 0 {
-		return "off (the kernel decides)"
-	}
-	return fmt.Sprintf("%d bytes", mss)
+	tui.Warn(config.ErrDirectRemoved.Error() + ".")
+	tui.PressEnter()
 }
 
 // editL3Ports does the same for an [l3] tunnel.
 func editL3Ports(t Tunnel, cfg config.Config) bool {
 	l := cfg.L3
 	iran := !strings.EqualFold(strings.TrimSpace(l.Mode), "listen")
+	if strings.EqualFold(strings.TrimSpace(l.Carrier), l3.CarrierPck) {
+		return editPck(t, l)
+	}
 
 	tui.Info("Kind         : Direct (Layer 3)")
 	tui.Info("This Server  : " + l3Role(l.Mode))
-	tui.Info("Carrier      : " + orDefault(l.Carrier, "udp"))
+	tui.Info("Carrier      : " + carrierLabel(orDefault(l.Carrier, "udp")))
 	tui.Info("Wrapping     : " + l3EncapLabel(l))
 	tui.Info("Address      : " + l.Addr)
 	tui.Info("Interface    : " + orDefault(l.Iface, "bp0") + "  " + l.LocalIP + " ↔ " + l.PeerIP)
-	tui.Info("MTU          : " + fmt.Sprint(l.MTU))
+	if l3.KernelCarrier(l.Carrier) && l.MTU == 0 {
+		tui.Info("MTU          : from the interface, less GRE's own")
+	} else {
+		tui.Info("MTU          : " + fmt.Sprint(l.MTU))
+	}
 	tui.Info("Tuning       : " + presetLabel(l.Preset) + ", " + orDefault(l.Qdisc, "fq_codel"))
 	if len(l.Ports) > 0 {
 		tui.Info("Ports        : " + strings.Join(l.Ports, ", "))
 		tui.Info("UDP          : " + onOff(l.AcceptUDP))
 	}
 	fmt.Println()
+	// A tunnel on a carrier v2.0.0 took out cannot start, and every other edit
+	// here would restart it into the same refusal. Said first, with the one
+	// entry that fixes it.
+	if l3.RemovedCarrier(l.Carrier) {
+		tui.Warn("Cannot Start: The " + strings.ToUpper(orDefault(l.Carrier, "udp")) +
+			" Carrier Was Removed In v2.0.0. Choose Carrier Below — The Same On Both Servers.")
+		fmt.Println()
+	}
 
+	// A GRE link has no token; what the other end has to match is its key, so
+	// that is what the same entry shows.
+	kernel := l3.KernelCarrier(l.Carrier)
+	secret := tui.Option{Title: "Show Token", Desc: ""}
+	mtuNow := fmt.Sprint(l.MTU)
+	if kernel {
+		secret = tui.Option{Title: "Show GRE Key", Desc: "now " + fmt.Sprint(l.GREKey)}
+		if l.MTU == 0 {
+			mtuNow = "from the interface"
+		}
+		tui.Warn("Not Encrypted: Kernel GRE Is Bare IP Protocol 47.")
+		fmt.Println()
+	}
 	options := []tui.Option{
-		{Title: "MTU", Desc: "now " + fmt.Sprint(l.MTU)},
+		{Title: "MTU", Desc: "now " + mtuNow},
 		{Title: "TCP MSS Clamp", Desc: "now " + mssClampLabel(l.MSSClamp, l.MTU)},
-		{Title: "Show Token", Desc: ""},
+		secret,
 	}
 	// The carrier's own screen, for the one carrier that has settings worth
 	// changing after the fact. It goes last on both sides, which is what keeps
@@ -201,6 +143,14 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 	// l3EditAction's range, and handled before it.
 	peer := -1
 	switch {
+	case kernel:
+		// Both ends of a GRE link name the other's real address.
+		peer = len(options)
+		other := "Kharej Address"
+		if !iran {
+			other = "Iran Address"
+		}
+		options = append(options, tui.Option{Title: other, Desc: "now " + l.Addr})
 	case iran:
 		peer = len(options)
 		options = append(options, tui.Option{Title: "Kharej Address", Desc: "now " + l.Addr})
@@ -210,8 +160,35 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 			Desc: "now " + orDefault(l.SpoofPeerIP, "not set")})
 	}
 
+	// The carrier, last of all and outside l3EditAction's range like the peer
+	// address above it. It has to match the other machine, so it was left
+	// out of this screen while every carrier still ran; a tunnel on one of the
+	// removed ones has no other way back short of being built again.
+	//
+	// Not on a GRE tunnel: a datagram carrier needs a token and a port the GRE
+	// link never had, so moving between the two is a new tunnel, not an edit.
+	carrierAt := -1
+	if !kernel {
+		carrierAt = len(options)
+		options = append(options, tui.Option{Title: "Carrier",
+			Desc: "now " + carrierLabel(orDefault(l.Carrier, "udp")) + " — set the other server the same"})
+	}
+
 	chosen := tui.ChooseOpt("Edit", options)
+	if chosen >= 0 && chosen == carrierAt {
+		if spec, ok := askNewL3Carrier(t, l); ok {
+			applyEdit(t, spec.Render())
+		}
+		return true
+	}
 	if chosen >= 0 && chosen == peer {
+		if kernel {
+			if !askGREPeerAddress(&l, iran) {
+				return true
+			}
+			saveL3(t, l)
+			return true
+		}
 		if iran {
 			addr, ok := askPeerAddress("Kharej", l.Addr)
 			if !ok {
@@ -255,7 +232,11 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		saveL3(t, l)
 	case 2:
 		fmt.Println()
-		l.MTU = tui.PromptInt("Tunnel MTU (Lower It If Downloads Stall)", l.MTU)
+		label := "Tunnel MTU (Lower It If Downloads Stall)"
+		if kernel {
+			label = "Tunnel MTU (0 = From The Interface, Less GRE's Own)"
+		}
+		l.MTU = tui.PromptInt(label, l.MTU)
 		saveL3(t, l)
 	case 3:
 		fmt.Println()
@@ -263,6 +244,12 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		saveL3(t, l)
 	case 4:
 		fmt.Println()
+		if kernel {
+			tui.Info("GRE Key (The Same On Both Servers):")
+			fmt.Println("  " + tui.Color(tui.Bold+tui.White, fmt.Sprint(l.GREKey)))
+			tui.PressEnter()
+			break
+		}
 		tui.Info("Token (Copy Exactly):")
 		fmt.Println("  " + tui.Color(tui.Bold+tui.White, l.Token))
 		tui.PressEnter()
@@ -274,6 +261,57 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		return false
 	}
 	return true
+}
+
+// askNewL3Carrier asks which carrier the tunnel should move to, and the
+// questions that carrier has — the SNI domain, the spoof screen — exactly as
+// Setup asks them, then returns the whole tunnel re-rendered onto it. It
+// writes nothing: false means the operator went back or the answers cannot
+// work, and the file is left as it was.
+//
+// It starts from the config as it is, whatever its carrier. A udp or quic
+// tunnel does not validate any more, and this is how it is fixed, so nothing
+// on the way here may refuse to read one.
+func askNewL3Carrier(t Tunnel, l config.L3Config) (l3Spec, bool) {
+	carrier, ok := askL3Carrier()
+	if !ok {
+		return l3Spec{}, false
+	}
+	// GRE is a link with no port and no token, naming both servers' real
+	// addresses; nothing in this tunnel's file says what those would be.
+	if l3.KernelCarrier(carrier) != l3.KernelCarrier(l.Carrier) {
+		tui.Error("A GRE Tunnel Is Set Up Anew, Not Changed Into: Setup Iran → Direct → GRE, Then Delete This One.")
+		tui.PressEnter()
+		return l3Spec{}, false
+	}
+	spec := directSpecFrom(t.Name, l)
+	spec.Carrier = carrier
+	if !askL3CarrierExtras(&spec, spec.Side) {
+		return l3Spec{}, false
+	}
+	if err := validL3Spec(spec); err != nil {
+		tui.Error(err.Error())
+		tui.PressEnter()
+		return l3Spec{}, false
+	}
+	fmt.Println()
+	tui.Warn("Set The Other Server To " + carrierLabel(carrier) + " As Well — The Two Ends Must Match.")
+	return spec, true
+}
+
+// validL3Spec renders a spec, reads it back the way the engine will, and asks
+// the engine whether it would start — so an edit is refused here, with the
+// engine's reason, rather than written and then refused at the restart.
+func validL3Spec(spec l3Spec) error {
+	var cfg config.Config
+	if _, err := toml.Decode(spec.Render(), &cfg); err != nil {
+		return fmt.Errorf("the edit produced a config that does not parse: %w", err)
+	}
+	engine, err := l3.ConfigFromTable(cfg.L3)
+	if err != nil {
+		return err
+	}
+	return engine.Validate()
 }
 
 // l3EditActionShift is how far the kharej side's indices are below the actions
@@ -316,65 +354,9 @@ func mssClampLabel(clamp, mtu int) string {
 // package, and one constant is a smaller price than that dependency.
 const mssClampOffLabel = -1
 
-// saveDirect writes a changed [direct] config back and restarts the tunnel.
-func saveDirect(t Tunnel, d config.DirectConfig) {
-	side := sideIran
-	if d.ResolvedRole() == "origin" {
-		side = sideKharej
-	}
-	spec := directSpec{
-		Name: t.Name, Side: side,
-		Transport: orDefault(d.Transport, "tcp"),
-		Addr:      d.Addr, Token: d.Token,
-		Ports: d.Ports, AcceptUDP: d.AcceptUDP,
-		MaxConnections: d.MaxConnections, BandwidthMbps: d.BandwidthMbps,
-		Sessions:     d.Sessions,
-		Preset:       d.Preset,
-		MuxFrameSize: d.MaxFrameSize, MuxReceiveBuffer: d.MaxReceiveBuffer,
-		MuxStreamBuffer: d.MaxStreamBuffer, Keepalive: d.Keepalive,
-		Nodelay:    d.Nodelay,
-		ServerName: d.ServerName,
-		ACMEDomain: d.ACMEDomain, ACMEEmail: d.ACMEEmail,
-		// Never asked for here, and kept so that changing a port does not
-		// delete a certificate or a hand-set timeout.
-		TLSCertFile: d.TLSCertFile, TLSKeyFile: d.TLSKeyFile,
-		MuxVersion:  d.MuxVersion,
-		DialTimeout: d.DialTimeout, RetryInterval: d.RetryInterval,
-		MSS: d.MSS,
-	}
-	applyEdit(t, spec.Render())
-}
-
 // saveL3 writes a changed [l3] config back and restarts the tunnel.
 func saveL3(t Tunnel, l config.L3Config) {
-	applyEdit(t, l3SpecOf(t, l).Render())
-}
-
-// l3SpecOf rebuilds the wizard's view of an existing layer-3 config, so an
-// edit re-renders the whole file rather than patching it.
-func l3SpecOf(t Tunnel, l config.L3Config) l3Spec {
-	side := sideIran
-	if strings.EqualFold(strings.TrimSpace(l.Mode), "listen") {
-		side = sideKharej
-	}
-	return l3Spec{
-		Name: t.Name, Side: side,
-		Carrier: orDefault(l.Carrier, "udp"),
-		Encap:   "gre", GREKey: l.GREKey,
-		Addr: l.Addr, Token: l.Token,
-		Iface:   orDefault(l.Iface, "bp0"),
-		LocalIP: l.LocalIP, PeerIP: l.PeerIP, MTU: l.MTU,
-		SockBuf: l.SockBuf, MSSClamp: l.MSSClamp, AutoMTU: l.AutoMTU,
-		FECData: l.FECData, FECParity: l.FECParity,
-		Paths:  l.Paths,
-		Preset: l.Preset, TxQueueLen: l.TxQueueLen, Qdisc: l.Qdisc,
-		Ports: l.Ports, AcceptUDP: l.AcceptUDP,
-		MaxConnections: l.MaxConnections, BandwidthMbps: l.BandwidthMbps,
-		// Carried whole, so an edit to the MTU does not quietly revert a
-		// carrier the operator spent an afternoon tuning.
-		Spoof: l.SpoofConfig,
-		Pck:   l.PckConfig,
-	}
+	applyEdit(t, directSpecFrom(t.Name, l).Render())
 }
 
 // validateRendered parses a config the wizard just built, before it replaces
@@ -539,4 +521,36 @@ func movePeer(l *config.L3Config, addr string) {
 			l.SpoofPeerIP = ip.String()
 		}
 	}
+}
+
+// askGREPeerAddress points a GRE tunnel at the other server's new address. A
+// GRE link has no port, and the family of the new address decides the link: a
+// move from IPv4 to IPv6 is a move from gre to ip6gre, which the other end has
+// to follow, and the screen says so.
+func askGREPeerAddress(l *config.L3Config, iran bool) bool {
+	other := "Kharej"
+	if !iran {
+		other = "Iran"
+	}
+	fmt.Println()
+	host := strings.Trim(strings.TrimSpace(tui.PromptDefault("New "+other+" IP Or Domain", l.Addr)), "[]")
+	if host == "" {
+		tui.Error("An address is required.")
+		tui.PressEnter()
+		return false
+	}
+	carrier, err := greCarrierForHost(host, "")
+	if err != nil {
+		tui.Error(err.Error())
+		tui.PressEnter()
+		return false
+	}
+	if carrier != l.Carrier {
+		tui.Warn("That Moves The Tunnel To " + greUnderlayLabel(carrier) + " (" + carrier +
+			") — Set The Other Server's End The Same Way.")
+		// A local address of the old family cannot name an end of the new link.
+		l.GRELocal = ""
+	}
+	l.Addr, l.Carrier = host, carrier
+	return true
 }

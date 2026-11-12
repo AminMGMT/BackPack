@@ -64,6 +64,8 @@ type muxSession struct {
 	// takes; they are read from the config once rather than per stream.
 	proxyProtocol bool
 	sniffer       bool
+	// udpPriority sends the frames of forwarded-UDP streams ahead of bulk data.
+	udpPriority bool
 
 	limits   *limiter
 	log      *logrus.Logger
@@ -147,35 +149,53 @@ func (m muxSession) run(session *smux.Session) {
 				return
 			}
 
-			// Send the target port over the tunnel connection
-			_ = stream.SetWriteDeadline(time.Now().Add(pairingWait(incomingConn.timeCreated)))
-			if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
-				m.log.Tracef("failed to send address over stream: %v", err)
-				// The stream is unusable and nothing else will close it.
-				stream.Close()
-
-				// Give back the mux slot this attempt took. It was not given
-				// back, so a session that failed this way MuxCon times stopped
-				// taking connections at all: the loop blocks at the top on a
-				// counter that is full, and the only goroutine that empties it
-				// is this one.
-				<-counter
-
-				// Back on the queue for another stream, without blocking — see
-				// requeueLocal. A connection that goes back is still in flight
-				// and stays counted; one there was no room for is counted out
-				// here, because nothing downstream will ever do it.
-				if !requeueLocal(m.local, incomingConn, m.limits, m.log) {
-					m.add(m.streams, -1)
+			// announce names the backend to the other end, over the stream. It runs
+			// in the connection's own goroutine, not in this loop: the write waits
+			// for the frame to be through the session's write queue and into the
+			// carrier, which on a loaded session is tens to hundreds of
+			// milliseconds, and done here it set how fast this session could pair
+			// connections — one per wait. Under a flood of short connections
+			// (200 a second in the soak) eight sessions paired a fraction of
+			// them, the queue behind them reached the three seconds a waiting
+			// connection is allowed, and a new download's first byte came just
+			// inside that limit, every time. Now the slots (muxCon per session)
+			// are the limit, as they were meant to be.
+			announce := func() bool {
+				if m.udpPriority && isUDPFlow(incomingConn.conn) {
+					stream.SetPriority(true)
 				}
-				continue
-			}
-			_ = stream.SetWriteDeadline(time.Time{})
+				_ = stream.SetWriteDeadline(time.Now().Add(pairingWait(incomingConn.timeCreated)))
+				if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
+					m.log.Tracef("failed to send address over stream: %v", err)
+					// The stream is unusable and nothing else will close it.
+					stream.Close()
 
+					// Give back the mux slot this attempt took. It was not given
+					// back, so a session that failed this way MuxCon times stopped
+					// taking connections at all: the loop blocks at the top on a
+					// counter that is full, and the only goroutine that empties it
+					// is this one.
+					<-counter
+
+					// Back on the queue for another stream, without blocking — see
+					// requeueLocal. A connection that goes back is still in flight
+					// and stays counted; one there was no room for is counted out
+					// here, because nothing downstream will ever do it.
+					if !requeueLocal(m.local, incomingConn, m.limits, m.log) {
+						m.add(m.streams, -1)
+					}
+					return false
+				}
+				_ = stream.SetWriteDeadline(time.Time{})
+				return true
+			}
 			// Handle data exchange between connections
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
+				if !announce() {
+					return
+				}
 				// Free the connection slot once the transfer ends, or the
 				// limit would fill up permanently.
 				defer m.limits.release()

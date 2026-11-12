@@ -79,7 +79,7 @@ func Validate(c *config.Config) error {
 	if !c.Server.Naive.Enabled() && !c.Client.Naive.Enabled() {
 		return nil
 	}
-	if c.Direct.Enabled() || c.L3.Enabled() {
+	if c.Direct.Present() || c.L3.Enabled() {
 		return errors.New("Naive is a TCP Reverse wrapper, not a Direct or L3 carrier")
 	}
 	server, client := c.Server.BindAddr != "", c.Client.RemoteAddr != ""
@@ -253,7 +253,7 @@ func ValidateXray(c *config.Config) error {
 	if c.Server.Naive.Enabled() || c.Client.Naive.Enabled() {
 		return errors.New("Xray cannot be combined with Naive")
 	}
-	if c.Direct.Enabled() || c.L3.Enabled() {
+	if c.Direct.Present() || c.L3.Enabled() {
 		return errors.New("Xray supports only the TCP reverse engine")
 	}
 	server, client := c.Server.BindAddr != "", c.Client.RemoteAddr != ""

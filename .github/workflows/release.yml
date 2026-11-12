@@ -71,12 +71,30 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # PCK is paqet's engine, which captures with libpcap through cgo. Tests
+      # run against a libpcap built for the runner; the release binaries are
+      # each linked with one built for their own architecture, by Zig's C
+      # compiler (and gcc-arm-linux-gnueabi for ARMv5, which Zig's musl cannot
+      # target). See scripts/build-linux.sh and CONTRIBUTING.md.
+      - name: Install the build toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flex bison gcc-arm-linux-gnueabi
+          ZIG_VERSION=0.17.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz
+          sudo mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo "/opt/zig" >> "$GITHUB_PATH"
+
+      - uses: ./.github/actions/libpcap
+
       - name: Test before publishing
         # Nothing gets published that has not passed the suite. A broken
         # release is far more expensive to undo than a slow pipeline.
         run: go test ./... -timeout 20m
 
       - name: Build release assets
+        # The cgo variables the test step exported are for the runner's own
+        # libpcap; build-linux.sh sets its own per architecture.
         # RELEASE_SIGNING_KEY signs release/SHA256SUMS. Without it the build
         # still produces every asset and simply publishes no signature, which
         # is what a fork gets — and what this repository got until a key was

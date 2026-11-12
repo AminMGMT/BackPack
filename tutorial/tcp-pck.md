@@ -18,6 +18,9 @@ This costs a raw socket, root, and a Linux-only dependency.
 
 > Reference page: [docs/tcp-pck.md](../docs/tcp-pck.md). Read [TCP](tcp.md) for
 > the parts of the wizard not covered here.
+>
+> **This is the reverse transport.** For the direct `pck` carrier (Setup → Direct
+> → PCK), see [Setting up a direct PCK tunnel](direct-pck.md).
 
 ---
 

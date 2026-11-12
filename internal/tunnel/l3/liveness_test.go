@@ -17,7 +17,7 @@ func TestADiallerRecoversFromAListenerThatRestarted(t *testing.T) {
 
 	const token = "a-liveness-token"
 	cfg := func(mode, addr, local, peer string) Config {
-		return Config{Mode: mode, Addr: addr, Token: token, Encap: "gre",
+		return Config{Mode: mode, Addr: addr, Token: token, Encap: "gre", Carrier: carrierLoopback,
 			LocalIP: local, PeerIP: peer, MTU: 1400}
 	}
 

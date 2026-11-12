@@ -34,20 +34,24 @@ type ConnTestBest struct {
 	Transport  string  `json:"tr,omitempty"` // "direct pck"
 	Mbps       float64 `json:"mb,omitempty"`
 	UploadMbps float64 `json:"upload_mb,omitempty"`
-	RTTms      int     `json:"rt,omitempty"`
-	JitterMs   int     `json:"ji,omitempty"`
-	WorstMs    int     `json:"wo,omitempty"`
-	LossPct    float64 `json:"lo,omitempty"`
-	Preset     string  `json:"pr,omitempty"`
-	BDPKB      int     `json:"bd,omitempty"`
-	PathMTU    int     `json:"pm,omitempty"` // 0: not measured
-	MSS        int     `json:"ms,omitempty"` // 0: automatic
-	DirectMTU  int     `json:"dm,omitempty"` // measured by the best direct tunnel; 0: none
-	DirectBy   string  `json:"db,omitempty"`
-	KeepAlive  int     `json:"ka,omitempty"`
-	Heartbeat  int     `json:"hb,omitempty"`
-	FECData    int     `json:"fd,omitempty"`
-	FECParity  int     `json:"fp,omitempty"`
+	// PeakMbps and UploadPeakMbps are the best one second the chosen tunnel
+	// carried: the most it can be got to move. See ConnTestResult.
+	PeakMbps       float64 `json:"peak_mb,omitempty"`
+	UploadPeakMbps float64 `json:"upload_peak_mb,omitempty"`
+	RTTms          int     `json:"rt,omitempty"`
+	JitterMs       int     `json:"ji,omitempty"`
+	WorstMs        int     `json:"wo,omitempty"`
+	LossPct        float64 `json:"lo,omitempty"`
+	Preset         string  `json:"pr,omitempty"`
+	BDPKB          int     `json:"bd,omitempty"`
+	PathMTU        int     `json:"pm,omitempty"` // 0: not measured
+	MSS            int     `json:"ms,omitempty"` // 0: automatic
+	DirectMTU      int     `json:"dm,omitempty"` // measured by the best direct tunnel; 0: none
+	DirectBy       string  `json:"db,omitempty"`
+	KeepAlive      int     `json:"ka,omitempty"`
+	Heartbeat      int     `json:"hb,omitempty"`
+	FECData        int     `json:"fd,omitempty"`
+	FECParity      int     `json:"fp,omitempty"`
 }
 
 // The path-MTU probe's bounds: 576 is what every IPv4 path must carry, 1500 an
@@ -185,6 +189,7 @@ func ctComputeBest(results []ConnTestResult, cases []*connTestCase, pmtu int, lo
 			b.Transport = r.Kind + " " + r.Transport
 			b.Mbps = r.Mbps
 			b.UploadMbps = r.UploadMbps
+			b.PeakMbps, b.UploadPeakMbps = r.PeakMbps, r.UploadPeakMbps
 		}
 		q = ctQuality(r, cases[best].rtts)
 		b.RTTms = int(q.Avg.Milliseconds())
@@ -304,8 +309,12 @@ func ConnTestBestTable(b ConnTestBest) string {
 		kind, tr, _ := strings.Cut(b.Transport, " ")
 		row("Transport", ctKind(kind)+" "+ctName(tr), fmt.Sprintf("%.1f Mbps, %s", b.Mbps, link))
 		if b.UploadMbps > 0 {
-			row("Download", fmt.Sprintf("%.1f Mbps", b.Mbps), "4 streams, verified receiver bytes")
-			row("Upload", fmt.Sprintf("%.1f Mbps", b.UploadMbps), "4 streams, verified receiver bytes")
+			row("Download", fmt.Sprintf("%.1f Mbps", b.Mbps), "sustained, verified receiver bytes")
+			row("Upload", fmt.Sprintf("%.1f Mbps", b.UploadMbps), "sustained, verified receiver bytes")
+		}
+		if b.PeakMbps > 0 {
+			row("Max download", fmt.Sprintf("%.1f Mbps", b.PeakMbps), "best second, up to 16 connections")
+			row("Max upload", fmt.Sprintf("%.1f Mbps", b.UploadPeakMbps), "best second, up to 16 connections")
 		}
 	} else {
 		row("Transport", "-", "nothing carried traffic steadily")

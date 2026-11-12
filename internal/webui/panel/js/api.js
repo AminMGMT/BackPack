@@ -203,6 +203,10 @@ export const backupImport = file => {
   return post('/api/backup/import', fd);
 };
 export const autoBackup    = () => get('/api/autobackup');
+/* The overview's showcase box. The image is an address rather than a fetch: it
+   goes into an <img>, and the ?v= is its hash, so a new image is a new URL. */
+export const showcase      = () => get('/api/showcase');
+export const showcaseImage = v => at('/api/showcase/image?v=' + encodeURIComponent(v));
 /* enabled, not on — the same kind of miss as setChannel, and just as invisible
    while nothing called it. */
 export const setAutoBackup = on =>

@@ -74,7 +74,7 @@ func TestNoClampWhenNothingFits(t *testing.T) {
 func TestConfigRejectsAnImpossibleClamp(t *testing.T) {
 	base := func() Config {
 		return Config{
-			Mode: ModeDial, Addr: "1.2.3.4:9000", Token: "t",
+			Mode: ModeDial, Addr: "1.2.3.4:9000", Token: "t", Carrier: CarrierXdi,
 			LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 		}
 	}

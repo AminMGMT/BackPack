@@ -47,6 +47,14 @@ tunnels carried it, and whatever is currently wrong. Trouble is shown first on
 purpose: a page that opens with healthy numbers and hides the one failure among
 them is a page that gets glanced at and trusted.
 
+Beside the traffic card sits a square **Sponsored** box: an image (GIF, PNG,
+JPEG or WebP) and a link, published by the developer on their own server so it
+can change without a release. The panel fetches it in the background — direct,
+then through the tunnel relay, like an update — every 30 minutes at most, caches
+it under `/etc/backpack/showcase/`, and serves it from its own origin; the
+browser never contacts the publishing server. With nothing cached the box is
+left out and the page looks as it did before.
+
 *CLI: the opening screen, plus Manage → Status.*
 
 ### Servers — `#/servers`
@@ -80,8 +88,8 @@ family continues. All paths can be stopped together.
 Use the path buttons to inspect separate results and compare recommendations.
 The overall recommendation identifies both the winning address and transport.
 Failed and skipped rows remain visible, including the reason for each skip.
-Native socket transports and Direct UDP/QUIC can test IPv6. Raw IPv4 carriers
-(PCK, Direct xDi/SNI and IP spoofing) are explicitly skipped for IPv6. IPv6 PMTU
+Native socket transports can test IPv6. Raw IPv4 carriers (PCK, every Direct
+carrier — PCK, xDi and SNI — and IP spoofing) are explicitly skipped for IPv6. IPv6 PMTU
 uses a 1280-byte minimum, its own fragmentation option and a 40-byte IP header;
 a suggested TCP MSS subtracts 60 bytes. Missing managed helpers are skipped as
 before. All temporary test engines and files are removed when the test ends.
@@ -135,7 +143,7 @@ These belong to the machine rather than to one tunnel.
 
 | Screen | Address | What it is | CLI |
 | --- | --- | --- | --- |
-| Add tunnel | `#/add` | Five steps: this server as the Iran end with reverse or direct under it, the tunnel (forwarded ports with a Random), performance (preset cards and what the chosen one sets), optional, done. Only this server's end is built; the last step hands over its setup link — the kharej's `sudo backpack link apply '…'` line. The families and presets are served rather than written into the page. | 1 Setup Iran, 2 Setup Kharej |
+| Add tunnel | `#/add` | Five steps: this server as the Iran end with reverse or direct under it, the tunnel (forwarded ports with a Random), performance (preset cards and what the chosen one sets — on PCK, the engine's sessions, mode, windows and buffers, with a PCK fine-tune drawer for the six `pck_*` values), optional, done. On PCK the form shows no interface, tunnel addresses, error correction or stealth, fills a free tunnel port, and the Iran side makes the token. Only this server's end is built; the last step hands over its setup link — the kharej's `sudo backpack link apply '…'` line. The families and presets are served rather than written into the page. | 1 Setup Iran, 2 Setup Kharej |
 | Settings | `#/settings` | Panel access (port, certificate, password, address path, a new login code, restart), security, the Telegram bot, and the release channel. | 5 Web Panel, 7 Telegram Bot, 8 Update → Release channel |
 | Alerts | `#/alerts` | The alert history: what fired, when, and about which tunnel. | The alert history |
 | Health check | `#/health` | The machine-level checks — the same list the CLI runs, with the same fixes offered. Reached from the warning bar as well as directly. | Manage → Health Check |
@@ -192,4 +200,4 @@ hash همه‌جا درست reload می‌شود. هر صفحه‌ای در ای
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

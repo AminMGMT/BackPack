@@ -19,7 +19,7 @@ blocked one way — turn it round.
 | Tutorial | Use it when | Needs |
 |---|---|---|
 | **[Direct tunnel](../docs/l3-direct-tunnel.md)** | the reverse tunnel will not connect; Iran dials out instead | Linux, root, a port open on kharej |
-| **[Direct, stream transports](direct-tunnel.md)** | you already run a `[direct]` tunnel — the wizard no longer builds these | a port open on kharej |
+| **[Direct, stream transports](direct-tunnel.md)** | you still have a `[direct]` tunnel — v2.0.0 removed that engine; this page says how to rebuild it | Linux, root, a port open on kharej |
 
 ## The transports
 
@@ -29,6 +29,7 @@ blocked one way — turn it round.
 | **[TCP Mux](tcp-mux.md)** | the service opens many short connections (panels, web) | — |
 | **[TCP + Stealth](tcp-stealth.md)** | the link is DPI-filtered and plain TCP dies | — |
 | **[TCP + PCK](tcp-pck.md)** | TCP connects then stalls, resets or is throttled | Linux, root |
+| **[Direct PCK](direct-pck.md)** | the same, as a direct tunnel on paqet: KCP survives loss; no TUN | Linux, root |
 | **[UDP](udp.md)** | you are forwarding one UDP service and want no layer on top | UDP open |
 | **[UDP + KCP + FEC](udp-kcp-fec.md)** | gaming, or a lossy route where TCP keeps backing off | UDP open |
 | **[UDP + QUIC](udp-quic.md)** | you want to test an encrypted, self-tuning UDP carrier | UDP open |

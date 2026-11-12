@@ -59,6 +59,11 @@ func runL3Tunnel(cfg *config.Config, ctx context.Context, configPath string) {
 	}
 	if forwarder != nil {
 		forwarder.SetTunnelState(tunnel.Up)
+		// A pck tunnel has no TUN to dial across: the other server makes the
+		// connection, through a stream of the engine.
+		if tunnel.UsesStreams() {
+			forwarder.SetDialer(tunnel.StreamDialer())
+		}
 	}
 
 	// The engine's own counters, read once per snapshot. They survive the

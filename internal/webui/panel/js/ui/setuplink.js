@@ -39,8 +39,14 @@ export function setupLinkHTML(info) {
       ${line(LINK, info.link, 'the link')}`
     : `<div class="sl-h"><b>On the Iran server</b><small>${esc(info.where)}</small></div>
       ${line(LINK, info.link, 'the link')}`}
-    ${info.needsAddress ? `<div class="tl-note wr">This server's public address could not be found, so the other side will ask for it.</div>` : ''}
-    <div class="tl-note">The link holds the tunnel's token — send it only to the server it is for.</div>
+    ${info.needsAddress ? (info.gre
+      /* A GRE link: the kharej's link names this server, and link apply
+         refuses to guess it — the command above carries --host for it. */
+      ? `<div class="tl-note wr">This server's own address could not be found, so the link does not name it. Put the address the kharej reaches this server at in place of IRAN_SERVER_IP above.</div>`
+      : `<div class="tl-note wr">This server's public address could not be found, so the other side will ask for it.</div>`) : ''}
+    <div class="tl-note">${info.gre
+      ? 'The link holds the GRE key and both servers\' addresses — send it only to the server it is for.'
+      : 'The link holds the tunnel\'s token — send it only to the server it is for.'}</div>
   </div>`;
 }
 

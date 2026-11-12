@@ -60,20 +60,31 @@ type Config struct {
 	// Mode is ModeDial or ModeListen.
 	Mode string
 
-	// Addr is the peer to dial, or the address to bind, depending on Mode.
+	// Addr is the peer to dial, or the address to bind, depending on Mode. On
+	// a kernel GRE carrier it is the other server's address on both sides, with
+	// no port: a GRE link names both ends and neither of them listens.
 	Addr string
+
+	// GRELocal is this server's own address for a kernel GRE link. Empty uses
+	// the source address of the route to Addr, which is right unless the
+	// server has several and the other end expects a particular one.
+	GRELocal string
 
 	// Token is the shared secret both ends hold. It is the only credential.
 	Token string
 
-	// Carrier names the datagram carrier beneath the tunnel.
+	// Carrier names the datagram carrier beneath the tunnel, or one of the two
+	// kernel GRE links (gre, ip6gre), which have no carrier socket at all —
+	// see kernelgre.go.
 	Carrier string
 
 	// Encap names the framing. There is one: "gre". A config that still says
 	// "ipip" is read as GRE — see NewEncap.
 	Encap string
 
-	// GREKey is the RFC 2890 key. Zero omits the field entirely.
+	// GREKey is the RFC 2890 key. Zero omits the field entirely. On a kernel
+	// GRE carrier it is the kernel link's key, which is what lets more than one
+	// GRE tunnel join the same two servers.
 	GREKey uint32
 
 	// Iface is the TUN interface name to create.
@@ -96,12 +107,6 @@ type Config struct {
 	// every FEC.Data datagrams, FEC.Parity extra ones, and any FEC.Parity of a
 	// group may be lost without loss. Zero values mean none. See fec.go.
 	FEC FECConfig
-
-	// Multipath spreads the plain UDP carrier over several sockets on
-	// consecutive ports, so a path that shapes per flow gives the tunnel
-	// several allowances instead of one. Zero or one is a single socket. See
-	// multipath.go, including why the other carriers do not take it.
-	Multipath MultipathConfig
 
 	// TxQueueLen is how many packets the kernel may hold for the interface
 	// while this process drains it. Zero takes the default.
@@ -165,6 +170,22 @@ type Config struct {
 	// own egress from the route to the peer.
 	Pck network.PcapCarrier
 
+	// Preset is the tuning profile's name (balance, turbo, aggressive). It is
+	// a label for every carrier but pck, whose engine takes the parameters
+	// the keys below leave unset from it. See paqet.PresetParams.
+	Preset string
+
+	// The PCK engine's own tuning; zero means the preset's. Read only when
+	// Carrier is "pck".
+	PckConns                   int
+	PckKCPMode                 string
+	PckKCPMTU                  int
+	PckKCPSndWnd, PckKCPRcvWnd int
+	PckKCPBlock                string
+	// PckRemoteTargets lets the listening side dial targets that are not its
+	// own addresses. See paqet.Config.RemoteTargets.
+	PckRemoteTargets bool
+
 	// SNIDomain is the server name the "sni" carrier puts in the ClientHello it
 	// sends at the start of the flow. Empty means snispoof.DefaultDomain.
 	// Ignored by every other carrier.
@@ -183,18 +204,33 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("l3: unknown mode %q (want %q or %q)", c.Mode, ModeDial, ModeListen)
 	}
 
+	// Lower-cased first: whether this is a kernel GRE link decides what addr
+	// and token have to be.
+	c.Carrier = strings.ToLower(strings.TrimSpace(c.Carrier))
+	kernel := KernelCarrier(c.Carrier)
+
 	if strings.TrimSpace(c.Addr) == "" {
-		if c.Mode == ModeDial {
+		switch {
+		case kernel:
+			return fmt.Errorf("l3: addr is required and must be the other server's address")
+		case c.Mode == ModeDial:
 			return fmt.Errorf("l3: addr is required and must be the peer's host:port")
 		}
 		return fmt.Errorf("l3: addr is required and must be the address to bind")
 	}
-	if _, _, err := net.SplitHostPort(c.Addr); err != nil {
-		return fmt.Errorf("l3: addr %q must be host:port: %w", c.Addr, err)
-	}
-
-	if strings.TrimSpace(c.Token) == "" {
-		return fmt.Errorf("l3: token is required and must match the other end")
+	if kernel {
+		// A GRE link has no port, and no secret: the kernel sends whatever
+		// reaches the interface, in the clear. A token in the file is ignored.
+		if err := c.validateGREEndpoints(); err != nil {
+			return err
+		}
+	} else {
+		if _, _, err := net.SplitHostPort(c.Addr); err != nil {
+			return fmt.Errorf("l3: addr %q must be host:port: %w", c.Addr, err)
+		}
+		if strings.TrimSpace(c.Token) == "" {
+			return fmt.Errorf("l3: token is required and must match the other end")
+		}
 	}
 
 	if _, err := NewEncap(c.Encap, c.GREKey); err != nil {
@@ -204,13 +240,17 @@ func (c *Config) Validate() error {
 	// handshake identifier included — names the same thing the packets are
 	// wrapped in.
 	c.Encap = "gre"
-	c.Carrier = strings.ToLower(strings.TrimSpace(c.Carrier))
-	if c.Carrier == "" {
-		c.Carrier = CarrierUDP
-	}
+	// Before the known-carrier check, so a tunnel on a carrier that was taken
+	// out is told so — and told what to pick — instead of reading as a typo.
+	// An empty name is one of them: it used to mean udp, and filling in another
+	// carrier here would move a working tunnel onto a different wire format
+	// that the other end is not speaking.
 	if !knownCarrier(c.Carrier) {
-		return fmt.Errorf("l3: carrier %q is not available (have %q, %q, %q, %q, %q, %q)",
-			c.Carrier, CarrierUDP, CarrierPck, CarrierXdi, CarrierSpoof, CarrierQuic, CarrierSNI)
+		if RemovedCarrier(c.Carrier) {
+			return RemovedCarrierError(c.Carrier)
+		}
+		return fmt.Errorf("l3: carrier %q is not available (have %s)",
+			c.Carrier, strings.Join(Carriers(), ", "))
 	}
 	// The listening side of the forged-source carrier cannot learn where its
 	// peer really is, because every packet it receives carries a forged
@@ -220,21 +260,17 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("l3: carrier %q needs spoof_peer_ip when listening, "+
 			"because the peer forges the source of every packet it sends", CarrierSpoof)
 	}
+	// PCK is its own engine and reads a different set of keys. Everything below
+	// is about the TUN device and the session, which it has neither of, and a
+	// file written for the previous PCK must not be refused for what it says
+	// about them.
+	if c.Carrier == CarrierPck {
+		return c.validatePck()
+	}
 	// The scheme is not negotiated, so an unusable one is refused where it is
 	// written rather than at the first packet the peer cannot rebuild.
 	if err := c.FEC.Validate(); err != nil {
 		return err
-	}
-	if err := c.Multipath.Validate(); err != nil {
-		return err
-	}
-	// Several sockets is a plain-UDP arrangement. The obfuscated carriers vary
-	// their source per packet already, so it would add machinery without
-	// adding the effect; refusing here beats a setting that is written, read,
-	// and quietly does nothing.
-	if c.Multipath.Enabled() && c.Carrier != CarrierUDP {
-		return fmt.Errorf("l3: paths is for the udp carrier; %q already varies its source per "+
-			"packet, so spreading it over sockets adds nothing", c.Carrier)
 	}
 	if c.Iface == "" {
 		c.Iface = defaultIfaceName
@@ -264,15 +300,18 @@ func (c *Config) Validate() error {
 	if c.Qdisc == "" {
 		c.Qdisc = defaultQdisc
 	}
-	if c.MTU == 0 {
+	// On a kernel GRE link zero stays zero: the engine works it out from the
+	// interface the route to the other server leaves by, minus what GRE adds,
+	// which is a better figure than any default (see greMTUFor).
+	if c.MTU == 0 && !kernel {
 		c.MTU = defaultMTU
 	}
-	if c.MTU < minMTU || c.MTU > maxMTU {
+	if c.MTU != 0 && (c.MTU < minMTU || c.MTU > maxMTU) {
 		return fmt.Errorf("l3: mtu %d is outside the workable range %d..%d", c.MTU, minMTU, maxMTU)
 	}
 	// A clamp larger than the MTU can carry is not a clamp; it would leave the
 	// stall it exists to prevent, while looking like it had been dealt with.
-	if c.MSSClamp > 0 && c.MSSClamp > c.MTU-mssclamp.OverheadV4 {
+	if c.MSSClamp > 0 && c.MTU != 0 && c.MSSClamp > c.MTU-mssclamp.OverheadV4 {
 		return fmt.Errorf("l3: mss_clamp %d does not fit an mtu of %d (the largest that fits is %d)",
 			c.MSSClamp, c.MTU, c.MTU-mssclamp.OverheadV4)
 	}
@@ -353,6 +392,7 @@ func ConfigFromTable(table config.L3Config) (Config, error) {
 	tunnelCfg := Config{
 		Mode:           table.Mode,
 		Addr:           table.Addr,
+		GRELocal:       table.GRELocal,
 		Token:          table.Token,
 		Carrier:        table.Carrier,
 		Encap:          table.Encap,
@@ -370,11 +410,18 @@ func ConfigFromTable(table config.L3Config) (Config, error) {
 		AcceptUDP:      table.AcceptUDP,
 		MaxConnections: table.MaxConnections,
 		BandwidthMbps:  table.BandwidthMbps,
-		// Read only by the carrier they belong to; both are ignored otherwise.
-		FEC:       FECConfig{Data: table.FECData, Parity: table.FECParity},
-		Multipath: MultipathConfig{Paths: table.Paths},
-		Spoof:     table.SpoofConfig,
-		SNIDomain: table.SNIDomain,
+		// Read only by the carrier they belong to; ignored otherwise.
+		Preset:           table.Preset,
+		PckConns:         table.PckConns,
+		PckKCPMode:       table.PckKCPMode,
+		PckKCPMTU:        table.PckKCPMTU,
+		PckKCPSndWnd:     table.PckKCPSndWnd,
+		PckKCPRcvWnd:     table.PckKCPRcvWnd,
+		PckKCPBlock:      table.PckKCPBlock,
+		PckRemoteTargets: table.PckRemoteTargets,
+		FEC:              FECConfig{Data: table.FECData, Parity: table.FECParity},
+		Spoof:            table.SpoofConfig,
+		SNIDomain:        table.SNIDomain,
 		Pck: network.PcapCarrier{
 			Interface:  table.PckInterface,
 			GatewayMAC: table.PckGatewayMAC,

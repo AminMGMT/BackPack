@@ -47,9 +47,8 @@ func (t *Tunnel) pumpFromTUN(ctx context.Context) {
 	// by exactly its own overhead.
 	payloads := make([]int, batch)
 
-	// sendmmsg, when the carrier has it. Only the plain UDP carrier does; the
-	// rest keep writing one datagram per syscall exactly as before. See
-	// batchread.go.
+	// A batch write, when the carrier has one — pck and xdi do; the rest keep
+	// writing one datagram per syscall exactly as before. See batchread.go.
 	writer := asBatchWriter(t.carrier)
 
 	for {

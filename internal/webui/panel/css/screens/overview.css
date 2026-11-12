@@ -164,6 +164,50 @@
 .panel .qa-tx span{display:block;font-size:10.5px;color:var(--dim);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* ---- the showcase --------------------------------------------------------
+   A square beside the traffic card, so it is on screen when the overview
+   opens rather than below the fold; the actions and the facts share the row
+   under both. Its size is fixed, not a share of the page: a box that grew and
+   shrank with the window made the rows change height with it. The traffic
+   card stretches to the square's height and keeps its month of bars along the
+   bottom edge. */
+.panel .ov-srv.has-show{--sc-w:252px;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) var(--sc-w);
+  grid-template-areas:"tk tk sc" "acts facts facts"}
+.panel .ov-srv.has-show > .tk{grid-area:tk;display:flex;flex-direction:column}
+.panel .ov-srv.has-show > .tk > #ovDays{margin-top:auto}
+.panel .ov-srv.has-show > #ovShow{grid-area:sc}
+.panel .ov-srv.has-show > .ov-acts{grid-area:acts}
+.panel .ov-srv.has-show > #ovFacts{grid-area:facts}
+.panel .ov-srv > #ovShow{display:grid}
+.panel .ov-srv > #ovShow:empty{display:none}
+.panel .sc{display:flex;flex-direction:column;min-width:0;text-decoration:none;color:inherit;
+  border:1px solid var(--ln);border-top-color:var(--glass-edge);border-radius:15px;
+  overflow:hidden;background:var(--glass);
+  -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);
+  transition:border-color .18s ease}
+.panel a.sc:hover{border-color:var(--ln2)}
+.panel a.sc:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.panel .sc img{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:cover;
+  background:var(--s2)}
+.panel .sc-tag{margin-top:auto;padding:7px 11px;font-size:10px;font-weight:600;
+  color:var(--dim);border-top:1px solid var(--ln)}
+
+/* Narrower, the square stays beside the traffic and the actions and the facts
+   each take a row of their own: under the square's fixed width, two columns
+   left the actions too narrow to read. On a phone everything stacks, the
+   square straight after the traffic it sits beside on a desktop, and held to a
+   size a phone screen can take whole. */
+@container pg (max-width:1000px){
+  .panel .ov-srv.has-show{grid-template-columns:minmax(0,1fr) var(--sc-w);
+    grid-template-areas:"tk sc" "acts acts" "facts facts"}
+}
+@container pg (max-width:620px){
+  .panel .ov-srv.has-show{grid-template-columns:1fr;
+    grid-template-areas:"tk" "sc" "acts" "facts"}
+  .panel .ov-srv.has-show > #ovShow{justify-self:center;width:min(100%,320px)}
+}
+
 .panel .ov-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
   border:1px solid var(--ln);border-top-color:var(--glass-edge);
   border-radius:15px;overflow:hidden;
@@ -173,7 +217,10 @@
 @container pg (max-width:430px){ .panel .ov-facts{grid-template-columns:1fr} }
 .panel .ov-fact{background:var(--glass);padding:12px 15px;min-width:0}
 .panel .ov-fact span{display:block;font-size:10.5px;font-weight:620;letter-spacing:.06em;
-  text-transform:uppercase;color:var(--dim)}
+  text-transform:uppercase;color:var(--dim);
+  /* One line, like the value under it: a label that wrapped at one width made
+     its row, and so the whole block, taller there than at the next. */
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel .ov-fact b{display:block;font-size:12.5px;font-weight:600;margin-top:4px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 

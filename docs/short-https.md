@@ -1,6 +1,6 @@
 # Experimental Short HTTPS
 
-Last verified against Backpack v1.9.0, 2026-10-11.
+Last verified against Backpack v2.0.0, 2026-10-11.
 
 `backpack short-https` is an **experimental, standalone TCP port relay** for
 paths that allow short HTTPS exchanges but stop established connections after

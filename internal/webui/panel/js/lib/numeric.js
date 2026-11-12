@@ -8,7 +8,8 @@
  * against those structs.
  */
 export const NUMERIC = new Set([
-  'paths', 'greKey', 'maxConnections', 'bandwidthMbps',
+  'greKey', 'maxConnections', 'bandwidthMbps',
+  'pckConns', 'pckKcpMtu', 'pckKcpSndWnd', 'pckKcpRcvWnd',
   'limits.maxConnections', 'limits.bandwidthMbps',
   'tune.keepAlive', 'tune.heartbeat', 'tune.mss', 'tune.channelSize',
   'tune.connectionPool', 'tune.muxCon', 'tune.muxVersion', 'tune.muxFrameSize',

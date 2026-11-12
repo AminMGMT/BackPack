@@ -10,7 +10,7 @@ import (
 
 const (
 	// Version of the backpack engine.
-	Version = "v1.9.0"
+	Version = "v2.0.0"
 
 	// RepoOwner/RepoName identify the GitHub repository used by the installer
 	// and the release-based updater.
@@ -19,6 +19,11 @@ const (
 
 	// SourceURL is where the source lives, printed with the version.
 	SourceURL = "https://github.com/" + RepoOwner + "/" + RepoName
+
+	// ShowcaseURL is the manifest of the overview's showcase box, published
+	// on the developer's own server. Empty leaves the box out. See
+	// manage/showcase.go.
+	ShowcaseURL = "http://94.139.180.174:8088/ad.json"
 
 	// InstallDir is where the release bundle lives on the VPS.
 	InstallDir = "/root/BackPack"

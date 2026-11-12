@@ -12,39 +12,16 @@ import (
 // table of established sockets. These check that the two direct kinds are
 // judged on their own terms rather than a reverse tunnel's.
 
-func TestDirectIranHealthyWhenDialledOut(t *testing.T) {
+// A [direct] stream tunnel cannot be up — its engine was removed in v2.0.0 —
+// and has nothing of its own to observe. It reads as unknown, so the watchdog
+// leaves it alone rather than restarting it into the same refusal for ever.
+func TestARemovedDirectTunnelIsLeftAlone(t *testing.T) {
 	tunnel := core.Tunnel{Role: "iran", Transport: "direct/stealth", Addr: "203.0.113.9:8443"}
-
-	// An established socket to the kharej address is the tunnel.
-	pairs := [][2]string{{"192.168.1.5:55123", "203.0.113.9:8443"}}
-	if healthy, known := directHealthy(tunnel, pairs); !healthy || !known {
-		t.Fatalf("healthy=%v known=%v, want true/true", healthy, known)
+	if healthy, known := directHealthy(tunnel); healthy || known {
+		t.Fatalf("healthy=%v known=%v, want false/false", healthy, known)
 	}
-
-	// Nothing established: down, and that is a real answer.
-	if healthy, known := directHealthy(tunnel, nil); healthy || !known {
-		t.Fatalf("healthy=%v known=%v, want false/true", healthy, known)
-	}
-
-	// The right port to the wrong host must not count as the tunnel.
-	other := [][2]string{{"192.168.1.5:55123", "198.51.100.1:8443"}}
-	if healthy, _ := directHealthy(tunnel, other); healthy {
-		t.Fatal("an unrelated connection on the same port was taken for the tunnel")
-	}
-}
-
-// The kharej side listens. Judging it by the dial test — which is what
-// happened before, because it is not called "server" — made a perfectly
-// healthy tunnel show permanently offline.
-func TestDirectKharejHealthyWhenDialledInto(t *testing.T) {
-	tunnel := core.Tunnel{Role: "kharej", Transport: "direct/wss", Addr: "0.0.0.0:8443"}
-
-	pairs := [][2]string{{"203.0.113.9:8443", "198.51.100.4:41022"}}
-	if healthy, known := directHealthy(tunnel, pairs); !healthy || !known {
-		t.Fatalf("healthy=%v known=%v, want true/true", healthy, known)
-	}
-	if healthy, known := directHealthy(tunnel, nil); healthy || !known {
-		t.Fatalf("healthy=%v known=%v, want false/true", healthy, known)
+	if !tunnelHealthy(tunnel, [][2]string{{"192.168.1.5:55123", "203.0.113.9:8443"}}) {
+		t.Fatal("the watchdog would restart a tunnel that can never start")
 	}
 }
 
@@ -54,9 +31,9 @@ func TestDirectKharejHealthyWhenDialledInto(t *testing.T) {
 // rather than as "restart it", which is the difference between a quiet tunnel
 // and one restarted every few seconds forever.
 func TestL3HealthIsUnknowableWithoutASnapshot(t *testing.T) {
-	for _, carrier := range []string{"l3/udp", "l3/pck", "l3/xdi", "l3/spoof"} {
+	for _, carrier := range []string{"l3/pck", "l3/sni", "l3/xdi", "l3/spoof"} {
 		tunnel := core.Tunnel{Role: "iran", Transport: carrier, Addr: "203.0.113.9:9000"}
-		if _, known := directHealthy(tunnel, nil); known {
+		if _, known := directHealthy(tunnel); known {
 			t.Fatalf("%s: the check claimed to know with no snapshot", carrier)
 		}
 		if !tunnelHealthy(tunnel, nil) {
@@ -73,18 +50,12 @@ func TestWatchdogLeavesUnobservableTunnelsAlone(t *testing.T) {
 		t.Fatal("the watchdog would restart a layer-3 tunnel it cannot see")
 	}
 
-	// A direct tunnel that genuinely is down must still be reported down, or
-	// the watchdog could never recover one.
-	down := core.Tunnel{Role: "iran", Transport: "direct/tcp", Addr: "203.0.113.9:8443"}
-	if tunnelHealthy(down, nil) {
-		t.Fatal("a disconnected direct tunnel was reported healthy")
-	}
 }
 
 // The health screen must not show green for something it did not look at.
 func TestHealthDetailWording(t *testing.T) {
-	iran := core.Tunnel{Role: "iran", Transport: "direct/tcp"}
-	kharej := core.Tunnel{Role: "kharej", Transport: "direct/tcp"}
+	iran := core.Tunnel{Role: "iran", Transport: "l3/pck"}
+	kharej := core.Tunnel{Role: "kharej", Transport: "l3/pck"}
 
 	if got := directStateDetail(iran, true, true); got != "peer connected" {
 		t.Fatalf("connected detail = %q", got)
@@ -123,7 +94,7 @@ func TestL3HealthReadsTheReportedPeer(t *testing.T) {
 	// With no snapshot at all the honest answer is still unknown — but that is
 	// now the narrow case of a tunnel that has not reported yet, rather than
 	// every layer-3 tunnel forever.
-	if _, known := directHealthy(tunnel, nil); known {
+	if _, known := directHealthy(tunnel); known {
 		t.Fatal("a tunnel with no snapshot claimed to know its state")
 	}
 

@@ -65,6 +65,7 @@ func (c *pckConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, 
 	}
 	msgs, iovs := b.msgs[:n], b.iovs[:n]
 
+	down := 0
 	for {
 		for i := range n {
 			if len(bufs[i]) == 0 {
@@ -96,7 +97,7 @@ func (c *pckConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, 
 			return 0, err // closed, or a read deadline
 		}
 		if serr != nil {
-			if errors.Is(serr, unix.EINTR) {
+			if errors.Is(serr, unix.EINTR) || c.rxLinkDown(serr, &down) {
 				continue
 			}
 			return 0, serr
@@ -240,6 +241,11 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 		if serr != nil {
 			if errors.Is(serr, unix.EINTR) {
 				continue
+			}
+			if pckLinkDownErr(serr) {
+				// The path is down: the rest are lost, as on the single-send path.
+				c.linkDrops.Add(uint64(n - sent))
+				return n, nil
 			}
 			return sent, serr
 		}

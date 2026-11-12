@@ -140,6 +140,7 @@ func Run() {
 		{"watchdog", manage.RunWatchdog},
 		{"telegram bot", telegram.RunBot},
 		{"alerts", telegram.RunAlerts},
+		{"telegram showcase", telegram.RunShowcase},
 		{"history sampler", tunhist.Run},
 		{"auto-backup", manage.RunAutoBackup},
 	}

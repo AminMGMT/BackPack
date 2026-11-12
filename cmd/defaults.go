@@ -228,6 +228,7 @@ func validateConfig(cfg *config.Config) error {
 		checkXdi,
 		checkSpoof,
 		checkPck,
+		checkGRE,
 		checkFallbackChain,
 		// Last: the specific checks above explain a refusal better than the
 		// engine's own validation of the same field would.
@@ -539,6 +540,26 @@ func checkXdi(cfg *config.Config) error {
 		return fmt.Errorf("the xdi transport needs a raw ICMP socket, which requires root or CAP_NET_RAW — run as root, or grant the capability with: setcap cap_net_raw+ep %s", app.BinPath)
 	}
 	logger.Warn("xdi is experimental: it carries the tunnel inside ICMP echo (ping) packets, for networks that filter UDP and TCP but not ICMP. It is slower than the other transports and heavier on ICMP rate limits.")
+	return nil
+}
+
+// checkGRE refuses a kernel GRE tunnel that cannot be created, and says once,
+// at start, what the operator chose: a link with no encryption at all.
+//
+// The link is made with ip(8), which needs CAP_NET_ADMIN; without it the add
+// fails with "Operation not permitted" deep in the engine's first attempt and
+// again every five seconds. Caught here, it names the cause.
+func checkGRE(cfg *config.Config) error {
+	if !l3.KernelCarrier(l3Carrier(cfg)) {
+		return nil
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("carrier %q is a Linux kernel GRE link and is only available on Linux", l3Carrier(cfg))
+	}
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("carrier %q creates a kernel GRE link, which needs root or CAP_NET_ADMIN — run as root", l3Carrier(cfg))
+	}
+	logger.Warn("gre is kernel GRE: bare IP protocol 47, with no encryption of its own. Whatever crosses it is in the clear unless it is encrypted itself, and a single firewall rule blocks it.")
 	return nil
 }
 

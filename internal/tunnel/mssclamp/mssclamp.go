@@ -133,6 +133,33 @@ func Rules(kind, iface string, mtu, configured int) []Rule {
 	return out
 }
 
+// Clamped is one address family's clamp as it was actually installed: the value
+// it clamps to and the chains that accepted the rule.
+type Clamped struct {
+	Label  string
+	MSS    int
+	Chains []string
+}
+
+// Group folds installed rules into one entry per address family, in the order
+// each family first appears. Rules for the same family differ only in chain, so
+// a family's clamp is reported once, naming every chain it reached, rather than
+// once per rule.
+func Group(installed []Rule) []Clamped {
+	var out []Clamped
+	at := map[string]int{}
+	for _, r := range installed {
+		i, ok := at[r.Label]
+		if !ok {
+			i = len(out)
+			at[r.Label] = i
+			out = append(out, Clamped{Label: r.Label, MSS: r.MSS})
+		}
+		out[i].Chains = append(out[i].Chains, r.Chain)
+	}
+	return out
+}
+
 // spec is the match and target. The comment is what makes a rule findable
 // later, by the sweep below and by an operator reading iptables -S.
 func spec(kind, iface string, mss int) []string {

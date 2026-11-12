@@ -125,7 +125,7 @@ function statsOf(vals) {
   const sum = vals.reduce((a, b) => a + b, 0);
   const net = last - first;
   return {
-    net, step: last - prev,
+    net, step: last - prev, base: Math.abs(first),
     pct: first ? (net / first) * 100 : 0,
     peak: Math.max(...vals), low: Math.min(...vals), avg: sum / vals.length,
   };
@@ -191,12 +191,18 @@ const CHEV = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"
    zone: without one, a card twitches between up and down forever. */
 const NEUTRAL_PCT = 0.5;
 
+/* A percentage needs a baseline worth dividing by. Under 64 KiB (the series is
+   bytes) 0.01 -> 0.15 MB reads "1486.3%", which is arithmetic, not news; below
+   the floor the badge keeps its arrow and drops the number. */
+const TREND_FLOOR = 64 * 1024;
+const trendText = st => st.base < TREND_FLOOR ? '' : Math.abs(st.pct).toFixed(1) + '%';
+
 function trendHTML(st) {
   if (!st) return '';
   const flat = Math.abs(st.pct) < NEUTRAL_PCT;
   const icon = flat ? TREND.flat : st.net >= 0 ? TREND.up : TREND.down;
   return `<span class="trend" title="Change across the window drawn">` +
-         `${icon}${Math.abs(st.pct).toFixed(1)}%</span>`;
+         `${icon}${trendText(st)}</span>`;
 }
 
 const VIEW = {
@@ -272,6 +278,10 @@ ${field(t, idx)}
   <!-- Said in full, on the card, because it is the one failure where every
        other reading on this card is green and correct. -->
   ${serviceDown(t) ? `<div class="nosvc">${esc(t.serviceDown)}</div>` : ''}
+  <!-- A config v2.0.0 left unable to start — a [direct] stream tunnel, or a
+       udp or quic carrier. Said in the engine's words, so "Stopped" is not
+       read as something Start will fix. -->
+  ${t.unrunnable ? `<div class="nosvc">${esc(t.unrunnable)}</div>` : ''}
 
   <!-- The headline is the ping: the one figure that says how this tunnel is
        behaving right now. What it has carried is a total, and a total is a
@@ -281,7 +291,7 @@ ${field(t, idx)}
 
   <div class="lines">
     <span class="ip">${esc(ip || '—')}</span><span class="sep"></span>
-    <span class="pt">port ${esc(port || t.tunnelPort || '—')}</span>
+    <span class="pt">${/^(ip6)?gre$/i.test(t.carrier || '') ? 'GRE' : `port ${esc(port || t.tunnelPort || '—')}`}</span>
   </div>
 </div>
 
@@ -375,7 +385,7 @@ function paintTrend(el, t) {
   if (tr) {
     const flat = Math.abs(st.pct) < NEUTRAL_PCT;
     tr.innerHTML = (flat ? TREND.flat : st.net >= 0 ? TREND.up : TREND.down) +
-                   Math.abs(st.pct).toFixed(1) + '%';
+                   trendText(st);
   }
   const lbl = el.querySelector('[data-per-open]');
   if (lbl) {
@@ -419,7 +429,7 @@ function quotaMeter(t) {
  */
 function cardSig(t) {
   return JSON.stringify([
-    t.state, t.serviceDown, t.role, t.direction, t.transport, t.carrier, t.addr, t.ports,
+    t.state, t.serviceDown, t.unrunnable, t.role, t.direction, t.transport, t.carrier, t.addr, t.ports,
     t.ping, t.uptime, t.bytesIn, t.bytesOut, t.bytesTotal, t.country, t.peerCountry,
     t.peerLocation, t.peerISP, t.botRelay, t.botRelayPort, t.tunnelPort,
     t.kcpLossPercent, t.pool, t.preset, t.certType, t.certDomain, t.certExpiry,
@@ -607,7 +617,7 @@ export function dashboard(ctx) {
         title: `Delete <q>${esc(name)}</q>?`,
         body: 'Its config and its service are removed. This cannot be undone.',
         lines: [
-          { text: `/etc/backpack/${name}.json` },
+          { text: `/etc/backpack/${name}.toml` },
           { text: `backpack-${name}.service` },
         ],
         go: 'Delete', danger: true,

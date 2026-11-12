@@ -215,6 +215,14 @@ async function choicesFor(name, opts, family) {
     }
     case 'preset':
       return (opts.presets || []).map(p => ({ value: p.value, label: p.label }));
+    case 'carrier':
+      return (opts.carriers || []).map(c => ({ value: c.value, label: c.label }));
+    case 'pckKcpMode':
+      return [{ value: '', label: 'From the preset' },
+        ...(opts.pckModes || []).map(v => ({ value: v, label: v }))];
+    case 'pckKcpBlock':
+      return [{ value: '', label: 'From the preset (aes)' },
+        ...(opts.pckBlocks || []).filter(v => v !== 'aes').map(v => ({ value: v, label: v }))];
     case 'tune.logLevel':
       return ['debug', 'info', 'warn', 'error'].map(v => ({ value: v, label: v }));
     default:
@@ -284,11 +292,17 @@ async function wireControls(root, given) {
       menu.innerHTML = '';
       list.forEach(c => {
         const b = el('button', { type: 'button', class: 'selopt', text: c.label });
+        b.dataset.value = c.value;
         b.addEventListener('click', ev => {
           ev.stopPropagation();
           sel.dataset.value = c.value;
           sel.childNodes[0].textContent = c.label;
-          if (input) input.value = c.value;
+          if (input) {
+            input.value = c.value;
+            /* A programmatic value fires nothing, and the preset menu has a
+               listener (PCK clears its fine-tuning when the preset changes). */
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
           menu.hidden = true;
           sel.classList.remove('open');
           // Changing the family changes what transports there are.
@@ -359,8 +373,12 @@ function syncControls(root) {
     }
     if (!input.value) return;
     sel.dataset.value = input.value;
-    const opt = [...sel.querySelectorAll('.selopt')]
-      .find(o => o.textContent.trim().toLowerCase() === input.value.trim().toLowerCase());
+    /* By value first: a label can say more than the value does ("UDP (removed)"
+       for udp), and matching only the text left the raw value on show. */
+    const want = input.value.trim().toLowerCase();
+    const opts = [...sel.querySelectorAll('.selopt')];
+    const opt = opts.find(o => (o.dataset.value || '').toLowerCase() === want)
+      || opts.find(o => o.textContent.trim().toLowerCase() === want);
     sel.childNodes[0].textContent = opt ? opt.textContent : input.value;
   });
 }
@@ -379,33 +397,108 @@ const sw = (name, title, text) => `<div class="tg"><div class="tx"><b>${title}</
 const field = (name, label, hint = '') => `<div class="f"><label>${label}</label>` +
   `<input name="${name}" type="text">${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
 
-function directMarkup(set) {
+/* The carrier comes first, because it is the one setting that can stop a
+ * tunnel from starting at all: v2.0.0 removed the udp and quic carriers, and a
+ * tunnel built on either is fixed here, by choosing another — on both servers.
+ * The server sends the reason it cannot start, and the menu lists what is
+ * left plus whatever this tunnel runs now, so it never opens blank. */
+/* A GRE tunnel is the kernel's own link: no token, no error correction, and a
+ * carrier menu of GRE alone, so the form says what it is instead of offering
+ * what it cannot have. */
+/* A PCK tunnel has no TUN device, so it has none of what the rest of this form
+ * is made of — no MTU, no auto MTU, no error correction — and has a set of its
+ * own: the engine's six pck_* values under a fine-tune drawer. The preset
+ * decides them unless one is set, and a changed preset sets them back. */
+function pckMarkup(set) {
   const ports = !!set.holdsPorts;
-  if (set.layer === 4) return `<div class="pane" data-tab="Direct">` + (ports ?
-    field("addr", "Kharej address", "Host and port.") + field("ports", "Forwarded ports") +
-    sw("acceptUdp", "Accept UDP") +
-    `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo<span class="sp"></span></div></div>` +
-    `<div class="two">${field("sessions", "Sessions")}${field("mss", "TCP MSS", "0 is auto.")}</div>` +
-    `<div class="two">${field("maxConnections", "Max connections")}${field("bandwidthMbps", "Bandwidth (Mbit/s)")}</div>` :
-    `<div class="hint">Forwarded ports and tuning are set on the Iran server.</div>`) + `</div>`;
+  const chev = '<svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+  const menu = (name, label, shown) => `<div class="f"><label>${label}</label><div class="sel" data-name="${name}">${shown}` +
+    `<span class="sp"></span>${chev}</div></div>`;
   return `<div class="pane" data-tab="Direct">` +
+    `<div class="f"><label>Carrier</label><div class="sel" data-name="carrier">${esc(set.carrier || '')}<span class="sp"></span>${chev}</div>` +
+    `<div class="hint">PCK forwards ports over KCP and has no TUN device, so it cannot be changed into a carrier that routes ` +
+    `traffic: add that tunnel on both servers instead. Both ends must run PCK.</div></div>` +
+    ((set.pckNotes || []).length ? `<div class="hint pcknote">${esc(set.pckNotes.join(' · '))}</div>` : '') +
+    (ports ? field('ports', 'Forwarded ports', 'Comma separated. PCK carries ports only, so at least one is needed.') +
+      sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
+    `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo<span class="sp"></span>${chev}</div>` +
+    `<div class="tdesc" id="pckEffective">${set.pckEffective ? 'Runs with ' + esc(set.pckEffective) : ''}</div></div>` +
+    `<div class="drawer"><button class="dhh" data-fn="dr" data-args="this">PCK fine-tune<span class="note">optional</span>` +
+    `<svg class="cv" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button><div class="db">` +
+    `<div class="lead">Empty takes the preset’s value, shown in grey. Choosing another preset clears these. ` +
+    `The cipher is the one setting both ends must agree on; the packet size should match too.</div>` +
+    `<div class="ftgrid">${ports ? field('pckConns', 'KCP sessions', '1 to 16. Each is its own TCP flow.') : ''}` +
+    menu('pckKcpMode', 'Speed mode', 'From the preset') +
+    field('pckKcpSndWnd', 'Send window (packets)') + field('pckKcpRcvWnd', 'Receive window (packets)') +
+    field('pckKcpMtu', 'Packet size (bytes)', '576 to 1450. Packets are not fragmented.') +
+    menu('pckKcpBlock', 'Cipher', 'From the preset (aes)') + `</div></div></div>` +
+    (ports ? `<div class="two">${field('maxConnections', 'Max connections', '0 is no limit.')}` +
+      `${field('bandwidthMbps', 'Bandwidth (Mbit/s)', '0 is no limit.')}</div>` : '') +
+    `</div>`;
+}
+
+function directMarkup(set) {
+  if (set.pck) return pckMarkup(set);
+  const ports = !!set.holdsPorts;
+  const gre = !!set.kernel;
+  return `<div class="pane" data-tab="Direct">` +
+    `<div class="f"><label>Carrier</label><div class="sel" data-name="carrier">${esc(set.carrier || '')}` +
+    `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>` +
+    (set.unrunnable ? `<div class="hint warn">${esc(set.unrunnable)}</div>` : '') +
+    (gre ? `<div class="hint warn">Kernel GRE is not encrypted: it travels as bare IP protocol 47, and ` +
+      `whatever crosses it is in the clear unless it is encrypted itself. GRE key ${esc(String(set.greKey || 0))} ` +
+      `— the same on both servers.</div>`
+      : `<div class="hint">Both ends must match — change the other server too.</div>`) + `</div>` +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. Blank leaves a plain TUN tunnel.') +
       sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
     `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo` +
     `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div></div>` +
-    `<div class="two">${field('mtu', 'MTU')}` +
-    (set.carrier === 'udp' ? field('paths', 'Sockets', '1 is one socket; 2–8 spread it.') : '<div></div>') + `</div>` +
+    `<div class="two">${field('mtu', 'MTU', gre ? '0 takes the interface’s MTU less GRE’s own.' : undefined)}<div></div></div>` +
     sw('autoMtu', 'Auto MTU', 'Measure the path and correct the MTU once up.') +
-    sw('fec', 'Error correction (FEC)', 'Spare packets repair loss. Both ends must match.') +
+    (gre ? '' : sw('fec', 'Error correction (FEC)', 'Spare packets repair loss. Both ends must match.')) +
     (set.carrier === 'spoof' ? sw('stealth', 'Stealth', 'Padding and header cosmetics. Both ends must match.') : '') +
     (ports ? `<div class="two">${field('maxConnections', 'Max connections', '0 is no limit.')}` +
       `${field('bandwidthMbps', 'Bandwidth (Mbit/s)', '0 is no limit.')}</div>` : '') +
     `</div>`;
 }
 
-const DIRECT_NUMBERS = new Set(['mtu', 'paths', 'maxConnections', 'bandwidthMbps', 'sessions', 'mss']);
+const DIRECT_NUMBERS = new Set(['mtu', 'maxConnections', 'bandwidthMbps',
+  'pckConns', 'pckKcpMtu', 'pckKcpSndWnd', 'pckKcpRcvWnd']);
 
 const directBaseline = new WeakMap();
+
+/* The fine-tune boxes of a PCK tunnel show what the chosen preset sets as grey
+   text, and choosing another preset clears whatever is in them: the server sets
+   the preset-derived values back when the preset changes, and a box still
+   holding the old number would send it again. */
+function wirePck(root, settings, presets) {
+  const paint = (preset, clear) => {
+    const o = presets.find(p => p.value === preset) || {};
+    const ph = { pckConns: o.pckConns, pckKcpSndWnd: o.pckSndWnd, pckKcpRcvWnd: o.pckRcvWnd, pckKcpMtu: o.pckMtu };
+    for (const [name, v] of Object.entries(ph)) {
+      const i = root.querySelector(`input[name="${name}"]`);
+      if (!i) continue;
+      if (v) i.placeholder = v;
+      if (clear && name !== 'pckKcpMtu') i.value = '';
+    }
+    if (clear) {
+      const mode = root.querySelector('input[name="pckKcpMode"]');
+      const menu = root.querySelector('.sel[data-name="pckKcpMode"]');
+      if (mode && menu) { mode.value = ''; menu.dataset.value = ''; menu.childNodes[0].textContent = 'From the preset'; }
+      const eff = root.querySelector('#pckEffective');
+      if (eff && o.pck) eff.textContent = 'Will run with ' + o.pck;
+    }
+  };
+  /* fill() writes a zero as "0", and for these a zero means "from the preset". */
+  for (const name of ['pckConns', 'pckKcpSndWnd', 'pckKcpRcvWnd', 'pckKcpMtu']) {
+    const i = root.querySelector(`input[name="${name}"]`);
+    if (i && Number(i.value) === 0) i.value = '';
+  }
+  paint(settings.preset || 'turbo', false);
+  root.addEventListener('change', ev => {
+    if (ev.target?.name === 'preset') paint(ev.target.value, true);
+  });
+}
 
 function readDirect(root) {
   const out = {};
@@ -452,9 +545,12 @@ export async function editView(ctx) {
         if (panes) panes.innerHTML = directMarkup(settings);
         let dopts = { presets: [] };
         try { dopts = await api.directOptions(); } catch (e) { /* the menu stays empty */ }
-        await wireControls(root, { families: [], presets: settings.presets || dopts.presets || [] });
+        await wireControls(root, { families: [], presets: dopts.presets || [],
+          carriers: settings.carriers || dopts.carriers || [],
+          pckModes: dopts.pckModes || [], pckBlocks: dopts.pckBlocks || [] });
         fill(root, settings);
         syncControls(root);
+        if (settings.pck) wirePck(root, settings, dopts.presets || []);
       } else {
         /* The switches and the menus were drawings.
          *

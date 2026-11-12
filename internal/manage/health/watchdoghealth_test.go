@@ -69,3 +69,28 @@ func TestConnectedIsATriState(t *testing.T) {
 	}
 	metrics.ClearPeer()
 }
+
+// One snapshot read twice is one failure, not the two in a row that restart a
+// tunnel. The watchdog looks every 25 seconds and a snapshot is written every
+// 30, so it reads most of them twice; counting each read restarted a pck tunnel
+// that was between sessions for a second at the moment its snapshot was taken.
+func TestASnapshotReadTwiceIsOneFailure(t *testing.T) {
+	counted := map[string]time.Time{}
+	at := time.Now().Add(-10 * time.Second)
+	if !newFailure(counted, "t", at) {
+		t.Fatal("the first reading of a down snapshot was not counted")
+	}
+	if newFailure(counted, "t", at) {
+		t.Fatal("the same snapshot, read again 25 seconds later, counted as a second failure")
+	}
+	if !newFailure(counted, "t", at.Add(30*time.Second)) {
+		t.Fatal("the next snapshot, still down, was not counted")
+	}
+	if !newFailure(counted, "other", at) {
+		t.Fatal("a reading of one tunnel kept another's from counting")
+	}
+	// A verdict from the socket table is read fresh on every pass.
+	if !newFailure(counted, "socket", time.Time{}) || !newFailure(counted, "socket", time.Time{}) {
+		t.Fatal("a fresh reading with no snapshot behind it was not counted every time")
+	}
+}

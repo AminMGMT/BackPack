@@ -80,6 +80,13 @@ type KCPSettings struct {
 	// the source is this machine's real one, so the server learns each client
 	// from the wire exactly as a UDP socket would. See pckconn_linux.go.
 	Pck *PcapCarrier
+	// Path, when set, puts the sessions under the pck transport's send-side
+	// control (PathControl): a window that follows the path's queue, a paced
+	// output, a retransmission timer that waits for a queued segment, and fast
+	// retransmission of a lost fast retransmit. Nil, which is every transport
+	// but pck, leaves the session exactly as the preset tunes it. Set by
+	// EnablePathControl.
+	Path *PathControl
 	// Logf, when set, receives the startup notes: the effective MTU and FEC
 	// on both ends, and — for the pck carrier — the egress it discovered and
 	// whether the kernel-RST guard installed. It exists because a KCP tunnel that
@@ -249,6 +256,12 @@ func ApplyKCPSettings(session *kcp.UDPSession, s KCPSettings) {
 	// DSCP 46 (Expedited Forwarding) asks routers that honour it to treat the
 	// tunnel as low-latency traffic. Networks that ignore it are unaffected.
 	session.SetDSCP(46)
+	if s.Path != nil {
+		// A fast retransmission that is lost is sent again after about a round
+		// trip, not after the timer and its back-off. The rest of the path
+		// control is applied once the session is pooled (PooledKCP).
+		session.SetFastRetransmitAgain(true)
+	}
 	if s.SO_RCVBUF > 0 {
 		session.SetReadBuffer(s.SO_RCVBUF)
 	}

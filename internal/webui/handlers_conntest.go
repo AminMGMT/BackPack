@@ -49,8 +49,11 @@ type conntestRow struct {
 	RTTms      int     `json:"rtt,omitempty"`
 	Mbps       float64 `json:"mbps,omitempty"`
 	UploadMbps float64 `json:"uploadMbps,omitempty"`
-	Phase      string  `json:"phase,omitempty"`
-	Connect    float64 `json:"connect,omitempty"`
+	// The best second of either direction; see manage.ConnTestResult.
+	PeakMbps       float64 `json:"peakMbps,omitempty"`
+	UploadPeakMbps float64 `json:"uploadPeakMbps,omitempty"`
+	Phase          string  `json:"phase,omitempty"`
+	Connect        float64 `json:"connect,omitempty"`
 }
 
 // conntestView is the whole state, as GET /api/conntest answers it.
@@ -143,6 +146,7 @@ func rowOf(r manage.ConnTestResult) conntestRow {
 		Status: r.Status, Detail: r.Detail, OK: r.OK, Tried: r.Tried, Total: r.Total,
 		RTTms: r.RTTms, Mbps: r.Mbps, Connect: r.Connect,
 		UploadMbps: r.UploadMbps, Phase: r.Phase,
+		PeakMbps: r.PeakMbps, UploadPeakMbps: r.UploadPeakMbps,
 	}
 }
 

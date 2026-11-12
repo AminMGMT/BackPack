@@ -3,11 +3,13 @@ package l3
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/backpack/backpack/internal/tunnel/paqet"
 	"github.com/sirupsen/logrus"
 )
 
@@ -294,6 +296,16 @@ type Tunnel struct {
 	// freshness.go.
 	seenInits seenInits
 
+	// kernel is set for a kernel GRE carrier, which runs runKernelGRE instead
+	// of the TUN and the session, and gre is what that path keeps between its
+	// generations. See kernelgre.go.
+	kernel bool
+	gre    greState
+
+	// pck is the paqet engine for carrier = "pck", which has no TUN, no session
+	// and no carrier socket of this package's. See pck.go.
+	pck *paqet.Engine
+
 	stats struct {
 		packetsIn, packetsOut atomic.Uint64
 		bytesIn, bytesOut     atomic.Uint64
@@ -320,8 +332,20 @@ func New(cfg Config, log *logrus.Logger) (*Tunnel, error) {
 	if log == nil {
 		log = logrus.StandardLogger()
 	}
+	var pck *paqet.Engine
+	if cfg.Carrier == CarrierPck {
+		pc, err := PckEngineConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if pck, err = paqet.New(pc, log); err != nil {
+			return nil, fmt.Errorf("l3: pck: %w", err)
+		}
+	}
 	return &Tunnel{
 		cfg:           cfg,
+		pck:           pck,
+		kernel:        KernelCarrier(cfg.Carrier),
 		encap:         encap,
 		log:           log,
 		replies:       make(chan handshakeReply, 4),
@@ -336,6 +360,12 @@ func New(cfg Config, log *logrus.Logger) (*Tunnel, error) {
 // Run opens the device and the carrier and serves the tunnel until ctx ends.
 // It always cleans up what it opened, including on the error paths.
 func (t *Tunnel) Run(ctx context.Context) error {
+	if t.pck != nil {
+		return t.runPaqet(ctx)
+	}
+	if t.kernel {
+		return t.runKernelGRE(ctx)
+	}
 	carrier, peer, err := openCarrierContext(ctx, t.cfg)
 	if err != nil {
 		return err
@@ -482,6 +512,18 @@ func (t *Tunnel) LocalAddr() net.Addr {
 // Held by TestStatsAreNeverInternallyImpossible, which found the original by
 // reading flat out while packets crossed.
 func (t *Tunnel) Stats() Stats {
+	if t.pck != nil {
+		// The engine counts what crosses its wire, keepalives included, which
+		// is what lets the watchdog tell an idle tunnel from a stalled one.
+		w := t.pck.Stats()
+		return Stats{PacketsIn: w.PacketsIn, PacketsOut: w.PacketsOut,
+			BytesIn: w.BytesIn, BytesOut: w.BytesOut, Dropped: w.RxDrops, Handshakes: w.Sessions}
+	}
+	if t.kernel {
+		// The kernel counts a GRE link's traffic; there is nothing here to
+		// count it with.
+		return t.gre.stats(readGRECounters)
+	}
 	packetsIn := t.stats.packetsIn.Load()
 	packetsOut := t.stats.packetsOut.Load()
 	return Stats{

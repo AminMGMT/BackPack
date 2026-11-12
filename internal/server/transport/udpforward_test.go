@@ -220,3 +220,95 @@ func testForwarder(t *testing.T, target string) *udpForwarder {
 	t.Cleanup(fw.close)
 	return fw
 }
+
+// Datagrams that are already queued ride one Read, so a relay that writes each
+// Read to a stream and waits for it is not limited to one datagram per write.
+// The bytes are the same as ever — length-prefixed frames, in order — however
+// the Reads cut them.
+func TestFlowReadTakesEverythingQueued(t *testing.T) {
+	fw := testForwarder(t, "9000")
+	peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4000}
+	f := newUDPFlow(fw, peer, peer.String())
+
+	var want []byte
+	for i := 0; i < 20; i++ {
+		payload := bytes.Repeat([]byte{byte(i)}, 10+i*7)
+		f.deliver(payload)
+		want = append(want, byte(len(payload)>>8), byte(len(payload)))
+		want = append(want, payload...)
+	}
+
+	buf := make([]byte, 64*1024)
+	n, err := f.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf[:n], want) {
+		t.Fatalf("one Read returned %d bytes, want all %d queued", n, len(want))
+	}
+
+	// A small buffer splits the same stream at arbitrary points; nothing is
+	// lost or reordered, and a frame cut by one Read continues in the next.
+	for i := 0; i < 20; i++ {
+		payload := bytes.Repeat([]byte{byte(i)}, 10+i*7)
+		f.deliver(payload)
+	}
+	var got []byte
+	small := make([]byte, 37)
+	for len(got) < len(want) {
+		n, err := f.Read(small)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, small[:n]...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("a small buffer changed the stream")
+	}
+}
+
+// A Read does not wait for a batch: with one datagram queued it returns it.
+func TestFlowReadDoesNotWaitToBatch(t *testing.T) {
+	fw := testForwarder(t, "9000")
+	peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4001}
+	f := newUDPFlow(fw, peer, peer.String())
+	f.deliver([]byte("one"))
+	done := make(chan int, 1)
+	go func() {
+		n, _ := f.Read(make([]byte, 4096))
+		done <- n
+	}()
+	select {
+	case n := <-done:
+		if n != 5 {
+			t.Fatalf("Read returned %d bytes, want 5", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Read held a lone datagram back")
+	}
+}
+
+// A flow whose queue is full drops the datagram that has waited longest, so
+// what the tunnel carries next is the freshest traffic, not a backlog.
+func TestAFullFlowQueueDropsTheOldestDatagram(t *testing.T) {
+	fw := testForwarder(t, "9000")
+	peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4002}
+	f := newUDPFlow(fw, peer, peer.String())
+	total := udpFlowQueue + 40
+	for i := 0; i < total; i++ {
+		f.deliver([]byte{byte(i >> 8), byte(i)})
+	}
+	buf := make([]byte, 64*1024)
+	n, err := f.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != udpFlowQueue*4 {
+		t.Fatalf("Read returned %d bytes, want %d queued datagrams of 4", n, udpFlowQueue)
+	}
+	first := int(buf[2])<<8 | int(buf[3])
+	last := int(buf[n-2])<<8 | int(buf[n-1])
+	if first != 40 || last != total-1 {
+		t.Fatalf("kept datagrams %d..%d, want 40..%d (the oldest 40 dropped)", first, last, total-1)
+	}
+}

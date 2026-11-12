@@ -26,11 +26,11 @@ func checkEngine(cfg *config.Config) error {
 		}
 		return nil
 
-	case cfg.Direct.Enabled():
-		if _, _, err := newDirectRunner(directConfigOf(cfg), nil); err != nil {
-			return fmt.Errorf("direct tunnel configuration is not usable: %w", err)
-		}
-		return nil
+	case cfg.Direct.Present():
+		// Removed in v2.0.0, with no engine left to ask. Refused here, which is
+		// what start, reload and `backpack check` all go through, so the three
+		// say the same thing — see docs/adr/0002.
+		return config.ErrDirectRemoved
 	}
 
 	switch {

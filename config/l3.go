@@ -40,21 +40,47 @@ type L3Config struct {
 	Mode string `toml:"mode"`
 
 	// Addr is the peer's host:port when dialling, or the address to bind when
-	// listening.
+	// listening. On the kernel GRE carriers it is the other server's real
+	// address on both sides, with no port — "203.0.113.9" — because a GRE link
+	// names both of its ends and neither of them listens.
 	Addr string `toml:"addr"`
+
+	// GRELocal is this server's own address for a kernel GRE link. Empty — the
+	// default — uses the address the route to addr leaves from, which is right
+	// unless the server has several and the other end expects another. Read
+	// only when carrier is "gre" or "ip6gre".
+	GRELocal string `toml:"gre_local"`
 
 	// Token is the shared secret. It is the only credential: the handshake
 	// derives its pre-shared key from it, and a peer without it is answered
-	// with silence.
+	// with silence. The kernel GRE carriers have no handshake and no secret,
+	// and need none.
 	Token string `toml:"token"`
 
-	// Carrier is the datagram transport underneath: "udp" (the default, and
-	// the right choice on a path that does not interfere), "pck" (raw TCP
-	// segments, so a capture sees an ordinary flow), "quic" (a real QUIC
-	// session, so a capture sees HTTP/3), "sni" (pck, plus a TLS ClientHello
+	// Carrier is the datagram transport underneath: "pck" (a different
+	// engine from the rest — see below), "sni" (pck, plus a TLS ClientHello
 	// naming an allowed domain at the start of the flow), "xdi" (inside ICMP
-	// echo) or "spoof" (raw IP with a forged source). All but udp and quic are
-	// Linux-only and need CAP_NET_RAW.
+	// echo) or "spoof" (raw IP with a forged source), all four Linux-only and
+	// needing CAP_NET_RAW; or "gre" / "ip6gre", kernel GRE over IPv4 or IPv6
+	// endpoints, which is NOT encrypted.
+	//
+	// "pck" is not a datagram carrier for the layer-3 engine. Since v2.0.0 it is
+	// paqet's engine: TCP segments crafted and captured with libpcap, KCP for
+	// reliability, smux streams on top, forwarding the ports below. There is no
+	// TUN device and no routed traffic: a pck tunnel carries ports only (Iran
+	// dials, listens on ports, and the kharej side dials the target). It reads
+	// mode, addr, token, ports, accept_udp, max_connections, bandwidth_mbps,
+	// preset, sockbuf (the capture ring), pck_* and the keys under PckConns. A
+	// file written for the old PCK needs no change: see l3.ConfigFromTable.
+	//
+	// The two GRE carriers are a link the kernel creates and encapsulates for
+	// itself. There is no carrier socket, no handshake and no encryption — it
+	// travels as bare IP protocol 47, and what crosses it is in the clear unless
+	// it is encrypted itself. Both need CAP_NET_ADMIN rather than CAP_NET_RAW.
+	//
+	// It is required. "udp" — which an empty carrier used to mean — and "quic"
+	// were removed in v2.0.0, and a file that still names either, or names
+	// none, is refused with the list above rather than moved onto one of them.
 	//
 	// A reliable carrier is not an option here — see the l3 package doc for
 	// why stacking retransmission is actively harmful rather than merely
@@ -67,7 +93,12 @@ type L3Config struct {
 	Encap string `toml:"encap"`
 
 	// GREKey is the RFC 2890 key, letting more than one logical tunnel share
-	// a carrier. Zero omits the field. Ignored unless encap is "gre".
+	// a carrier. Zero omits the field. On the kernel GRE carriers it is the
+	// link's key, which both ends must share; the setup picks one per tunnel.
+	//
+	// It matters more there: the kernel allows one GRE link per pair of
+	// addresses and key, so it is what lets several GRE tunnels join the same
+	// two servers. The setup link carries it to the other end.
 	GREKey uint32 `toml:"gre_key"`
 
 	// SNIDomain is the server name the "sni" carrier puts in that hello. Empty
@@ -89,7 +120,11 @@ type L3Config struct {
 
 	// MTU is the interface MTU. Zero takes a deliberately conservative
 	// default, because a layer-3 tunnel whose packets are slightly too large
-	// does not fail loudly — it passes small flows and stalls large ones.
+	// does not fail loudly — it passes small flows and stalls large ones. On
+	// the kernel GRE carriers zero is worked out from the outgoing interface.
+	//
+	// That is the MTU of the interface the route to addr leaves by, minus
+	// GRE's own 24 bytes (28 with a key; 44 and 48 for ip6gre).
 	MTU int `toml:"mtu"`
 
 	// SockBuf sizes the carrier's socket buffers in bytes. Zero takes the
@@ -113,15 +148,6 @@ type L3Config struct {
 	// FECParity is how many parity packets accompany each group. Both ends must
 	// agree on this and on fec_data.
 	FECParity int `toml:"fec_parity"`
-
-	// Paths spreads the udp carrier over this many sockets, on consecutive
-	// ports starting at the one in Addr. One (or zero) is a single socket.
-	//
-	// It is for a path that rate-limits per flow: one socket is one flow and
-	// gets one allowance however much headroom the link has. Both ends must set
-	// the same number, and the extra ports must be open. The obfuscated
-	// carriers do not take it — they already vary their source per packet.
-	Paths int `toml:"paths"`
 
 	// Preset is the name of the tuning profile the two keys below came from.
 	// It is a label: the engine reads the values, not this.
@@ -194,6 +220,50 @@ type L3Config struct {
 	// Embedded the same way for the pck_* keys, read only when
 	// carrier = "pck".
 	PckConfig
+
+	// The pck_* keys below tune the PCK engine and are read only when carrier is
+	// "pck". Every one is optional: left out, it comes from the preset the file
+	// names (see Preset), which is how a file written by an older version —
+	// which has a preset and a sockbuf and none of these — runs unchanged.
+	//
+	// What the engine is, and which of the keys above it still reads, is under
+	// Carrier. Keys that only made sense for the TUN device (iface, local_ip's
+	// address, peer_ip's address, mtu, txqueuelen, qdisc, auto_mtu, mss_clamp,
+	// fec_*, encap, gre_key) are accepted and ignored on a pck tunnel, so a file
+	// from before the engine changed needs no edit.
+
+	// PckConns is how many KCP sessions the Iran side holds open to the kharej
+	// side, each its own TCP flow. Zero takes the preset's (Balance 1, Turbo 2,
+	// Aggressive 4); at most 16.
+	PckConns int `toml:"pck_conns"`
+	// PckKCPMode is KCP's speed mode: "normal", "fast", "fast2" or "fast3",
+	// from least CPU to lowest latency. Empty takes the preset's (Balance fast,
+	// Turbo fast2, Aggressive fast3).
+	PckKCPMode string `toml:"pck_kcp_mode"`
+	// PckKCPMTU is the size of one KCP packet, which is the TCP payload of one
+	// segment. Zero takes 1350, which with the headers fits a 1500-byte path.
+	// The segments are not fragmented, so a value the path cannot carry is lost
+	// without any message, not slow.
+	PckKCPMTU int `toml:"pck_kcp_mtu"`
+	// PckKCPSndWnd is the ceiling of KCP's send window in packets. The engine
+	// moves the window below it by what it reads of the path's delay, so a
+	// larger figure does not queue more on a path that is full, but one that is
+	// too small is the speed limit: throughput is at most window x mtu /
+	// round-trip time. Zero takes the preset's.
+	PckKCPSndWnd int `toml:"pck_kcp_sndwnd"`
+	// PckKCPRcvWnd is KCP's receive window in packets; see pck_kcp_sndwnd. Zero
+	// takes the preset's.
+	PckKCPRcvWnd int `toml:"pck_kcp_rcvwnd"`
+	// PckKCPBlock is the cipher KCP encrypts with, keyed from token. Empty is
+	// "aes". Both ends must agree. "aes-128-gcm" adds authentication; "none"
+	// and "null" turn encryption off.
+	PckKCPBlock string `toml:"pck_kcp_block"`
+	// PckRemoteTargets, on the kharej side, lets the tunnel reach machines
+	// other than the kharej server itself. Off (the default), a forwarded port
+	// reaches only this server's own services — 127.0.0.1 and its own
+	// addresses — which is what the previous PCK's TUN device reached too. Turn
+	// it on only for a mapping that names another host ("443=10.0.0.5:443").
+	PckRemoteTargets bool `toml:"pck_remote_targets"`
 }
 
 // Enabled reports whether this configuration describes a layer-3 tunnel. It is

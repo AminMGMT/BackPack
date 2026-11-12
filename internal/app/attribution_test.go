@@ -37,7 +37,7 @@ func read(t *testing.T, rel string) string {
 
 // NOTICE states the requirement and the READMEs tell a fork where the line goes.
 func TestTheAttributionIsInTheLicenceDocuments(t *testing.T) {
-	for _, f := range []string{"NOTICE", "README.md", "README_FA.md", "TRADEMARK.md"} {
+	for _, f := range []string{"NOTICE", "README.md", "README_FA.md", "README_RU.md", "TRADEMARK.md"} {
 		if !strings.Contains(read(t, f), attribution) {
 			t.Errorf("%s does not carry the attribution %q", f, attribution)
 		}

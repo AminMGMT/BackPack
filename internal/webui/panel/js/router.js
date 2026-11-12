@@ -10,6 +10,7 @@
 
 const routes = [];
 let current = null;
+let tearingDown = false;
 let onChange = () => {};
 
 /* The last page that was not a dialog.
@@ -51,6 +52,13 @@ export function match(path) {
 }
 
 export function go(to, replace = false) {
+  /* A navigation asked for by a teardown is dropped. The only thing that does
+     it is a dialog's close, which goes "back to the page underneath" — but a
+     teardown runs because the address already changed, so that navigation was
+     answered after the one the user typed and overwrote it: typing #/tunnels
+     over an open Edit dialog landed on #/. The route being resolved already
+     says where to be. */
+  if (tearingDown) return;
   const hash = to.startsWith('#') ? to : '#' + to;
   if (location.hash === hash) { resolve(); return; }
   if (replace) history.replaceState(null, '', hash);
@@ -64,7 +72,10 @@ export function resolve() {
   const { path, query } = parse();
   const hit = match(path);
   if (!hit) { go('/', true); return; }
-  if (current && current.teardown) current.teardown();
+  if (current && current.teardown) {
+    tearingDown = true;
+    try { current.teardown(); } finally { tearingDown = false; }
+  }
   current = { teardown: null };
   const ctx = { params: hit.params, query, path, setTeardown: fn => { current.teardown = fn; } };
   hit.view(ctx);

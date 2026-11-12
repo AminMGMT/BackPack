@@ -25,7 +25,7 @@ func sampleLink() ShareLink {
 		Port: "9000", Host: "203.0.113.9",
 		Preset: "turbo", Ports: "443, 8080=80", AcceptUDP: true, MSS: 1208, MTU: 1400,
 		LocalIP: "10.20.0.1/30", PeerIP: "10.20.0.2",
-		FECData: 10, FECParity: 3, Paths: 4,
+		FECData: 10, FECParity: 3,
 		Profile: "icmp", Uplink: "icmp", Downlink: "udp",
 		SrcIPs: "8.8.4.4, 1.1.1.1", Stealth: true, ICMPReply: true,
 		Hosts:        []string{"iran.example.com", "198.51.100.7:8443"},
@@ -232,13 +232,17 @@ func TestThePairedListNamesWhatMustMatch(t *testing.T) {
 		return false
 	}
 	for _, want := range []string{"token", "tunnelPort", "carrier", "localIp", "peerIp",
-		"paths", "fec", "stealth", "spoof.profile", "spoofPeerIp"} {
+		"fec", "stealth", "spoof.profile", "spoofPeerIp"} {
 		if !has(want) {
 			t.Errorf("%q must match the other end and is not marked as paired", want)
 		}
 	}
 	// The name is a suggestion and the forged source is this side's own choice:
 	// warning about either would be warning about nothing.
+	// "paths" went with the udp carrier in v2.0.0; a link must not ask for it.
+	if has("paths") {
+		t.Error(`"paths" is marked paired, but nothing reads it any more`)
+	}
 	for _, notWanted := range []string{"name", "spoof.srcIPs"} {
 		if has(notWanted) {
 			t.Errorf("%q is local to this side and must not be marked paired", notWanted)

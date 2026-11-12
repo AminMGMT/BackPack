@@ -34,6 +34,58 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 Coverage is measured with `-coverpkg` and has a floor that only goes up. If it
 drops, find out what stopped being exercised before lowering it.
 
+## Building with libpcap (the PCK carrier)
+
+The `pck` carrier is [paqet](https://github.com/hanselime/paqet)'s engine
+(`internal/tunnel/paqet`), and paqet captures packets with `gopacket/pcap`,
+which is cgo and libpcap. That is the one place Backpack is not CGO-free, so a
+build that is meant to *run* PCK needs libpcap's headers and a static
+`libpcap.a`. Everything else builds and runs without them: a plain
+`CGO_ENABLED=0 go build` still compiles, passes the engine's tests (they use a
+fake wire) and says "this build has no libpcap" if a PCK tunnel is started.
+
+No root is needed anywhere. Build libpcap into your home directory once:
+
+```
+make libpcap                       # -> ~/.local/libpcap  (LIBPCAP_PREFIX=... to move it)
+```
+
+That runs `scripts/build-libpcap.sh`: it downloads libpcap, builds it with
+`--with-pcap=linux --disable-shared` and installs `include/pcap.h` and
+`lib/libpcap.a`. libpcap's tarball does not ship its generated parser, so it
+needs `flex` and `bison`; if they are not installed the script builds `m4`,
+`bison` and `flex` from source into the same prefix first. Then point cgo at it
+for anything that compiles the module — `go vet`, `go test`, `go build`:
+
+```
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I$HOME/.local/libpcap/include"
+export CGO_LDFLAGS="-L$HOME/.local/libpcap/lib -lpcap"
+go vet ./... && go test ./...
+```
+
+`make build`, `make check` and the other targets do that for you when the
+prefix exists. A local `make build` links libpcap statically but uses the host
+libc; it is for development, not for shipping.
+
+**Release binaries** are one static file per architecture, as before, and must
+run on a server with no libpcap. `make release-linux` builds each with a libpcap
+built for that architecture (`scripts/build-linux.sh <arch>`), using
+[Zig](https://ziglang.org)'s C compiler and its bundled musl as the cross
+compiler — no containers, no sudo, byte-for-byte reproducible. It needs `zig` on
+`PATH` (0.17.0 is what CI uses), plus `gcc-arm-linux-gnueabi` for `armv5`, which
+Zig's musl cannot target. `-tags netgo,osusergo` keeps the pure-Go resolver, so
+cgo does not change how names are resolved. To check one:
+
+```
+scripts/build-linux.sh amd64 /tmp/backpack
+ldd /tmp/backpack                  # "not a dynamic executable"
+go version -m /tmp/backpack | grep CGO_ENABLED     # CGO_ENABLED=1
+```
+
+CI (`.github/actions/libpcap`) builds libpcap once per run (cached) and exports
+the three variables above for every job.
+
 ## How this codebase is written, and why it will look unusual
 
 **The comments carry the institutional memory.** They say what was tried, what

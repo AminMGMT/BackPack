@@ -132,3 +132,39 @@ func TestApplyToleratesANilLogger(t *testing.T) {
 	Apply("l3", "bp0-test-nonexistent", 1400, 0, nil)
 	Remove("l3", "bp0-test-nonexistent", 1400, 0)
 }
+
+// One log line per address family, not per rule. Each family installs into two
+// chains with the same MSS, and the old Apply logged every one of them.
+func TestGroupReportsEachFamilyOnce(t *testing.T) {
+	rules := Rules("l3", "bp0", 1400, 0)
+	if len(rules) != 4 {
+		t.Fatalf("want 4 rules (2 families x 2 chains), got %d", len(rules))
+	}
+	got := Group(rules)
+	if len(got) != 2 {
+		t.Fatalf("want 2 families, got %d: %+v", len(got), got)
+	}
+	for _, c := range got {
+		if len(c.Chains) != 2 {
+			t.Errorf("%s: want both chains, got %v", c.Label, c.Chains)
+		}
+	}
+	if got[0].Label != "IPv4" || got[0].MSS != 1400-OverheadV4 {
+		t.Errorf("first family = %+v, want IPv4 at %d", got[0], 1400-OverheadV4)
+	}
+	if got[1].Label != "IPv6" || got[1].MSS != 1400-OverheadV6 {
+		t.Errorf("second family = %+v, want IPv6 at %d", got[1], 1400-OverheadV6)
+	}
+}
+
+// A chain that failed to install must not be named in the summary.
+func TestGroupOnlyNamesInstalledChains(t *testing.T) {
+	rules := Rules("l3", "bp0", 1400, 0)
+	got := Group(rules[:1])
+	if len(got) != 1 || len(got[0].Chains) != 1 || got[0].Chains[0] != "FORWARD" {
+		t.Fatalf("got %+v, want one IPv4 entry on FORWARD only", got)
+	}
+	if Group(nil) != nil {
+		t.Errorf("Group(nil) should be empty")
+	}
+}

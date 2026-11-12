@@ -77,7 +77,7 @@ server pastes.
 | **Carry UDP As Well As TCP On Those Ports** `[y/N]` | off by default. [Forwarded UDP](forwarded-udp.md) |
 | **TLS Certificate** | wss/wssmux only — Self-Signed, Let's Encrypt, or Existing Files |
 | **Simple Token Auth** `[y/N]` | wss/wssmux only — for a TLS-terminating proxy in front |
-| **TCP Flag Pattern** / interface override | pck only. [TCP + PCK](tcp-pck.md) |
+| **TCP Flag Pattern** / interface override | the reverse `pck` transport only. [TCP + PCK](tcp-pck.md) |
 | **Send Real Client IP (PROXY Protocol)** `[y/N]` | where the transport can carry it. [Real client IP](real-client-ip.md) |
 | **How Should The Tunnel Be Tuned?** | [Presets](performance-presets.md) |
 | **Fine-Tune The Advanced Settings** `[y/N]` | [↓ the advanced settings](#the-advanced-settings-fine-tune) |
@@ -102,8 +102,9 @@ with the same token would take the connection from the first.
 
 ### Setup Iran / Setup Kharej → Direct
 
-A direct tunnel is always a full IP tunnel wrapped in Backpack's own GRE, so
-there is nothing to choose about the shape or the framing — only how it travels.
+A direct tunnel is always a full IP tunnel wrapped in Backpack's own GRE — or,
+on the **GRE** carrier, the kernel's own, unencrypted — so there is nothing to
+choose about the shape or the framing, only how it travels.
 [Direct tunnel](l3-direct-tunnel.md)
 
 Set up the **Iran server first**; its summary shows a setup link the kharej
@@ -111,7 +112,7 @@ server pastes. The Iran questions, in order:
 
 | Prompt | Notes |
 |---|---|
-| **How Should The Packets Travel?** | **xDi**, **PCK**, **UDP**, **Quic**, **IP Spoofing**, **SNI Spoofing**, in that order; both ends choose the same one |
+| **How Should The Packets Travel?** | **xDi**, **PCK**, **IP Spoofing**, **SNI Spoofing**, **GRE**, in that order; both ends choose the same one. `udp` and `quic` were removed in v2.0.0. **PCK** and **GRE** have their own, shorter questions — see below |
 | **Kharej IP Or Domain** | Iran dials out, so it needs no inbound port of its own |
 | **Tunnel Port** `[9000]` | what kharej binds and Iran reaches |
 | **Forwarded Ports (Blank For TUN)** | optional. Blank is a plain private network that routes what it is given. A port something here already listens on (the panel's `7777`) is refused |
@@ -119,7 +120,6 @@ server pastes. The Iran questions, in order:
 | **Security Token** | generated here — press Enter. The setup link carries it to kharej |
 | **Carry UDP As Well As TCP On Those Ports** `[y/N]` | only when ports were given |
 | **Turn On Error Correction (FEC)** `[y/N]` | for a route that drops packets; about a third more traffic |
-| **Spread The Tunnel Over Several Sockets** `[y/N]` / **How Many Sockets (2-8)** | UDP only — for a provider that limits each connection. One port per socket from the tunnel port up, open on kharej; the summary shows the range |
 | **How Should The Tunnel Be Tuned?** | Turbo / Balance / Aggressive — the queue and the socket buffers. [Presets](performance-presets.md) |
 | **Fine-Tune The Advanced Settings** `[y/N]` | tunnel addresses (a free `10.10.N.0/30` by default), starting MTU, interface name, GRE key, segment cap, caps |
 | **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | as for reverse above |
@@ -135,6 +135,50 @@ On kharej: the same carrier, then **How Do You Want To Set Up This Side?** —
 port, both tunnel addresses as Iran printed them, a name, and the Iran
 server's token, which kharej never generates). A spoof kharej is also asked
 for the Iran server's real IP.
+
+**PCK** forwards ports over KCP and has **no TUN**, so it asks none of the questions
+above about addresses, MTU, error correction or a token. See
+[Direct PCK](direct-pck.md):
+
+| Prompt | Notes |
+|---|---|
+| **Kharej IP Or Domain** | IPv4 only |
+| **Tunnel Port** `[9000]` | what kharej's capture listens on and Iran reaches; nothing may listen on it |
+| **Forwarded Ports** | required — PCK carries ports only. A port something here already listens on is refused |
+| **Carry UDP As Well As TCP On Those Ports** `[y/N]` | |
+| **Tunnel Name** | |
+| **How Should The Tunnel Be Tuned?** | Turbo / Balance / Aggressive, each shown with what it sets in the engine: `2 sessions, fast2, 1024-packet windows, 4 MiB buffers, 8 MiB capture`. [Presets](performance-presets.md) |
+| **Fine-Tune The Advanced Settings** `[y/N]` | sessions, KCP speed mode, send and receive window, packet size, cipher, caps — all optional, `0`/Enter keeps the preset's |
+| **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | as above |
+
+The token is generated and is the encryption key; the Setup Link carries it. On
+kharej, **Setup Link** asks only for a name, and **Manual** asks the tunnel port,
+a name, the Iran server's token and the preset. (Before: interface, both tunnel
+addresses, MTU, error correction and a token question on every side.) The
+kharej side dials only its own services by default — `127.0.0.1` and its own
+addresses; for a target on another machine, set `pck_remote_targets = true`
+in the kharej server's file.
+
+**GRE** is the kernel's own GRE, and it is **not encrypted**: it travels as
+bare IP protocol 47, and whatever crosses it is in the clear unless it is
+encrypted itself. The wizard says so first, then asks less than the others —
+there is no port, no token and no error correction:
+
+| Prompt | Notes |
+|---|---|
+| **Kharej IP Or Domain** | an IPv4 address makes the tunnel `gre`, an IPv6 one `ip6gre` |
+| **Forwarded Ports (Blank For TUN)** | as above |
+| **Tunnel Name** `[gre-iran]` | the next free one is offered: `gre-iran-2`, … |
+| **Carry UDP As Well As TCP On Those Ports** `[y/N]` | only when ports were given |
+| **How Should The Tunnel Be Tuned?** | the interface's queue |
+| **Fine-Tune The Advanced Settings** `[y/N]` | tunnel addresses, IPv4 or IPv6 between the servers (for a domain), this server's own GRE address (blank = the route's), MTU (0 = the interface's less GRE's own), Auto MTU, interface name, the GRE key, segment cap, caps |
+| **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | as above |
+
+The interface, the `10.10.N.0/30` and the **GRE key** are chosen for every GRE
+tunnel, so several can share one server — to different kharej, or more than
+one to the same — and the setup link carries the key and this server's address
+to the kharej. On kharej, **Manual** asks the Iran server's address, the two
+tunnel addresses and the GRE key from the Iran server. [GRE](l3-direct-tunnel.md#kernel-gre)
 
 **IP Spoofing** and **SNI Spoofing** keep the classic wizard: no setup link,
 both ends set up by hand, the **kharej** side suggests the token and the Iran
@@ -209,8 +253,10 @@ only the entries that apply to its role and transport.
 | **Limits** | Max simultaneous connections and Mbit/s for this tunnel as a whole; `0` = unlimited. Warns below 10 connections — one browser opens more. [More](limits.md) |
 | **Forward UDP** | Carry UDP on the exposed ports too. Off by default. [More](forwarded-udp.md) |
 | **TCP MSS clamp** | Non-datagram transports only. Leave at 0 unless Health Check reports a smaller path MTU — it prints the number. **Same value on both ends.** [More](mss-clamp.md) |
-| **TCP packet flags** | `pck` only. What this end's flag field says; each end decides its own, so they need not match. [More](tcp-pck.md) |
+| **TCP packet flags** | the reverse `pck` transport only. What this end's flag field says; each end decides its own, so they need not match. [More](tcp-pck.md) |
+| **Preset** / **Fine-Tune** (a direct PCK tunnel) | direct `pck` only, in place of MTU, MSS clamp and the interface: the preset resets sessions, mode and windows; Fine-Tune sets them one by one and the cipher. A PCK tunnel is not edited into another carrier, or another into PCK. [More](direct-pck.md) |
 | **IP Spoofing** | `spoof` only. The forged source, the profile, and everything else. [More](ip-spoofing.md) |
+| **Show GRE Key** / **Kharej Address** / **Iran Address** | direct `gre` / `ip6gre` only, in place of the token and the carrier: the key both ends share, and the other server's address — an address of the other family moves the tunnel between `gre` and `ip6gre`, and the other end must follow. A GRE tunnel is not edited into another carrier, or another into GRE; set the new one up and delete the old |
 | **Certificate** | wss/wssmux only. Switch between self-signed and Let's Encrypt. [More](../tutorial/websocket-tls.md) |
 
 **On a client (kharej) tunnel:**
@@ -265,7 +311,8 @@ certificates and the auto-refresh schedule** into one portable `.tar.gz` under
 
 ## 5 — Web Panel
 
-A monitoring-only dashboard, recommended on the **Iran** server. The header shows
+The web dashboard, recommended on the **Iran** server; it also adds and edits
+tunnels (see [Web Panel](web-panel.md)). The header shows
 the URL, the login code and the state.
 
 | Option | Notes |
@@ -371,7 +418,7 @@ silently overwrite your answers.
 |---|---|
 | **KCP MTU (bytes)** | Keep it **below the path MTU**. |
 | **KCP interval (ms)** | The tick. Lower reacts faster and costs CPU; 10 ms on the gaming presets. |
-| **KCP send window / receive window (packets)** | Packets in flight. With congestion control off the window **is** the queue — bigger is not better for ping. |
+| **KCP send window / receive window (packets)** | Packets in flight. With congestion control off the window **is** the queue — bigger is not better for ping. (On `pck` it is the *ceiling*: the engine moves its window below it by what it reads of the path's delay.) |
 | **FEC data shards** | Packets per parity group. `0` disables error correction. |
 | **FEC parity shards** | Losses repairable per group. |
 
@@ -456,6 +503,31 @@ loopback، link-local (از جمله metadata ابر) و multicast خودِ سر
 **منوی Edit** بسته به نقش و ترنسپورت فرق می‌کند. روی سرور: پورت تونل، پورت‌های
 forward شده، ترنسپورت، پریست، آی‌پی واقعی کاربر، محدودیت‌ها، **Forward UDP**،
 MSS clamp، فلگ‌های TCP (فقط pck)، IP Spoofing (فقط spoof) و گواهی (فقط wss).
+روی تونل direct از نوع **GRE** به‌جای توکن و حامل: نمایش کلید GRE و آدرس سرور
+مقابل.
+
+**GRE در Setup → Direct:** GRE خودِ کرنل است و **رمزنگاری ندارد** — به‌صورت
+IP protocol 47 خام می‌رود و هر چه از آن رد شود آشکار است مگر خودش رمز شده باشد.
+سؤال‌هایش کمتر است: آدرس خارج (IPv4 یعنی `gre`، IPv6 یعنی `ip6gre`)، پورت‌های
+forward، نام، UDP، preset. پورت تونل، توکن و FEC ندارد. اینترفیس، ‎`/30`‎ و
+**کلید GRE** برای هر تونل خودکار انتخاب می‌شود، پس چند تونل GRE روی یک سرور —
+حتی چندتا به یک خارج — ممکن است و لینک setup کلید و آدرس ایران را به خارج می‌برد.
+
+**PCK در Setup → Direct:** از نسخهٔ 2.0.0 موتور PCK همان paqet است (KCP و smux
+روی بسته‌های TCP ساخته‌شده با libpcap) و **TUN ندارد**، پس فقط پورت forward
+می‌کند و سؤال‌های آدرس تونل، MTU، FEC و توکن را نمی‌پرسد. سؤال‌های سرور ایران به
+ترتیب: آدرس خارج (فقط IPv4)، **پورت تونل** `[9000]` (چیزی نباید روی سرور خارج
+روی این پورت گوش بدهد)، **پورت‌های forward** (اجباری؛ پورتی که روی این سرور
+قبلاً گرفته شده رد می‌شود)، UDP هم؟، نام تونل، **پریست** (Turbo پیش‌فرض،
+Balance، Aggressive — هرکدام با کاری که در موتور می‌کند، مثلاً
+`2 sessions, fast2, 1024-packet windows, 4 MiB buffers, 8 MiB capture`)، و
+**Fine-Tune** اختیاری (تعداد session، حالت KCP، پنجره‌های ارسال و دریافت، اندازهٔ
+بسته، رمز، محدودیت‌ها — `0` یا Enter یعنی همان مقدار پریست)، و ری‌استارت
+زمان‌بندی‌شده. توکن همین‌جا ساخته می‌شود و کلید رمزنگاری است؛ لینک setup آن را
+به خارج می‌برد. روی خارج **Setup Link** فقط نام می‌پرسد و **Manual** پورت تونل،
+نام، توکن سرور ایران و پریست را. سرور خارج به‌طور پیش‌فرض فقط به سرویس‌های خودش
+(127.0.0.1 و آدرس‌های خودش) وصل می‌شود؛ برای مقصدی روی ماشین دیگر
+`pck_remote_targets = true` را در فایل سرور خارج بگذار.
 روی کلاینت: آدرس و پورت سرور، ترنسپورت، آدرس‌های پشتیبان، پریست و لود بالانس.
 هر تغییر یک‌جا نوشته و اعمال می‌شود و **اگر تونل بالا نیامد خودکار برمی‌گردد
 عقب**.
@@ -474,4 +546,4 @@ FEC؛ و zero-copy (فقط روی tcp ساده).
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

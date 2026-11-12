@@ -72,6 +72,8 @@ func RunWatchdog(ctx context.Context) {
 	// up for days is reported once a window rather than once and then never.
 	lastFlapReport := map[string]time.Time{}
 	seenHealthy := map[string]bool{} // only "was up, then dropped" counts as a drop
+	// The snapshot each tunnel's last failure was read from. See newFailure.
+	counted := map[string]time.Time{}
 	// Health by what the tunnel is carrying, alongside health by whether it is
 	// connected. See throughputhealth.go for why silence is not the test.
 	//
@@ -116,6 +118,9 @@ func RunWatchdog(ctx context.Context) {
 				if !seenHealthy[t.Name] {
 					continue
 				}
+				if !newFailure(counted, t.Name, unhealthyEvidence(t)) {
+					continue
+				}
 				fails[t.Name]++
 				if fails[t.Name] >= wdThreshold && time.Since(lastRestart[t.Name]) > wdCooldown {
 					restartTunnel(t)
@@ -141,6 +146,47 @@ func RunWatchdog(ctx context.Context) {
 			flow.save()
 		}
 	}
+}
+
+// A failure is counted once per reading.
+//
+// The engines write their snapshot every 30 seconds and the watchdog looks every
+// 25, so most snapshots are read twice — and wdThreshold "consecutive" failures
+// could be one instant seen twice: a layer-3 tunnel that happened to be between
+// two sessions at the moment its snapshot was written was restarted for it,
+// though it had been down for a second and was carrying traffic again. The soak
+// run on a lossy, flapping path showed exactly that. A verdict that comes from
+// a snapshot therefore counts only when the snapshot is a new one, so the
+// threshold means what it says: down at two moments at least one snapshot
+// interval apart.
+
+// unhealthyEvidence is when the reading behind a tunnel's verdict was taken: its
+// snapshot's time when the verdict came from one, and zero when it came from
+// the socket table, which is read fresh on every pass.
+func unhealthyEvidence(t core.Tunnel) time.Time {
+	if !tunnelspec.IsDirectKind(t) {
+		if _, known := engineSaysConnected(t.Name); !known {
+			return time.Time{}
+		}
+	}
+	snap, err := metrics.Read(app.ConfigDir, t.Name)
+	if err != nil {
+		return time.Time{}
+	}
+	return snap.Taken
+}
+
+// newFailure reports whether a failure read at taken is one not counted
+// already, and records it. A zero time is a fresh reading every time.
+func newFailure(counted map[string]time.Time, name string, taken time.Time) bool {
+	if taken.IsZero() {
+		return true
+	}
+	if last, ok := counted[name]; ok && !taken.After(last) {
+		return false
+	}
+	counted[name] = taken
+	return true
 }
 
 // recoveryWait is how long a restarted tunnel is given to reconnect before the
@@ -226,7 +272,7 @@ func tunnelHealthy(t core.Tunnel, pairs [][2]string) bool {
 	// them. An unanswerable check reports healthy, because restarting
 	// something whose state cannot be seen would mean restarting it forever.
 	if tunnelspec.IsDirectKind(t) {
-		healthy, known := directHealthy(t, pairs)
+		healthy, known := directHealthy(t)
 		return healthy || !known
 	}
 	// The engine's own answer outranks the socket table wherever there is one.

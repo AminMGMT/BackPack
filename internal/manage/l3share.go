@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/tui"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 	"github.com/backpack/backpack/internal/tunnel/portmap"
 )
 
@@ -54,6 +54,12 @@ func eachIranL3Tunnel(visit func(l3Tunnel)) {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen") {
+			continue
+		}
+		// A PCK tunnel has no peer address on a TUN for another kharej's target
+		// to be joined to ("443=10.10.0.2:443|10.10.1.2:443"): its ports are
+		// dialled on the one kharej it connects to, so there is nothing to share.
+		if cfg.L3.Carrier == l3.CarrierPck {
 			continue
 		}
 		visit(l3Tunnel{T: t, L: cfg.L3})
@@ -205,7 +211,7 @@ func offerL3Sharing(cfg l3Spec) []string {
 // writeL3AndRestart saves a layer-3 config and restarts its service, quietly:
 // it runs in the middle of the setup wizard, which has its own screens.
 func writeL3AndRestart(t Tunnel, l config.L3Config) error {
-	body := l3SpecOf(t, l).Render()
+	body := directSpecFrom(t.Name, l).Render()
 	if err := validateRendered(body); err != nil {
 		return err
 	}
@@ -299,84 +305,4 @@ func portHeld(addr string) bool {
 	}
 	ln.Close()
 	return false
-}
-
-// udpCarriers are the carriers that bind a UDP socket of their own on the
-// listening side, so two tunnels with overlapping ports cannot both run.
-var udpCarriers = map[string]bool{"udp": true, "quic": true}
-
-// l3PortRange is the UDP ports a listening tunnel binds: its port, and the
-// ones after it when the udp carrier is spread over several sockets.
-func l3PortRange(port, paths int) (lo, hi int) {
-	if paths < 1 {
-		paths = 1
-	}
-	return port, port + paths - 1
-}
-
-// l3ListenClash says why a new kharej tunnel's UDP port cannot work here, or
-// "" when it can. Two Iran servers set up with the wizard's default port both
-// hand their kharej 9000; the second tunnel then fails to bind and restarts for
-// ever, with the reason only in its journal. Pure, so it can be tested.
-func l3ListenClash(name, carrier string, port, paths int, existing []l3Tunnel) string {
-	if !udpCarriers[carrier] {
-		return ""
-	}
-	lo, hi := l3PortRange(port, paths)
-	for _, e := range existing {
-		if strings.EqualFold(e.T.Name, name) || !udpCarriers[orDefault(e.L.Carrier, "udp")] {
-			continue
-		}
-		_, p, err := net.SplitHostPort(e.L.Addr)
-		if err != nil {
-			continue
-		}
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			continue
-		}
-		elo, ehi := l3PortRange(n, e.L.Paths)
-		if lo <= ehi && elo <= hi {
-			return fmt.Sprintf("tunnel %q already listens on UDP %s here. Two tunnels cannot share it: "+
-				"the second fails to bind. Give this tunnel another port — on the Iran server too, "+
-				"since it dials this one.", e.T.Name, portSpan(elo, ehi))
-		}
-	}
-	return ""
-}
-
-func portSpan(lo, hi int) string {
-	if lo == hi {
-		return strconv.Itoa(lo)
-	}
-	return fmt.Sprintf("%d-%d", lo, hi)
-}
-
-// kharejL3Tunnels is every layer-3 tunnel on this machine that listens.
-func kharejL3Tunnels() []l3Tunnel {
-	var out []l3Tunnel
-	for _, t := range List() {
-		cfg, err := LoadTunnelConfig(t.Name)
-		if err != nil || !cfg.L3.Enabled() || !strings.EqualFold(strings.TrimSpace(cfg.L3.Mode), "listen") {
-			continue
-		}
-		out = append(out, l3Tunnel{T: t, L: cfg.L3})
-	}
-	return out
-}
-
-// kharejPortClash is l3ListenClash for a spec about to be written.
-func kharejPortClash(s l3Spec) string {
-	if s.Side != sideKharej {
-		return ""
-	}
-	_, p, err := net.SplitHostPort(s.Addr)
-	if err != nil {
-		return ""
-	}
-	n, err := strconv.Atoi(p)
-	if err != nil {
-		return ""
-	}
-	return l3ListenClash(s.Name, s.Carrier, n, s.Paths, kharejL3Tunnels())
 }

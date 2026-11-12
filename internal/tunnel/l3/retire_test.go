@@ -21,7 +21,7 @@ import (
 // time, without opening anything.
 func tunnelWithSession(t *testing.T, age time.Duration) *Tunnel {
 	t.Helper()
-	tunnel, err := New(Config{
+	tunnel, err := New(Config{Carrier: carrierLoopback,
 		Mode: ModeListen, Addr: "0.0.0.0:9000", Token: "token",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2",
 	}, logrus.New())

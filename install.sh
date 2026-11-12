@@ -513,7 +513,24 @@ build_from_source() {
   export GOPROXY="${GOPROXY:-https://proxy.golang.org|https://mirror-go.runflare.com|https://goproxy.cn|direct}"
   export GOSUMDB=off GOTOOLCHAIN=local
   info "Building from source (module proxy order: ${GOPROXY})."
-  CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "-s -w" -o "$BIN_PATH" .
+  # The PCK carrier captures with libpcap through cgo (see CONTRIBUTING.md). A
+  # source build links it when the headers are here — a libpcap built into
+  # LIBPCAP_PREFIX with scripts/build-libpcap.sh, or the distribution's
+  # libpcap-dev — and otherwise is CGO-free, which builds and runs everything
+  # except PCK. Release binaries are always linked with it.
+  local pcap_prefix="${LIBPCAP_PREFIX:-$HOME/.local/libpcap}"
+  if [[ -f "$pcap_prefix/include/pcap.h" ]] && command -v gcc >/dev/null 2>&1; then
+    info "Linking the static libpcap in ${pcap_prefix} (PCK carrier available)."
+    CGO_ENABLED=1 CGO_CFLAGS="-I$pcap_prefix/include" CGO_LDFLAGS="-L$pcap_prefix/lib -lpcap" \
+      "$GO_BIN" build -trimpath -tags netgo,osusergo -ldflags "-s -w" -o "$BIN_PATH" .
+  elif [[ -f /usr/include/pcap/pcap.h || -f /usr/include/pcap.h ]] && command -v gcc >/dev/null 2>&1; then
+    info "Linking the system libpcap (PCK carrier available)."
+    CGO_ENABLED=1 "$GO_BIN" build -trimpath -tags netgo,osusergo -ldflags "-s -w" -o "$BIN_PATH" .
+  else
+    warn "No libpcap headers here, so this build has NO PCK carrier (a pck tunnel will say so and not start)."
+    warn "Install libpcap-dev (or run scripts/build-libpcap.sh) and build again, or use a release binary."
+    CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "-s -w" -o "$BIN_PATH" .
+  fi
   echo "$INSTALL_DIR" > /etc/backpack/install_path
 }
 

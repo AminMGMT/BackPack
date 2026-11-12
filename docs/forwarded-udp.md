@@ -97,12 +97,35 @@ tunnel logs a warning and carries on with TCP on that port. It is never fatal.
 
 ---
 
+## On a direct PCK tunnel
+
+`accept_udp = true` on the **Iran** side of a [direct PCK](direct-pck.md) tunnel
+(**Carry UDP As Well As TCP On Those Ports** in the wizard, **Accept UDP** in
+Edit) opens a UDP socket beside each forwarded TCP listener. Each source address
+is a **flow**, opened as one stream on the KCP session — the same way a TCP
+connection is — and **the kharej dials the flow's target on its own `127.0.0.1`**,
+one UDP socket per flow. A flow ends after **3 minutes** of quiet in both
+directions.
+
+Its datagrams do not queue behind that stream. One that fits a single segment
+(up to **1318 bytes**, which QUIC and WireGuard packets do) is sealed with a
+key of its own and sent beside KCP: not retransmitted, not held behind other
+streams, and lost if the path drops it — as UDP is, so a game or a call gets
+the newest packet rather than a late one. A larger datagram, and the first few
+sent before the other end has answered, go length-framed on the stream
+instead: reliable and in order, up to 64 KiB, and as late as the stream is on
+a lossy route. See [On a busy or lossy link](direct-pck.md#on-a-busy-or-lossy-link) for the
+measurements.
+
+---
+
 ## What it does not cover
 
 - **The `udp` transport is a different thing.** That is the *tunnel* itself
   running over bare datagrams, and it forwards UDP only. Forwarded UDP described
   here works on `tcp`, `tcpmux`, `stealth`, `ws`, `wss`, `wsmux`, `wssmux`,
-  `kcp`, `xdi`, `spoof` and `quic` — the transports that carry streams.
+  `kcp`, `quic`, and the direct carriers `xdi`, `sni`, `spoof`, `pck` and
+  `gre` — the transports that carry streams.
 
   **You almost certainly do not want the `udp` transport.** It has no
   retransmission, no ordering and no error correction, so on a route with any
@@ -185,4 +208,4 @@ forward‌های TCP گرسنه می‌مانند — سایت نصفه لود �
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

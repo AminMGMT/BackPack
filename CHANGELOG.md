@@ -2,6 +2,404 @@
 
 All notable changes to Backpack are documented here.
 
+## v2.0.0 — unreleased
+
+### Added
+
+- **Sponsored box on the panel's Overview.** A square image with a link, beside
+  the traffic card, so it is on screen without scrolling. Its content is a manifest
+  (`{"image", "link", "title"}`) and the image it names, published on the
+  developer's server, so it changes without a release. The panel fetches both
+  in the background — direct, then through the tunnel relay — at most every 30
+  minutes, revalidates the image with its ETag, and serves the cached copy from
+  its own origin, so the browser never reaches the publishing server and the
+  panel's CSP is unchanged. The image type is read from the bytes (GIF, PNG,
+  JPEG or WebP only, at most 15 MB); a link that is not http(s) is dropped. A
+  withdrawn manifest (404, or an empty `image`) removes the box; an unreachable
+  server keeps the last one. A fixed 252-pixel square, so the row is the same
+  height at every desktop width; still beside the traffic on a tablet, and
+  straight under it on a phone.
+
+- **The same image in the Telegram bot, every Friday.** From noon Tehran time,
+  each admin of the bot receives it once, with its link as a button (a GIF is
+  sent as an animation, so it plays). Uploaded once and sent to the other
+  admins by Telegram's file id. The monitor service keeps its own copy fresh,
+  so it goes out whether or not the panel was opened that week; a Friday the
+  service was down for is skipped, and a failed delivery is retried for that
+  admin alone the same day.
+
+- **GRE, the kernel's own, as a direct carrier.** Next to xDi, PCK, SNI and IP
+  Spoofing in Setup → Direct and on the panel's Add form. It is plain kernel GRE
+  and **not encrypted**: it travels as bare IP protocol 47, and whatever crosses
+  it is in the clear unless it is encrypted itself — the wizard, the panel, the
+  file and the health screen all say so. Where a route passes it, it is the
+  cheapest tunnel there is: the kernel encapsulates, with no TUN, no handshake
+  and no copy through userspace (5 MB in 0.04 s between two namespaces). It is
+  set up like the others — the Iran side first, one setup link for the kharej,
+  forwarded ports, UDP, presets, Edit, the listing, health, the watchdog,
+  metrics, the Connection Test, backup and delete — with fewer questions: no
+  port, no token, no error correction. `gre` runs over IPv4 and `ip6gre` over
+  IPv6, chosen from the kharej's address, and a domain can be pinned to either
+  under Fine-Tune. Several GRE tunnels can share one server, to different
+  kharej or more than one to the same: each gets its own interface, its own
+  `/30` and its own GRE key, since the kernel allows one link per pair of
+  addresses and key, and the setup link carries the key so both ends match.
+  The local address is the one the route to the kharej leaves from (`gre_local`
+  overrides it); the MTU is that interface's less GRE's own 24 bytes (28 with
+  the key; 44 and 48 over IPv6), then measured with don't-fragment pings across
+  the link and lowered if the path carries less. The engine pings the other end
+  every few seconds, which is how the panel and the watchdog know the tunnel is
+  up; lets protocol 47 from the other server in through iptables while it runs;
+  replaces a link a killed run left behind; and takes its link down when it
+  stops. A missing `ip_gre` / `ip6_gre` module is named with the `modprobe` that
+  fixes it. Needs root.
+
+### Changed
+
+- **PCK is a new engine: port forwarding over KCP, on paqet.** The `pck`
+  carrier no longer carries IP packets over a TUN device. It is a port of
+  [paqet](https://github.com/hanselime/paqet) (MIT; the notice is in `NOTICE`):
+  KCP for reliability, smux to carry many connections over one session, and TCP
+  segments built and captured with libpcap, so a middlebox still sees an
+  ordinary flow but the flow now retransmits what the path drops. Iran listens
+  on the forwarded ports (TCP, and UDP with `accept_udp`); the kharej dials the
+  target on its own `127.0.0.1`. **It carries ports and nothing routed.** There
+  is no interface, no tunnel address, no MTU and no error correction for it; for
+  routed traffic use xDi, SNI Spoofing, IP Spoofing or GRE. The three presets
+  map to the engine: Balance is one KCP session in `fast` mode with 256/512
+  windows, Turbo (the default) two in `fast2` with 1024, Aggressive four in
+  `fast3` with 4096 — and the wizard shows each with what it sets. Optional
+  `pck_conns`, `pck_kcp_mode`, `pck_kcp_mtu`, `pck_kcp_sndwnd`, `pck_kcp_rcvwnd`
+  and `pck_kcp_block` override them one by one, under Fine-Tune in the menu and
+  a PCK fine-tune drawer on the panel. The interface, this server's address,
+  the gateway's MAC and the iptables rules that keep the kernel from answering
+  the tunnel's segments with RSTs are found and installed at start, which paqet
+  leaves to its operator, and Health Check reads them instead of looking for an
+  interface that is not there. A forwarded connection keeps its half-close: a
+  client that finishes sending and waits for the reply gets it, which paqet's
+  own forwarding does not allow.
+
+  Setup is shorter than any other carrier's: the Iran wizard asks the kharej
+  address, the tunnel port, the ports, UDP, a name and the preset, and nothing
+  about interfaces, addresses, MTU or error correction. The token is generated
+  and *is* the encryption key; the setup link carries it, the port, the preset
+  and any tuning, and the kharej asks only for a name.
+
+  **Both servers must be updated:** the wire is not the previous PCK's, and each
+  end names the other when it is still on the old one. A tunnel built by v1.9.0
+  or earlier keeps running as its file is: it is read, never rewritten, its TUN
+  keys are ignored and said to be in the log, and the preset's engine
+  parameters come from its name. Saving it from Edit writes the new format. A
+  tunnel with no ports, which routed traffic, cannot go on doing that, and a PCK
+  tunnel is not edited into another carrier or the reverse — add the new one on
+  both servers and delete the old, as for GRE. Several kharej cannot share one
+  Iran port on PCK, which needed a peer address on a TUN. The reverse
+  `TCP + PCK` transport and `sni` are unchanged.
+
+  The kharej connects only to its own services — `127.0.0.1` and its own
+  addresses, what the previous PCK's TUN reached. A target on another machine
+  is refused and named in the Iran log, unless the kharej's file sets
+  `pck_remote_targets = true`. It also stops at 65 536 forwarded connections
+  open at once, and dials nothing for a session that has not completed its
+  hello.
+
+  Measured on a veth pair with 25 ms of delay and 0.5% loss each way, Turbo
+  downloads at 104, 170 and 168 Mb/s with 1, 4 and 16 streams where the previous
+  PCK reached 4, 16 and 56. On a clean veth link Turbo moves about 670 / 1060 /
+  1300 Mb/s up and 650 / 860 / 850 down at 1 / 4 / 16 streams — the previous
+  PCK's upload, and more than its download — because each KCP session sends
+  through a libpcap handle of its own (up to four): with paqet's single handle
+  the upload stopped at about 600-740, one system call per packet, one at a
+  time. If the route is clean and speed is all that matters, a TCP transport is
+  still the better choice. [Direct PCK](docs/direct-pck.md).
+
+- **PCK holds up on a congested or lossy link.** A soak of the engine on a
+  100 Mbit/s path (30 ms ± 10 ms, a 1000-packet queue) under a mix of 8 bulk
+  transfers, 200 short connections a second, idle connections, UDP flows and a
+  latency probe found Turbo carrying 14 Mbit/s with **no random loss at all**,
+  its probe at 661 ms where the path alone gave 130, transfers stalling for up
+  to 51 seconds on a lossy path, and forwarded UDP delivering 7.8% of its
+  datagrams a median of 11.7 seconds late. Correctness was never in question
+  (no byte differed, every connection completed, nothing restarted). Changes:
+
+  *The send window is controlled.* paqet runs KCP with no congestion control, so
+  the preset's window was the only brake, and a window larger than the path's
+  bandwidth-delay product plus its queue sends more than the queue holds: the
+  bottleneck dropped a quarter of what Turbo sent, KCP retransmitted 30% of its
+  segments, and the local queue refused 280 000 a minute. A controller, one per
+  tunnel, now moves the sessions' windows together between a floor and the
+  preset's window (which is the ceiling now, not the operating point) by what
+  it reads of the path, of its own direction only: the queue the data it sends
+  meets (the round-trip time against the lowest it has seen lately, less the
+  queue of the way back), and segments the local queue refuses, once they are
+  1% of those sent. It does not read loss, so random loss does not shrink the
+  window — a lossy path needs a window several times
+  its bandwidth-delay product, and keeping that is what keeps PCK ahead of GRE
+  at 3% loss and up. KCP's own congestion control was measured as the other
+  option and would have collapsed there, as TCP does.
+
+  *The controller reads its own direction.* It first read the round trip, which
+  holds the queue of both ways, so the less loaded end cut its window for the
+  other end's queue: bulk ran at about 45 Mbit/s one way and 6 the other for a
+  minute at a time, then swapped. The way back is now read where the data
+  arrives, from the timestamp KCP segments already carry, and taken off the
+  round trip. Nothing on the wire changes (the engine revision stays 3).
+
+  *Refusals of the local queue count by share.* Three refused segments in 25 ms
+  cut the window and held it for 1.5 s, and a burst that overflows the queue for
+  an instant refuses that many: that, not delay, was a loss of 5-30% of the top
+  speed on a path with 25 ms of delay and 0.5% loss. They now count once they
+  are 1% of the segments sent.
+
+  *Output is paced and the retransmit timer has a margin.* Output runs at 1.5 ×
+  window × packet size ÷ round trip, where unpaced full-window bursts were
+  tail-dropped at the bottleneck. The retransmit timer waits 2 × slack (the
+  larger of 25 ms and a third of the base round trip) plus the reverse queue
+  beyond KCP's own: with no loss, 8% of segments were sent by the timer and 7.5%
+  arrived twice, and now 0.1% or less. A lost fast retransmit is
+  fast-retransmitted again instead of waiting for the timer.
+
+  *A fork of kcp-go.* Those three need hooks KCP does not have, so kcp-go is a
+  copy in `internal/thirdparty/kcp-go` (upstream v5.6.72, MIT, a `go.mod`
+  replace, noted in `NOTICE`). It adds a retransmit-timer margin,
+  fast-retransmit-again, a one-way-delay reading of received data and an output
+  queue of 8192, each off unless a session turns it on. Only PCK does; the
+  legacy `kcp` transport links the fork and is unaffected.
+
+  *KCP batches acknowledgements and small writes in every mode.* paqet's fast2
+  and fast3 answer every packet with one, and on a link with many short
+  connections packets are what a queue counts: the same bulk load sent half the
+  segments, and bulk transfers beside the short connections went from 7 and 9
+  Mbit/s to 20 and 34.
+
+  *Forwarded UDP no longer rides the reliable stream.* A datagram that fits one
+  segment (1318 bytes) is sealed with a key of its own and sent beside KCP as a
+  segment of the same flow: not retransmitted, not queued behind other streams,
+  lost if the path drops it. The stream stays as the flow's control channel and
+  carries the larger datagrams and the first few. At 5% loss, 90% arrive, 94 ms
+  round trip; with no loss, 99.6%, 104 ms. The engine revision is 3: a peer on
+  revision 2 (an earlier build of v2.0.0) is named by the hello.
+
+  *A reader no longer waits for its window update.* smux sent a stream's flow
+  control update from the `Read` that triggered it, which returned only when the
+  frame had been through the session's write queue: hundreds of frames long on a
+  busy session. The reader that waited was not reading, data piled up in the
+  session's receive buffer, and when that ran out the session stopped reading
+  everything, including the updates the other end's writers waited for. Every
+  upload stopped, for up to a minute. smux is now a modified copy
+  (`internal/thirdparty/smux`, noted in `NOTICE`): updates are sent from a
+  goroutine of their own, and control frames go ahead of data in the write
+  queue. The wire is unchanged.
+
+  On that path Turbo now carries 40-44 / 36 Mbit/s of bulk with no loss (14 /
+  15 before the work, 25.5 / 23.3 after its first round; GRE 44 / 41), with the
+  probe at 163 ms median and 310 ms at the 99th percentile (243 and 598 after
+  the first round), forwarded UDP at 99.6%, no stall over 3 seconds in any run
+  from no loss to 10%, and every short connection completing (a path that goes
+  dark is another matter: 11 seconds on the flap profile, GRE's 39). Single
+  loss runs vary by about ±50%, so the sums of both directions of bulk, in
+  Mbit/s, are: 1% loss about 30 (about 19 originally), 3% 26 (15), 5% 23 (13),
+  10% 18 (15), which is 1.2-2.4 times the original and above GRE at every loss
+  rate. Aggressive carries 40 / 41 with no loss (22 / 21 before) and 12 / 19 at
+  10% (10 / 10); Balance is unchanged. Bulk transfers beside a few hundred
+  short connections a second get what those leave, and on a lossy path a small
+  request takes 0.5-1 s, because KCP delivers in order inside a session. Four
+  sessions (`pck_conns = 4`, an opt-in) help on a lossy route and not on a clean
+  one: at 10% loss about 13 / 15 Mbit/s against 9 / 8 and a probe median of 550
+  ms against 900; at 1% about 24 / 15 against 18 / 13; with no loss no gain and
+  a little less up (34.5 against 36); a path that flaps occasionally recovers
+  slower. Aggressive's description now says it suits long, lossy routes and is
+  slower than Turbo on a clean path; Turbo stays at two sessions, as it was.
+  On a clean veth pair the speed is unchanged (Turbo 658 / 896 / 902 Mbit/s
+  down with 1 / 4 / 16 streams); acknowledgement batching is turned off where
+  the round trip is shorter than the KCP tick, since it would be the round trip
+  there. With 25 ms of delay and 0.5% loss and nothing to fill, Turbo downloads
+  at 89 / 177 / 172, where the release before the controller gave 99 / 176 / 170
+  and the previous PCK 4 / 16 / 56. A policer, which drops without queueing,
+  shows in neither signal, and there the window ceiling is the only limit; a
+  signal from the share of segments lost was tried and removed, since it fired
+  at 10% random loss and cost ten times the goodput. The numbers are in
+  [Direct PCK](docs/direct-pck.md#on-a-busy-or-lossy-link). `pck_kcp_sndwnd` is
+  the controller's ceiling.
+
+- **The reverse `TCP + PCK` transport no longer fills the path's queue.** The
+  presets give each pooled session a window of 512 to 2048 packets with KCP's
+  own congestion control off, so a Turbo pool of eight could have 8192 packets
+  in flight against a path that holds about 1500. The same soak that found it in
+  direct PCK (100 Mbit/s, 30 ms ± 10 ms, a 1000-packet queue, the same load)
+  measured the reverse transport at 28 / 18 Mbit/s down / up with **no random
+  loss**, 31% of its segments sent by the retransmission timer, the probe at
+  1.3 s, and the same figures at 10% loss as at none, so the loss was never the
+  limit. The send-side machinery of direct PCK now drives the reverse
+  transport, and only it (`kcp` and `xdi` share the session code and are
+  unchanged): the window follows the queue the data meets, read of the
+  sender's own direction; output is paced; the retransmission timer waits for a
+  segment that is only queued; a lost fast retransmission is sent again after a
+  round trip; and acknowledgements are batched where the round trip is longer
+  than the KCP tick, whatever `kcp_acknodelay` says. Two things are for the
+  reverse transport's pool of eight sessions, where direct PCK has two: the
+  window is a budget for the pool, divided among the sessions that have
+  something to send (given to each of eight alike, the two that carried a
+  transfer had a quarter of the path, and which direction it was changed from
+  run to run), and a session that has received nothing does not vote on the
+  queue of the way back. The controller moved to `internal/pathctl`, shared with
+  the direct engine, whose behaviour is unchanged. **Nothing on the wire
+  changes**: every part is on the sending side, so a v2.0.0 end works with a
+  v1.9.0 end, in either role, and each end's sending improves on its own. Next
+  to an end that does not run the control, whose direction fills the bottleneck
+  queue and makes the round trip swing by hundreds of milliseconds, the control
+  tolerates half the queue it reads on the way back on top of its slack (it
+  otherwise cut to its floor and carried a third of what the old end did).
+  Measured at 1% loss, down / up: a new kharej with a v1.9.0 Iran 22.0 / 24.2
+  (two v1.9.0 ends 28.7 / 18.5), a new Iran with a v1.9.0 kharej 55.8 / 10.6.
+  Measured on that path, Turbo, 300 s, single runs: no loss 61.0 / 15.4 and
+  59.6 / 20.0 (28.4 / 17.9 and 28.8 / 19.1 before), 1% 53.7 / 24.1 and 55.2 /
+  24.4 (28.7 / 18.5, 30.4 / 19.2), 3% 60.4 / 20.4 (29.1 / 19.0), 5% 45.1 / 28.6
+  (29.5 / 18.3), 10% 23 / 25 over five runs, 17 to 28 down (28.7 / 17.8); the
+  probe's median 110-215 ms (0.9-1.5 s), segments sent by the timer under 1%
+  (31%), and the engines' CPU about 90% of a core each where it was 130-160%.
+  Upload stays near 15-28 Mbit/s, and at 10% loss the two directions trade, so
+  their sum is what it was. A stream could stall for 3-6 s and forwarded UDP came back
+  at 53-89% under that load (74-96% before), both fixed in this release without
+  touching the wire. **Forwarded UDP**: the relay wrote one datagram per stream
+  write and each write waits for the session's write queue, so a flow was held to
+  one datagram per write latency, the queue in front of it stood at its 256 and
+  dropped, and the rest waited behind a frame of every stream on the session.
+  Datagrams already queued now go in one write (the Iran-side flow, and the
+  kharej-side backend reader, which also has its own queue), a full queue drops
+  its oldest, and the smux fork has an opt-in per-stream priority (a bounded
+  burst, control frames still first) that forwarded-UDP streams use on `pck`
+  only. Measured, 300 s: **99.9-100% of the UDP at 0, 1, 3, 5 and 10% loss,
+  reordering, duplication and 10% on one direction, median 150-210 ms, 99th
+  percentile 340-740 ms** (56-81% and 0.6-2.9 s median, 8-27 s tail, before);
+  bulk unchanged. No datagram lane was needed, so nothing on the wire changed.
+  A smux frame of 16 KB moved the UDP median 15% and was left out; 8 KB had cost
+  upload. **Stalls**: the 3-6 s were a new download's wait for its first byte:
+  each session sent a connection's backend name and waited for it to leave the
+  write queue before pairing the next, so under 200 new connections a second the
+  pairing queue reached the 3 s a waiting connection is allowed. The name is sent
+  from the connection's own goroutine now; the longest stream stall is 1-3 s in
+  the final runs (3-6 s before); seven of the 11 final runs had no first byte
+  over 2.5 s and the rest 17 between them, the longest 3.2 s (5 to 15 per run
+  before). The
+  controller's pace is also bounded: one session reading a round trip of seconds
+  had slowed all of them, once stopping a 10%-loss run for 27 s. Next to a v1.9.0
+  end at 1% loss: v2.0.0 Iran with v1.9.0 kharej 55.8 down / 7.8 up and 99.7% UDP,
+  v1.9.0 Iran with v2.0.0 kharej 12.8 / 25.9, nothing lost or corrupted. The
+  test's short connections half-close and wait for a reply, which the reverse
+  relay has never carried, so they read 0% before and after.
+  [TCP + PCK](docs/tcp-pck.md#on-a-busy-or-lossy-link).
+
+- **Release builds link libpcap, statically.** PCK's capture needs it, so the
+  release binaries are built with cgo and libpcap, which is linked in rather than
+  installed: nothing changes on the server. A binary built without it runs
+  everything else, and refuses a PCK tunnel by saying so (the health screen and
+  the wizard name it too).
+
+- **Connection Test reports the most each tunnel can carry.** The speed test
+  measured each direction once, with four connections, and showed the average.
+  It now measures with four connections and again with sixteen — enough to fill
+  a fast link on a long round trip, where a few TCP windows cannot — and keeps
+  the better sustained rate, beside a **max**: the best whole second either
+  stage carried. A burst shorter than a second is not reported as the maximum.
+  A carrier that will not open sixteen connections keeps its four-connection
+  figures rather than failing. Shown on every row, in the best-path table
+  (CLI and panel) and in the menu's board; about twelve seconds longer per
+  healthy tunnel. The far end is unchanged, so an older kharej is measured the
+  same way.
+
+- **The web panel is one width on every desktop.** At most 1100 pixels wide and
+  centred, so a laptop and an ultrawide monitor show the same page at the same
+  size instead of stretching the cards across the whole window. On a tablet or
+  a phone it still fills the screen. Every section follows, since the limit is
+  on the panel itself.
+
+- **A direct tunnel's carrier can be changed after it is built.** Manage →
+  Manage Tunnels → the tunnel → Edit → Carrier in the menu, and a Carrier menu
+  on the panel's Edit form, ask the same questions Setup does (the SNI domain,
+  the spoof screen) and keep every other setting. Both ends must match, and
+  both screens say to change the other server too. It is how a tunnel left on
+  a removed carrier (below) is brought back.
+
+### Removed
+
+- **The udp and quic carriers of the direct tunnel.** A direct tunnel now
+  travels over pck, sni (pck with a TLS ClientHello), xdi or spoof — all raw
+  sockets, Linux only, root on both servers. There is no migration: an `[l3]`
+  tunnel that names `udp` or `quic`, or names no carrier at all (which meant
+  udp), is refused at start, reload and `backpack check` with the reason and
+  the way out, rather than moved onto another carrier behind the operator's
+  back where the far end would not match. The menu, the health screen and the
+  panel's card list it as unable to run and say why. Fix it with Edit →
+  Carrier on both servers, or `carrier = "pck"` in the file. The reverse
+  tunnel's own `udp` and `quic` transports are untouched.
+
+- **`paths`, the udp carrier's multi-socket spread**, with the carrier: the key
+  is ignored, the panel's Sockets field and the setup link's socket count are
+  gone, and so is the kharej's check for two tunnels sharing a UDP port, which
+  only the udp carriers could hit. An older setup link that still carries the
+  count decodes, and is refused for the carrier it names.
+
+- **The `[direct]` stream tunnel.** The layer-4 port forwarder over tcp,
+  stealth, ws or wss, which Setup stopped building in v1.7.3, is gone with its
+  engine. A file with a `[direct]` table is still recognised: it is listed with
+  the reason, can be deleted, and is refused at start by name ("the [direct]
+  stream tunnel (tcp, stealth, ws, wss) was removed in Backpack v2.0.0")
+  instead of reading as a file with no tunnel in it. Rebuild it with Setup
+  Iran / Setup Kharej → Direct on both servers. `docs/config-reference.md` now
+  shows only the few keys still read from that table.
+
+### Fixed
+
+- **A pck tunnel never came back after its network interface went down and up.**
+  The packet socket a pck carrier reads from reports ENETDOWN once when its
+  interface goes down, and kcp-go's listener ends its read loop for good on the
+  first error from the carrier — so a reverse pck server kept running but heard
+  no client again. The same event failed the carrier's send (ENETDOWN on a
+  packet socket, ENETUNREACH on the raw one, whose route goes with the link),
+  which KCP reads as the end of the session. A reverse pck server now reads on
+  through the error, waiting longer between repeats up to a second, and a send
+  that fails because the path is down counts as a lost segment, as a full
+  transmit queue already did. In a run with the Iran interface down for 10
+  seconds the tunnel used to stay dead for the rest of the run; it now carries
+  traffic again within a second of the link coming back. A new live test,
+  `TestReversePckOverARealPath`, checks it across two namespaces.
+
+- **Connection Test under-reported upload.** The far end acknowledged every
+  32 KB it received, so the upload stage spent much of its time waiting on its
+  own acknowledgements and measured that rather than the tunnel. It now
+  reports its running count every 5 ms, and the final count at the end; on a
+  fast path upload figures rise accordingly (on loopback, four streams went
+  from 25.6 to 50.5 Gb/s). The far end changed too, so a kharej on an older
+  version still reports the old way.
+
+- **Editing a direct tunnel in the web panel rewrote its file.** The panel
+  decoded the file and wrote it back out whole, which dropped its header and
+  comments and added keys the file never had. It now writes the same file Edit
+  in the menu does, and carries over any keys the engine does not know.
+
+- **Smaller fixes.** The MSS clamp is logged once per address family instead
+  of once per chain. The panel and the kharej now give the same, correct
+  length for the speed stage of the Connection Test (about 16–25 seconds per
+  healthy tunnel), long transport names in its rows wrap instead of being cut,
+  and a tunnel card's change badge no longer shows a percentage of a near-zero
+  baseline.
+
+- **A path outage during the MTU search could lower a tunnel's MTU for
+  good.** The search reads a lost probe as a size that does not fit, so a path
+  that went dark for a few seconds partway through walked it down towards the
+  floor — and a GRE link is never raised again. A result below the
+  interface's current MTU is now checked against the smallest size and the
+  current one first: if the smallest no longer crosses the path is down and
+  nothing changes, and if the current one crosses the path never shrank. This
+  applies to GRE and to the TUN carriers' probe.
+
+- **The web panel.** Typing an address over an open Edit dialog lands on that
+  address instead of the overview. A tunnel still on the removed udp carrier
+  shows "UDP (removed)" in its carrier menu instead of the raw name, and a
+  refused carrier change reads "a tunnel on the xDi carrier cannot be changed
+  onto the PCK carrier" instead of "a xDi tunnel".
+
 ## v1.9.0 — 2026-10-19
 
 ### Added

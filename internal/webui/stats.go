@@ -67,6 +67,13 @@ type TunnelInfo struct {
 	// have to go and find in the far machine's journal.
 	ServiceDown string `json:"serviceDown,omitempty"`
 
+	// Unrunnable says this tunnel's config can no longer start, and why, in
+	// the engine's words: a [direct] stream tunnel, or an [l3] tunnel on the
+	// udp or quic carrier, all removed in v2.0.0. The card shows it in full,
+	// because "stopped" alone would send somebody to press Start on a tunnel
+	// that will only be refused again.
+	Unrunnable string `json:"unrunnable,omitempty"`
+
 	// Node is the managed server holding this tunnel's other end, when this
 	// panel built both. Empty for a tunnel whose far end was set up by hand,
 	// which is a real and ordinary thing to have.
@@ -228,6 +235,7 @@ func tunnelInfo(t manage.Tunnel, h manage.Health, peersByPort map[string][]peerC
 		Ping:       -1,
 		Direction:  manage.TunnelDirection(t),
 		Carrier:    manage.TunnelCarrier(t),
+		Unrunnable: t.Unrunnable,
 	}
 	if paired {
 		info.Node, info.PeerName = pair.Node, pair.PeerName
@@ -541,43 +549,22 @@ func peerHost(peer string) string {
 	return host
 }
 
-// fillDirectConfig reports what a direct or layer-3 tunnel actually has.
+// fillDirectConfig reports what a direct tunnel actually has.
 //
-// Each keeps its own preset and limits in its own table, so they are read from
+// It keeps its own preset and limits in its own table, so they are read from
 // there; a field the table does not have stays empty rather than showing a
-// zero that looks like a setting. What it also shows is the certificate, which is the one thing an
-// operator of a wss direct tunnel has to keep an eye on.
+// zero that looks like a setting. A [direct] stream tunnel — removed in
+// v2.0.0 — has nothing left to report beyond what the list already says, and
+// why it cannot run.
 func fillDirectConfig(info *TunnelInfo, cfg config.Config) {
-	if cfg.L3.Enabled() {
-		info.MaxConnections = cfg.L3.MaxConnections
-		info.BandwidthMbps = cfg.L3.BandwidthMbps
-		// A layer-3 tunnel has its own presets (the queue and the socket
-		// memory), and the card names the one it was built with.
-		if cfg.L3.Preset != "" {
-			info.Preset = manage.PresetValueLabel(cfg.L3.Preset)
-		}
-		return // and no certificate: a layer-3 tunnel has none
-	}
-	if !cfg.Direct.Enabled() {
+	if !cfg.L3.Enabled() {
 		return
 	}
-	info.MaxConnections = cfg.Direct.MaxConnections
-	info.BandwidthMbps = cfg.Direct.BandwidthMbps
-	info.Preset = manage.PresetValueLabel(cfg.Direct.Preset)
-	if cfg.Direct.Transport != "wss" {
-		return
-	}
-	switch {
-	case cfg.Direct.ACMEDomain != "":
-		info.CertType, info.CertDomain = "letsencrypt", cfg.Direct.ACMEDomain
-	case cfg.Direct.TLSCertFile != "":
-		info.CertType = "file"
-		if exp, err := manage.CertExpiry(cfg.Direct.TLSCertFile); err == nil {
-			info.CertExpiry = exp.Format("2006-01-02")
-		}
-	default:
-		// Generated in memory at start-up, so there is no file to inspect and
-		// no expiry that outlives the process.
-		info.CertType = "generated"
+	info.MaxConnections = cfg.L3.MaxConnections
+	info.BandwidthMbps = cfg.L3.BandwidthMbps
+	// A layer-3 tunnel has its own presets (the queue and the socket memory),
+	// and the card names the one it was built with. It has no certificate.
+	if cfg.L3.Preset != "" {
+		info.Preset = manage.PresetValueLabel(cfg.L3.Preset)
 	}
 }

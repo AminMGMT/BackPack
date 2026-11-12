@@ -11,6 +11,7 @@ import (
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/quota"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 	"github.com/backpack/backpack/internal/utils/network"
 )
 
@@ -22,6 +23,14 @@ type Tunnel struct {
 	Addr      string   // bind_addr (server) or remote_addr (client)
 	Ports     []string // server only
 	Service   string
+
+	// Unrunnable says why this tunnel's config can no longer start, in the
+	// engine's own words; empty when it can. Set for the two kinds v2.0.0
+	// took out — a [direct] stream tunnel, and an [l3] tunnel on the udp or
+	// quic carrier (or on none, which meant udp). Such a tunnel is still
+	// listed, so it can be seen, fixed or deleted: dropping it from the list
+	// would leave an installed service that no screen shows.
+	Unrunnable string
 }
 
 // List scans the config directory and returns all tunnels, sorted by name.
@@ -34,39 +43,59 @@ func List() []Tunnel {
 			continue
 		}
 		name := strings.TrimSuffix(filepath.Base(path), ".toml")
-		t := Tunnel{Name: name, Service: app.ServiceName(name)}
-		switch {
-		case cfg.Server.BindAddr != "":
-			t.Role = "server"
-			t.Transport = string(cfg.Server.Transport)
-			t.Addr = cfg.Server.BindAddr
-			t.Ports = cfg.Server.Ports
-		case cfg.Client.RemoteAddr != "":
-			t.Role = "client"
-			t.Transport = string(cfg.Client.Transport)
-			t.Addr = cfg.Client.RemoteAddr
-		// The two direct kinds are listed on the same terms as a reverse
-		// tunnel, so they can be started, stopped, watched and deleted from
-		// the same menu. Without these they would run perfectly well and be
-		// invisible to every management screen, which is worse than not
-		// working: nothing would say why.
-		case cfg.Direct.Enabled():
-			t.Role = DirectRole(cfg.Direct.ResolvedRole())
-			t.Transport = "direct/" + OrDefault(cfg.Direct.Transport, "tcp")
-			t.Addr = cfg.Direct.Addr
-			t.Ports = cfg.Direct.Ports
-		case cfg.L3.Enabled():
-			t.Role = L3Role(cfg.L3.Mode)
-			t.Transport = "l3/" + OrDefault(cfg.L3.Carrier, "udp")
-			t.Addr = cfg.L3.Addr
-			t.Ports = cfg.L3.Ports
-		default:
+		t, ok := tunnelOf(name, cfg)
+		if !ok {
 			continue
 		}
 		tunnels = append(tunnels, t)
 	}
 	sort.Slice(tunnels, func(i, j int) bool { return tunnels[i].Name < tunnels[j].Name })
 	return tunnels
+}
+
+// tunnelOf is what List makes of one parsed config, with no filesystem in it,
+// so a test can hand it a file directly. false means the file describes no
+// tunnel this machine lists.
+func tunnelOf(name string, cfg config.Config) (Tunnel, bool) {
+	t := Tunnel{Name: name, Service: app.ServiceName(name)}
+	switch {
+	case cfg.Server.BindAddr != "":
+		t.Role = "server"
+		t.Transport = string(cfg.Server.Transport)
+		t.Addr = cfg.Server.BindAddr
+		t.Ports = cfg.Server.Ports
+	case cfg.Client.RemoteAddr != "":
+		t.Role = "client"
+		t.Transport = string(cfg.Client.Transport)
+		t.Addr = cfg.Client.RemoteAddr
+	// A direct tunnel is listed on the same terms as a reverse tunnel, so it
+	// can be started, stopped, watched and deleted from the same menu.
+	// Without this it would run perfectly well and be invisible to every
+	// management screen, which is worse than not working: nothing would say
+	// why. The same holds for the two kinds that can no longer run — they
+	// are listed with the reason, so they can still be fixed or deleted.
+	case cfg.L3.Enabled():
+		t.Role = L3Role(cfg.L3.Mode)
+		t.Transport = "l3/" + OrDefault(cfg.L3.Carrier, "udp")
+		t.Addr = cfg.L3.Addr
+		t.Ports = cfg.L3.Ports
+		if l3.RemovedCarrier(cfg.L3.Carrier) {
+			t.Unrunnable = strings.TrimPrefix(l3.RemovedCarrierError(cfg.L3.Carrier).Error(), "l3: ")
+		}
+	// After [l3], in the order the engine picks them.
+	case cfg.Direct.Present():
+		t.Role = "iran"
+		if !cfg.Direct.OnIran() {
+			t.Role = "kharej"
+		}
+		t.Transport = "direct/" + OrDefault(cfg.Direct.Transport, "tcp")
+		t.Addr = cfg.Direct.Addr
+		t.Ports = cfg.Direct.Ports
+		t.Unrunnable = config.ErrDirectRemoved.Error()
+	default:
+		return t, false
+	}
+	return t, true
 }
 
 // LoadTunnelConfig reads a tunnel's full config file. Callers that need more
@@ -98,7 +127,12 @@ func Delete(name string) error {
 		}
 	}
 	if cfgErr == nil {
-		network.CleanupPckGuards(cfg.Server.Token, cfg.Client.Token, cfg.Direct.Token, cfg.L3.Token)
+		network.CleanupPckGuards(cfg.Server.Token, cfg.Client.Token, cfg.L3.Token)
+		// A GRE engine takes its link down when it stops; one that was killed
+		// could not, and the name would then refuse the next tunnel given it.
+		if cfg.L3.Enabled() && l3.KernelCarrier(cfg.L3.Carrier) {
+			l3.CleanupGRE(cfg.L3.Iface, strings.ToLower(strings.TrimSpace(cfg.L3.Carrier)), cfg.L3.Addr)
+		}
 	}
 	removeUnit(name)
 	removeScheduledRestart(name)

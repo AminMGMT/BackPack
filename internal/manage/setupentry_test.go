@@ -56,24 +56,9 @@ func TestDirectSetupHeadingNamesTheMachine(t *testing.T) {
 // The config a wizard writes has to name the side it was run for. This is the
 // check that the menu entry actually reaches the right half of the engine.
 func TestMenuEntryReachesTheRightSide(t *testing.T) {
-	iran := directSpec{
-		Side: sideIran, Transport: "tcp", Addr: "1.2.3.4:8443", Token: "t",
-		Ports: []string{"443"},
-	}.Render()
-	if !strings.Contains(iran, `role         = "iran"`) {
-		t.Fatalf("the Iran entry did not produce an iran config:\n%s", iran)
-	}
-
-	kharej := directSpec{
-		Side: sideKharej, Transport: "tcp", Addr: "0.0.0.0:8443", Token: "t",
-	}.Render()
-	if !strings.Contains(kharej, `role         = "kharej"`) {
-		t.Fatalf("the Kharej entry did not produce a kharej config:\n%s", kharej)
-	}
-
-	// And for the layer-3 kind, which uses dial/listen rather than a role.
+	// A direct tunnel uses dial/listen rather than a role.
 	l3Iran := l3Spec{
-		Side: sideIran, Carrier: "udp", Encap: "ipip", Addr: "1.2.3.4:9000", Token: "t",
+		Side: sideIran, Carrier: "xdi", Encap: "ipip", Addr: "1.2.3.4:9000", Token: "t",
 		Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 	}.Render()
 	if !strings.Contains(l3Iran, `mode         = "dial"`) {
@@ -81,7 +66,7 @@ func TestMenuEntryReachesTheRightSide(t *testing.T) {
 	}
 
 	l3Kharej := l3Spec{
-		Side: sideKharej, Carrier: "udp", Encap: "ipip", Addr: "0.0.0.0:9000", Token: "t",
+		Side: sideKharej, Carrier: "xdi", Encap: "ipip", Addr: "0.0.0.0:9000", Token: "t",
 		Iface: "bp0", LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1400,
 	}.Render()
 	if !strings.Contains(l3Kharej, `mode         = "listen"`) {

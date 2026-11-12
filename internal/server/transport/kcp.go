@@ -146,6 +146,9 @@ func (c *KcpConfig) settings() network.KCPSettings {
 			GatewayMAC: c.PckGatewayMAC,
 			Flags:      flags,
 		}
+		// Only pck gets the path control: kcp and xdi share the session code
+		// and keep the preset's behaviour. See network.PathControl.
+		network.EnablePathControl(&s)
 	}
 	return s
 }
@@ -456,7 +459,7 @@ func (s *KcpTransport) acceptSession(g *kcpGen, session *kcp.UDPSession) {
 		}
 		// From here on the session is closed through conn, so that the idle
 		// governor lets go of it.
-		conn := network.IdleAwareKCP(session, s.kcpSettings, s.kcpSettings.AckNoDelay)
+		conn := network.PooledKCP(session, s.kcpSettings)
 		muxSession, err := smux.Client(conn, s.smuxConfig)
 		if err != nil {
 			s.logger.Errorf("failed to create MUX session for connection %s: %v", session.RemoteAddr(), err)
@@ -507,6 +510,7 @@ func (s *KcpTransport) session(g *kcpGen) muxSession {
 		muxCon:        s.config.MuxCon,
 		proxyProtocol: s.config.ProxyProtocol,
 		sniffer:       s.config.Sniffer,
+		udpPriority:   s.config.UsePck,
 		limits:        s.limits,
 		log:           s.logger,
 		streams:       &s.streamCounter,

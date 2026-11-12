@@ -114,6 +114,9 @@ func (c *KcpConfig) settings() network.KCPSettings {
 			GatewayMAC: c.PckGatewayMAC,
 			Flags:      flags,
 		}
+		// Only pck gets the path control: kcp and xdi share the session code
+		// and keep the preset's behaviour. See network.PathControl.
+		network.EnablePathControl(&s)
 	}
 	return s
 }
@@ -342,7 +345,7 @@ func (c *KcpTransport) tunnelDialer() {
 	atomic.AddInt32(&c.poolConnections, 1)
 	ready()
 
-	c.handleSession(network.IdleAwareKCP(tunnelConn, c.kcpSettings, c.kcpSettings.AckNoDelay))
+	c.handleSession(network.PooledKCP(tunnelConn, c.kcpSettings))
 }
 
 func (c *KcpTransport) handleSession(tunnelConn net.Conn) {
@@ -371,5 +374,6 @@ func (c *KcpTransport) backend() backendOpts {
 		sndBuf:      c.config.SO_SNDBUF,
 		mss:         0,
 		sniffer:     c.config.Sniffer,
+		udpPriority: c.config.UsePck,
 	}
 }

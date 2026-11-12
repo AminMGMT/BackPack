@@ -60,3 +60,167 @@ patterniha (https://github.com/patterniha/SNI-Spoofing) and implemented in Rust
 by therealaleph (https://github.com/therealaleph/sni-spoofing-rust, MIT). The Go
 code here is original; the fake ClientHello it sends follows the shape that
 implementation established.
+
+--------------------------------------------------------------------------------
+Third-party code included in this distribution
+--------------------------------------------------------------------------------
+
+paqet — internal/tunnel/paqet
+https://github.com/hanselime/paqet (commit 8a5d8a1), MIT licence
+
+The PCK carrier's engine is a port of paqet: the packet capture and injection
+(internal/socket), the framing between the two ends (internal/protocol), the KCP
+and smux session setup (internal/tnet/kcp), and the client, server and port
+forwarding (internal/client, internal/server, internal/forward). It was adapted
+to this program's logging, configuration and lifecycle; the changes are listed
+in the package documentation of internal/tunnel/paqet. paqet's own licence
+requires that this notice travel with it:
+
+    MIT License
+
+    Copyright (c) 2025 hanselime
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+smux — internal/thirdparty/smux (a modified copy)
+https://github.com/xtaci/smux v1.5.57, MIT licence
+
+The PCK engine multiplexes forwarded connections with smux, built from a copy
+kept in this repository (go.mod replaces the module with it) because two things
+in it had to change: a window update is sent by a goroutine of its own instead
+of by the Read that triggered it, and control frames (window updates, stream
+opens, pings) go ahead of data in the write queue instead of waiting for their
+stream's turn in the round robin. The wire format is unchanged. The changes are
+marked in stream.go and shaper.go. The upstream licence is in
+internal/thirdparty/smux/LICENSE and applies to the copy:
+
+    MIT License
+
+    Copyright (c) 2016-2017 xtaci
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+kcp-go — internal/thirdparty/kcp-go (a modified copy)
+https://github.com/xtaci/kcp-go v5.6.72, MIT licence
+
+KCP is the PCK engine's reliable stream, and it too is built from a copy kept in
+this repository (go.mod replaces the module with it). Four things were added,
+and each is off until a session asks for it, so the other users of kcp-go in
+Backpack run as before: a retransmission margin the window control sets, so
+that the timer does not fire for segments a queue it allows is still holding; a
+fast retransmission that can itself be fast-retransmitted, instead of waiting
+for the timer; a reading of the delay that received data met (from the
+timestamp every data segment already carries), which lets the window control
+tell its own direction's queue from the other's; and a larger output queue, for
+the rate limiter. The wire format is unchanged. The changes are marked
+"Backpack" in kcp.go and sess.go. The upstream licence is in
+internal/thirdparty/kcp-go/LICENSE and applies to the copy:
+
+    The MIT License (MIT)
+
+    Copyright (c) 2015 xtaci
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+libpcap — statically linked into release binaries
+https://www.tcpdump.org. Copyright (c) 1993-2024 The Regents of the University of
+California and The Tcpdump Group, under this licence:
+
+    License: BSD
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+      1. Redistributions of source code must retain the above copyright
+         notice, this list of conditions and the following disclaimer.
+      2. Redistributions in binary form must reproduce the above copyright
+         notice, this list of conditions and the following disclaimer in
+         the documentation and/or other materials provided with the
+         distribution.
+      3. The names of the authors may not be used to endorse or promote
+         products derived from this software without specific prior
+         written permission.
+
+    THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+
+gopacket — github.com/gopacket/gopacket, linked into every build
+
+    Copyright (c) 2012 Google, Inc. All rights reserved.
+    Copyright (c) 2009-2011 Andreas Krennmair. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+       * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+       * Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following disclaimer
+    in the documentation and/or other materials provided with the
+    distribution.
+       * Neither the name of Andreas Krennmair, Google, nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

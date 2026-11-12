@@ -31,8 +31,9 @@ func TestTheCarrierChecksSeeADirectTunnel(t *testing.T) {
 		// and the same pck_* keys.
 		{l3.CarrierSNI, true, false},
 		{l3.CarrierXdi, false, true},
-		{l3.CarrierUDP, false, false},
-		{l3.CarrierQuic, false, false},
+		{l3.CarrierSpoof, false, false},
+		// Removed in v2.0.0; refused by the engine, and not either check's.
+		{"udp", false, false},
 	} {
 		t.Run(tc.carrier, func(t *testing.T) {
 			cfg := &config.Config{}

@@ -65,14 +65,6 @@ func TestNoOverlapKeepsEverything(t *testing.T) {
 	}
 }
 
-// The kharej is told its address with the prefix it needs.
-func TestTheKharejIsToldItsAddressWithThePrefix(t *testing.T) {
-	cfg := l3Spec{LocalIP: "10.10.1.1/30", PeerIP: "10.10.1.2"}
-	if got := l3PeerWithPrefix(cfg); got != "10.10.1.2/30" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 // Two new ports landing on the same existing tunnel rewrite it once, with
 // both changes.
 func TestSharesAreGroupedPerTunnel(t *testing.T) {
@@ -89,32 +81,5 @@ func TestSharesAreGroupedPerTunnel(t *testing.T) {
 	// And the tunnel it came from is not changed underneath.
 	if !reflect.DeepEqual(first.L.Ports, []string{"443", "80", "22"}) {
 		t.Fatalf("the original port list was modified: %v", first.L.Ports)
-	}
-}
-
-// Two kharej tunnels listening on one UDP port cannot both run: the second
-// fails to bind and restarts for ever. Two Iran servers set up with the
-// wizard's default port 9000 land exactly there.
-func TestAKharejRefusesATunnelPortAnotherTunnelListensOn(t *testing.T) {
-	existing := []l3Tunnel{{
-		T: Tunnel{Name: "iran-a"},
-		L: config.L3Config{Mode: "listen", Carrier: "udp", Addr: "0.0.0.0:9000", Paths: 4},
-	}}
-	for _, tc := range []struct {
-		carrier string
-		port    int
-		paths   int
-		clash   bool
-	}{
-		{"udp", 9000, 0, true},
-		{"quic", 9003, 0, true}, // inside iran-a's 9000-9003
-		{"udp", 8998, 3, true},  // 8998-9000 reaches it
-		{"udp", 9004, 0, false},
-		{"xdi", 9000, 0, false}, // no UDP socket of its own
-	} {
-		got := l3ListenClash("iran-b", tc.carrier, tc.port, tc.paths, existing)
-		if (got != "") != tc.clash {
-			t.Errorf("%s on %d (paths %d): clash %q, want clash=%v", tc.carrier, tc.port, tc.paths, got, tc.clash)
-		}
 	}
 }

@@ -14,14 +14,14 @@ import (
 // why the only way to build one was the CLI.
 func TestThePanelReadsADirectTunnelsSettings(t *testing.T) {
 	iran := decode(t, l3Spec{
-		Name: "web-iran", Side: sideIran, Carrier: "pck", Encap: "gre",
+		Name: "web-iran", Side: sideIran, Carrier: "xdi", Encap: "gre",
 		Addr: "203.0.113.9:9000", Token: "a-long-token", Iface: "bp0",
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1371,
 		Ports: []string{"443", "8080=80"}, AcceptUDP: true,
 	}.Render()).L3
 
 	set := directSettingsFrom("web-iran", iran)
-	if set.Side != "iran" || set.Carrier != "pck" {
+	if set.Side != "iran" || set.Carrier != "xdi" {
 		t.Errorf("side/carrier = %q/%q", set.Side, set.Carrier)
 	}
 	if set.Encap != "GRE + Noise" {
@@ -38,7 +38,7 @@ func TestThePanelReadsADirectTunnelsSettings(t *testing.T) {
 	}
 
 	kharej := decode(t, l3Spec{
-		Name: "web-kharej", Side: sideKharej, Carrier: "pck", Encap: "gre",
+		Name: "web-kharej", Side: sideKharej, Carrier: "xdi", Encap: "gre",
 		Addr: "0.0.0.0:9000", Token: "a-long-token", Iface: "bp0",
 		LocalIP: "10.10.0.2/30", PeerIP: "10.10.0.1", MTU: 1371,
 	}.Render()).L3
@@ -98,7 +98,7 @@ func TestAPanelEditLeavesUntouchedFieldsAlone(t *testing.T) {
 
 // The edit must refuse what the wizard refuses.
 func TestAPanelEditRefusesBadInput(t *testing.T) {
-	base := config.L3Config{Mode: "dial", Carrier: "pck", Encap: "gre", MTU: 1371}
+	base := config.L3Config{Mode: "dial", Carrier: "xdi", Encap: "gre", MTU: 1371}
 
 	bad := "not-a-port"
 	if _, err := applyDirectEdit(base, DirectEdit{Ports: &bad}); err == nil {

@@ -1,3 +1,5 @@
+//go:build linux
+
 package manage
 
 import (
@@ -14,8 +16,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -275,6 +279,12 @@ func startTestEcho(t *testing.T, udp bool) string {
 	return l.Addr().String()
 }
 
+// startTestEngine runs one engine as its own process group, so that it dies
+// with the test: Pdeathsig has the kernel SIGKILL it when the thread that forked
+// it exits, and Cleanup kills the whole group and reaps it. Pdeathsig follows
+// the forking thread, not the process, so the goroutine that starts the engine
+// locks its thread and holds it until the engine is reaped; the thread cannot
+// exit under a live child.
 func startTestEngine(t *testing.T, bin, cfg, logPath string) {
 	t.Helper()
 	logf, err := os.Create(logPath)
@@ -283,14 +293,30 @@ func startTestEngine(t *testing.T, bin, cfg, logPath string) {
 	}
 	cmd := exec.Command(bin, "-c", cfg)
 	cmd.Stdout, cmd.Stderr = logf, logf
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	started := make(chan error, 1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.LockOSThread()
+		if err := cmd.Start(); err != nil {
+			started <- err
+			return
+		}
+		started <- nil
+		<-stop
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-done
 		logf.Close()
 	})
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // awaitTestEcho waits until a payload sent into the forwarded port comes back.

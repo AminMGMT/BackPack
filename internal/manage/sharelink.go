@@ -20,6 +20,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
 // Handing a tunnel's settings to the other server.
@@ -93,7 +94,13 @@ type ShareLink struct {
 
 	FECData   int `json:"fd,omitempty"`
 	FECParity int `json:"fp,omitempty"`
-	Paths     int `json:"pa,omitempty"`
+	// RetiredPaths is "pa", the udp carrier's socket count, which went with
+	// the carrier in v2.0.0. Nothing writes or reads it. It stays because a
+	// format 2 link numbers its fields by position (shareFieldIDs) and a
+	// number is never reused: dropping the field would shift nothing, but it
+	// would leave an older link that still carries "pa" undecodable, where
+	// now it decodes and is refused for the carrier it names.
+	RetiredPaths int `json:"pa,omitempty"`
 
 	// Direct only, and all three paired. They were left out, and a tunnel
 	// whose Iran side had set one of them came up on the kharej without it:
@@ -157,6 +164,18 @@ type ShareLink struct {
 	HelperPublicKey string `json:"hk,omitempty"`
 	HelperShortID   string `json:"hsid,omitempty"`
 	HelperCA        string `json:"hca,omitempty"`
+
+	// The PCK engine's tuning, direct pck only. The preset above is what sets
+	// them; these are what an operator set over it. Two of them are paired —
+	// the cipher, which the two ends must agree on to read each other at all,
+	// and the packet size — and the rest are carried so that the kharej is built
+	// the way the Iran side was, which is what asking for the same preset meant.
+	PckConns     int    `json:"pn,omitempty"`
+	PckKCPMode   string `json:"pm,omitempty"`
+	PckKCPMTU    int    `json:"pu,omitempty"`
+	PckKCPSndWnd int    `json:"ps,omitempty"`
+	PckKCPRcvWnd int    `json:"pw,omitempty"`
+	PckKCPBlock  string `json:"pb,omitempty"`
 }
 
 // Encode renders a link as the string an operator copies.
@@ -268,7 +287,9 @@ func DecodeShareLink(s string) (out ShareLink, err error) {
 
 // checkShareLink refuses a decoded link that cannot build anything.
 func checkShareLink(out ShareLink) error {
-	if out.Tok == "" || out.Tr == "" {
+	// The one tunnel with no token is kernel GRE, which has no secret at all.
+	kernel := out.Kind == "direct" && l3.KernelCarrier(out.Tr)
+	if (out.Tok == "" && !kernel) || out.Tr == "" {
 		return fmt.Errorf("the setup link is missing the token or the transport — it was not made by this version")
 	}
 	switch out.Kind {
@@ -316,13 +337,20 @@ type PeerForm struct {
 	LocalIP string `json:"localIp,omitempty"`
 	PeerIP  string `json:"peerIp,omitempty"`
 
-	Paths int  `json:"paths,omitempty"`
-	FEC   bool `json:"fec,omitempty"`
+	FEC bool `json:"fec,omitempty"`
 	// The exact error-correction pair. FEC above says only whether it is on,
 	// and a far end given "on" took the recommended pair — not the one the
 	// producer had chosen, and two different pairs cannot decode each other.
 	FECData   int `json:"fecData,omitempty"`
 	FECParity int `json:"fecParity,omitempty"`
+
+	// The PCK engine's tuning; see ShareLink.
+	PckConns     int    `json:"pckConns,omitempty"`
+	PckKCPMode   string `json:"pckKcpMode,omitempty"`
+	PckKCPMTU    int    `json:"pckKcpMtu,omitempty"`
+	PckKCPSndWnd int    `json:"pckKcpSndWnd,omitempty"`
+	PckKCPRcvWnd int    `json:"pckKcpRcvWnd,omitempty"`
+	PckKCPBlock  string `json:"pckKcpBlock,omitempty"`
 
 	GREKey   uint32 `json:"greKey,omitempty"`   // direct
 	MSSClamp int    `json:"mssClamp,omitempty"` // direct
@@ -379,7 +407,6 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		Preset:     l.Preset,
 		MSS:        l.MSS,
 		MTU:        l.MTU,
-		Paths:      l.Paths,
 		FEC:        l.FECData > 0 && l.FECParity > 0,
 		FECData:    l.FECData,
 		FECParity:  l.FECParity,
@@ -388,10 +415,20 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		MSSClamp:   l.L3MSS,
 		AutoMTU:    l.AutoMTU,
 	}
+	if l.Kind == "direct" && l.Tr == l3.CarrierPck {
+		f.PckConns, f.PckKCPMode, f.PckKCPMTU = l.PckConns, l.PckKCPMode, l.PckKCPMTU
+		f.PckKCPSndWnd, f.PckKCPRcvWnd, f.PckKCPBlock = l.PckKCPSndWnd, l.PckKCPRcvWnd, l.PckKCPBlock
+	}
 	// Every one of these is a setting the two ends must agree on. The list is
 	// what the panel marks, so it is built from what was actually filled rather
-	// than written out twice.
+	// than written out twice. A GRE link has neither a token nor a port.
 	paired := []string{"token", "tunnelPort"}
+	if l.Kind == "direct" && l3.KernelCarrier(l.Tr) {
+		paired = nil
+	}
+	// A PCK link has no tunnel addresses, MTU or error correction to carry, and
+	// two paired engine settings: see below.
+	pck := l.Kind == "direct" && l.Tr == l3.CarrierPck
 
 	if l.Kind == "reverse" {
 		f.Transport = l.Tr
@@ -430,11 +467,29 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		// The private network's two addresses swap: the producer's local is the
 		// receiver's peer.
 		f.LocalIP, f.PeerIP = l.PeerIP, hostOf(l.LocalIP)
+		if pck {
+			// An Iran side that has not been updated still writes them; they
+			// mean nothing to this engine and are not carried on.
+			f.LocalIP, f.PeerIP, f.MTU, f.FEC, f.FECData, f.FECParity = "", "", 0, false, 0, 0
+			f.GREKey, f.MSSClamp, f.AutoMTU, f.Encap = 0, 0, nil, ""
+			paired = removeString(paired, "encap")
+			if l.PckKCPBlock != "" {
+				paired = append(paired, "pckKcpBlock")
+			}
+			if l.PckKCPMTU != 0 {
+				paired = append(paired, "pckKcpMtu")
+			}
+		}
 		if f.LocalIP != "" {
 			paired = append(paired, "localIp", "peerIp")
 		}
 		// Iran dials kharej on a direct tunnel, so only the Iran side is asked
-		// for an address to reach.
+		// for an address to reach — except on GRE, whose link names both
+		// servers: the kharej's names Iran's, which the link carries.
+		if f.Side == "kharej" && l3.KernelCarrier(l.Tr) && l.Host != "" {
+			f.ServerAddr = l.Host
+			paired = append(paired, "serverAddr")
+		}
 		if f.Side == "iran" {
 			f.ServerAddr = l.Host
 			paired = append(paired, "serverAddr")
@@ -443,22 +498,19 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		}
 	}
 
-	if l.Paths > 1 {
-		paired = append(paired, "paths")
-	}
 	if f.FEC {
 		paired = append(paired, "fec")
 	}
 	if l.MSS > 0 {
 		paired = append(paired, "mss")
 	}
-	if l.GREKey != 0 {
+	if l.GREKey != 0 && !pck {
 		paired = append(paired, "greKey")
 	}
-	if l.L3MSS != 0 {
+	if l.L3MSS != 0 && !pck {
 		paired = append(paired, "mssClamp")
 	}
-	if l.MTU > 0 && l.Kind == "direct" {
+	if l.MTU > 0 && l.Kind == "direct" && !pck {
 		paired = append(paired, "mtu")
 	}
 
@@ -509,6 +561,16 @@ func MirrorForPeer(l ShareLink) PeerForm {
 // peerName suggests a name for the other end, derived from the one the producer
 // chose so a pair is recognisable in a list. It is only a suggestion: the name
 // is local and nothing breaks if the operator picks another.
+func removeString(list []string, s string) []string {
+	out := list[:0:0]
+	for _, v := range list {
+		if v != s {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func peerName(l ShareLink) string {
 	if l.Name == "" {
 		return ""
@@ -598,16 +660,30 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		}
 		l.Tok = cfg.L3.Token
 		l.Tr = orDefault(cfg.L3.Carrier, "udp")
+		if l3.KernelCarrier(l.Tr) {
+			// The kharej's GRE link names this server's real address, of the
+			// tunnel's own family, so a host that cannot be that is replaced.
+			l.Tok = ""
+			l.Host = greShareHost(l.Host, directSpecFrom(name, cfg.L3))
+		}
 		l.SNI = cfg.L3.SNIDomain
 		l.Encap = "gre"
 		l.Port = addrPort(cfg.L3.Addr)
 		l.Preset = cfg.L3.Preset
 		l.Ports = strings.Join(cfg.L3.Ports, ", ")
 		l.AcceptUDP = cfg.L3.AcceptUDP
+		if l.Tr == l3.CarrierPck {
+			// What the PCK engine reads and the other end must be told: the
+			// port and the token above, the preset, and the tuning set over it.
+			// No encapsulation, addresses, MTU or error correction: it has none.
+			l.Encap = ""
+			l.PckConns, l.PckKCPMode, l.PckKCPMTU = cfg.L3.PckConns, cfg.L3.PckKCPMode, cfg.L3.PckKCPMTU
+			l.PckKCPSndWnd, l.PckKCPRcvWnd, l.PckKCPBlock = cfg.L3.PckKCPSndWnd, cfg.L3.PckKCPRcvWnd, cfg.L3.PckKCPBlock
+			break
+		}
 		l.MTU = cfg.L3.MTU
 		l.LocalIP, l.PeerIP = cfg.L3.LocalIP, cfg.L3.PeerIP
 		l.FECData, l.FECParity = cfg.L3.FECData, cfg.L3.FECParity
-		l.Paths = cfg.L3.Paths
 		l.GREKey, l.L3MSS, l.AutoMTU = cfg.L3.GREKey, cfg.L3.MSSClamp, cfg.L3.AutoMTU
 		sc := cfg.L3.SpoofConfig
 		l.Profile, l.Uplink, l.Downlink = sc.SpoofProfile, sc.SpoofUplink, sc.SpoofDownlink
@@ -646,7 +722,9 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		return "", fmt.Errorf("%q is not a tunnel this version can hand over", name)
 	}
 
-	if l.Tok == "" {
+	// A kernel GRE tunnel has no token to hand over, and needs none: what the
+	// two ends share is each other's address and the GRE key.
+	if l.Tok == "" && !(l.Kind == "direct" && l3.KernelCarrier(l.Tr)) {
 		return "", fmt.Errorf("%q has no token to hand over", name)
 	}
 	if cfg.Server.Naive.Enabled() || cfg.Server.Xray.Enabled() {

@@ -20,7 +20,7 @@ func TestDirectEditFieldsReachTheServer(t *testing.T) {
 	payload := map[string]any{
 		"ports": "443", "acceptUdp": true, "preset": "turbo",
 		"mtu": 1400, "autoMtu": false, "maxConnections": 0, "bandwidthMbps": 0,
-		"paths": 4, "fec": true, "stealth": true,
+		"carrier": "pck", "fec": true, "stealth": true,
 		"spoof": map[string]any{"profile": "icmp", "srcIPs": "203.0.113.10"},
 	}
 	raw, _ := json.Marshal(payload)

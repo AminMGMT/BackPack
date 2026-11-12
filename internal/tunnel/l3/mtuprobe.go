@@ -227,6 +227,29 @@ func (t *Tunnel) searchMTU(ctx context.Context) (int, error) {
 			hi = mid - 1
 		}
 	}
+
+	// A search that ends below where the interface already is has to be
+	// believed before it is acted on, because lowering is the one move that
+	// cannot easily be undone by looking at the same path again. A path that
+	// blacks out for a few seconds fails every probe sent during it, and the
+	// binary search reads each failure as "too big" — so an outage in the
+	// middle walks it down to a figure far under what the path carries. The
+	// ceiling and floor checks at the start cannot see that: they ran before
+	// the outage began.
+	//
+	// So the two things an outage cannot fake are asked again. The floor, the
+	// smallest packet there is: if the peer no longer answers that, the path is
+	// down and nothing in this search means anything. And the size the
+	// interface is at now: if that still crosses, the path has not shrunk and
+	// the low result was the outage's doing.
+	if cur := t.currentMTU(); best < cur {
+		if !t.probeOnce(ctx, floor) {
+			return 0, errProbeUnanswered
+		}
+		if cur <= ceiling && t.probeOnce(ctx, cur) {
+			return cur, nil
+		}
+	}
 	return best, nil
 }
 

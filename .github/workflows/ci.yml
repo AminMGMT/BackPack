@@ -25,6 +25,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # PCK is paqet's engine: libpcap, through cgo. See .github/actions/libpcap.
+      - uses: ./.github/actions/libpcap
+
       # Configuration round-trip tests exercise the real /etc/backpack paths.
       # The ephemeral runner owns their private fixture directory; production
       # configuration permissions remain unchanged.
@@ -51,6 +54,17 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: The CGO-free build still compiles and passes its tests
+        # A plain `go build` with no libpcap (a contributor's machine, a
+        # container build, install.sh's source build) must keep working: it just
+        # cannot run PCK, and says so. The engine's own tests use a fake wire and
+        # run in both modes.
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./internal/tunnel/paqet/ ./internal/tunnel/l3/ ./internal/utils/network/ ./cmd/...
+          go test ./internal/tunnel/paqet/ ./internal/tunnel/l3/ -count=1 -timeout 10m
 
       - name: Test
         # The e2e tests bind loopback ports and wait on real handshakes, so
@@ -135,6 +149,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/libpcap
       - name: Install the verified pinned helpers
         run: sudo env "PATH=$PATH" BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash ./install.sh
       - name: Authenticate REALITY cover fallback and exercise the real reverse carriers
@@ -157,6 +172,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/libpcap
       - name: Selection, fallback, sequencing, cancellation and panel API regressions
         run: |
           go test ./internal/manage ./internal/webui -race -count=1 -v -timeout 6m \
@@ -175,6 +191,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # PCK is paqet's engine: libpcap, through cgo. See .github/actions/libpcap.
+      - uses: ./.github/actions/libpcap
 
       - name: Known vulnerabilities
         # govulncheck reports only what this code actually *reaches*, which is
@@ -206,6 +225,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/libpcap
 
       - name: Fuzz
         # Short runs, every push.
@@ -249,6 +269,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/libpcap
 
       - name: Two minutes of steady traffic, watching for a leak
         # The rest of the suite proves correctness over seconds. Both leaks this
@@ -277,6 +298,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/libpcap
 
       - name: Build the previous release
         id: prev
@@ -317,6 +339,24 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Every release binary is linked with a libpcap built for its own
+      # architecture, with Zig's C compiler (and gcc-arm-linux-gnueabi for ARMv5,
+      # which Zig's musl cannot target). See scripts/build-linux.sh.
+      - name: Install the cross toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flex bison gcc-arm-linux-gnueabi
+          ZIG_VERSION=0.17.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz
+          sudo mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo "/opt/zig" >> "$GITHUB_PATH"
+
+      - name: Cache the per-architecture libpcap builds
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/backpack-libpcap
+          key: libpcap-cross-1.10.6-${{ hashFiles('scripts/build-libpcap.sh', 'scripts/build-linux.sh') }}
+
       - name: Check the version is in step
         # VERSION is what the updater reads to detect a new release — the raw
         # file on main is the fallback the CLI uses when the GitHub API rate
@@ -339,14 +379,25 @@ jobs:
             exit 1
           fi
 
-      - name: Build both architectures
+      - name: Build every architecture
         run: make release
+
+      - name: The binaries are static, and the amd64 one runs with nothing around it
+        # A server has no libpcap and should not need one. `NEEDED` entries
+        # would mean a shared library; an empty root with only the binary in it
+        # is the strictest place to start it.
+        run: |
+          for f in dist/backpack-linux-*; do
+            if readelf -d "$f" 2>/dev/null | grep -q NEEDED; then echo "$f is dynamically linked"; exit 1; fi
+          done
+          mkdir -p /tmp/emptyroot && cp dist/backpack-linux-amd64 /tmp/emptyroot/backpack
+          sudo chroot /tmp/emptyroot /backpack version
+          go version -m dist/backpack-linux-amd64 | grep -E 'CGO_ENABLED=1|-tags=netgo'
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: |
-            release/backpack_linux_amd64.tar.gz
-            release/backpack_linux_arm64.tar.gz
+            release/backpack_linux_*.tar.gz
             release/SHA256SUMS
           retention-days: 14

@@ -33,6 +33,8 @@ type backendOpts struct {
 	mss    int
 	// sniffer records per-port usage for the panel.
 	sniffer bool
+	// udpPriority sends the frames of forwarded-UDP streams ahead of bulk data.
+	udpPriority bool
 }
 
 // loopbackBuffer is the socket buffer for a backend on this machine, where a
@@ -132,6 +134,9 @@ func (l *lifecycle) serveSession(session *smux.Session, from net.Addr, o backend
 				return
 			}
 			_ = stream.SetReadDeadline(time.Time{})
+			if _, isUDP := network.SplitUDPTarget(target); isUDP && o.udpPriority {
+				stream.SetPriority(true)
+			}
 			l.relayStream(stream, target, o)
 		})
 	}

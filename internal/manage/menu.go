@@ -35,9 +35,16 @@ func ManageTunnels() {
 			if spec, err := LoadSpec(t.Name); err == nil {
 				transport = selectedTransport(spec)
 			}
+			state := plainState(t.Service)
+			// Listed rather than hidden, so it can be fixed or deleted — but
+			// never as merely "stopped", which invites a Start that can only
+			// be refused again.
+			if t.Unrunnable != "" {
+				state = "cannot run — removed in v2.0.0"
+			}
 			opts[i] = tui.Option{
 				Title: t.Name,
-				Desc:  fmt.Sprintf("%s %s — %s", t.Role, transportLabel(transport), plainState(t.Service)),
+				Desc:  fmt.Sprintf("%s %s — %s", t.Role, transportLabel(transport), state),
 			}
 		}
 
@@ -75,6 +82,10 @@ func manageOne(t Tunnel) {
 		// themselves as running and no traffic passes.
 		if on, ok := NodeFor(t.Name); ok {
 			tui.Warn(fmt.Sprintf("Other End Is On %q — Edit From The Web Panel So Both Ends Match.\n", on))
+		}
+		// The engine's own refusal, before the menu offers to start it.
+		if t.Unrunnable != "" {
+			tui.Warn(t.Unrunnable + ".\n")
 		}
 
 		idx := tui.ChooseOpt("Action", []tui.Option{

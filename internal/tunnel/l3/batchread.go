@@ -1,6 +1,9 @@
 package l3
 
-import "net"
+import (
+	"errors"
+	"net"
+)
 
 // Reading several datagrams per syscall.
 //
@@ -19,15 +22,16 @@ import "net"
 // a burst instead of one per packet. There is no timer and no added latency,
 // which is why this is the one batching change worth making here.
 //
-// It is a capability, not a requirement. Only the plain UDP carrier has a
-// socket recvmmsg can be pointed at; the obfuscated, QUIC and SNI
-// carriers each do their own work per datagram and are left reading one at a
-// time, which is what they did before.
+// It is a capability, not a requirement. The raw carriers, pck and xdi, expose
+// their own batch read and write (see pckCarrier); spoof and sni each do their
+// own work per datagram and are left reading one at a time, which is what they
+// did before. A carrier that has no batch path simply does not implement it.
 //
 // # Measured
 //
-// 40,000 1200-byte datagrams at a loopback carrier, 2026-09-21
-// (TestBatchReceiveRate):
+// 40,000 1200-byte datagrams at a loopback carrier, 2026-09-21. That was the
+// plain UDP carrier, which v2.0.0 removed along with the test that took the
+// figures; the raw carriers' own are in docs/performance-notes.md:
 //
 //	one by one   27,682 of 40,000 received,  59 kpps
 //	recvmmsg     40,000 of 40,000 received, 214 kpps
@@ -39,6 +43,11 @@ import "net"
 // loop is behind looks exactly like a lossy path from the outside, which is the
 // most expensive kind of fault to diagnose.
 
+// errNoBatch says this carrier has no batch path after all, so the caller
+// should read or write it one datagram at a time. It is a condition, not a
+// failure.
+var errNoBatch = errors.New("l3: this carrier cannot read in batches")
+
 // batchSize is how many datagrams one recvmmsg may gather.
 //
 // The kernel fills as many as have arrived and returns; a larger array costs
@@ -47,8 +56,8 @@ import "net"
 //
 // It was eight, on the argument that the syscall saving flattens out by then.
 // That was an argument rather than a measurement, and the send side has since
-// shown how wrong an argument about syscalls can be. Measured instead
-// (TestBatchWidth, four widths, three runs):
+// shown how wrong an argument about syscalls can be. Measured instead, on the
+// same since-removed carrier (four widths, three runs):
 //
 //	width   1    ~50 kpps, and only half the datagrams arrive
 //	width   8   ~225 kpps

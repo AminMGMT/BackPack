@@ -21,6 +21,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 	"github.com/backpack/backpack/internal/utils/network"
 )
 
@@ -740,8 +741,33 @@ func directChecks(g string, t core.Tunnel) []Check {
 
 	if cfg.L3.Enabled() {
 		l := cfg.L3
+		// A carrier v2.0.0 removed is the whole diagnosis: the engine refuses
+		// the file, so the interface below is missing because of this, not for
+		// any reason of its own.
+		if t.Unrunnable != "" {
+			return append(out, Check{Group: g, Name: "Carrier", Level: CheckFail,
+				Detail: t.Unrunnable,
+				Fix:    "Manage → Manage Tunnels → this tunnel → Edit → Carrier, on both servers"})
+		}
+		if strings.EqualFold(strings.TrimSpace(l.Carrier), l3.CarrierPck) {
+			// A pck tunnel is paqet's engine: crafted TCP segments and KCP
+			// streams, no interface and no wrapping at all. See pckcheck.go
+			// for what it has instead.
+			out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
+				Detail: "PCK (paqet engine) forwarding ports over KCP, preset " + core.OrDefault(l.Preset, "turbo")})
+			out = append(out, pckChecks(g, l)...)
+			if len(l.Ports) > 0 && !strings.EqualFold(strings.TrimSpace(l.Mode), "listen") {
+				out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
+					Detail: strings.Join(l.Ports, ", ")})
+				if err := validatePortSpecs(l.Ports); err != nil {
+					out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
+						Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
+				}
+			}
+			return out
+		}
 		out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
-			Detail: "layer-3 over " + core.OrDefault(l.Carrier, "udp") + ", " + tunnelspec.L3EncapLabel(l)})
+			Detail: "layer-3 over " + l.Carrier + ", " + tunnelspec.L3EncapLabel(l)})
 
 		// The interface is the tunnel. If it is not there, nothing else matters.
 		iface := core.OrDefault(l.Iface, "bp0")
@@ -759,9 +785,15 @@ func directChecks(g string, t core.Tunnel) []Check {
 			out = append(out, Check{Group: g, Name: "Interface", Level: CheckOK,
 				Detail: iface + "  " + l.LocalIP + " -> " + l.PeerIP + ", mtu " + strconv.Itoa(mtu) + note})
 		} else {
+			fix := "a layer-3 tunnel needs root and the tun module — check its log"
+			if l3.KernelCarrier(l.Carrier) {
+				fix = "a GRE tunnel needs root and the " + greModuleName(l.Carrier) + " module — check its log"
+			}
 			out = append(out, Check{Group: g, Name: "Interface", Level: CheckFail,
-				Detail: iface + " does not exist",
-				Fix:    "a layer-3 tunnel needs root and the tun module — check its log"})
+				Detail: iface + " does not exist", Fix: fix})
+		}
+		if l3.KernelCarrier(l.Carrier) {
+			out = append(out, greChecks(g, l)...)
 		}
 
 		// The forged-source carrier is the one health check that catches a
@@ -784,44 +816,11 @@ func directChecks(g string, t core.Tunnel) []Check {
 		return out
 	}
 
-	d := cfg.Direct
-	out = append(out, Check{Group: g, Name: "Config", Level: CheckOK,
-		Detail: "direct tunnel over " + core.OrDefault(d.Transport, "tcp")})
-
-	if tunnelspec.HoldsPorts(t) {
-		if len(d.Ports) == 0 {
-			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckWarn,
-				Detail: "none", Fix: "add ports with Manage → Manage Tunnels → Edit"})
-		} else {
-			out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckOK,
-				Detail: strings.Join(d.Ports, ", ")})
-			if err := validatePortSpecs(d.Ports); err != nil {
-				out = append(out, Check{Group: g, Name: "Port syntax", Level: CheckFail,
-					Detail: err.Error(), Fix: "fix them with Manage → Manage Tunnels → Edit"})
-			}
-		}
-		out = append(out, Check{Group: g, Name: "Kharej server", Level: CheckInfo, Detail: d.Addr})
-		return out
-	}
-
-	// The kharej side listens, so its port must actually be bound — and unlike
-	// a layer-3 carrier, every direct transport is real TCP, so the listen
-	// table can answer.
-	if p := addrPort(d.Addr); p != "" {
-		if n, _ := strconv.Atoi(p); n > 0 {
-			if listening(n) {
-				out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckOK,
-					Detail: p + " listening"})
-			} else {
-				out = append(out, Check{Group: g, Name: "Tunnel port", Level: CheckFail,
-					Detail: p + " not listening",
-					Fix:    "the service may have failed to bind — check its log"})
-			}
-		}
-	}
-	out = append(out, Check{Group: g, Name: "Forwarded ports", Level: CheckInfo,
-		Detail: "set on the Iran server — this side needs none"})
-	return out
+	// A [direct] stream tunnel: removed in v2.0.0, so there is nothing left to
+	// check but the reason it cannot run.
+	return append(out, Check{Group: g, Name: "Config", Level: CheckFail,
+		Detail: config.ErrDirectRemoved.Error(),
+		Fix:    "delete it, then Setup Iran / Setup Kharej → Direct on both servers"})
 }
 
 // ifaceExists reports whether a network interface is present.

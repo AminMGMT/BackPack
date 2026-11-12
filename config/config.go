@@ -640,8 +640,8 @@ type Config struct {
 	// without an [l3] table leaves this zero, L3.Enabled() reads false, and
 	// the reverse tunnel runs exactly as it always has. See config/l3.go.
 	L3 L3Config `toml:"l3"`
-	// Direct is a direct layer-4 tunnel — the same forwarded ports, dialled
-	// the other way round. Present only in a configuration that asks for one,
-	// on the same terms as L3 above. See config/direct.go.
-	Direct DirectConfig `toml:"direct"`
+	// Direct is the [direct] stream tunnel, removed in v2.0.0. It is read only
+	// so that such a file is recognised and refused by name rather than read
+	// as empty; see config/legacydirect.go.
+	Direct LegacyDirectConfig `toml:"direct"`
 }

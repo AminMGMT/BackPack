@@ -40,6 +40,7 @@ import (
 
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/manage"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
 // Result is everything a command produced: what to print, what to print on
@@ -647,6 +648,12 @@ func linkReport(done manage.LinkApplied) Result {
 		return Result{Out: b.String(), Code: CodeUnhealthy}
 	}
 	if done.Kind == "direct" {
+		if l3.KernelCarrier(done.Transport) {
+			// Neither end of a GRE link dials: each names the other, and the
+			// link carries traffic once both are up.
+			say("  %s Running. The GRE link is up here and carries traffic once the Iran server's end is up too.\n%s", ok, rule)
+			return Result{Out: b.String()}
+		}
 		say("  %s Running. It connects as soon as the Iran server dials in.\n%s", ok, rule)
 		return Result{Out: b.String()}
 	}

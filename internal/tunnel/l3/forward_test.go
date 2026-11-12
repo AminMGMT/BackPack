@@ -458,7 +458,7 @@ func TestNewForwarderRejectsBadPorts(t *testing.T) {
 // error arrives at startup rather than half way through serving.
 func TestConfigValidatesPortMappings(t *testing.T) {
 	cfg := Config{
-		Mode: ModeDial, Addr: "1.2.3.4:9000", Token: "token",
+		Mode: ModeDial, Addr: "1.2.3.4:9000", Token: "token", Carrier: CarrierXdi,
 		LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2",
 		Ports: []string{"443", "nonsense"},
 	}

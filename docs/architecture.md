@@ -30,13 +30,13 @@ proposal to run several tunnels in one process is trading it away.
 
 ---
 
-## Three engines
+## Three engines, two of them running
 
 `cmd/cmd.go runEngine` chooses, in this order, and the order is load-bearing:
 
 ```
         ┌─ [l3] table present?    ──yes──►  internal/tunnel/l3       layer 3
-config ─┼─ [direct] table present? ─yes──►  internal/tunnel/direct   layer 4, dials out
+config ─┼─ [direct] table present? ─yes──►  refused: the layer-4 engine was removed in v2.0.0
         └─ [server]/[client]      ────────►  internal/server + internal/client
                                              the reverse tunnel
 ```
@@ -79,16 +79,30 @@ replaced, is [ADR 0001](adr/0001-reverse-transport-generations.md). A generation
 outlives the kharej it serves: a re-dialing kharej is seated in place and no
 port is re-bound — [ADR 0005](adr/0005-a-generation-outlives-its-clients.md).
 
-### The direct tunnel — `[direct]`
+### The old direct tunnel — `[direct]` (removed)
 
-The same forwarded ports, dialled the other way round: Iran dials out, so it
-needs no inbound port of its own. `internal/tunnel/direct`.
+The layer-4 stream tunnel, Iran dialling out, was removed in v2.0.0. A file with
+a `[direct]` table is still recognised (`config/legacydirect.go`) and refused by
+name; it can be listed and deleted but not run. The direct direction is now the
+layer-3 tunnel below. See [Direct tunnel](direct-tunnel.md).
 
 ### The layer-3 tunnel — `[l3]`
 
 An interface on each host carrying whole IP packets. Noise NNpsk0, explicit
-nonces, a 2048-bit replay window (RFC 4303, as WireGuard uses). Six carriers
-underneath: `udp`, `quic`, `pck`, `sni`, `xdi`, `spoof`. `internal/tunnel/l3`.
+nonces, a 2048-bit replay window (RFC 4303, as WireGuard uses). Four carriers
+underneath, all raw sockets and Linux only: `xdi`, `sni`, `spoof` — and `pck`,
+which since v2.0.0 is not one of them: it is `internal/tunnel/paqet`, a port of
+[paqet](https://github.com/hanselime/paqet) (KCP and smux over TCP segments built
+and captured with libpcap) that forwards ports and has no TUN. See
+[Direct PCK](direct-pck.md). The `carrier` key is required; `udp` and `quic` were
+removed in v2.0.0.
+`internal/tunnel/l3`.
+
+The same table also runs **kernel GRE** (`carrier = "gre"` or `"ip6gre"`): the
+engine creates a Linux GRE link with ip(8) instead of a TUN device and a session,
+holds it while it runs and pings the other end across it for liveness, and the
+same forwarder serves `ports` over it. Unencrypted by design.
+`internal/tunnel/l3/kernelgre.go`.
 
 A reliable carrier is deliberately not an option here — stacking retransmission
 under a reliable tunnel is actively harmful, not merely wasteful. The package
@@ -214,8 +228,8 @@ they are worth reading before changing the code they sit on.
 پروسهٔ جداگانه دارد.
 
 **سه موتور،** و `cmd/cmd.go runEngine` به همین ترتیب انتخاب می‌کند: اگر جدول
-`[l3]` باشد → موتور لایه‌۳؛ وگرنه اگر `[direct]` باشد → تونل مستقیم لایه‌۴؛
-وگرنه `[server]`/`[client]` → تونل معکوس. **هیچ کلید کانفیگ و هیچ کدی بین‌شان
+`[l3]` باشد → موتور لایه‌۳؛ وگرنه اگر `[direct]` باشد → رد می‌شود (موتور لایه‌۴ در
+v2.0.0 حذف شد)؛ وگرنه `[server]`/`[client]` → تونل معکوس. **هیچ کلید کانفیگ و هیچ کدی بین‌شان
 مشترک نیست.** فایلی که `[l3]` ندارد اصلاً به موتور لایه‌۳ نمی‌رسد، و فایلی که
 دارد هیچ‌وقت به موتور معکوس نمی‌رسد.
 
@@ -251,4 +265,4 @@ context)، پورت‌های فوروارد (`forward.go`)، حلقهٔ کانا
 
 ---
 
-*Last verified against Backpack v1.9.0.*
+*Last verified against Backpack v2.0.0.*

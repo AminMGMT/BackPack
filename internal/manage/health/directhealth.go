@@ -1,7 +1,6 @@
 package health
 
 import (
-	"net"
 	"strings"
 
 	"github.com/backpack/backpack/internal/app"
@@ -31,64 +30,27 @@ import (
 // the question could be answered at all. known is false when nothing
 // observable can settle it, which callers should read as "leave it alone"
 // rather than "it is broken".
-func directHealthy(t core.Tunnel, pairs [][2]string) (healthy, known bool) {
+func directHealthy(t core.Tunnel) (healthy, known bool) {
 	if strings.HasPrefix(t.Transport, "l3/") {
-		// Every layer-3 carrier is a datagram or raw socket: udp holds an
-		// unconnected socket, and pck, xdi and spoof do not go through the
-		// kernel's stack at all, so the socket table cannot answer for them.
+		// Every layer-3 carrier is a raw socket: pck, sni, xdi and spoof do not
+		// go through the kernel's stack at all, so the socket table cannot
+		// answer for them.
 		//
 		// The engine can, and writes its peer down for exactly this. Reading
 		// it is what turns a layer-3 tunnel from a grey card with no state
-		// into one that says whether it is up. A snapshot too old to mean
+		// into one that says whether it is up. A kernel GRE tunnel has no
+		// socket either; its engine writes the peer while the other end
+		// answers pings across the link. A snapshot too old to mean
 		// anything still reports unknown, which is the honest answer when the
 		// process has stopped writing.
 		return datagramPeer(app.ConfigDir, t.Name)
 	}
-	if !strings.HasPrefix(t.Transport, "direct/") {
-		return false, false
-	}
-	// Authenticated sessions outrank sockets, which may belong to a stranger
-	// or remain established long after the mux stopped carrying traffic.
-	if connected, known := engineSaysConnected(t.Name); known {
-		return connected, true
-	}
-
-	if t.Role == "kharej" {
-		// It listens, so it is up when something has connected to its port.
-		_, port, err := net.SplitHostPort(t.Addr)
-		if err != nil {
-			return true, false
-		}
-		for _, p := range pairs {
-			if portOf(p[0]) == port {
-				return true, true
-			}
-		}
-		return false, true
-	}
-
-	// The Iran side dials out, so it is up when a socket is established to the
-	// kharej address it was given. A literal IP is required to match as well,
-	// or an unrelated outbound connection to the same port would look like the
-	// tunnel.
-	host, port, err := net.SplitHostPort(t.Addr)
-	if err != nil {
-		return true, false
-	}
-	want := net.ParseIP(host)
-	for _, p := range pairs {
-		peerHost, peerPort, err := net.SplitHostPort(p[1])
-		if err != nil || peerPort != port {
-			continue
-		}
-		if want != nil {
-			if got := net.ParseIP(peerHost); got == nil || !got.Equal(want) {
-				continue
-			}
-		}
-		return true, true
-	}
-	return false, true
+	// Anything else is a [direct] stream tunnel, whose engine v2.0.0 removed:
+	// it cannot be up, and there is no socket of its own to look at. Unknown,
+	// rather than down, so the watchdog does not restart it into the same
+	// refusal over and over; the health screen says why instead (see
+	// core.Tunnel.Unrunnable).
+	return false, false
 }
 
 // directStateDetail is the sentence the health screen shows for a direct

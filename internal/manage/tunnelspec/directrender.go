@@ -6,143 +6,21 @@ import (
 	"strings"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
-// Rendering the two new kinds of config.
+// Rendering a direct tunnel's config.
 //
-// These write their own TOML rather than going through TunnelSpec.Render,
-// because they describe different tables — [direct] and [l3] — and share no
-// keys with [server] or [client]. Keeping the renderers apart is what makes it
-// impossible for a change here to alter a reverse tunnel's file.
+// This writes its own TOML rather than going through TunnelSpec.Render,
+// because it describes a different table — [l3] — and shares no keys with
+// [server] or [client]. Keeping the renderers apart is what makes it
+// impossible for a change here to alter a reverse tunnel's file. (The other
+// direct kind, the [direct] stream tunnel, was removed in v2.0.0 and is no
+// longer written by anything.)
 //
 // The output is commented. A config that explains itself is one an operator
 // can fix at three in the morning without the documentation, and these files
 // are read far more often than they are written.
-
-// DirectSpec is everything the wizard collected for a [direct] tunnel.
-type DirectSpec struct {
-	Name             string
-	Side             DirectSide
-	Transport        string
-	Addr             string
-	Token            string
-	Ports            []string
-	AcceptUDP        bool
-	MaxConnections   int
-	BandwidthMbps    int
-	Sessions         int
-	Preset           string
-	MuxFrameSize     int
-	MuxReceiveBuffer int
-	MuxStreamBuffer  int
-	Keepalive        int
-	Nodelay          bool
-	ServerName       string
-	ACMEDomain       string
-	ACMEEmail        string
-
-	// Never asked for by the wizard, and kept for the same reason the carrier
-	// tables are kept on L3Spec: an edit re-renders the file, and a key the
-	// spec cannot hold is a key the edit deletes.
-	TLSCertFile   string
-	TLSKeyFile    string
-	MuxVersion    int
-	DialTimeout   int
-	RetryInterval int
-	MSS           int
-}
-
-func (s DirectSpec) Render() string {
-	var b strings.Builder
-
-	b.WriteString("# Direct tunnel — the Iran server dials out to kharej.\n")
-	b.WriteString("# Created by the Backpack setup wizard. Both ends must share the token.\n")
-	b.WriteString("#\n")
-	if s.Side == SideIran {
-		b.WriteString("# This is the IRAN side: it exposes the ports and dials out, so it\n")
-		b.WriteString("# needs no inbound tunnel port of its own.\n")
-	} else {
-		b.WriteString("# This is the KHAREJ side: it listens for the tunnel and holds the real\n")
-		b.WriteString("# service. It needs no port list — the Iran side names each target.\n")
-	}
-	b.WriteString("\n[direct]\n")
-
-	writeKV(&b, "role", quote(s.Side.String()))
-	writeKV(&b, "addr", quote(s.Addr))
-	writeKV(&b, "token", quote(s.Token))
-	writeKV(&b, "transport", quote(s.Transport))
-
-	if s.Side == SideIran {
-		b.WriteString("\n# Ports exposed on this machine. A target with no host means the\n")
-		b.WriteString("# kharej machine's own 127.0.0.1.\n")
-		writeKV(&b, "ports", tomlList(s.Ports))
-		writeKV(&b, "accept_udp", fmt.Sprint(s.AcceptUDP))
-		if s.Sessions > 1 {
-			writeKV(&b, "sessions", fmt.Sprint(s.Sessions))
-		}
-		if s.MaxConnections > 0 || s.BandwidthMbps > 0 {
-			b.WriteString("\n# Caps on this tunnel. Zero means unlimited.\n")
-			writeKV(&b, "max_connections", fmt.Sprint(s.MaxConnections))
-			writeKV(&b, "bandwidth_mbps", fmt.Sprint(s.BandwidthMbps))
-		}
-		if s.Preset != "" {
-			b.WriteString("\n# Performance tuning. The stream buffer is what caps a single\n")
-			b.WriteString("# download: at 100 ms round trip it is roughly this many bytes\n")
-			b.WriteString("# per RTT. Raise the preset if one transfer feels slow on a fast link.\n")
-			writeKV(&b, "preset", quote(s.Preset))
-			writeKV(&b, "mux_framesize", fmt.Sprint(s.MuxFrameSize))
-			writeKV(&b, "mux_recievebuffer", fmt.Sprint(s.MuxReceiveBuffer))
-			writeKV(&b, "mux_streambuffer", fmt.Sprint(s.MuxStreamBuffer))
-		}
-		if s.Keepalive > 0 {
-			writeKV(&b, "keepalive_period", fmt.Sprint(s.Keepalive))
-		}
-		// Written out because it is not the engine's default. A direct tunnel
-		// leaves Nagle on unless told otherwise, and Nagle on a mux session
-		// delays every small write behind the previous one's acknowledgement —
-		// which is the whole latency budget of an interactive connection. Every
-		// reverse preset turns it off for the same reason; see preset.go.
-		if s.Nodelay {
-			writeKV(&b, "nodelay", "true")
-		}
-		// Off unless somebody set it, and worth a word when they have: this is
-		// the knob for a path that silently drops full-sized packets, where the
-		// tunnel comes up and looks healthy while every real transfer stalls.
-		// Both ends need it — each clamps only what it sends.
-		if s.MSS > 0 {
-			writeKV(&b, "mss", fmt.Sprint(s.MSS))
-		}
-		if s.MuxVersion > 0 {
-			writeKV(&b, "mux_version", fmt.Sprint(s.MuxVersion))
-		}
-		if s.DialTimeout > 0 {
-			writeKV(&b, "dial_timeout", fmt.Sprint(s.DialTimeout))
-		}
-		if s.RetryInterval > 0 {
-			writeKV(&b, "retry_interval", fmt.Sprint(s.RetryInterval))
-		}
-		if s.ServerName != "" {
-			b.WriteString("\n# The domain to present in SNI and Host — for a CDN in front of the\n")
-			b.WriteString("# kharej server. Setting it also turns certificate checking on.\n")
-			writeKV(&b, "server_name", quote(s.ServerName))
-		}
-	}
-
-	if s.ACMEDomain != "" {
-		b.WriteString("\n# A Let's Encrypt certificate, renewed automatically.\n")
-		writeKV(&b, "acme_domain", quote(s.ACMEDomain))
-		if s.ACMEEmail != "" {
-			writeKV(&b, "acme_email", quote(s.ACMEEmail))
-		}
-	}
-	if s.TLSCertFile != "" {
-		b.WriteString("\n# A certificate of your own, instead of the generated one.\n")
-		writeKV(&b, "tls_cert", quote(s.TLSCertFile))
-		writeKV(&b, "tls_key", quote(s.TLSKeyFile))
-	}
-
-	return b.String()
-}
 
 // L3Spec is everything the wizard collected for an [l3] tunnel.
 type L3Spec struct {
@@ -151,10 +29,13 @@ type L3Spec struct {
 	Carrier string
 	// SNIDomain is the server name the "sni" carrier announces. Ignored by
 	// every other carrier, and empty means the engine's default.
-	SNIDomain      string
-	Encap          string
-	GREKey         uint32
-	Addr           string
+	SNIDomain string
+	Encap     string
+	GREKey    uint32
+	Addr      string
+	// GRELocal is this server's own address for a kernel GRE link. Empty, the
+	// usual case, lets the engine take the source of the route to Addr.
+	GRELocal       string
 	Token          string
 	Iface          string
 	LocalIP        string
@@ -164,7 +45,6 @@ type L3Spec struct {
 	SockBuf        int
 	FECData        int
 	FECParity      int
-	Paths          int
 	MSSClamp       int
 	Preset         string
 	TxQueueLen     int
@@ -185,13 +65,40 @@ type L3Spec struct {
 	// preserved here without this file being touched.
 	Spoof config.SpoofConfig
 	Pck   config.PckConfig
+
+	// The pck_* tuning of the PCK engine. Zero is "from the preset", and that
+	// is how a new tunnel is written: only the keys somebody chose appear in
+	// its file. Read only when Carrier is "pck".
+	PckConns     int
+	PckKCPMode   string
+	PckKCPMTU    int
+	PckKCPSndWnd int
+	PckKCPRcvWnd int
+	PckKCPBlock  string
+	// PckRemoteTargets is the kharej side's pck_remote_targets: dial targets
+	// that are not this server's own addresses. Written only when set.
+	PckRemoteTargets bool
 }
 
 func (s L3Spec) DefaultName() string {
+	// A GRE link has no port to tell two tunnels apart by; the setup takes
+	// the next free name from this one (gre-iran, gre-iran-2, …).
+	if l3.KernelCarrier(s.Carrier) {
+		return "gre-" + s.Side.String()
+	}
+	if s.Carrier == l3.CarrierPck {
+		return "pck-" + s.Side.String() + "-" + addrPort(s.Addr)
+	}
 	return "l3-" + s.Side.String() + "-" + addrPort(s.Addr)
 }
 
 func (s L3Spec) Render() string {
+	if l3.KernelCarrier(s.Carrier) {
+		return s.renderGRE()
+	}
+	if s.Carrier == l3.CarrierPck {
+		return s.renderPck()
+	}
 	var b strings.Builder
 
 	b.WriteString("# Full IP tunnel (layer 3) — a private network between the two servers.\n")
@@ -209,7 +116,7 @@ func (s L3Spec) Render() string {
 	writeKV(&b, "addr", quote(s.Addr))
 	writeKV(&b, "token", quote(s.Token))
 	writeKV(&b, "carrier", quote(s.Carrier))
-	// Only where it means something. A domain in a udp tunnel's file is a
+	// Only where it means something. A domain in a pck tunnel's file is a
 	// setting nothing reads, which is the kind an operator later spends time
 	// wondering about.
 	if s.Carrier == "sni" && s.SNIDomain != "" {
@@ -247,6 +154,16 @@ func (s L3Spec) Render() string {
 		writeKV(&b, "preset", quote(s.Preset))
 		writeKV(&b, "txqueuelen", fmt.Sprint(s.TxQueueLen))
 		writeKV(&b, "qdisc", quote(s.Qdisc))
+	} else if s.TxQueueLen > 0 || s.Qdisc != "" {
+		// A queue set by hand with no preset behind it. The file reads fine
+		// without the label, and an edit must not turn it back into the default.
+		b.WriteString("\n# Performance tuning, set by hand.\n")
+		if s.TxQueueLen > 0 {
+			writeKV(&b, "txqueuelen", fmt.Sprint(s.TxQueueLen))
+		}
+		if s.Qdisc != "" {
+			writeKV(&b, "qdisc", quote(s.Qdisc))
+		}
 	}
 	if s.SockBuf > 0 {
 		writeKV(&b, "sockbuf", fmt.Sprint(s.SockBuf))
@@ -256,11 +173,6 @@ func (s L3Spec) Render() string {
 	if s.FECData > 0 && s.FECParity > 0 {
 		writeKV(&b, "fec_data", fmt.Sprint(s.FECData))
 		writeKV(&b, "fec_parity", fmt.Sprint(s.FECParity))
-	}
-	// One socket is the default and needs no key; more than one is written so
-	// both ends read the same number out of their own file.
-	if s.Paths > 1 {
-		writeKV(&b, "paths", fmt.Sprint(s.Paths))
 	}
 	// Only when it is not the automatic default, so an ordinary file stays
 	// short and the key appears exactly when somebody chose it.
@@ -288,9 +200,189 @@ func (s L3Spec) Render() string {
 	return b.String()
 }
 
+// renderPck writes a PCK tunnel's file: only what the PCK engine reads.
+//
+// PCK is not a TUN carrier any more (internal/tunnel/paqet), so the file has no
+// interface, no tunnel addresses, no MTU, no queue and no error correction — a
+// key that nothing reads is one an operator later wonders about. A file written
+// by an older version carries all of those and still runs, as it is; it is only
+// when it is edited and re-rendered here that they are left out.
+//
+// What it keeps from such a file is what the engine does read: sockbuf (the
+// capture ring), the three pck_interface, pck_gateway_mac and pck_flags
+// overrides, and the limits on the forwarded ports. The pck_* tuning is written
+// only where it was set, because the preset already says what it is.
+func (s L3Spec) renderPck() string {
+	var b strings.Builder
+
+	b.WriteString("# PCK tunnel — forwards ports between the two servers over KCP, carried in\n")
+	b.WriteString("# crafted TCP packets that look like an ordinary connection. Created by the\n")
+	b.WriteString("# Backpack setup wizard. Both ends must share the token and the carrier.\n")
+	b.WriteString("#\n")
+	b.WriteString("# There is no network interface and there are no tunnel addresses to set: the\n")
+	b.WriteString("# interface, this server's address and the gateway are found at start.\n")
+	b.WriteString("# Needs root and libpcap.\n")
+	b.WriteString("\n[l3]\n")
+
+	mode := "dial"
+	if s.Side == SideKharej {
+		mode = "listen"
+	}
+	if s.Side == SideKharej {
+		b.WriteString("# The kharej side waits here, and dials the target of every forwarded port.\n")
+		b.WriteString("# Only this server's own services are reached (127.0.0.1 and its own\n")
+		b.WriteString("# addresses); add pck_remote_targets = true to let it reach other machines.\n")
+	} else {
+		b.WriteString("# The Iran side dials the kharej server and listens on the forwarded ports.\n")
+	}
+	writeKV(&b, "mode", quote(mode))
+	writeKV(&b, "addr", quote(s.Addr))
+	b.WriteString("# The token is the encryption key. It must be the same on both ends.\n")
+	writeKV(&b, "token", quote(s.Token))
+	writeKV(&b, "carrier", quote(s.Carrier))
+	if s.Preset != "" {
+		b.WriteString("\n# Tuning preset: balance, turbo or aggressive. It sets the number of KCP\n")
+		b.WriteString("# sessions, the speed mode and the window sizes; the pck_* keys below, when\n")
+		b.WriteString("# present, override it one by one.\n")
+		writeKV(&b, "preset", quote(s.Preset))
+	}
+	tune := s.PckConns != 0 || s.PckKCPMode != "" || s.PckKCPMTU != 0 || s.PckKCPSndWnd != 0 ||
+		s.PckKCPRcvWnd != 0 || s.PckKCPBlock != ""
+	if tune {
+		b.WriteString("\n# Fine-tuning, overriding the preset. KCP's windows are the speed limit on a\n")
+		b.WriteString("# long path: throughput is at most window x mtu / round-trip time. The cipher\n")
+		b.WriteString("# must be the same on both ends.\n")
+		if s.PckConns != 0 {
+			writeKV(&b, "pck_conns", fmt.Sprint(s.PckConns))
+		}
+		if s.PckKCPMode != "" {
+			writeKV(&b, "pck_kcp_mode", quote(s.PckKCPMode))
+		}
+		if s.PckKCPMTU != 0 {
+			writeKV(&b, "pck_kcp_mtu", fmt.Sprint(s.PckKCPMTU))
+		}
+		if s.PckKCPSndWnd != 0 {
+			writeKV(&b, "pck_kcp_sndwnd", fmt.Sprint(s.PckKCPSndWnd))
+		}
+		if s.PckKCPRcvWnd != 0 {
+			writeKV(&b, "pck_kcp_rcvwnd", fmt.Sprint(s.PckKCPRcvWnd))
+		}
+		if s.PckKCPBlock != "" {
+			writeKV(&b, "pck_kcp_block", quote(s.PckKCPBlock))
+		}
+	}
+	if s.SockBuf > 0 {
+		b.WriteString("\n# The capture ring, in bytes. Left out, the preset's is used.\n")
+		writeKV(&b, "sockbuf", fmt.Sprint(s.SockBuf))
+	}
+	writePckKeys(&b, s.Pck)
+	if s.PckRemoteTargets && s.Side == SideKharej {
+		b.WriteString("\n# Let the tunnel reach machines other than this server.\n")
+		writeKV(&b, "pck_remote_targets", "true")
+	}
+
+	if len(s.Ports) > 0 && s.Side != SideKharej {
+		b.WriteString("\n# Ports forwarded to the kharej server: \"443\" or \"2053=8443\" (listen here,\n")
+		b.WriteString("# dial 8443 there), or a range. The kharej side needs no list: each connection\n")
+		b.WriteString("# names the target it wants.\n")
+		writeKV(&b, "ports", tomlList(s.Ports))
+		writeKV(&b, "accept_udp", fmt.Sprint(s.AcceptUDP))
+		if s.MaxConnections > 0 || s.BandwidthMbps > 0 {
+			b.WriteString("\n# Caps on the forwarded ports only. Zero means unlimited.\n")
+			writeKV(&b, "max_connections", fmt.Sprint(s.MaxConnections))
+			writeKV(&b, "bandwidth_mbps", fmt.Sprint(s.BandwidthMbps))
+		}
+	}
+	return b.String()
+}
+
+// renderGRE writes a kernel GRE tunnel's file.
+//
+// A separate body rather than conditions through Render: most of what Render
+// writes — the token, the encapsulation, error correction, the carrier tables
+// — means nothing to a link the kernel encapsulates itself, and a key in the
+// file that nothing reads is one an operator later wonders about. The keys it
+// does share are written the same way, so the editor and the setup link read
+// both kinds alike.
+func (s L3Spec) renderGRE() string {
+	var b strings.Builder
+
+	b.WriteString("# Kernel GRE (layer 3) — a private network between the two servers.\n")
+	b.WriteString("# Created by the Backpack setup wizard.\n")
+	b.WriteString("#\n")
+	b.WriteString("# NOT ENCRYPTED. The kernel sends this tunnel as bare IP protocol 47, and\n")
+	b.WriteString("# whatever crosses it is in the clear unless it is encrypted itself. Both\n")
+	b.WriteString("# ends must name each other's real address, the same gre_key and each\n")
+	b.WriteString("# other's tunnel addresses.\n")
+	b.WriteString("#\n")
+	b.WriteString("# Needs root: it creates a GRE network interface.\n")
+	b.WriteString("\n[l3]\n")
+
+	mode := "dial"
+	if s.Side == SideKharej {
+		mode = "listen"
+	}
+	// mode is geography here, not direction: neither end of a GRE link dials
+	// or listens. It is what tells the screens which server this is.
+	writeKV(&b, "mode", quote(mode))
+	writeKV(&b, "carrier", quote(s.Carrier))
+	b.WriteString("# The other server's real address. A GRE link has no port.\n")
+	writeKV(&b, "addr", quote(s.Addr))
+	if s.GRELocal != "" {
+		writeKV(&b, "gre_local", quote(s.GRELocal))
+	}
+	// Written whatever it is, because the two ends must agree on it and the
+	// kernel allows one link per pair of addresses and key.
+	writeKV(&b, "gre_key", fmt.Sprint(s.GREKey))
+
+	b.WriteString("\n# The two ends of the private network. The other machine has these\n")
+	b.WriteString("# two the other way round.\n")
+	writeKV(&b, "iface", quote(s.Iface))
+	writeKV(&b, "local_ip", quote(s.LocalIP))
+	writeKV(&b, "peer_ip", quote(s.PeerIP))
+	if s.MTU > 0 {
+		writeKV(&b, "mtu", fmt.Sprint(s.MTU))
+	} else {
+		b.WriteString("# No mtu: it is worked out at start from the interface the route to the\n")
+		b.WriteString("# other server leaves by, less GRE's own 24 bytes (28 with a key; 44 and\n")
+		b.WriteString("# 48 over IPv6).\n")
+	}
+	if s.AutoMTU != nil && !*s.AutoMTU {
+		b.WriteString("\n# The tunnel normally measures what the path really carries once the\n")
+		b.WriteString("# other end answers, and lowers the mtu to fit. This turns that off.\n")
+		writeKV(&b, "auto_mtu", "false")
+	}
+	if s.Preset != "" {
+		// No txqueuelen and no qdisc: the engine leaves a GRE link the
+		// kernel's noqueue, so they would be keys nothing reads (see
+		// openGRELink in internal/tunnel/l3).
+		b.WriteString("\n# The tuning preset. The link itself keeps the kernel's own queueing:\n")
+		b.WriteString("# a GRE link never holds packets, the interface it leaves by does.\n")
+		writeKV(&b, "preset", quote(s.Preset))
+	}
+	if s.MSSClamp != 0 {
+		b.WriteString("\n# Caps the segment size of TCP crossing the tunnel. 0 derives it from\n")
+		b.WriteString("# the MTU, which is almost always right; -1 turns it off.\n")
+		writeKV(&b, "mss_clamp", fmt.Sprint(s.MSSClamp))
+	}
+
+	if len(s.Ports) > 0 {
+		b.WriteString("\n# Ports forwarded over the tunnel. Optional: without them the tunnel\n")
+		b.WriteString("# simply carries whatever is routed into the interface.\n")
+		writeKV(&b, "ports", tomlList(s.Ports))
+		writeKV(&b, "accept_udp", fmt.Sprint(s.AcceptUDP))
+		if s.MaxConnections > 0 || s.BandwidthMbps > 0 {
+			b.WriteString("\n# Caps on the forwarded ports only. Zero means unlimited.\n")
+			writeKV(&b, "max_connections", fmt.Sprint(s.MaxConnections))
+			writeKV(&b, "bandwidth_mbps", fmt.Sprint(s.BandwidthMbps))
+		}
+	}
+	return b.String()
+}
+
 // writeSpoofKeys emits the forged-source carrier's settings.
 //
-// Only what is set: a layer-3 tunnel over udp, pck or xdi has none of these,
+// Only what is set: a layer-3 tunnel over pck, sni or xdi has none of these,
 // and writing out two dozen zeroes would bury the handful of keys that describe
 // the tunnel. It mirrors TunnelSpec.writeSpoof, which does the same for a
 // reverse tunnel — the two are separate on purpose, so a change to one carrier
@@ -453,6 +545,23 @@ func tomlList(items []string) string {
 // management screens. The key is shown because both ends must agree on it and
 // a mismatch is otherwise invisible.
 func L3EncapLabel(l config.L3Config) string {
+	// PCK is not wrapped at all: it is KCP and smux streams inside crafted TCP
+	// segments, and "GRE + Noise" would name a layer it has none of.
+	if l.Carrier == l3.CarrierPck {
+		return "KCP over crafted TCP"
+	}
+	// The kernel's own GRE is exactly the thing the label below exists to be
+	// told apart from, and it says so in the same words.
+	if l3.KernelCarrier(l.Carrier) {
+		label := "Kernel GRE, unencrypted"
+		if l.Carrier == l3.CarrierIP6GRE {
+			label = "Kernel GRE over IPv6, unencrypted"
+		}
+		if l.GREKey != 0 {
+			label += fmt.Sprintf(" (key %d)", l.GREKey)
+		}
+		return label
+	}
 	// "+ Noise" is part of the name on every screen, because "GRE" on its own
 	// means the kernel's tunnel to anyone who has set one up — bare IP protocol
 	// 47, unencrypted, and blocked by a single firewall rule. This is the same

@@ -128,6 +128,10 @@ type pckConn struct {
 	// queueDrops counts segments the local transmit queue had no room for;
 	// see writeFailed.
 	queueDrops atomic.Uint64
+	// queueSent counts the segments it took; the drops are a share of the two.
+	queueSent atomic.Uint64
+	// linkDrops counts what a downed link cost; see writeFailed and rxLinkDown.
+	linkDrops atomic.Uint64
 }
 
 // The frame buffer pool both ReadFrom and WriteTo draw from lives in
@@ -594,6 +598,7 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 		if err := c.sendFrame(frame); err != nil {
 			return c.writeFailed(len(p), err)
 		}
+		c.queueSent.Add(1)
 		return len(p), nil
 	}
 
@@ -616,6 +621,7 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if err := c.txRaw.WriteTo(h, tcp, nil); err != nil {
 		return c.writeFailed(len(p), err)
 	}
+	c.queueSent.Add(1)
 	return len(p), nil
 }
 
@@ -632,18 +638,78 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 // the kharej had logged "no buffer space available".
 //
 // So it is reported the way UDP would have it: sent. KCP retransmits the
-// segment as it does any lost on the path. Every other error is returned.
+// segment as it does any lost on the path. Every other error is returned, bar
+// the one below.
+//
+// A link that is down is the same: the segment is lost, and the tunnel is told
+// nothing, so KCP keeps its session and retransmits once the link is back. The
+// send used to fail with ENETDOWN (a packet socket) or ENETUNREACH (the raw
+// socket, once the kernel dropped the connected route with the link), KCP read
+// that as the end of the session, and the reverse tunnel's control channel never
+// came back after the interface went down and up.
 func (c *pckConn) writeFailed(n int, err error) (int, error) {
 	if errors.Is(err, unix.ENOBUFS) || errors.Is(err, unix.EAGAIN) {
 		c.queueDrops.Add(1)
 		return n, nil
 	}
+	if pckLinkDownErr(err) {
+		c.linkDrops.Add(1)
+		return n, nil
+	}
 	return 0, err
 }
+
+// pckLinkDownErr reports an error that only means the path is down right now:
+// the interface is, or it has no route to the peer while it is.
+func pckLinkDownErr(err error) bool {
+	return errors.Is(err, unix.ENETDOWN) || errors.Is(err, unix.ENETUNREACH) || errors.Is(err, unix.EHOSTUNREACH)
+}
+
+// Bounds of the wait rxLinkDown puts between receive errors that repeat.
+const (
+	pckLinkWaitMin = 10 * time.Millisecond
+	pckLinkWaitMax = time.Second
+)
+
+// rxLinkDown decides whether a receive error is only the interface going down.
+//
+// An AF_PACKET socket bound to an interface reports ENETDOWN once, when that
+// interface goes down, and the kernel re-arms it by itself when the interface
+// comes back up. But kcp-go's listener ends its read loop on the first error
+// from the carrier, for good, so one NIC down/up left a reverse pck server deaf
+// to every client from then on, with its process still up. Such an error is
+// absorbed here, and the read goes on. The wait before the next read grows
+// with each repeat in a row (streak, the caller's), up to pckLinkWaitMax, so a
+// link that stays down costs next to no CPU. Anything else is the caller's.
+func (c *pckConn) rxLinkDown(err error, streak *int) bool {
+	if !errors.Is(err, unix.ENETDOWN) || c.closed.Load() {
+		return false
+	}
+	w := pckLinkWaitMin
+	for i := 0; i < *streak && w < pckLinkWaitMax; i++ {
+		w *= 2
+	}
+	if w > pckLinkWaitMax {
+		w = pckLinkWaitMax
+	}
+	*streak++
+	c.linkDrops.Add(1)
+	time.Sleep(w)
+	return true
+}
+
+// LinkDrops is how many segments, sent or received, a downed link cost: sends
+// that failed because the path was down, and receive errors absorbed.
+func (c *pckConn) LinkDrops() uint64 { return c.linkDrops.Load() }
 
 // QueueDrops is how many segments were dropped because the local transmit
 // queue was full.
 func (c *pckConn) QueueDrops() uint64 { return c.queueDrops.Load() }
+
+// TxStats is how many segments the local transmit queue refused and how many it
+// took, over the life of the connection. The path control reads the share the
+// first are of the two (see PathControl).
+func (c *pckConn) TxStats() (refused, sent uint64) { return c.queueDrops.Load(), c.queueSent.Load() }
 
 // sendFrame writes a finished Ethernet frame to the packet socket, taking the
 // descriptor from the runtime so it cannot be closed underneath the syscall.
@@ -683,6 +749,7 @@ func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	bp := pckFrameBuffers.Get().(*[]byte)
 	defer pckFrameBuffers.Put(bp)
 	buf := *bp
+	down := 0
 	for {
 		n, err := c.rx.Read(buf)
 		if err != nil {
@@ -690,6 +757,9 @@ func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				return 0, nil, os.ErrDeadlineExceeded
 			}
 			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			if c.rxLinkDown(err, &down) {
 				continue
 			}
 			return 0, nil, err

@@ -253,43 +253,11 @@ func openTUNTuned(name, localIP, peerIP string, mtu, mssClamp, txQueueLen int, q
 }
 
 // configureInterface gives the new interface its address and MTU and brings it
-// up.
-//
-// Two address forms are supported, because the two describe different things.
-// A prefix shorter than /32 — "10.10.0.1/30" — installs a subnet route, and
-// the peer is reached because it falls inside that subnet. A bare address with
-// an explicit peer installs a point-to-point route to exactly one host, which
-// is the tighter description of what this tunnel actually is.
+// up. The commands are interfaceSteps; see there for what each one is for.
 func configureInterface(name, localIP, peerIP string, mtu, txQueueLen int) error {
-	addrArgs := []string{"addr", "add", localIP, "dev", name}
-	if !strings.Contains(localIP, "/") {
-		if peerIP == "" {
-			return fmt.Errorf("l3: local_ip %q has no prefix length, so peer_ip is required", localIP)
-		}
-		addrArgs = []string{"addr", "add", localIP, "peer", peerIP, "dev", name}
-	}
-
-	steps := [][]string{
-		addrArgs,
-		{"link", "set", "dev", name, "mtu", strconv.Itoa(mtu)},
-		// The queue between the kernel and this process.
-		//
-		// A TUN device's default is 500 packets, which is sized for a device
-		// drained by hardware. Here it is drained by one goroutine that reads
-		// a packet, encapsulates it, encrypts it and writes it to a socket —
-		// several microseconds each, during which the kernel keeps queueing.
-		// Under a bulk transfer the queue fills and the kernel drops the
-		// overflow, which showed up in the field as ~2% of the acknowledgements
-		// on a 100 MB download being lost. TCP recovers, so the transfer still
-		// completes and verifies, but every one of those drops costs a
-		// retransmit that the link did not need.
-		//
-		// A deeper queue is the cheap half of the fix and the one with no
-		// downside worth the name: these are small packets, so even a full
-		// queue is a fraction of a megabyte, and latency is bounded by the
-		// drain rate rather than by the depth.
-		{"link", "set", "dev", name, "txqueuelen", strconv.Itoa(txQueueLen)},
-		{"link", "set", "dev", name, "up"},
+	steps, err := interfaceSteps(name, localIP, peerIP, mtu, txQueueLen)
+	if err != nil {
+		return err
 	}
 	for _, args := range steps {
 		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
@@ -297,28 +265,7 @@ func configureInterface(name, localIP, peerIP string, mtu, txQueueLen int) error
 				strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
-
-	// A /30 or wider gives the peer a subnet route already. A prefix that
-	// covers only this host does not, so the route has to be stated.
-	if peerIP != "" && needsExplicitPeerRoute(localIP) {
-		args := []string{"route", "replace", peerIP, "dev", name}
-		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("l3: ip %s: %w: %s",
-				strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-		}
-	}
 	return nil
-}
-
-// needsExplicitPeerRoute reports whether the local address covers only itself,
-// leaving the peer unreachable without a route of its own.
-func needsExplicitPeerRoute(localIP string) bool {
-	_, prefix, found := strings.Cut(localIP, "/")
-	if !found {
-		// The point-to-point form already installed the peer route.
-		return false
-	}
-	return prefix == "32" || prefix == "128"
 }
 
 // applyQdisc puts a queueing discipline on the interface.

@@ -45,7 +45,16 @@ type backendPool struct {
 	members []*backendMember
 	turn    atomic.Uint64 // rotates the choice among equally loaded members
 	now     func() time.Time
+
+	// dialFn replaces the dial when the tunnel makes the connections itself
+	// (pck, whose far side dials). Nil is net.Dialer.
+	dialFn DialFunc
 }
+
+// DialFunc makes a forwarded connection to addr. report, if not nil, is called
+// once with nil or an error when the far side's verdict on the target is known,
+// for a connection that returns before it is. See paqet.StatusPending.
+type DialFunc func(ctx context.Context, network, addr string, report func(error)) (net.Conn, error)
 
 type backendMember struct {
 	addr      string
@@ -92,6 +101,12 @@ func (p *backendPool) order() []*backendMember {
 // dial connects to the best member and counts the connection against it.
 // The caller must call done on the member it got once the connection ends.
 func (p *backendPool) dial(ctx context.Context, network string) (net.Conn, *backendMember, error) {
+	return p.dialReport(ctx, network, nil)
+}
+
+// dialReport is dial for a caller that wants a pending verdict reported; see
+// DialFunc.
+func (p *backendPool) dialReport(ctx context.Context, network string, report func(error)) (net.Conn, *backendMember, error) {
 	if len(p.members) == 0 {
 		return nil, nil, errors.New("no backends configured")
 	}
@@ -108,8 +123,16 @@ func (p *backendPool) dial(ctx context.Context, network string) (net.Conn, *back
 		// loads and pile onto the same member: 16 streams over two kharej came
 		// out at 1.8× one kharej instead of 2×, measured.
 		m.active.Add(1)
-		dialer := net.Dialer{Timeout: timeout}
-		conn, err := dialer.DialContext(ctx, network, m.addr)
+		var conn net.Conn
+		var err error
+		if p.dialFn != nil {
+			dctx, cancel := context.WithTimeout(ctx, timeout)
+			conn, err = p.dialFn(dctx, network, m.addr, report)
+			cancel()
+		} else {
+			dialer := net.Dialer{Timeout: timeout}
+			conn, err = dialer.DialContext(ctx, network, m.addr)
+		}
 		if err == nil {
 			m.downUntil.Store(0)
 			return conn, m, nil

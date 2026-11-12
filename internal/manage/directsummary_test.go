@@ -61,7 +61,7 @@ func TestReminderShowsTheToken(t *testing.T) {
 // one fact a line, and on Iran the setup link the kharej pastes.
 func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
 	cfg := l3Spec{
-		Name: "demo", Side: sideIran, Carrier: "pck", Encap: "gre", GREKey: 42,
+		Name: "demo", Side: sideIran, Carrier: "xdi", Encap: "gre", GREKey: 42,
 		Addr: "203.0.113.9:9000", Token: "the-token", Ports: []string{"3233"},
 		Iface: "bp0", LocalIP: "10.10.0.1/30", PeerIP: "10.10.0.2", MTU: 1400,
 		Preset: PresetBalance,
@@ -73,7 +73,7 @@ func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
 	out := capture(t, func() { summariseL3(cfg, link) })
 
 	for _, want := range []string{
-		"Direct PCK", "bp0", "10.10.0.1/30", "10.10.0.2",
+		"Direct xDi", "bp0", "10.10.0.1/30", "10.10.0.2",
 		"203.0.113.9:9000", "3233", "GRE Key", "42", "Balance",
 		"Setup Link (sudo backpack → Setup Kharej → Direct → Setup Link):",
 		"Install BackPack And Set Up This Tunnel (Kharej Without BackPack, As Root):",
@@ -94,14 +94,6 @@ func TestL3SummaryShowsWhatWasAsked(t *testing.T) {
 	if form.Token != "the-token" || hostOnly(form.LocalIP) != "10.10.0.2" || form.PeerIP != "10.10.0.1" ||
 		form.TunnelPort != "9000" || form.GREKey != 42 {
 		t.Fatalf("the summary's link builds the wrong kharej: %+v", form)
-	}
-
-	// A udp tunnel over several sockets names the kharej ports it needs open.
-	udp := cfg
-	udp.Carrier, udp.Paths = "udp", 4
-	if out := capture(t, func() { summariseL3(udp, "") }); !strings.Contains(out, "Direct UDP") ||
-		!strings.Contains(out, "9000-9003") {
-		t.Fatalf("a four-socket udp tunnel does not show its port range:\n%s", out)
 	}
 
 	// No ports is a plain TUN, and says so.
