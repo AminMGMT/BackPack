@@ -149,7 +149,7 @@ jobs:
         # can repoint that tag can read the one secret the whole update
         # verification design rests on. Update deliberately, with the tag the
         # SHA belongs to written beside it.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           # Explicit, because a manual run on a branch has no tag in its ref.
           # For a pushed tag this is the same tag, so nothing changes there.
