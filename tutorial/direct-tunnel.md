@@ -1,4 +1,4 @@
-# Setting up a direct tunnel (stream transports)
+# Direct tunnel (stream engine) — removed in v2.0.0
 
 > **This engine was removed in v2.0.0.** The layer-4 `[direct]` tunnel — Iran
 > dialling out over `tcp`, `stealth`, `ws` or `wss` with one smux session — no

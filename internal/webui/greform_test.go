@@ -177,7 +177,11 @@ func TestTheTrendBadgeDropsItsNumberOnATinyBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(js), "TREND_FLOOR") || strings.Count(string(js), "trendText(st)") < 2 {
+	lib, err := fs.ReadFile(panelRoot, "js/lib/trend.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(lib), "TREND_FLOOR") || strings.Count(string(js), "trendText(st,") < 2 {
 		t.Error("both trend renderers must go through trendText, which applies the baseline floor")
 	}
 }

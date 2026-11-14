@@ -172,7 +172,7 @@ BackPack намеренно разделяет **руководства по н�
 
 * [Forwarded UDP](tutorial/udp-forwarding.md) — проброс UDP
 * [Behind X-UI / 3x-ui / Marzban](tutorial/behind-a-panel.md) — за панелью X-UI / 3x-ui / Marzban
-* [Direct tunnel](tutorial/direct-tunnel.md) — прямой туннель
+* [Direct tunnel (stream engine) — removed in v2.0.0](tutorial/direct-tunnel.md) — прямой туннель (потоковый движок), удалён в v2.0.0
 * [IP Spoofing](tutorial/ip-spoofing.md) — подмена IP-адреса
 
 ---

@@ -290,6 +290,24 @@ All notable changes to Backpack are documented here.
   relay has never carried, so they read 0% before and after.
   [TCP + PCK](docs/tcp-pck.md#on-a-busy-or-lossy-link).
 
+- **The reverse `kcp` and `xdi` transports get the same send-side control.**
+  They share the session code with reverse `pck`, and ran without the
+  controller, so a pool of eight sessions with KCP's congestion control off kept
+  the bottleneck queue full under load. On a new soak path (100 Mbit/s each way,
+  30 ± 10 ms, 1000-packet queue; Turbo as the wizard writes it; four bulk
+  streams each way, 200 new connections a second, UDP and a latency probe; 300 s
+  single runs), without → with, down / up Mbit/s, new connections made, probe
+  median: kcp at no loss 52.9 / 54.5, 31.5%, 766 ms → 68.2 / 61.4, 100%, 80 ms;
+  at 3% 52.4 / 54.2, 38%, 244 ms → 69.0 / 58.3, 100%, 77 ms; at 10% 53.6 / 54.2,
+  35%, 410 ms → 67.1 / 52.8, 100%, 80 ms; xdi alike (51.2 / 53.6, 31%, 729 ms →
+  67.7 / 66.0, 100%, 79 ms at no loss; 52.5 / 53.9 → 67.2 / 58.7 at 10%). On an
+  unshaped 25 ms path with 0.5% loss kcp carried 144.6 / 133.5 → 554.3 / 382.1
+  and xdi 142.0 / 79.8 → 418.3 / 318.8, the probe there 30 → 65-70 ms with the
+  link full. CPU was lower on the shaped path (130-147% → 77-100% of a core per
+  end). UDP and ICMP sockets do not report a full transmit queue, so for them
+  the window follows the delay alone. Send side only; nothing on the wire
+  changes, and an end without it works as before.
+
 - **Release builds link libpcap, statically.** PCK's capture needs it, so the
   release binaries are built with cgo and libpcap, which is linked in rather than
   installed: nothing changes on the server. A binary built without it runs
@@ -350,6 +368,44 @@ All notable changes to Backpack are documented here.
   shows only the few keys still read from that table.
 
 ### Fixed
+
+- **Editing a direct tunnel keeps the comments in its file.** The menu's Edit and
+  the panel's both wrote the tunnel's file again from scratch, so the header and
+  every note a person had added were lost. They now patch the file as it is: a
+  changed value is replaced in place (its trailing comment stays), a removed
+  key's line goes, a new key is added after the key that precedes it, and
+  unknown keys stay where they were. The menu's Edit also keeps unknown keys now,
+  as the panel's already did. A file with inline tables, multi-line strings or
+  arrays, or quoted keys is rewritten whole, as before.
+
+- **The panel's trend badge never showed a percentage on a live card.** The
+  64 KiB floor that keeps a tiny baseline from printing "1486.3%" was written
+  for byte totals, but the Live and 24-hour windows draw rates (bytes per
+  second), so the first sample had to be 64 KiB/s — 512 kbit/s — before a
+  number appeared, and a tunnel that moved 8 MB over twelve minutes never got
+  there. The floor is now per unit: 64 KiB for the 7- and 30-day totals, 1 KiB/s
+  for the rate windows. The arithmetic moved to `js/lib/trend.js` and has tests.
+
+- **Connection Test said nothing about an old kharej.** Next to a kharej on
+  v1.9.0, everything passed but direct PCK and GRE, which read only "never
+  carried traffic". Both are new in v2.0.0 (PCK's wire changed, GRE did not
+  exist), and nothing on the wire says which release the kharej runs, so those
+  two rows now add that a kharej older than v2.0.0 has to be updated. Checked
+  both ways in two namespaces: v2.0.0 Iran with a v1.9.0 kharej, and v1.9.0 Iran
+  with a v2.0.0 kharej; every other tunnel passed in both.
+
+- **A pck carrier never came back after its network interface was deleted and
+  created again** — a veth, ppp or wg device recreated, a NIC replugged. Its
+  sockets stay bound to the old interface index, which no longer exists: the
+  receive socket never heard another packet, and every send failed with ENXIO,
+  which KCP took for the end of its session. The carrier (reverse `pck`, and the
+  `sni` direct carrier) now notices the interface is gone, reopens its sockets on
+  the interface that comes back under the same name, and carries on without a
+  restart; KCP sees only the packets lost in between. It waits for the interface
+  as long as it takes, with no busy loop, and logs once when it is gone and once
+  when it is back. The new interface must have the same address. A new test,
+  `TestACarrierReopensOnARecreatedInterface`, deletes and recreates a veth under
+  a live carrier.
 
 - **A pck tunnel never came back after its network interface went down and up.**
   The packet socket a pck carrier reads from reports ENETDOWN once when its

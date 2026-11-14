@@ -841,11 +841,12 @@ func EditDirectSettings(name string, e DirectEdit) error {
 // it: raw is the tunnel's file as it is now.
 //
 // It is rendered, not re-encoded. The CLI's Edit writes through directSpecFrom
-// and the renderer (saveL3), so a tunnel edited from either place ends up as the
-// same file: the header, the carrier's own comments, the key order, and only the
-// keys that carrier reads. Encoding a decoded document instead threw all of that
-// away and wrote every zero-valued field of the struct — a token on a GRE link,
-// a qdisc and a txqueuelen it never reads.
+// and the renderer (saveL3) and then the same carryOver, so a tunnel edited from
+// either place ends up as the same file: only the keys that carrier reads, and
+// the person's own comments, header and key order kept (see preserveComments).
+// Encoding a decoded document instead threw all of that away and wrote every
+// zero-valued field of the struct — a token on a GRE link, a qdisc and a
+// txqueuelen it never reads.
 //
 // What the renderer cannot hold is carried over from raw by keptForeignKeys, so
 // the one thing re-rendering costs — a key somebody added by hand that this
@@ -860,8 +861,7 @@ func editedDirectBody(name, raw string, e DirectEdit) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	body := directSpecFrom(name, l).Render()
-	body, err = withForeignKeys(body, raw, md)
+	body, err := carryOver(directSpecFrom(name, l).Render(), raw, md)
 	if err != nil {
 		return "", err
 	}

@@ -19,7 +19,7 @@ blocked one way — turn it round.
 | Tutorial | Use it when | Needs |
 |---|---|---|
 | **[Direct tunnel](../docs/l3-direct-tunnel.md)** | the reverse tunnel will not connect; Iran dials out instead | Linux, root, a port open on kharej |
-| **[Direct, stream transports](direct-tunnel.md)** | you still have a `[direct]` tunnel — v2.0.0 removed that engine; this page says how to rebuild it | Linux, root, a port open on kharej |
+| **[Direct tunnel (stream engine) — removed in v2.0.0](direct-tunnel.md)** | you still have a `[direct]` tunnel — v2.0.0 removed that engine; this page says how to rebuild it | Linux, root, a port open on kharej |
 
 ## The transports
 

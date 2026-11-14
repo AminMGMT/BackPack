@@ -726,3 +726,18 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 		t.Fatal("cancelled helper probe retained its cover connection")
 	}
 }
+
+// A direct PCK or GRE row that never came up says what an older kharej would
+// mean: both need v2.0.0 on both servers, and nothing else in the table shows it.
+func TestADownPckOrGRERowNamesTheReleaseItNeeds(t *testing.T) {
+	for _, tr := range []string{"pck", "gre"} {
+		if n := ctNeedsV2Note("direct", tr); !strings.Contains(n, "v2.0.0") {
+			t.Errorf("direct %s: %q", tr, n)
+		}
+	}
+	for _, c := range [][2]string{{"reverse", "pck"}, {"direct", "xdi"}, {"direct", "sni"}} {
+		if n := ctNeedsV2Note(c[0], c[1]); n != "" {
+			t.Errorf("%s %s should add nothing, got %q", c[0], c[1], n)
+		}
+	}
+}

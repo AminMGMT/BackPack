@@ -114,10 +114,11 @@ func (c *KcpConfig) settings() network.KCPSettings {
 			GatewayMAC: c.PckGatewayMAC,
 			Flags:      flags,
 		}
-		// Only pck gets the path control: kcp and xdi share the session code
-		// and keep the preset's behaviour. See network.PathControl.
-		network.EnablePathControl(&s)
 	}
+	// Every carrier of the KCP family gets the path control: pck since
+	// v2.0.0's first round, kcp and xdi since the soak runs that measured them
+	// with and without it (see network.PathControl).
+	network.EnablePathControl(&s)
 	return s
 }
 

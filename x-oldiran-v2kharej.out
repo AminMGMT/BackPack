@@ -1,0 +1,2 @@
+env: './ct-x.sh': No such file or directory
+env: use -[v]S to pass options in shebang lines

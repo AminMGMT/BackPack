@@ -3,6 +3,7 @@ package network
 import (
 	"errors"
 	"net"
+	"os"
 	"sync"
 	"unsafe"
 
@@ -41,7 +42,7 @@ type pckRecvBatch struct {
 // froms[i] describing it. It blocks until at least one segment is this
 // tunnel's, and never waits for a second.
 func (c *pckConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, error) {
-	if c.rxConn == nil {
+	if c.link.Load().rxConn == nil {
 		return 0, errPckNoBatch
 	}
 	// The package has a two-argument min of its own, which hides the builtin.
@@ -80,7 +81,8 @@ func (c *pckConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, 
 
 		var got int
 		var serr error
-		err := c.rxConn.Read(func(fd uintptr) bool {
+		l := c.link.Load()
+		err := l.rxConn.Read(func(fd uintptr) bool {
 			r, _, e := unix.Syscall6(unix.SYS_RECVMMSG, fd,
 				uintptr(unsafe.Pointer(&msgs[0])), uintptr(n), unix.MSG_DONTWAIT, 0, 0)
 			if e == unix.EAGAIN {
@@ -94,10 +96,13 @@ func (c *pckConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, 
 			return true
 		})
 		if err != nil {
+			if c.link.Load() != l && !c.closed.Load() && !errors.Is(err, os.ErrDeadlineExceeded) {
+				continue // relink closed the old socket under this read
+			}
 			return 0, err // closed, or a read deadline
 		}
 		if serr != nil {
-			if errors.Is(serr, unix.EINTR) || c.rxLinkDown(serr, &down) {
+			if errors.Is(serr, unix.EINTR) || c.rxLinkDown(l, serr, &down) {
 				continue
 			}
 			return 0, serr
@@ -108,7 +113,7 @@ func (c *pckConn) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, 
 		// payload down never overwrites a frame still to be looked at.
 		out := 0
 		for i := 0; i < got; i++ {
-			payload, addr, ok := c.accept(bufs[i][:msgs[i].Len])
+			payload, addr, ok := c.accept(l, bufs[i][:msgs[i].Len])
 			if !ok {
 				continue
 			}
@@ -147,7 +152,8 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	if c.closed.Load() {
 		return 0, net.ErrClosed
 	}
-	if c.txConn == nil || c.txAddr == nil {
+	l := c.link.Load()
+	if l.txConn == nil || l.txAddr == nil {
 		return 0, errPckNoBatch
 	}
 	dst, ok := toUDPAddr(to)
@@ -172,9 +178,9 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 		b.name = unix.RawSockaddrLinklayer{
 			Family:   unix.AF_PACKET,
 			Protocol: htons(unix.ETH_P_IP),
-			Ifindex:  int32(c.txAddr.Ifindex),
-			Halen:    c.txAddr.Halen,
-			Addr:     c.txAddr.Addr,
+			Ifindex:  int32(l.txAddr.Ifindex),
+			Halen:    l.txAddr.Halen,
+			Addr:     l.txAddr.Addr,
 		}
 	}
 
@@ -198,8 +204,8 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 			b.frames[i] = make([]byte, need)
 		}
 		frame := assemblePckFrame(b.frames[i][:cap(b.frames[i])], pckFrameParams{
-			SrcMAC: c.egress.SrcMAC, DstMAC: c.egress.NextHop,
-			SrcIP: c.egress.LocalIP, DstIP: dstIP,
+			SrcMAC: l.egress.SrcMAC, DstMAC: l.egress.NextHop,
+			SrcIP: l.egress.LocalIP, DstIP: dstIP,
 			SrcPort: c.local, DstPort: uint16(dst.Port),
 			Seq: seq, Ack: ack,
 			Flags: c.flags[int(c.flagRot.Add(1)-1)%len(c.flags)],
@@ -222,7 +228,7 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	for sent < n {
 		var got int
 		var serr error
-		err := c.txConn.Write(func(fd uintptr) bool {
+		err := l.txConn.Write(func(fd uintptr) bool {
 			r, _, e := unix.Syscall6(unix.SYS_SENDMMSG, fd,
 				uintptr(unsafe.Pointer(&b.msgs[sent])), uintptr(n-sent), unix.MSG_DONTWAIT, 0, 0)
 			if e == unix.EAGAIN {
@@ -236,15 +242,22 @@ func (c *pckConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 			return true
 		})
 		if err != nil {
+			if c.link.Load() != l && !c.closed.Load() {
+				c.linkDrops.Add(uint64(n - sent)) // relink closed the socket: lost
+				return n, nil
+			}
 			return sent, err
 		}
 		if serr != nil {
 			if errors.Is(serr, unix.EINTR) {
 				continue
 			}
-			if pckLinkDownErr(serr) {
+			if pckLinkDownErr(serr) || pckLinkGoneErr(serr) {
 				// The path is down: the rest are lost, as on the single-send path.
 				c.linkDrops.Add(uint64(n - sent))
+				if pckLinkGoneErr(serr) {
+					c.relinkAsync(l)
+				}
 				return n, nil
 			}
 			return sent, serr

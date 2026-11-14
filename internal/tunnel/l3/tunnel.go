@@ -385,6 +385,11 @@ func (t *Tunnel) Run(ctx context.Context) error {
 			t.log.Infof("%s", note)
 		}
 	}
+	// And somewhere to say what it does on its own later, such as reopening on a
+	// recreated interface.
+	if l, ok := carrier.(interface{ SetLogf(func(string, ...any)) }); ok {
+		l.SetLogf(t.log.Infof)
+	}
 	if w, ok := carrier.(interface{ Warning() string }); ok {
 		if warning := w.Warning(); warning != "" {
 			t.log.Warnf("%s", warning)

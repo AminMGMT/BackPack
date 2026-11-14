@@ -287,8 +287,8 @@ note = "kept"
 	if other, _ := doc["other"].(map[string]any); other["note"] != "kept" {
 		t.Errorf("another table was lost:\n%s", body)
 	}
-	if !strings.Contains(body, "# Full IP tunnel (layer 3)") {
-		t.Errorf("the setup header is gone:\n%s", body)
+	if !strings.HasPrefix(body, "# Hand written.\n") {
+		t.Errorf("the file's own header is gone:\n%s", body)
 	}
 }
 

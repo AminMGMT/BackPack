@@ -48,9 +48,9 @@ tunnel. `L3Config.Enabled()` is one trimmed string, and it is the whole gate.
 ### The reverse tunnel — `[server]` / `[client]`
 
 The Iran side listens and exposes ports; the kharej side dials out. A control
-channel plus a pool of data connections. Ten transports: `tcp`, `tcpmux`,
-`stealth`, `ws`, `wss`, `wsmux`, `wssmux`, `kcp`, `quic`, `udp`, plus `xdi` and
-`pck` which ride the KCP stack over raw and packet sockets.
+channel plus a pool of data connections. Twelve transports: `tcp`, `tcpmux`,
+`stealth`, `ws`, `wss`, `wsmux`, `wssmux`, `kcp`, `quic`, `udp`, `xdi` and
+`pck`. The last two ride the KCP stack over raw and packet sockets.
 
 - `internal/server` / `internal/client` — pick the transport, build its config
 - `internal/server/transport` / `internal/client/transport` — the transports
@@ -74,7 +74,7 @@ them has to get the same is shared, on each side:
 
 A transport supplies adapters to these — its socket options, what a queued user
 asks for, how long its goodbye needs to leave — and nothing else. A fix to one
-of them is a fix to all seven transports; the reason for the split, and what it
+of them is a fix to all twelve transports; the reason for the split, and what it
 replaced, is [ADR 0001](adr/0001-reverse-transport-generations.md). A generation
 outlives the kharej it serves: a re-dialing kharej is seated in place and no
 port is re-bound — [ADR 0005](adr/0005-a-generation-outlives-its-clients.md).
@@ -245,7 +245,7 @@ heap) — و هر پروسهٔ دیگری همان فایل را می‌خوان
 **داخل یک ترنسپورتِ معکوس** فقط چیزی است که واقعاً فرق می‌کند. بقیه — چرخهٔ
 **نسل‌ها** (`lifecycle.go`: یک کانال کنترل و هر چیزی که به آن خدمت می‌کند، روی یک
 context)، پورت‌های فوروارد (`forward.go`)، حلقهٔ کانال کنترل (`controlloop.go`) و
-شکلِ سیگنال‌ها روی سیم (`internal/controlwire`) — یک بار نوشته شده و هر هفت
+شکلِ سیگنال‌ها روی سیم (`internal/controlwire`) — یک بار نوشته شده و هر دوازده
 ترنسپورت از همان استفاده می‌کنند. دلیلش در [ADR 0001](adr/0001-reverse-transport-generations.md) است.
 
 **از کجا شروع به خواندن کنی:** تونل بالا نمی‌آید → اول `backpack check -c <file>`، بعد `cmd/cmd.go` و بعد ترنسپورت

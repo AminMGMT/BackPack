@@ -71,7 +71,7 @@ func Carriers() []string {
 // tunnel built on a removed one can be moved onto by changing its carrier
 // alone. A GRE link names both servers' real addresses and has no port and no
 // token, so a tunnel becomes one by being set up again, not by an edit.
-func DatagramCarriers() []string { return []string{CarrierPck, CarrierXdi, CarrierSNI, CarrierSpoof} }
+func DatagramCarriers() []string { return []string{CarrierXdi, CarrierPck, CarrierSNI, CarrierSpoof} }
 
 // RemovedCarrier reports whether a carrier name — lower-cased and trimmed, as
 // Validate leaves it — is one Backpack v2.0.0 took out. An empty name counts:
@@ -104,9 +104,10 @@ func RemovedCarrierError(name string) error {
 		was = "no carrier, which meant udp,"
 	}
 	return fmt.Errorf("l3: this tunnel names %s and the udp and quic carriers were removed in "+
-		"Backpack v2.0.0. Choose one of %s instead, the same on both servers: "+
+		"Backpack v2.0.0. Choose one of %s instead (pck carries ports only; xdi, sni and spoof "+
+		"keep the TUN), the same on both servers: "+
 		"sudo backpack → Manage → Manage Tunnels → the tunnel → Edit → Carrier, or Edit on "+
-		"the tunnel in the web panel, or set carrier = \"pck\" in its [l3] table by hand",
+		"the tunnel in the web panel, or set carrier = \"xdi\" in its [l3] table by hand",
 		was, strings.Join(DatagramCarriers(), ", "))
 }
 

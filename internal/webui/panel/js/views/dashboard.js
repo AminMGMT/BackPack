@@ -15,6 +15,7 @@ import * as api from '../api.js';
 import { toast, oops, onFix } from '../ui/toast.js';
 import { confirmBox } from '../ui/confirm.js';
 import { go } from '../router.js';
+import { statsOf, trendText, NEUTRAL_PCT } from '../lib/trend.js';
 
 /* ---- the rate chart behind a card ---------------------------------------- */
 /* The preview drew a fixed path; this is the same shape from real samples. */
@@ -118,19 +119,6 @@ function periodReady(t) {
   return !!(got && got.points.length >= 2);
 }
 
-function statsOf(vals) {
-  if (!vals.length) return null;
-  const first = vals[0], last = vals[vals.length - 1];
-  const prev = vals.length > 1 ? vals[vals.length - 2] : first;
-  const sum = vals.reduce((a, b) => a + b, 0);
-  const net = last - first;
-  return {
-    net, step: last - prev, base: Math.abs(first),
-    pct: first ? (net / first) * 100 : 0,
-    peak: Math.max(...vals), low: Math.min(...vals), avg: sum / vals.length,
-  };
-}
-
 /* curve: an area under a line. bars: one column per sample.
    Both are drawn to the same box so switching does not move anything. */
 function chartSVG(series, view, id) {
@@ -187,22 +175,12 @@ const TREND = {
 };
 const CHEV = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
 
-/* Under this, the window is flat. Matches the reference design's own dead
-   zone: without one, a card twitches between up and down forever. */
-const NEUTRAL_PCT = 0.5;
-
-/* A percentage needs a baseline worth dividing by. Under 64 KiB (the series is
-   bytes) 0.01 -> 0.15 MB reads "1486.3%", which is arithmetic, not news; below
-   the floor the badge keeps its arrow and drops the number. */
-const TREND_FLOOR = 64 * 1024;
-const trendText = st => st.base < TREND_FLOOR ? '' : Math.abs(st.pct).toFixed(1) + '%';
-
-function trendHTML(st) {
+function trendHTML(st, unit) {
   if (!st) return '';
   const flat = Math.abs(st.pct) < NEUTRAL_PCT;
   const icon = flat ? TREND.flat : st.net >= 0 ? TREND.up : TREND.down;
   return `<span class="trend" title="Change across the window drawn">` +
-         `${icon}${trendText(st)}</span>`;
+         `${icon}${trendText(st, unit)}</span>`;
 }
 
 const VIEW = {
@@ -263,7 +241,7 @@ ${field(t, idx)}
       <button data-view="bars"  class="${view === 'bars'  ? 'on' : ''}" title="Bars">${VIEW.bars}</button>
     </div>` : ''}
     <span class="sp2"></span>
-    ${trendHTML(st)}
+    ${trendHTML(st, per.unit)}
     <span class="stt"><span class="${dotCls}"></span>${label}</span>
   </div>
 
@@ -385,7 +363,7 @@ function paintTrend(el, t) {
   if (tr) {
     const flat = Math.abs(st.pct) < NEUTRAL_PCT;
     tr.innerHTML = (flat ? TREND.flat : st.net >= 0 ? TREND.up : TREND.down) +
-                   trendText(st);
+                   trendText(st, periodOf(t.name).unit);
   }
   const lbl = el.querySelector('[data-per-open]');
   if (lbl) {

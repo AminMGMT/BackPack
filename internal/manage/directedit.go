@@ -3,6 +3,7 @@ package manage
 import (
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -21,8 +22,8 @@ import (
 // offered with a warning to change it there too.
 //
 // Edits go through the parsed config and are written back through the same
-// renderer the wizard uses, so an edited file looks exactly like a fresh one
-// and keeps its comments.
+// renderer the wizard uses; what that render says is then patched into the old
+// file (carryOver), so the person's comments, header and foreign keys stay.
 
 // editDirectMenu is the per-tunnel editor for a direct tunnel.
 func editDirectMenu(t Tunnel) {
@@ -375,6 +376,16 @@ func validateRendered(body string) error {
 // not decode would leave a tunnel that cannot start and an operator with no
 // idea why, and the cost of checking is one parse of a file we just built.
 func applyEdit(t Tunnel, body string) {
+	// Into the file as it is now, so its comments survive. A file that cannot be
+	// read or parsed is simply replaced, as before.
+	if raw, err := os.ReadFile(app.ConfigPath(t.Name)); err == nil {
+		var old config.Config
+		if md, err := toml.Decode(string(raw), &old); err == nil {
+			if merged, err := carryOver(body, string(raw), md); err == nil {
+				body = merged
+			}
+		}
+	}
 	var check config.Config
 	if _, err := toml.Decode(body, &check); err != nil {
 		tui.Error("The edit does not parse: " + err.Error())

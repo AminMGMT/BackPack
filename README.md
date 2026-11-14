@@ -170,7 +170,7 @@ The `tutorial/` directory explains how to actually build a tunnel, step by step,
 
 * [Forwarded UDP](tutorial/udp-forwarding.md)
 * [Behind X-UI / 3x-ui / Marzban](tutorial/behind-a-panel.md)
-* [Direct tunnel](tutorial/direct-tunnel.md)
+* [Direct tunnel (stream engine) — removed in v2.0.0](tutorial/direct-tunnel.md)
 * [IP Spoofing](tutorial/ip-spoofing.md)
 
 ---

@@ -21,8 +21,14 @@ written down, so a release made in a hurry is the same release.
       agree. The installer refuses to run if they do not, and says so.
 - [ ] The full suite is green, with `-race`, and so are `staticcheck` and
       `govulncheck`.
-- [ ] The compatibility job passed: the previous release talks to this one in
-      both directions, over every reverse transport and under concurrent load.
+- [ ] The compatibility test ran and passed: the previous release talks to this
+      one in both directions, over every reverse transport and under concurrent
+      load. In the `Wire compatibility` job's log, confirm
+      `--- PASS: TestThePreviousReleaseStillTalksToThisOne` appears. The job
+      can show green while that test never ran: when the repository has no
+      previous tag, its comparison step is skipped (the log says
+      `no previous tag to compare against; skipping`). A skipped step is not a
+      pass, so a green check alone does not tick this box.
 - [ ] The l3 carriers ran on a real TUN, on a machine that allows unprivileged
       user namespaces (CI does not), with the previous release at one end:
       ```

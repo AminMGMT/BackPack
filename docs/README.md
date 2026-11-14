@@ -12,7 +12,7 @@ Reference pages: what each part of Backpack **is**, and every setting it has.
 - [Server layout (file locations)](server-layout.md)
 
 ### Tunnel direction
-- [Direct tunnel — stream transports](direct-tunnel.md) — the old `[direct]` engine, removed in v2.0.0: what happens to an existing file and how to rebuild it
+- [Direct tunnel (stream engine) — removed in v2.0.0](direct-tunnel.md) — the old `[direct]` engine, removed in v2.0.0: what happens to an existing file and how to rebuild it
 - [Direct tunnel](l3-direct-tunnel.md) — **what the wizard builds**: a private network between the two
   servers, carrying whole IP packets (GRE/IPIP over a TUN device)
 

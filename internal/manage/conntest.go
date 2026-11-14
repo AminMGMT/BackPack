@@ -357,6 +357,23 @@ const (
 	ctSkipped  = "skipped"
 )
 
+// ctNeedsV2Note is what a direct PCK or GRE row that never came up adds: both
+// are new in v2.0.0 (PCK's wire changed then, GRE did not exist), and a kharej
+// on an older release takes part in everything else, so these two rows are all
+// that shows it. Nothing on the wire says which release the kharej runs.
+func ctNeedsV2Note(kind, tr string) string {
+	if kind != "direct" {
+		return ""
+	}
+	switch tr {
+	case "pck":
+		return " — if the kharej runs a release before v2.0.0, update it: the PCK wire changed in v2.0.0"
+	case "gre":
+		return " — if the kharej runs a release before v2.0.0, update it: GRE is new in v2.0.0"
+	}
+	return ""
+}
+
 // connTestCase is one tunnel under test, as the Iran side holds it.
 type connTestCase struct {
 	kind, tr   string
@@ -1338,6 +1355,7 @@ func ctProbe(ctx context.Context, c *connTestCase, l3Echo int, report func(ConnT
 				r.Detail += " — the forged source was dropped: by the provider on the way out, " +
 					"or by a strict rp_filter on the kharej"
 			}
+			r.Detail += ctNeedsV2Note(c.kind, c.tr)
 			say("never came up")
 			return r
 		}

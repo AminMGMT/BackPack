@@ -73,12 +73,18 @@ type PcapCarrier struct {
 	Token string
 }
 
-// pckConn is one tunnel's carrier.
-type pckConn struct {
-	rx      *os.File // AF_PACKET, wrapped so the runtime poller drives reads
-	rxConn  syscall.RawConn
-	rxBatch pckRecvBatch // recvmmsg's arrays, reused; see pckbatch_linux.go
-	txBatch pckSendBatch // sendmmsg's, likewise
+// pckLink is everything a carrier holds that belongs to one instance of its
+// network interface: the route it found, and the sockets bound to that
+// interface's index. When the interface is deleted and comes back — a veth or
+// ppp/wg device recreated, a NIC hot-replugged — it has a new index and every
+// one of these is dead for good, so the carrier opens a new pckLink and swaps it
+// in whole (see relink). Readers and writers load it once per call.
+type pckLink struct {
+	egress *pckEgress
+
+	rx     *os.File // AF_PACKET, wrapped so the runtime poller drives reads
+	rxConn syscall.RawConn
+
 	txRaw   *ipv4.RawConn
 	txRawPC net.PacketConn
 	txFile  *os.File // AF_PACKET send, when the link has an L2 header we can build
@@ -94,8 +100,44 @@ type pckConn struct {
 	// do with the work being done.
 	txConn syscall.RawConn
 	txAddr *unix.SockaddrLinklayer
+}
 
-	egress *pckEgress
+// close closes every socket of the link.
+func (l *pckLink) close() {
+	if l.rx != nil {
+		_ = l.rx.Close()
+	}
+	if l.txFile != nil {
+		_ = l.txFile.Close()
+	}
+	if l.txRaw != nil {
+		_ = l.txRaw.Close()
+	}
+	if l.txRawPC != nil {
+		_ = l.txRawPC.Close()
+	}
+}
+
+// pckConn is one tunnel's carrier.
+type pckConn struct {
+	link    atomic.Pointer[pckLink]
+	rxBatch pckRecvBatch // recvmmsg's arrays, reused; see pckbatch_linux.go
+	txBatch pckSendBatch // sendmmsg's, likewise
+
+	// What the egress was resolved from, so relink can resolve it again.
+	toward     net.IP
+	ifaceName  string // as configured; "" means the route decides
+	gatewayMAC string
+	// localIP is the address the port reservation and the guard rules name; a
+	// link that comes back with another one cannot be swapped in.
+	localIP net.IP
+
+	relinkMu  sync.Mutex
+	relinking atomic.Bool
+	relinks   atomic.Uint64
+	rdeadline atomic.Pointer[time.Time] // the last read deadline, for a new rx
+	logf      atomic.Pointer[func(string, ...any)]
+
 	port   uint16 // the port our segments are addressed TO on the peer
 	local  uint16 // the port our segments come FROM, and that we accept
 	server bool
@@ -209,13 +251,16 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 	}
 
 	c := &pckConn{
-		egress:  egress,
-		port:    carrier.Port,
-		server:  server,
-		flags:   flags,
-		tsBase:  rand.Uint32(),
-		tsStart: time.Now(),
-		peers:   make(map[pckPeerKey]*pckPeer),
+		toward:     toward,
+		ifaceName:  carrier.Interface,
+		gatewayMAC: carrier.GatewayMAC,
+		localIP:    egress.LocalIP,
+		port:       carrier.Port,
+		server:     server,
+		flags:      flags,
+		tsBase:     rand.Uint32(),
+		tsStart:    time.Now(),
+		peers:      make(map[pckPeerKey]*pckPeer),
 
 		tunnelID: pckTunnelID(carrier.Token),
 	}
@@ -267,15 +312,12 @@ func newPckConn(server bool, listenPort uint16, carrier PcapCarrier) (net.Packet
 		}
 	}
 
-	if err := c.openRx(); err != nil {
+	link, err := c.openLink(egress)
+	if err != nil {
 		release()
 		return nil, err
 	}
-	if err := c.openTx(); err != nil {
-		c.rx.Close()
-		release()
-		return nil, err
-	}
+	c.link.Store(link)
 	// One rule set covers the whole range and is shared by every carrier in this
 	// process, so a pool of sixteen does not install sixteen sets of rules.
 	peerScope := ""
@@ -333,9 +375,33 @@ func reservePckClientPort(id string, base uint16, ip net.IP) (uint16, *os.File, 
 	return 0, nil, fmt.Errorf("pck: no available TCP source port in range %d-%d", base, base+pckPortSpan-1)
 }
 
+// resolveEgress finds the egress again, the way newPckConn found it first.
+func (c *pckConn) resolveEgress() (*pckEgress, error) {
+	e, err := discoverEgress(c.toward, c.ifaceName, c.gatewayMAC)
+	if err != nil && c.server && c.ifaceName == "" {
+		if name := firstUsableIface(); name != "" {
+			e, err = discoverEgress(c.toward, name, c.gatewayMAC)
+		}
+	}
+	return e, err
+}
+
+// openLink opens the receive and send sockets on egress.
+func (c *pckConn) openLink(e *pckEgress) (*pckLink, error) {
+	l := &pckLink{egress: e}
+	if err := c.openRx(l); err != nil {
+		return nil, err
+	}
+	if err := c.openTx(l); err != nil {
+		l.rx.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
 // openRx opens the AF_PACKET receive socket and filters it down to this
 // tunnel's segments in the kernel.
-func (c *pckConn) openRx() error {
+func (c *pckConn) openRx(l *pckLink) error {
 	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(htons(unix.ETH_P_IP)))
 	if err != nil {
 		if errors.Is(err, unix.EPERM) {
@@ -345,16 +411,16 @@ func (c *pckConn) openRx() error {
 	}
 	if err := unix.Bind(fd, &unix.SockaddrLinklayer{
 		Protocol: htons(unix.ETH_P_IP),
-		Ifindex:  c.egress.Iface.Index,
+		Ifindex:  l.egress.Iface.Index,
 	}); err != nil {
 		unix.Close(fd)
-		return fmt.Errorf("pck: could not bind the packet socket to %s: %w", c.egress.Iface.Name, err)
+		return fmt.Errorf("pck: could not bind the packet socket to %s: %w", l.egress.Iface.Name, err)
 	}
 	// Filtering in the kernel rather than in the read loop is the difference
 	// between waking on this tunnel's packets and waking on every packet the
 	// machine receives. Best effort: parsePckFrame checks the port again, so a
 	// kernel that refuses the filter costs CPU rather than correctness.
-	if prog, err := pckBPFProgram(c.local, c.egress.LinkLen); err == nil {
+	if prog, err := pckBPFProgram(c.local, l.egress.LinkLen); err == nil {
 		_ = attachSockFilter(fd, prog)
 	}
 	// A burst that arrives while the reader is busy is held here rather than
@@ -369,18 +435,18 @@ func (c *pckConn) openRx() error {
 	// Handing the descriptor to os.File puts it under the runtime's poller, so
 	// reads block in the scheduler rather than in a syscall and deadlines and
 	// Close work without a race over the descriptor.
-	c.rx = os.NewFile(uintptr(fd), "pck-rx")
+	l.rx = os.NewFile(uintptr(fd), "pck-rx")
 	// For recvmmsg. Without it ReadBatch declines and reads go one at a time.
-	if raw, err := c.rx.SyscallConn(); err == nil {
-		c.rxConn = raw
+	if raw, err := l.rx.SyscallConn(); err == nil {
+		l.rxConn = raw
 	}
 	return nil
 }
 
 // openTx opens the send path: a second packet socket where the link has an
 // Ethernet header this process can build, and a raw IP socket where it does not.
-func (c *pckConn) openTx() error {
-	if c.egress.Ethernet && c.egress.NextHop != nil {
+func (c *pckConn) openTx(l *pckLink) error {
+	if l.egress.Ethernet && l.egress.NextHop != nil {
 		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(htons(unix.ETH_P_IP)))
 		if err == nil {
 			// The send socket had no buffer set while the receive one had 8 MB.
@@ -392,25 +458,25 @@ func (c *pckConn) openTx() error {
 			// moment the tunnel is busiest.
 			_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, 8*1024*1024)
 			if err = unix.SetNonblock(fd, true); err == nil {
-				c.txFile = os.NewFile(uintptr(fd), "pck-tx")
+				l.txFile = os.NewFile(uintptr(fd), "pck-tx")
 				// Resolved once. Both are constant for the life of the socket,
 				// and building them per packet was two allocations on the
 				// hottest path in the carrier.
-				if raw, rerr := c.txFile.SyscallConn(); rerr == nil {
-					c.txConn = raw
+				if raw, rerr := l.txFile.SyscallConn(); rerr == nil {
+					l.txConn = raw
 					sll := &unix.SockaddrLinklayer{
 						Protocol: htons(unix.ETH_P_IP),
-						Ifindex:  c.egress.Iface.Index,
+						Ifindex:  l.egress.Iface.Index,
 						Halen:    6,
 					}
-					copy(sll.Addr[:6], c.egress.NextHop)
-					c.txAddr = sll
+					copy(sll.Addr[:6], l.egress.NextHop)
+					l.txAddr = sll
 					return nil
 				}
 				// Without a usable RawConn there is no link-layer send path;
 				// fall through to the raw IP socket below.
-				_ = c.txFile.Close()
-				c.txFile = nil
+				_ = l.txFile.Close()
+				l.txFile = nil
 				return nil
 			}
 			unix.Close(fd)
@@ -427,22 +493,22 @@ func (c *pckConn) openTx() error {
 		}
 		return fmt.Errorf("pck: could not open the raw send socket: %w", err)
 	}
-	if c.egress.Iface != nil {
-		_ = bindPacketConnToInterface(pc, c.egress.Iface.Name)
+	if l.egress.Iface != nil {
+		_ = bindPacketConnToInterface(pc, l.egress.Iface.Name)
 	}
 	raw, err := ipv4.NewRawConn(pc)
 	if err != nil {
 		pc.Close()
 		return fmt.Errorf("pck: could not take control of the IP header: %w", err)
 	}
-	c.txRawPC, c.txRaw = pc, raw
+	l.txRawPC, l.txRaw = pc, raw
 	return nil
 }
 
 // L2 reports whether frames are being injected at the link layer, which is the
 // path that bypasses the host's routing and output chains entirely. The carrier
 // says so once at startup, because the difference matters and is invisible.
-func (c *pckConn) L2() bool { return c.txFile != nil }
+func (c *pckConn) L2() bool { return c.link.Load().txFile != nil }
 
 // GuardInstalled reports whether the kernel's interfering replies are being
 // suppressed. Without it the tunnel usually still works and occasionally dies
@@ -459,12 +525,13 @@ func (c *pckConn) PckDiag() string {
 	if c.server {
 		role = "server"
 	}
+	l := c.link.Load()
 	send := "kernel-routed raw IP (no L2 injection)"
 	nextHop := "kernel"
-	if c.L2() {
+	if l.txFile != nil {
 		send = "L2 frame injection"
-		if c.egress.NextHop != nil {
-			nextHop = c.egress.NextHop.String()
+		if l.egress.NextHop != nil {
+			nextHop = l.egress.NextHop.String()
 		}
 	}
 	guard := "installed (kernel RSTs dropped, flow untracked)"
@@ -472,7 +539,7 @@ func (c *pckConn) PckDiag() string {
 		guard = "MISSING — kernel RSTs are NOT suppressed; the flow will drop at any stateful hop. Install iptables."
 	}
 	return fmt.Sprintf("pck %s ready: iface=%s src=%s:%d peer-tcp-port=%d send=%s next-hop=%s rst-guard=%s",
-		role, c.egress.Iface.Name, c.egress.LocalIP, c.local, c.port, send, nextHop, guard)
+		role, l.egress.Iface.Name, l.egress.LocalIP, c.local, c.port, send, nextHop, guard)
 }
 
 // timestamp is our TCP timestamp clock: a random base advancing at the 1 kHz a
@@ -558,6 +625,7 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 		return 0, net.InvalidAddrError("pck: unusable destination address")
 	}
 	peer := c.peerFor(dst, true)
+	l := c.link.Load()
 
 	c.mu.Lock()
 	seq, ack, tsEcr := peer.seq, peer.ack, peer.lastTS
@@ -586,17 +654,17 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	}
 
 	frame := assemblePckFrame(buf, pckFrameParams{
-		SrcMAC: c.egress.SrcMAC, DstMAC: c.egress.NextHop,
-		SrcIP: c.egress.LocalIP, DstIP: dst.IP.To4(),
+		SrcMAC: l.egress.SrcMAC, DstMAC: l.egress.NextHop,
+		SrcIP: l.egress.LocalIP, DstIP: dst.IP.To4(),
 		SrcPort: c.local, DstPort: uint16(dst.Port),
 		Seq: seq, Ack: ack, Flags: f,
 		TSVal: c.timestamp(), TSEcr: tsEcr,
 		ID: id, Payload: p,
 	})
 
-	if c.txFile != nil {
-		if err := c.sendFrame(frame); err != nil {
-			return c.writeFailed(len(p), err)
+	if l.txFile != nil {
+		if err := c.sendFrame(l, frame); err != nil {
+			return c.writeFailed(l, len(p), err)
 		}
 		c.queueSent.Add(1)
 		return len(p), nil
@@ -615,11 +683,11 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 		Flags:    ipv4.DontFragment,
 		TTL:      64,
 		Protocol: 6,
-		Src:      c.egress.LocalIP,
+		Src:      l.egress.LocalIP,
 		Dst:      dst.IP.To4(),
 	}
-	if err := c.txRaw.WriteTo(h, tcp, nil); err != nil {
-		return c.writeFailed(len(p), err)
+	if err := l.txRaw.WriteTo(h, tcp, nil); err != nil {
+		return c.writeFailed(l, len(p), err)
 	}
 	c.queueSent.Add(1)
 	return len(p), nil
@@ -647,7 +715,13 @@ func (c *pckConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 // socket, once the kernel dropped the connected route with the link), KCP read
 // that as the end of the session, and the reverse tunnel's control channel never
 // came back after the interface went down and up.
-func (c *pckConn) writeFailed(n int, err error) (int, error) {
+//
+// An interface that is gone altogether — deleted, with nothing yet in its
+// place — answers ENXIO or ENODEV, as the index the socket names no longer
+// exists. That segment is lost too, and the carrier starts reopening itself on
+// whatever has the interface's name once it is back (relink). A send that
+// fails because relink closed the old socket under it is the same loss.
+func (c *pckConn) writeFailed(l *pckLink, n int, err error) (int, error) {
 	if errors.Is(err, unix.ENOBUFS) || errors.Is(err, unix.EAGAIN) {
 		c.queueDrops.Add(1)
 		return n, nil
@@ -656,7 +730,22 @@ func (c *pckConn) writeFailed(n int, err error) (int, error) {
 		c.linkDrops.Add(1)
 		return n, nil
 	}
+	if pckLinkGoneErr(err) {
+		c.linkDrops.Add(1)
+		c.relinkAsync(l)
+		return n, nil
+	}
+	if c.link.Load() != l && !c.closed.Load() {
+		c.linkDrops.Add(1)
+		return n, nil
+	}
 	return 0, err
+}
+
+// pckLinkGoneErr reports an error that means the socket's interface does not
+// exist any more.
+func pckLinkGoneErr(err error) bool {
+	return errors.Is(err, unix.ENXIO) || errors.Is(err, unix.ENODEV)
 }
 
 // pckLinkDownErr reports an error that only means the path is down right now:
@@ -681,9 +770,22 @@ const (
 // absorbed here, and the read goes on. The wait before the next read grows
 // with each repeat in a row (streak, the caller's), up to pckLinkWaitMax, so a
 // link that stays down costs next to no CPU. Anything else is the caller's.
-func (c *pckConn) rxLinkDown(err error, streak *int) bool {
+//
+// The kernel reports the same ENETDOWN when the interface is deleted, and then
+// never re-arms the socket: it is unbound from an index that no longer exists,
+// and an interface that comes back under the same name has a new one. So the
+// interface is looked up; when it is gone, the carrier starts reopening on its
+// replacement in the background (relink) and the read goes on on the old
+// socket, which hears nothing — its deadline still ends it, and relink closing
+// it once the new link is in moves the read over.
+func (c *pckConn) rxLinkDown(l *pckLink, err error, streak *int) bool {
 	if !errors.Is(err, unix.ENETDOWN) || c.closed.Load() {
 		return false
+	}
+	if pckLinkGone(l) {
+		c.linkDrops.Add(1)
+		c.relinkAsync(l)
+		return true
 	}
 	w := pckLinkWaitMin
 	for i := 0; i < *streak && w < pckLinkWaitMax; i++ {
@@ -696,6 +798,132 @@ func (c *pckConn) rxLinkDown(err error, streak *int) bool {
 	c.linkDrops.Add(1)
 	time.Sleep(w)
 	return true
+}
+
+// pckLinkGone reports whether the interface l was opened on has been deleted:
+// no interface has its index any more, or one with another name does.
+func pckLinkGone(l *pckLink) bool {
+	in, err := net.InterfaceByIndex(l.egress.Iface.Index)
+	return err != nil || in.Name != l.egress.Iface.Name
+}
+
+// Bounds of the wait between attempts to reopen on a deleted interface.
+const (
+	pckRelinkWaitMin = 100 * time.Millisecond
+	pckRelinkWaitMax = 2 * time.Second
+)
+
+// relinkAsync starts relink in the background unless one is running already.
+// Neither a send nor a read waits for an interface to come back.
+func (c *pckConn) relinkAsync(l *pckLink) {
+	if c.closed.Load() || !c.relinking.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer c.relinking.Store(false)
+		c.relink(l)
+	}()
+}
+
+// relink replaces the link old, whose interface was deleted, with one opened on
+// the interface that now has its name (or, for a carrier that follows the
+// route, on whatever the route now names). It waits for one to appear, with a
+// growing pause, and returns true once the new link is in place — or at once,
+// when old was replaced already — and false when the carrier is closed first.
+// KCP above never notices beyond the packets lost in between, so its sessions
+// carry on as they do after a link that only went down.
+//
+// The new link must have the address the old one had: the TCP port reservation
+// and the RST guard name it. One that came back with another address is waited
+// past, in case the address follows, and said so in the log.
+func (c *pckConn) relink(old *pckLink) bool {
+	said := ""
+	wait := pckRelinkWaitMin
+	for !c.closed.Load() {
+		if c.link.Load() != old {
+			return true
+		}
+		e, err := c.resolveEgress()
+		if err == nil && !e.LocalIP.Equal(c.localIP) {
+			err = fmt.Errorf("it came back with the address %s, and this tunnel runs on %s", e.LocalIP, c.localIP)
+		}
+		var l *pckLink
+		if err == nil {
+			l, err = c.openLink(e)
+		}
+		if err == nil {
+			// The swap, under relinkMu, so Close cannot run between the check
+			// and the store and leave the new link open.
+			c.relinkMu.Lock()
+			if c.closed.Load() || c.link.Load() != old {
+				c.relinkMu.Unlock()
+				l.close()
+				return !c.closed.Load()
+			}
+			c.link.Store(l)
+			if d := c.rdeadline.Load(); d != nil {
+				_ = l.rx.SetReadDeadline(*d)
+			}
+			c.relinkMu.Unlock()
+			old.close()
+			c.relinks.Add(1)
+			if pckRelinkNote(e.Iface.Name + " back") {
+				c.log("pck: the interface %s is back (index %d, was %d); the carrier reopened on it",
+					e.Iface.Name, e.Iface.Index, old.egress.Iface.Index)
+			}
+			return true
+		}
+		if msg := err.Error(); msg != said {
+			said = msg
+			if pckRelinkNote(old.egress.Iface.Name + " gone " + msg) {
+				c.log("pck: the interface %s is gone; waiting for it to come back: %v", old.egress.Iface.Name, err)
+			}
+		}
+		time.Sleep(wait)
+		if wait *= 2; wait > pckRelinkWaitMax {
+			wait = pckRelinkWaitMax
+		}
+	}
+	return false
+}
+
+// pckRelinkNotes keeps a pool of carriers on one interface — a reverse
+// tunnel's eight, say — from each logging the same outage: a note is said once
+// per pckRelinkQuiet, process-wide.
+var pckRelinkNotes = struct {
+	sync.Mutex
+	said map[string]time.Time
+}{said: map[string]time.Time{}}
+
+const pckRelinkQuiet = 10 * time.Second
+
+func pckRelinkNote(key string) bool {
+	pckRelinkNotes.Lock()
+	defer pckRelinkNotes.Unlock()
+	now := time.Now()
+	if t, ok := pckRelinkNotes.said[key]; ok && now.Sub(t) < pckRelinkQuiet {
+		return false
+	}
+	for k, t := range pckRelinkNotes.said {
+		if now.Sub(t) >= pckRelinkQuiet {
+			delete(pckRelinkNotes.said, k)
+		}
+	}
+	pckRelinkNotes.said[key] = now
+	return true
+}
+
+// Relinks is how many times the carrier reopened on a recreated interface.
+func (c *pckConn) Relinks() uint64 { return c.relinks.Load() }
+
+// SetLogf gives the carrier somewhere to say what it does on its own, such as
+// reopening on a recreated interface. Without one it says nothing.
+func (c *pckConn) SetLogf(f func(string, ...any)) { c.logf.Store(&f) }
+
+func (c *pckConn) log(format string, args ...any) {
+	if f := c.logf.Load(); f != nil && *f != nil {
+		(*f)(format, args...)
+	}
 }
 
 // LinkDrops is how many segments, sent or received, a downed link cost: sends
@@ -716,8 +944,8 @@ func (c *pckConn) TxStats() (refused, sent uint64) { return c.queueDrops.Load(),
 //
 // The RawConn and the destination are resolved once at open; see the fields on
 // pckConn for why they used to be rebuilt per packet and why that mattered.
-func (c *pckConn) sendFrame(frame []byte) error {
-	sc, sll := c.txConn, c.txAddr
+func (c *pckConn) sendFrame(l *pckLink, frame []byte) error {
+	sc, sll := l.txConn, l.txAddr
 	if sc == nil {
 		// Only reachable if the socket was never opened for link-layer
 		// injection, which the caller has already checked.
@@ -751,7 +979,8 @@ func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	buf := *bp
 	down := 0
 	for {
-		n, err := c.rx.Read(buf)
+		l := c.link.Load()
+		n, err := l.rx.Read(buf)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				return 0, nil, os.ErrDeadlineExceeded
@@ -759,12 +988,15 @@ func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
-			if c.rxLinkDown(err, &down) {
+			if c.link.Load() != l && !c.closed.Load() {
+				continue // relink closed the old socket under this read
+			}
+			if c.rxLinkDown(l, err, &down) {
 				continue
 			}
 			return 0, nil, err
 		}
-		payload, addr, ok := c.accept(buf[:n])
+		payload, addr, ok := c.accept(l, buf[:n])
 		if !ok {
 			continue
 		}
@@ -775,8 +1007,8 @@ func (c *pckConn) ReadFrom(p []byte) (int, net.Addr, error) {
 // accept checks one captured frame and, when it is this tunnel's, records what
 // it acknowledges and returns its payload and sender. The payload points into
 // frame.
-func (c *pckConn) accept(frame []byte) ([]byte, *net.UDPAddr, bool) {
-	seg, ok := parsePckFrame(frame, c.egress.LinkLen, c.local)
+func (c *pckConn) accept(l *pckLink, frame []byte) ([]byte, *net.UDPAddr, bool) {
+	seg, ok := parsePckFrame(frame, l.egress.LinkLen, c.local)
 	if !ok || len(seg.Payload) == 0 {
 		return nil, nil, false
 	}
@@ -784,7 +1016,7 @@ func (c *pckConn) accept(frame []byte) ([]byte, *net.UDPAddr, bool) {
 	// addressed FROM our port, so the destination-port filter usually
 	// excludes them, but a client that happened to pick the server's port
 	// would see its own traffic; drop anything sourced from us.
-	if seg.SrcIP.Equal(c.egress.LocalIP) && seg.SrcPort == c.local {
+	if seg.SrcIP.Equal(l.egress.LocalIP) && seg.SrcPort == c.local {
 		return nil, nil, false
 	}
 	addr := &net.UDPAddr{IP: seg.SrcIP, Port: int(seg.SrcPort)}
@@ -807,18 +1039,13 @@ func (c *pckConn) Close() error {
 		return nil
 	}
 	c.guard.remove()
-	if c.rx != nil {
-		_ = c.rx.Close()
+	// Under relinkMu, so a relink in progress cannot swap in a link after this
+	// one is closed: it sees closed and gives up.
+	c.relinkMu.Lock()
+	if l := c.link.Load(); l != nil {
+		l.close()
 	}
-	if c.txFile != nil {
-		_ = c.txFile.Close()
-	}
-	if c.txRaw != nil {
-		_ = c.txRaw.Close()
-	}
-	if c.txRawPC != nil {
-		_ = c.txRawPC.Close()
-	}
+	c.relinkMu.Unlock()
 	if c.reservation != nil {
 		_ = c.reservation.Close()
 	}
@@ -831,11 +1058,17 @@ func (c *pckConn) Close() error {
 // LocalAddr reports the address our segments come from, which is what a caller
 // asking "where am I" wants to know.
 func (c *pckConn) LocalAddr() net.Addr {
-	return &net.UDPAddr{IP: c.egress.LocalIP, Port: int(c.local)}
+	return &net.UDPAddr{IP: c.localIP, Port: int(c.local)}
 }
 
-func (c *pckConn) SetDeadline(t time.Time) error      { return c.rx.SetDeadline(t) }
-func (c *pckConn) SetReadDeadline(t time.Time) error  { return c.rx.SetReadDeadline(t) }
+func (c *pckConn) SetDeadline(t time.Time) error { return c.SetReadDeadline(t) }
+
+// SetReadDeadline is remembered as well as set, so a link swapped in later by
+// relink carries it too.
+func (c *pckConn) SetReadDeadline(t time.Time) error {
+	c.rdeadline.Store(&t)
+	return c.link.Load().rx.SetReadDeadline(t)
+}
 func (c *pckConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // toUDPAddr accepts the address shapes KCP hands a PacketConn.

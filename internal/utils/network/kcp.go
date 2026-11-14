@@ -80,12 +80,12 @@ type KCPSettings struct {
 	// the source is this machine's real one, so the server learns each client
 	// from the wire exactly as a UDP socket would. See pckconn_linux.go.
 	Pck *PcapCarrier
-	// Path, when set, puts the sessions under the pck transport's send-side
-	// control (PathControl): a window that follows the path's queue, a paced
-	// output, a retransmission timer that waits for a queued segment, and fast
-	// retransmission of a lost fast retransmit. Nil, which is every transport
-	// but pck, leaves the session exactly as the preset tunes it. Set by
-	// EnablePathControl.
+	// Path, when set, puts the sessions under the send-side control
+	// (PathControl): a window that follows the path's queue, a paced output, a
+	// retransmission timer that waits for a queued segment, and fast
+	// retransmission of a lost fast retransmit. The reverse kcp, xdi and pck
+	// transports set it; nil leaves the session exactly as the preset tunes it.
+	// Set by EnablePathControl.
 	Path *PathControl
 	// Logf, when set, receives the startup notes: the effective MTU and FEC
 	// on both ends, and — for the pck carrier — the egress it discovered and
@@ -103,6 +103,10 @@ type KCPSettings struct {
 // kernel-RST guard installed. The type assertion against it in KCPListen and
 // KCPDial simply does nothing for every other carrier.
 type pckDiagnoser interface{ PckDiag() string }
+
+// pckLogger is the pck carrier's way to say what it does on its own after
+// startup, such as reopening on a recreated interface.
+type pckLogger interface{ SetLogf(func(string, ...any)) }
 
 // logSettings emits the effective session parameters, so a mismatch between the
 // two ends — which never negotiates and so fails silently — is visible in the
@@ -323,6 +327,9 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 		if d, ok := conn.(pckDiagnoser); ok && s.Logf != nil {
 			s.Logf("%s", d.PckDiag())
 		}
+		if l, ok := conn.(pckLogger); ok && s.Logf != nil {
+			l.SetLogf(s.Logf)
+		}
 		listener, err := kcp.ServeConn(block, s.DataShards, s.ParityShards, conn)
 		if err != nil {
 			conn.Close()
@@ -416,6 +423,9 @@ func KCPDialContext(ctx context.Context, remoteAddr, token string, s KCPSettings
 		}
 		if d, ok := conn.(pckDiagnoser); ok && s.Logf != nil {
 			s.Logf("%s", d.PckDiag())
+		}
+		if l, ok := conn.(pckLogger); ok && s.Logf != nil {
+			l.SetLogf(s.Logf)
 		}
 		session, err = ownedKCPSession(&net.UDPAddr{IP: ipAddr.IP, Port: int(carrier.Port)},
 			block, s.DataShards, s.ParityShards, conn)

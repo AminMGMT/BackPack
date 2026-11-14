@@ -68,6 +68,13 @@ func (c *obfuscatedCarrier) CarrierName() string { return c.name }
 // happened while nothing called this — is the same as not computing it.
 func (c *obfuscatedCarrier) Diag() string { return c.note }
 
+// SetLogf passes a logger to the conn underneath, when it takes one (pck's).
+func (c *obfuscatedCarrier) SetLogf(f func(string, ...any)) {
+	if l, ok := c.PacketConn.(interface{ SetLogf(func(string, ...any)) }); ok {
+		l.SetLogf(f)
+	}
+}
+
 // openRawPck builds the raw-datagram packet-level TCP carrier. Only sni uses it
 // now: carrier = "pck" is paqet's engine (pck.go) and never reaches a datagram
 // carrier.

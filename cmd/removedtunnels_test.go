@@ -72,7 +72,7 @@ peer_ip  = "10.10.0.2"
 			if err == nil {
 				t.Fatalf("%s (%s): a tunnel on a removed carrier was accepted", tc.name, mode)
 			}
-			for _, want := range []string{"removed in Backpack v2.0.0", "pck, xdi, sni, spoof", "Edit → Carrier"} {
+			for _, want := range []string{"removed in Backpack v2.0.0", "xdi, pck, sni, spoof", "keep the TUN", "Edit → Carrier"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("%s (%s): the refusal does not say %q: %v", tc.name, mode, want, err)
 				}

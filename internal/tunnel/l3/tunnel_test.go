@@ -536,7 +536,7 @@ func TestRemovedCarriersAreRefusedWithTheWayOut(t *testing.T) {
 			if err == nil {
 				t.Fatalf("carrier %q (%s) was accepted", name, mode)
 			}
-			for _, want := range []string{"removed in Backpack v2.0.0", "pck, xdi, sni, spoof", "Carrier"} {
+			for _, want := range []string{"removed in Backpack v2.0.0", "xdi, pck, sni, spoof", "keep the TUN", "Carrier"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("carrier %q: the refusal %q does not say %q", name, err, want)
 				}

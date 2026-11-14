@@ -114,8 +114,10 @@ configure, and **nothing changes on the wire**: a v2.0.0 end works with a v1.9.0
 end, and each end's own sending improves on its own. Next to a v1.9.0 end the
 gain is smaller (the old end still fills its own direction's queue): at 1% loss a
 v2.0.0 kharej with a v1.9.0 Iran carried 22 Mbit/s down and 24 up, two v1.9.0
-ends 29 and 19; update both. `kcp` and `xdi`, which share
-the session code, are unchanged.
+ends 29 and 19; update both. The reverse `kcp` and `xdi` transports, which share
+the session code, run the same control since a later v2.0.0 round (see the
+CHANGELOG); on UDP and ICMP there is no transmit-queue signal, so their window
+follows the delay alone.
 
 The presets give every pooled session a window of 512 to 2048 packets and turn
 KCP's own congestion control off, so a Turbo pool of eight could have 8192
@@ -215,9 +217,12 @@ down, 7.8 up and 99.7% of the UDP, a v1.9.0 Iran with a v2.0.0 kharej 12.8 down,
 25.9 up (two v1.9.0 ends 28.7 / 18.5), and neither lost a session or corrupted
 a byte; update both. The test's short connections half-close and wait for a
 reply, which the reverse relay has never carried, so they read 0% before and
-after. A tunnel whose path goes dark with the link down (a NIC that loses its
-link) does not come back by itself on either version, and a path that goes dark
-with the link up does.
+after. A v2.0.0 tunnel comes back by itself when its interface goes down and up
+(within a second of the link returning), and when the interface is deleted and
+created again under the same name — a veth, ppp or wg device recreated, a NIC
+replugged — it reopens on the new one and says so in the log ("the interface …
+is back"). The new interface must carry the same address. A v1.9.0 end recovers
+from neither without a restart.
 
 ## Notes
 

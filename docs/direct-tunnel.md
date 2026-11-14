@@ -1,4 +1,4 @@
-# Direct tunnel (stream transports)
+# Direct tunnel (stream engine) — removed in v2.0.0
 
 > **Removed in v2.0.0.** The layer-4 `[direct]` engine described on this page no
 > longer exists. For a direct tunnel use **Setup Iran → Direct**, which builds the

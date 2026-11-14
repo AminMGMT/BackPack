@@ -9,7 +9,7 @@ import (
 	"github.com/xtaci/kcp-go/v5"
 )
 
-// PathControl is the pck transport's send-side control of its KCP sessions: the
+// PathControl is the KCP transports' send-side control of their sessions: the
 // window controller, the output pace, the retransmission margin and the
 // acknowledgement batching of internal/pathctl, which the direct pck engine
 // runs too, and fast retransmission of a lost fast retransmit. See that package
@@ -42,9 +42,16 @@ import (
 //
 // # Scope
 //
-// Opt-in per transport: only a KCPSettings whose Path is set gets any of it, and
-// only the pck transport sets one (EnablePathControl). kcp and xdi share every
-// line of the session code and keep their old behaviour.
+// Every carrier of the KCP family: pck, and since the soak runs of 2026-11-14
+// kcp (UDP) and xdi (ICMP) too. Measured on the same path (100 Mbit/s, 30±10
+// ms, 1000-packet queue, Turbo, bulk both ways with 200 new connections a
+// second), a reverse kcp or xdi tunnel without it made 31-40% of the new
+// connections, with the probe at 750 ms; with it 100% at 80 ms, a quarter
+// more bulk, and less CPU. On an unshaped 25 ms path it carried three to four
+// times as much. UDP and ICMP sockets do not report a full transmit queue the
+// way pck's packet socket does (txStater), so for them the window follows the
+// delay alone. Still opt-in per KCPSettings: one without Path is a session
+// exactly as the preset tunes it.
 //
 // One PathControl serves one tunnel, all of its pooled sessions together: they
 // share a path, and so one verdict on it. The control channel is not one of them
