@@ -7,18 +7,14 @@
 .page{max-width:1300px;margin:0 auto;padding:0 clamp(14px,3vw,26px) 70px}
 
 /* header */
-.hdr{display:flex;align-items:center;gap:12px;padding:18px 0 16px;position:sticky;top:0;z-index:40;
-  background:color-mix(in srgb,var(--bg) 88%,transparent);
-  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
-.hdr .mk{width:34px;height:34px;border-radius:10px;background:var(--tx);color:var(--bg);display:grid;place-items:center;flex:none}
-.hdr .mk svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.1;stroke-linecap:round}
-.hdr .who b{display:block;font-size:15px;font-weight:650;letter-spacing:-.026em;line-height:1.2}
-.hdr .who small{display:block;font-size:11.5px;color:var(--dim);margin-top:1px}
-.hdr .sp{flex:1}
-.hdr .upd{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;padding:8px 13px;
-  border-radius:11px;cursor:pointer;background:color-mix(in srgb,var(--wr) 13%,transparent);
-  border:1px solid color-mix(in srgb,var(--wr) 32%,transparent);color:var(--wr)}
-.hdr .upd svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+
+
+
+
+
+
+
+
 
 /* banner for the states that look fine but are not */
 .warnbar{display:flex;align-items:flex-start;gap:12px;padding:13px 15px;border-radius:14px;margin-bottom:12px;
@@ -27,7 +23,7 @@
 .warnbar.bad{border-color:color-mix(in srgb,var(--er) 32%,transparent);
   background:color-mix(in srgb,var(--er) 8%,transparent)}
 .warnbar .ic{width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:13px;
-  font-weight:700;background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr)}
+  font-weight:600;background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr)}
 .warnbar.bad .ic{background:color-mix(in srgb,var(--er) 18%,transparent);color:var(--er)}
 .warnbar .tx{flex:1;min-width:0}
 .warnbar .tx b{display:block;font-size:12.5px;font-weight:640;margin-bottom:3px}
@@ -37,53 +33,42 @@
 .warnbar .act:hover{background:var(--ln)}
 
 /* the server strip */
-.srv{border:1px solid var(--ln);border-radius:18px;background:var(--s1);overflow:hidden;margin-bottom:22px}
-.srv .m{background:var(--s1);padding:15px 16px}
-.srv .m .k{font-size:11px;color:var(--dim);font-weight:560}
-.srv .m .v{font-size:23px;font-weight:650;letter-spacing:-.034em;margin:5px 0 9px;font-variant-numeric:tabular-nums}
-.srv .m .v em{font-style:normal;font-size:12px;color:var(--mu);font-weight:560;margin-left:2px;letter-spacing:0}
-.srv .m .tr{height:5px;border-radius:3px;background:var(--sunk);overflow:hidden}
-.srv .m .tr i{display:block;height:100%;border-radius:3px;background:var(--tx2)}
-.srv .m .s{font-size:11px;color:var(--dim);margin-top:7px}
-.srv .facts{display:flex;align-items:center;gap:0;padding:0;border-top:1px solid var(--ln);background:var(--s2)}
-.srv .facts .sp{flex:1}
-.srv .extra{display:none;border-top:1px solid var(--ln);background:var(--s2);padding:14px 16px;
-  grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px 26px}
-.srv.open .extra{display:grid}
-.srv .extra .e{display:flex;align-items:baseline;gap:9px;font-size:12px;padding:5px 0;border-bottom:1px solid var(--ln)}
-.srv .extra .e .k{color:var(--dim);flex:none;min-width:88px}
-.srv .extra .e .v{margin-left:auto;font-weight:570;font-variant-numeric:tabular-nums;text-align:right}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(336px,1fr));gap:16px}
 
 /* empty state */
 .empty{grid-column:1/-1;border:1px dashed var(--ln2);border-radius:18px;padding:44px 20px;text-align:center}
-.empty b{display:block;font-size:14.5px;font-weight:620;letter-spacing:-.02em;margin-bottom:6px}
+.empty b{display:block;font-size:14.5px;font-weight:620;letter-spacing:0;margin-bottom:6px}
 .empty span{display:block;font-size:12.5px;color:var(--dim);line-height:1.6;max-width:52ch;margin:0 auto 16px}
 
 /* ---------- the whole page reacts, not just the header ---------- */
-.page2{container-type:inline-size;container-name:pg;max-width:1300px;margin:0 auto;
-  padding:0 clamp(12px,3vw,26px) 70px}
+
 .stick{position:sticky;top:0;z-index:40;margin:0 calc(-1 * clamp(12px,3vw,26px));
   padding:0 clamp(12px,3vw,26px);
-  background:color-mix(in srgb,var(--bg) 88%,transparent);
-  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
-@container pg (max-width:1080px){ .srv .row1{grid-template-columns:repeat(2,1fr)} .srv .traf{grid-column:span 2} }
-@container pg (max-width:560px){ .srv .row1{grid-template-columns:1fr} .srv .traf{grid-column:span 1} }
-.srv .facts{overflow-x:auto;scrollbar-width:none}
-.srv .facts::-webkit-scrollbar{display:none}
-@container pg (max-width:720px){
-  .srv .facts .more2{position:sticky;right:0;background:var(--s2);box-shadow:-10px 0 12px -8px rgba(0,0,0,.5)}
-}
-@container pg (max-width:560px){ .srv .extra{grid-template-columns:1fr} }
+  background:var(--bg)}
+
+
+
+
+
+
 
 /* section heading */
-@container pg (max-width:560px){
-  .sech{flex-wrap:wrap}
-  .sech .cnt{order:3}
-  .sech .sb{flex:1;justify-content:center}
-  .sech .sp{display:none}
-  .sech h2{flex:1}
-}
+
 /* the grid already reflows; on a phone one column reads better than a squeezed two */
 @container pg (max-width:560px){ #grid{grid-template-columns:1fr} }
 
@@ -107,41 +92,6 @@
 .panel{container-type:inline-size;container-name:pg;background:transparent;color:var(--tx);
   position:relative;z-index:1}
 
-/* ---- the ground ---------------------------------------------------------
- *
- * Bars across the full width: tallest at the edges, shortest in the middle, so
- * the page has a horizon and the content sits in the dip of it. Each is a
- * gradient of the accent fading upward.
- *
- * It is built on --ac, which is the variable the accent picker sets on <body>.
- * That is the whole mechanism — pick a different accent, or switch between
- * light and dark, and this repaints with it. No script watches for the change
- * because nothing has to.
- *
- * The strength is deliberately low. The reference draws these at full colour on
- * an empty page; this one has a panel over it, and a background loud enough to
- * be admired is a background that competes with what it is behind.
- */
-.bgbars{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;
-  display:flex;transform:translateZ(0);backface-visibility:hidden}
-.bgbars i{flex:1 0 0;min-width:0;height:100%;transform-origin:bottom;
-  transform:scaleY(var(--s));
-  background:linear-gradient(to top,
-    color-mix(in srgb,var(--ac) 24%,transparent),
-    color-mix(in srgb,var(--ac) 6%,transparent) 45%,
-    transparent 78%);
-  animation:pulseBar 2s ease-in-out var(--d) infinite alternate}
-@keyframes pulseBar{
-  0%{transform:scaleY(var(--s))}
-  100%{transform:scaleY(calc(var(--s) * .7))}
-}
-/* A light ground has far less contrast to spend, so the wash is lighter still. */
-body[data-t="light"] .bgbars i{
-  background:linear-gradient(to top,
-    color-mix(in srgb,var(--ac) 15%,transparent),
-    color-mix(in srgb,var(--ac) 4%,transparent) 45%,
-    transparent 78%)}
-@media (prefers-reduced-motion:reduce){ .bgbars i{animation:none} }
 .panel .inner2{padding:0 clamp(12px,3vw,24px) 26px}
 /* One width on every desktop. A laptop and an ultrawide monitor draw the same
    page at the same size, centred, with the rest of the window left clear —
@@ -154,11 +104,10 @@ body[data-t="light"] .bgbars i{
    queries measuring a width the content no longer has. */
 .panel{max-width:1100px;margin:0 auto}
 .panel .stickH{position:sticky;top:0;z-index:40;margin:0 calc(-1*clamp(12px,3vw,24px));
-  padding:0 clamp(12px,3vw,24px);background:color-mix(in srgb,var(--bg) 90%,transparent);
-  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+  padding:0 clamp(12px,3vw,24px);background:var(--bg)}
 .panel .stickH .HH{background:transparent}
 .panel .sectitle{display:flex;align-items:center;gap:9px;margin:22px 0 11px}
-.panel .sectitle h3{font-size:11px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+.panel .sectitle h3{font-size:12px;font-weight:600;letter-spacing:0;color:var(--dim)}
 .panel .sectitle .ln{flex:1;height:1px;background:var(--ln)}
 
 /* resources — V3 */
@@ -184,7 +133,7 @@ body[data-t="light"] .bgbars i{
 
 /* tunnels */
 .panel .sech2{display:flex;align-items:center;gap:11px;margin:22px 0 12px}
-.panel .sech2 h2{font-size:17px;font-weight:650;letter-spacing:-.028em}
+.panel .sech2 h2{font-size:17px;font-weight:600;letter-spacing:-.028em}
 .panel .sech2 .cnt{font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:9px;background:var(--sunk);color:var(--mu)}
 .panel .sech2 .sp{flex:1}
 .panel .sech2 .sb{font:inherit;font-size:12.5px;font-weight:590;padding:9px 15px;border-radius:11px;cursor:pointer;
@@ -222,7 +171,7 @@ body[data-t="light"] .bgbars i{
 .boot-in{width:46px;height:46px;border-radius:15px;background:var(--tx);color:var(--bg);
   display:grid;place-items:center}
 .boot-in svg{width:23px;height:23px}
-.boot-title{font-size:20px;font-weight:660;letter-spacing:-.03em}
+.boot-title{font-size:20px;font-weight:600;letter-spacing:-.03em}
 .boot-sub{font-size:12.5px;color:var(--dim);margin-top:3px;min-height:18px}
 .boot-reads{width:100%;margin-top:20px;display:flex;flex-direction:column;gap:7px}
 .boot-read{display:flex;align-items:center;gap:9px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;

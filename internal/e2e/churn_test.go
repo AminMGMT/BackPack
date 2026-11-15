@@ -58,6 +58,17 @@ func TestAServerOutlivesItsClientsWithoutLeaking(t *testing.T) {
 					t.Fatalf("client %d could not carry traffic: %v", i, err)
 				}
 				tun.Stop()
+				// Stop does not wait for the transport to wind down (see its
+				// comment), and a mux session can carry for a moment after
+				// it. The next client's readiness probe could then pass
+				// through this one's leftover session, and its real transfer
+				// meet the server ending this generation: "client 7 could not
+				// carry traffic: read back: EOF", on a loaded CI runner. Each
+				// client is checked on its own tunnel only once this one has
+				// stopped carrying.
+				if err := tun.waitGone(10 * time.Second); err != nil {
+					t.Fatalf("client %d: %v", i, err)
+				}
 			}
 
 			visit(0)

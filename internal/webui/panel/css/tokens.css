@@ -9,52 +9,28 @@
      and an <svg> with no rule of its own paints solid black with no stroke.
      Anything that genuinely wants a fill declares it on the element, which wins. */
   button,input,select,textarea{font:inherit;color:inherit}
-  svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  svg{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   /* [hidden] is a UA rule at attribute specificity, so any class rule that sets
      display beats it and the element stays on screen. This settles it once. */
   [hidden]{display:none!important}
 
   *{box-sizing:border-box;margin:0;padding:0}
   html{-webkit-text-size-adjust:100%}
-  /* The material the cards are made of.
-   *
-   * A translucent surface over the page's own ground, blurred, so a card reads
-   * as a pane of something rather than a rectangle of paint. Following Apple's
-   * material rules: the surface is semi-transparent with a blur behind it, its
-   * top edge is a touch brighter than the rest — light catching the near face —
-   * and a bigger surface reads as thicker, so cards blur harder than chips.
-   *
-   * It is a hint and not an effect. At 82% the ground behind is a suggestion of
-   * depth; much below that and text starts sitting on whatever moves behind it,
-   * which is the point at which glass stops being a material and becomes a
-   * legibility problem.
-   *
-   * Bands inside a card use --glass-solid: the same material, denser. They are
-   * part of the same pane, not a second one stacked on it — stacking two
-   * translucent surfaces is what makes this look cheap and read badly.
-   */
+  /* The surface the cards are made of: a plain raised step of the ground with
+     a hairline. It was a translucent "glass" with a 20px blur and a bright top
+     edge, which made every card a pane over moving bars; the bars are gone and
+     a card is now just the next step up from the page. The variable names stay
+     because forty rules read them. */
   body{
-    --glass:color-mix(in srgb,var(--s1) 82%,transparent);
-    --glass-solid:color-mix(in srgb,var(--s1) 94%,transparent);
-    --glass-blur:blur(20px) saturate(150%);
-    --glass-edge:color-mix(in srgb,var(--tx) 13%,transparent);
-    --glass-lift:0 2px 10px rgba(0,0,0,.04),0 12px 34px rgba(0,0,0,.16);
-    /* The two named series a tunnel has: down and up.
-       The accent, and the accent gone quiet — one measurement in two halves,
-       so they are one hue at two strengths rather than two unrelated colours.
-       Built on --ac and --mu, so they follow the accent the operator picked
-       and the theme they are in, the way everything else here does. */
+    --glass:var(--s1);
+    --glass-solid:var(--s1);
+    --glass-blur:none;
+    --glass-edge:var(--ln);
+    --glass-lift:none;
+    /* The two named series a tunnel has: down and up. The accent, and the
+       accent gone quiet — one measurement in two halves. */
     --sc1:var(--ac);
     --sc2:color-mix(in srgb,var(--ac) 38%,var(--mu));
-  }
-  /* Told to keep it simple: solid surfaces, no blur, no bright edge. */
-  @media (prefers-reduced-transparency:reduce){
-    body{--glass:var(--s1);--glass-solid:var(--s1);--glass-blur:none;
-         --glass-edge:var(--ln)}
-  }
-  @media (prefers-contrast:more){
-    body{--glass:var(--s1);--glass-solid:var(--s1);--glass-blur:none;
-         --glass-edge:var(--tx)}
   }
 
   /* The ground moved here from .panel: the panel is transparent now so the
@@ -77,4 +53,7 @@
      fields were transparent. */
   body[data-t="dark"]{--field:#0c0c0c}
   body[data-t="light"]{--field:#ffffff}
-  :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.32,.72,0,1)}
+  :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.22,1,.36,1)}
+  /* Status colours toned to sit inside the ground rather than shout over it. */
+  body[data-t="dark"]{--ok:#4cc38a;--wr:#e5a33d;--er:#e5484d}
+  body[data-t="light"]{--ok:#16a34a;--wr:#b45309;--er:#dc2626}

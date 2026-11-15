@@ -18,18 +18,18 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 @media (max-width:780px){.cell.open{grid-column:span 1}}
 .c7{background:var(--s1);border:1px solid var(--ln);border-radius:18px;position:relative;overflow:hidden;
     display:flex;flex-direction:column;min-height:318px;transition:border-color .3s var(--spring)}
-.c7 .hd,.ed .eh{display:flex;align-items:center;gap:10px}
+.c7 .hd{display:flex;align-items:center;gap:10px}
 .fl{width:30px;height:30px;border-radius:9px;background:var(--s3);border:1px solid var(--ln);
-    display:grid;place-items:center;font-size:15px;flex:none}
-.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    display:grid;place-items:center;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mu);flex:none}
+.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .c7 .id small{display:block;font-size:11px;color:var(--dim);margin-top:1px}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;display:block;background:var(--ok);animation:bp 2.6s ease-out infinite}
 @keyframes bp{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
-.c7 .kind span{font-size:10.5px;font-weight:620;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
+.c7 .kind span{font-size:12px;font-weight:620;letter-spacing:0;padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;letter-spacing:0;font-weight:560}
 .relay{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:620;padding:5px 9px 5px 7px;
   border-radius:8px;background:var(--sunk);border:1px solid var(--ln);color:var(--tx2)}
-.relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .dlg.logs{width:min(760px,100%);max-height:88vh}
 .dlg .bar2{display:flex;align-items:center;gap:10px;padding:11px 18px;border-bottom:1px solid var(--ln)}
 .dlg .bar2 .sp{flex:1}
@@ -42,12 +42,12 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
   transition:background .22s ease,color .22s ease,transform .12s ease-out}
 .dlg .tool:hover{background:var(--ln);color:var(--tx)}
 .dlg .tool:active{transform:scale(.96)}
-.dlg .tool svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.dlg .tool svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .dlg .tool.on{background:var(--tx);color:var(--bg);border-color:var(--tx)}
 .dlg .diag{margin:14px 18px 0;border:1px solid color-mix(in srgb,var(--wr) 34%,transparent);border-radius:12px;
   background:color-mix(in srgb,var(--wr) 8%,transparent);padding:12px 13px;display:flex;gap:11px;align-items:flex-start}
 .dlg .diag .ic{width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;
-  background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr);font-size:13px;font-weight:700}
+  background:color-mix(in srgb,var(--wr) 20%,transparent);color:var(--wr);font-size:13px;font-weight:600}
 .dlg .diag .tx{flex:1;min-width:0}
 .dlg .diag .tx b{display:block;font-size:12.5px;font-weight:620;margin-bottom:3px}
 .dlg .diag .tx .detail{font-size:11.5px;color:var(--tx2);line-height:1.55}
@@ -57,7 +57,7 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .dlg .diag .x2{width:22px;height:22px;border-radius:6px;border:1px solid transparent;background:transparent;
   color:var(--dim);cursor:pointer;display:grid;place-items:center;flex:none}
 .dlg .diag .x2:hover{background:color-mix(in srgb,var(--wr) 14%,transparent);color:var(--wr)}
-.dlg .diag .x2 svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.dlg .diag .x2 svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round}
 .dlg .logwrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
 .dlg .log{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:10px 0 12px;
   scrollbar-width:thin;scrollbar-color:var(--ln2) transparent}
@@ -66,9 +66,9 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .dlg .ln{display:grid;grid-template-columns:74px 62px 1fr;gap:12px;padding:4px 18px;font-size:12px;line-height:1.55;
   align-items:baseline}
 .dlg .ln:hover{background:var(--sunk)}
-.dlg .ln .t{color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:-.01em;
+.dlg .ln .t{color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:0;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
-.dlg .ln .lv{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.dlg .ln .lv{font-size:12px;font-weight:600;letter-spacing:0;}
 .dlg .ln .lv.info{color:var(--dim)}
 .dlg .ln .lv.warn{color:var(--wr)}
 .dlg .ln .lv.error{color:var(--er)}
@@ -83,7 +83,7 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
   background:var(--tx);color:var(--bg);border:0;box-shadow:0 8px 22px -8px rgba(0,0,0,.7);
   display:none;align-items:center;gap:7px}
 .dlg .jump.on{display:inline-flex;animation:arrive .3s cubic-bezier(.32,.72,0,1)}
-.dlg .jump svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.dlg .jump svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:120;
   background:var(--tx);color:var(--bg);font-size:12.5px;font-weight:580;padding:11px 16px;border-radius:12px;
   box-shadow:0 14px 34px -12px rgba(0,0,0,.7);display:none;max-width:min(520px,92vw);line-height:1.5}

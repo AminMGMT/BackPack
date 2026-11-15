@@ -21,7 +21,7 @@
      anything else, so it reads the choice itself rather than importing it. */
   (function(){
     var t='dark', a='none';
-    try{ t=localStorage.getItem('bp_theme')||'dark'; a=localStorage.getItem('bp_accent')||'none'; }catch(e){}
+    try{ t=localStorage.getItem('bp_theme')||'dark'; a=localStorage.getItem('bp_accent')||'signal'; }catch(e){}
     if(t!=='light') t='dark';
     document.addEventListener('DOMContentLoaded',function(){
       document.body.dataset.t=t;
@@ -36,24 +36,25 @@
      (panel/css/tokens.css, accent.css, screens/monitor.css). */
   *{box-sizing:border-box;margin:0;padding:0}
   button,input{font:inherit;color:inherit}
-  svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  svg{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   [hidden]{display:none!important}
-  :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.32,.72,0,1)}
+  :root{--ok:#22c55e;--wr:#f59e0b;--er:#ef4444;--spring:cubic-bezier(.22,1,.36,1)}
+  body[data-t="dark"]{--ok:#4cc38a;--wr:#e5a33d;--er:#e5484d}
+  body[data-t="light"]{--ok:#16a34a;--wr:#b45309;--er:#dc2626}
   body[data-t="dark"]{
     --bg:#070707;--s1:#111111;--s2:#181818;--s3:#1f1f1f;
     --ln:rgba(255,255,255,.08);--ln2:rgba(255,255,255,.15);--ln3:rgba(255,255,255,.3);
     --tx:#fafafa;--tx2:#dcdcdc;--mu:#8e8e8e;--dim:#606060;--faint:#3d3d3d;
-    --sunk:rgba(255,255,255,.05);--field:#0c0c0c;
-    --glassA:rgba(26,26,28,.62);--glassB:rgba(16,16,18,.74);
-    --rim:rgba(255,255,255,.30);--rim2:rgba(255,255,255,.06);--spec:rgba(255,255,255,.09)}
+    --sunk:rgba(255,255,255,.05);--field:#0c0c0c;}
   body[data-t="light"]{
     --bg:#f2f2f2;--s1:#ffffff;--s2:#fafafa;--s3:#f4f4f4;
     --ln:rgba(0,0,0,.09);--ln2:rgba(0,0,0,.16);--ln3:rgba(0,0,0,.34);
     --tx:#0a0a0a;--tx2:#2e2e2e;--mu:#6b6b6b;--dim:#949494;--faint:#c4c4c4;
-    --sunk:rgba(0,0,0,.045);--field:#ffffff;
-    --glassA:rgba(255,255,255,.66);--glassB:rgba(250,250,250,.78);
-    --rim:rgba(255,255,255,.95);--rim2:rgba(0,0,0,.05);--spec:rgba(255,255,255,.55)}
+    --sunk:rgba(0,0,0,.045);--field:#ffffff;}
+  /* The signal accent marks live readings in the panel; this page has none,
+     so it leaves the mark and the button in the ramp. */
   body{--ac:var(--tx);--ac-on:var(--bg)}
+  body[data-accent="signal"]{--ac:var(--tx);--ac-on:var(--bg)}
   body[data-t="dark"][data-accent="crimson"]{--ac:#b3001b;--ac-on:#ffffff}
   body[data-t="light"][data-accent="crimson"]{--ac:#4f000b;--ac-on:#ffffff}
   body[data-t="dark"][data-accent="ember"]{--ac:#f6511d;--ac-on:#ffffff}
@@ -72,37 +73,20 @@
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
   :focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:4px}
 
-  /* The ground: the panel's horizon of accent bars. */
-  .bgbars{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;display:flex}
-  .bgbars i{flex:1 0 0;min-width:0;height:100%;transform-origin:bottom;transform:scaleY(var(--s));
-    background:linear-gradient(to top,color-mix(in srgb,var(--ac) 24%,transparent),
-      color-mix(in srgb,var(--ac) 6%,transparent) 45%,transparent 78%);
-    animation:pulseBar 2s ease-in-out var(--d) infinite alternate}
-  body[data-t="light"] .bgbars i{
-    background:linear-gradient(to top,color-mix(in srgb,var(--ac) 15%,transparent),
-      color-mix(in srgb,var(--ac) 4%,transparent) 45%,transparent 78%)}
-  @keyframes pulseBar{to{transform:scaleY(calc(var(--s) * .7))}}
 
-  /* The card: the panel's glass dialog. */
+  /* The card: a raised surface with a hairline, as the panel's dialogs are. */
   .card{position:relative;z-index:1;width:min(360px,100%);border-radius:20px;overflow:hidden;
-    background:linear-gradient(160deg,var(--glassA),var(--glassB));
-    -webkit-backdrop-filter:blur(44px) saturate(190%);backdrop-filter:blur(44px) saturate(190%);
-    border:1px solid transparent;
-    box-shadow:0 40px 90px -30px rgba(0,0,0,.75),0 2px 10px -4px rgba(0,0,0,.5);
+    background:var(--s1);border:1px solid var(--ln2);
+    box-shadow:0 24px 64px -24px rgba(0,0,0,.6);
     animation:rise .55s var(--spring) both}
-  body[data-t="light"] .card{box-shadow:0 30px 70px -30px rgba(0,0,0,.28),0 2px 10px -4px rgba(0,0,0,.12)}
-  .card::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:5;padding:1px;
-    background:linear-gradient(150deg,var(--rim),var(--rim2) 34%,transparent 60%,var(--rim2) 88%);
-    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-    mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor;mask-composite:exclude}
+  body[data-t="light"] .card{box-shadow:0 8px 24px rgba(0,0,0,.06)}
   @keyframes rise{from{opacity:0;transform:translateY(14px) scale(.985)}}
 
   .top{display:flex;flex-direction:column;align-items:center;padding:30px 24px 20px;text-align:center}
   .mk{width:46px;height:46px;border-radius:15px;background:var(--ac);color:var(--ac-on);
     display:grid;place-items:center;margin-bottom:14px}
-  .mk svg{width:23px;height:23px;stroke-width:2.1}
-  h1{font-size:20px;font-weight:660;letter-spacing:-.03em}
+  .mk svg{width:22px;height:22px;stroke-width:1.6}
+  h1{font-size:20px;font-weight:600}
   .sub{font-size:12.5px;color:var(--dim);margin-top:4px;line-height:1.5}
 
   form{display:flex;flex-direction:column;gap:10px;padding:0 24px 22px}
@@ -124,7 +108,7 @@
   html[data-state="wrong"] .err{display:flex}
   html[data-state="wrong"] input{border-color:color-mix(in srgb,var(--er) 55%,transparent)}
   .go{height:44px;margin-top:4px;border-radius:11px;border:1px solid transparent;cursor:pointer;
-    background:var(--ac);color:var(--ac-on);font-size:13.5px;font-weight:620;letter-spacing:-.01em;
+    background:var(--ac);color:var(--ac-on);font-size:13.5px;font-weight:600;
     display:flex;align-items:center;justify-content:center;gap:8px;
     transition:opacity .2s ease,transform .2s var(--spring)}
   .go:hover{opacity:.9}
@@ -132,7 +116,7 @@
   .go svg{width:15px;height:15px}
 
   .foot{border-top:1px solid var(--ln);padding:13px 24px 15px;text-align:center;
-    background:color-mix(in srgb,var(--s1) 40%,transparent);font-size:11px;color:var(--dim);line-height:1.6}
+    background:var(--s2);font-size:11px;color:var(--dim);line-height:1.6}
   .foot b{color:var(--tx2);font-weight:600}
   .foot a{color:inherit}
 
@@ -140,11 +124,9 @@
   html[dir="rtl"] input{padding:0 13px 0 44px}
   html[dir="rtl"] .go svg{transform:scaleX(-1)}
   @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-  @media (prefers-reduced-transparency:reduce){.card{background:var(--s1);-webkit-backdrop-filter:none;backdrop-filter:none}}
 </style>
 </head>
 <body data-t="dark">
-  <div class="bgbars" aria-hidden="true"><i style="--s:1.000;--d:0.0s"></i><i style="--s:0.882;--d:0.1s"></i><i style="--s:0.767;--d:0.2s"></i><i style="--s:0.658;--d:0.3s"></i><i style="--s:0.553;--d:0.4s"></i><i style="--s:0.456;--d:0.5s"></i><i style="--s:0.368;--d:0.6s"></i><i style="--s:0.300;--d:0.7s"></i><i style="--s:0.368;--d:0.8s"></i><i style="--s:0.456;--d:0.9s"></i><i style="--s:0.553;--d:1.0s"></i><i style="--s:0.658;--d:1.1s"></i><i style="--s:0.767;--d:1.2s"></i><i style="--s:0.882;--d:1.3s"></i><i style="--s:1.000;--d:1.4s"></i></div>
 
   <main class="card">
     <div class="top">
@@ -167,7 +149,7 @@
       <button type="submit" class="go" id="unlock"><span id="unlocktxt">Unlock</span><svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></button>
     </form>
     <div class="foot">
-      <div>TeleGram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
+      <div>Telegram <b>@BlackProtocols</b> · GitHub <b>AminMGMT</b></div>
     </div>
   </main>
 <script nonce="__CSP_NONCE__">

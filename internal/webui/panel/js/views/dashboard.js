@@ -16,6 +16,7 @@ import { toast, oops, onFix } from '../ui/toast.js';
 import { confirmBox } from '../ui/confirm.js';
 import { go } from '../router.js';
 import { statsOf, trendText, NEUTRAL_PCT } from '../lib/trend.js';
+import { svg } from '../lib/icons.js';
 
 /* ---- the rate chart behind a card ---------------------------------------- */
 /* The preview drew a fixed path; this is the same shape from real samples. */
@@ -264,7 +265,7 @@ ${field(t, idx)}
   <!-- The headline is the ping: the one figure that says how this tunnel is
        behaving right now. What it has carried is a total, and a total is a
        fact about the past — it goes under, at the size of one. -->
-  <div class="headline">${hasPing ? t.ping : '—'}<em>${hasPing ? 'ms' : 'no ping'}</em></div>
+  <div class="headline${hasPing ? '' : ' none'}">${hasPing ? t.ping : '—'}<em>${hasPing ? 'ms' : 'no ping'}</em></div>
   <div class="hcap">${esc(bytes(t.totalBytes || 0))}${t.uptime ? ` · up ${esc(t.uptime)}` : ''}</div>
 
   <div class="lines">
@@ -301,20 +302,20 @@ ${st ? `<div class="permenu">
 </div>` : ''}
 
 <div class="card-more">
-  <button data-do="start"><span>▶</span>Start</button>
-  <button data-do="stop"><span>■</span>Stop</button>
-  <button data-do="restart"><span>↻</span>Restart</button>
+  <button data-do="start"><span>${svg('play')}</span>Start</button>
+  <button data-do="stop"><span>${svg('stop')}</span>Stop</button>
+  <button data-do="restart"><span>${svg('restart')}</span>Restart</button>
   <div class="sep2"></div>
   <!-- Offered only while the other end is unknown. Everything the fleet does
        for a tunnel is gated on knowing where that end lives, and a tunnel not
        built through the fleet has never had a way to say. -->
   <!-- The line that builds the other end, as the menu prints it. -->
-  <button data-do="share"><span>⛓</span>Setup link…</button>
+  <button data-do="share"><span>${svg('link')}</span>Setup link…</button>
   ${t.node
-    ? `<button data-do="unlink"><span>⛓</span>Unlink from ${esc(t.node)}</button>`
-    : `<button data-do="adopt"><span>⛓</span>Link to a server…</button>`}
+    ? `<button data-do="unlink"><span>${svg('link')}</span>Unlink from ${esc(t.node)}</button>`
+    : `<button data-do="adopt"><span>${svg('link')}</span>Link to a server…</button>`}
   <div class="sep2"></div>
-  <button class="danger" data-do="delete"><span>✕</span>Delete</button>
+  <button class="danger" data-do="delete"><span>${svg('trash')}</span>Delete</button>
 </div>
 </div>`;
 }

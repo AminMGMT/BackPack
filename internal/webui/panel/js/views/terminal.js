@@ -140,7 +140,19 @@ const SVG = {
   shield: '<svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
 };
 
+/* xterm's own stylesheet comes with the screen, as the emulator does: the
+   index used to link it for every visit. */
+function xtermStyles() {
+  if (document.querySelector('link[data-xterm]')) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'css/vendor/xterm.css';
+  link.dataset.xterm = '';
+  document.head.append(link);
+}
+
 export function terminalView(ctx) {
+  xtermStyles();
   const view = $('#view');
   const host = store.get().stats?.hostname || 'this server';
   view.innerHTML = `<div class="tl-page tm" data-state="${sess ? sess.phase : 'idle'}">

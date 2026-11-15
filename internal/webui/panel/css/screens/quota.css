@@ -14,16 +14,16 @@
   filter:drop-shadow(0 0 6px color-mix(in srgb,var(--c) 45%,transparent))}
 .dlg.quota .qt-ring .new{stroke:color-mix(in srgb,var(--tx) 22%,transparent);stroke-width:10;stroke-dasharray:2 5}
 .dlg.quota .qt-ring .mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
-.dlg.quota .qt-ring .mid b{font-size:26px;font-weight:700;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.dlg.quota .qt-ring .mid b{font-size:26px;font-weight:600;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
 .dlg.quota .qt-ring .mid b em{font-style:normal;font-size:13px;color:var(--mu);margin-left:1px}
-.dlg.quota .qt-ring .mid small{font-size:10px;font-weight:640;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.dlg.quota .qt-ring .mid small{font-size:12px;font-weight:640;letter-spacing:0;color:var(--dim)}
 .dlg.quota .qt-ring.inf .arc{display:none}
 .dlg.quota .qt-ring.inf .mid b{font-size:34px}
 .dlg.quota .qt-nums{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--ln);border:1px solid var(--ln);
   border-radius:13px;overflow:hidden}
 .dlg.quota .qt-nums > div{background:var(--field);padding:11px 13px}
-.dlg.quota .qt-nums span{display:block;font-size:10px;font-weight:640;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
-.dlg.quota .qt-nums b{display:block;font-size:16px;font-weight:660;margin-top:3px;font-variant-numeric:tabular-nums;
+.dlg.quota .qt-nums span{display:block;font-size:12px;font-weight:640;letter-spacing:0;color:var(--dim)}
+.dlg.quota .qt-nums b{display:block;font-size:16px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums;
   letter-spacing:-.02em}
 .dlg.quota .qt-nums .wide{grid-column:1/-1}
 .dlg.quota .qt-state{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border-radius:12px;font-size:12px;
@@ -37,7 +37,7 @@
 @keyframes qt-pulse{50%{opacity:.35}}
 
 /* choosing */
-.dlg.quota .qt-h{font-size:10.5px;font-weight:660;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+.dlg.quota .qt-h{font-size:12px;font-weight:600;letter-spacing:0;color:var(--dim);
   display:flex;align-items:center;gap:9px}
 .dlg.quota .qt-h::after{content:"";flex:1;height:1px;background:var(--ln)}
 .dlg.quota .qt-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
@@ -47,7 +47,7 @@
 .dlg.quota .qt-presets button:hover,.dlg.quota .qt-add button:hover{border-color:var(--ln2);color:var(--tx)}
 .dlg.quota .qt-presets button:active,.dlg.quota .qt-add button:active{transform:scale(.97)}
 .dlg.quota .qt-presets button.on{background:var(--tx);color:var(--bg);border-color:var(--tx)}
-body[data-accent] .dlg.quota .qt-presets button.on{background:var(--ac);color:var(--ac-on);border-color:transparent}
+body[data-accent]:not([data-accent="signal"]) .dlg.quota .qt-presets button.on{background:var(--ac);color:var(--ac-on);border-color:transparent}
 .dlg.quota .qt-presets button small{display:block;font-size:9.5px;font-weight:560;opacity:.7;margin-top:1px}
 .dlg.quota .qt-custom{display:flex;gap:8px;align-items:stretch}
 .dlg.quota .qt-custom input{flex:1;min-width:0;font:inherit;font-size:15px;font-weight:620;color:var(--tx);background:var(--field);

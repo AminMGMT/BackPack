@@ -49,6 +49,10 @@ export function kindLabel(t) {
 }
 
 export function flag(cc) {
+  /* The two-letter country code, as text. It was the flag emoji: a picture
+     that renders differently on every system (as two letters in a box on
+     Windows) and the loudest thing on a quiet card. The code says the same
+     thing in the panel's own type. */
   if (!cc || cc.length !== 2) return '';
-  return String.fromCodePoint(...[...cc.toUpperCase()].map(c => 0x1f1a5 + c.charCodeAt(0)));
+  return cc.toUpperCase();
 }

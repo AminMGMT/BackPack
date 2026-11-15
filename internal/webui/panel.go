@@ -51,7 +51,7 @@ func loadPanel() {
 	panelOnce.Do(func() {
 		panelRoot, _ = fs.Sub(panelFS, "panel")
 		raw, _ := fs.ReadFile(panelRoot, "index.html")
-		panelIndex = raw
+		panelIndex = minifyHTML(raw)
 	})
 }
 
@@ -111,6 +111,7 @@ func assetFor(name string) *panelAsset {
 		assets[name] = nil
 		return nil
 	}
+	raw = minifyAsset(name, raw)
 	sum := sha256.Sum256(raw)
 	a := &panelAsset{
 		raw:   raw,

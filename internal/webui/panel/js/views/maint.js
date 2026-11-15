@@ -9,6 +9,7 @@ import * as store from '../store.js';
 import { openScreen } from '../ui/screen.js';
 import { oops, toast } from '../ui/toast.js';
 import { confirmBox } from '../ui/confirm.js';
+import { svg } from '../lib/icons.js';
 
 export async function maintView(ctx) {
   /* Opened straight from a link, this runs before the first poll, so the
@@ -271,7 +272,7 @@ export async function maintView(ctx) {
                 <button class="btn6" data-b="test">Test</button>
                 <a class="btn6" href="${esc(api.savedBackupURL(f.name))}">Download</a>
                 <button class="btn6 warn" data-b="restore">Restore</button>
-                <button class="btn6 ghost6" data-b="delete" title="Delete">✕</button>
+                <button class="btn6 ghost6" data-b="delete" title="Delete" aria-label="Delete">${svg('trash')}</button>
                 <div class="bsout" hidden></div></div>`).join('')}</div>`
               : '<div class="note6">None yet — the weekly backup and "Back up now" put them here.</div>'}
             <div class="lfh"><b>Off-site copy</b><span>A command run on every new backup. <code>{}</code> is the file — e.g. <code>rclone copy {} remote:backpack/</code>.</span></div>

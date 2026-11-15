@@ -50,8 +50,7 @@
 /* The chart lives in the content region, so it ends exactly where the bottom
    band begins rather than running behind it. */
 .c7 .mfield{position:absolute;inset:0 0 0 auto;z-index:0;pointer-events:none}
-.c7 .mwash{position:absolute;inset:0;
-  background:linear-gradient(to left,color-mix(in srgb,var(--mc) 12%,transparent),transparent 75%)}
+.c7 .mwash{display:none}
 /* The dotted ground. Drawn as a background rather than an SVG pattern on
    purpose: tokens.css sets svg{fill:none} for the icon set, and a CSS
    declaration beats a presentation attribute, so a <rect fill="url(#pattern)">
@@ -124,7 +123,7 @@
    worth a look — amber from 70%, red from 90% and when the limit is reached. */
 .c7 .qm{flex:1;min-width:0;display:grid;grid-template-columns:auto 1fr auto;align-items:center;column-gap:10px}
 .c7 .qm-tx{font-size:11.5px;white-space:nowrap;color:var(--dim);font-variant-numeric:tabular-nums}
-.c7 .qm-tx b{color:var(--tx);font-weight:650}
+.c7 .qm-tx b{color:var(--tx);font-weight:600}
 .c7 .qm-tx i{font-style:normal;margin:0 4px;opacity:.5}
 .c7 .qm-tx em{font-style:normal;font-size:14px;color:var(--mu);line-height:1}
 .c7 .qm-bar{height:5px;border-radius:3px;background:var(--sunk);overflow:hidden;min-width:40px;position:relative}
@@ -135,13 +134,13 @@ body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
 .c7 .qm.wr .qm-bar i{background:var(--wr)}
 .c7 .qm.er .qm-bar i{background:var(--er);box-shadow:0 0 8px color-mix(in srgb,var(--er) 55%,transparent)}
 .c7 .qm.none .qm-bar{background:repeating-linear-gradient(90deg,var(--ln) 0 4px,transparent 4px 8px)}
-.c7 .qm-pc{font-size:10.5px;font-weight:650;color:var(--mu);font-variant-numeric:tabular-nums}
+.c7 .qm-pc{font-size:10.5px;font-weight:600;color:var(--mu);font-variant-numeric:tabular-nums}
 .c7 .qm.wr .qm-pc{color:var(--wr)} .c7 .qm.er .qm-pc{color:var(--er)}
 .c7 .qm-ed{width:28px;height:28px;flex:none;border-radius:9px;border:1px solid var(--ln);background:var(--s2);
   color:var(--mu);display:grid;place-items:center;cursor:pointer;transition:background .18s ease,color .18s ease,transform .12s ease}
 .c7 .qm-ed:hover{background:var(--s3);color:var(--tx)}
 .c7 .qm-ed:active{transform:scale(.94)}
-.c7 .qm-ed svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.c7 .qm-ed svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 
 /* ---- the trend, and the window it is measured over ----------------------
  *
@@ -151,7 +150,7 @@ body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
  * The arrow carries the direction; the colour stays out of it. */
 .c7 .trend{display:inline-flex;align-items:center;gap:3px;flex:none;
   font-size:11px;font-weight:620;color:var(--mu);font-variant-numeric:tabular-nums}
-.c7 .trend svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.4;
+.c7 .trend svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:1.6;
   stroke-linecap:round;stroke-linejoin:round}
 @container pg (max-width:430px){ .c7 .trend{display:none} }
 
@@ -169,7 +168,7 @@ body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
   font-size:10.5px;font-weight:580;color:var(--dim);cursor:pointer;white-space:nowrap;
   transition:background .2s ease,color .2s ease}
 .c7 .per:hover{background:var(--sunk);color:var(--tx2)}
-.c7 .per svg{width:9px;height:9px;fill:none;stroke:currentColor;stroke-width:2.4;
+.c7 .per svg{width:9px;height:9px;fill:none;stroke:currentColor;stroke-width:1.6;
   stroke-linecap:round;stroke-linejoin:round}
 .c7 .permenu{position:absolute;right:16px;top:92px;z-index:6;min-width:142px;padding:4px;
   background:var(--s1);border:1px solid var(--ln2);border-radius:13px;box-shadow:var(--lift);
@@ -185,13 +184,13 @@ body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
   background:var(--mc);flex:none}
 /* What the window is drawn from, said once, so "Past 30 days" on a chart of
    daily totals is not mistaken for a per-second reading. */
-.c7 .permenu i{display:block;padding:7px 10px 5px;font-style:normal;font-size:10px;
-  font-weight:620;letter-spacing:.05em;text-transform:uppercase;color:var(--faint)}
+.c7 .permenu i{display:block;padding:7px 10px 5px;font-style:normal;font-size:12px;
+  font-weight:620;letter-spacing:0;color:var(--faint)}
 .c7 .hd{display:flex;align-items:center;gap:10px}
 .c7 .fl{width:30px;height:30px;border-radius:9px;background:var(--s3);border:1px solid var(--ln);
-        display:grid;place-items:center;font-size:15px;flex:none}
+        display:grid;place-items:center;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mu);flex:none}
 .c7 .id{flex:1;min-width:0}
-.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em;overflow:hidden;
+.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:0;overflow:hidden;
           text-overflow:ellipsis;white-space:nowrap}
 .c7 .id small{display:block;font-size:11px;color:var(--dim);margin-top:1px;overflow:hidden;
           text-overflow:ellipsis;white-space:nowrap}
@@ -203,7 +202,7 @@ body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
 @keyframes bp{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}
   70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
 .c7 .kind{display:flex;gap:6px;height:22px;margin-top:11px;overflow:hidden}
-.c7 .kind span{font-size:10.5px;font-weight:620;letter-spacing:.04em;text-transform:uppercase;
+.c7 .kind span{font-size:12px;font-weight:620;letter-spacing:0;
   padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
 /* min-width:0 so the ports chip can actually give way. A flex item will not
    shrink below its content without it, so a tunnel forwarding several ports
@@ -211,7 +210,8 @@ body:not([data-accent]) .c7 .qm.ok .qm-bar i{background:var(--tx2)}
 /* The preset: the one chip that is a choice rather than a fact about the
    wiring, so it carries the accent where the others are grey. */
 .c7 .kind span.pr{background:color-mix(in srgb,var(--ac) 14%,transparent);color:var(--ac);flex:none}
-body:not([data-accent]) .c7 .kind span.pr{background:color-mix(in srgb,var(--tx) 10%,transparent);color:var(--tx2)}
+body:not([data-accent]) .c7 .kind span.pr,
+body[data-accent="signal"] .c7 .kind span.pr{background:color-mix(in srgb,var(--tx) 10%,transparent);color:var(--tx2)}
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;
   letter-spacing:0;font-weight:560;min-width:0;max-width:100%;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
@@ -224,7 +224,7 @@ body:not([data-accent]) .c7 .kind span.pr{background:color-mix(in srgb,var(--tx)
   color:var(--tx2)}
 .c7 .relay{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:620;
   padding:5px 9px 5px 7px;border-radius:8px;background:var(--sunk);border:1px solid var(--ln);color:var(--tx2)}
-.c7 .relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.c7 .relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .c7 .lines{display:flex;align-items:center;gap:7px;height:18px;margin-top:10px;
   font-size:11.5px;color:var(--dim)}
 .c7 .lines .ip,.c7 .lines .pt{font-variant-numeric:tabular-nums;color:var(--mu)}
@@ -256,6 +256,8 @@ body:not([data-accent]) .c7 .kind span.pr{background:color-mix(in srgb,var(--tx)
   text-align:left;cursor:pointer}
 .c7 .card-more button:hover{background:var(--sunk)}
 .c7 .card-more button span{width:14px;text-align:center;color:var(--dim);font-size:10px}
+.c7 .card-more button span{display:grid;place-items:center}
+.c7 .card-more button span svg{width:14px;height:14px;stroke-width:1.6}
 .c7 .card-more .sep2{height:1px;background:var(--ln);margin:4px 0}
 .c7 .card-more button.danger{color:var(--er)}
 .c7 .card-more button.danger span{color:var(--er)}
@@ -265,7 +267,12 @@ body:not([data-accent]) .c7 .kind span.pr{background:color-mix(in srgb,var(--tx)
 
 .emptybox{grid-column:1/-1;border:1px dashed var(--ln2);border-radius:18px;background:var(--s1);
   padding:44px 24px;text-align:center}
-.emptybox b{display:block;font-size:15px;font-weight:650;letter-spacing:-.026em}
+.emptybox b{display:block;font-size:15px;font-weight:600;letter-spacing:0}
 .emptybox span{display:block;font-size:12.5px;color:var(--mu);margin-top:8px;line-height:1.6}
 .emptybox code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
   background:var(--sunk);border-radius:5px;padding:1px 6px}
+
+/* No ping is an absence, not a figure: the dash stays where the number goes,
+   in the muted role, so the card does not lead with a big bar of nothing. */
+.c7 .headline.none{color:var(--faint)}
+.c7 .headline.none em{color:var(--dim)}

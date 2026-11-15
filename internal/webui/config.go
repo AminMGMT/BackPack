@@ -233,12 +233,6 @@ func UpdateConfig(change func(*Config) error) (c Config, err error) {
 	return c, err
 }
 
-// Save persists a complete config (0600, root only). Incremental writers use
-// UpdateConfig to preserve fields owned by other callers.
-func Save(c Config) error {
-	return withConfigLock(func() error { return saveConfig(c) })
-}
-
 func saveConfig(c Config) error {
 	data, _ := json.MarshalIndent(c, "", "  ")
 	// Atomic: the panel reads this on every login and the CLI shows the password

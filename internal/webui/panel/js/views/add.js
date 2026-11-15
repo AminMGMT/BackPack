@@ -1016,22 +1016,21 @@ export function addView(ctx) {
            the rest of the form listens to. */
         const kind = el('div', { class: 'typegrp' });
         kind.innerHTML = `<div class="here-card">
-            <span class="here-flag">🇮🇷</span>
+            <span class="here-flag"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></svg></span>
             <div><b>Iran — this server</b><small>This end is built here. The kharej is set up from the one line
-              you get at the end: paste it there and the tunnel comes up.</small></div>
-            <span class="here-pill"><i></i>this server</span></div>
+              you get at the end: paste it there and the tunnel comes up.</small></div></div>
           <div class="lede2 kindq">How do the two servers reach each other?</div>
           <div class="grp3 kindgrp"><div class="choices">
             <button type="button" class="ch4" data-kind="rev">
               <span class="ic4"><svg viewBox="0 0 24 24"><path d="M20 12H4"/><path d="M10 6l-6 6 6 6"/></svg></span>
               <b>Reverse<span class="rec">usual</span></b>
-              <i>The kharej dials in to this server. Ten transports, from plain TCP to WebSocket behind a CDN — what to try first.</i>
-              <div class="diagram">🌍 kharej <b>→</b> 🇮🇷 Iran</div></button>
+              <i>The kharej dials in to this server. Twelve transports, from plain TCP to WebSocket behind a CDN — what to try first.</i>
+              <div class="diagram"><span class="route"><span>kharej</span><i class="rt"></i><span>Iran</span></span></div></button>
             <button type="button" class="ch4" data-kind="dir">
               <span class="ic4"><svg viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M14 6l6 6-6 6"/></svg></span>
               <b>Direct</b>
               <i>This server dials out to the kharej over a layer-3 carrier. For paths where reverse is filtered.</i>
-              <div class="diagram">🇮🇷 Iran <b>→</b> 🌍 kharej</div></button>
+              <div class="diagram"><span class="route"><span>Iran</span><i class="rt"></i><span>kharej</span></span></div></button>
           </div></div>`;
         side.append(kind);
         const swap = root.querySelector('.modeswap');

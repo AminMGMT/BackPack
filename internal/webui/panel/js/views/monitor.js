@@ -10,6 +10,7 @@ import * as api from '../api.js';
 import * as store from '../store.js';
 import { openScreen } from '../ui/screen.js';
 import { oops, toast } from '../ui/toast.js';
+import { svg } from '../lib/icons.js';
 
 /* ---- alerts -------------------------------------------------------------- */
 const clock = d => d.toTimeString().slice(0, 5);
@@ -40,8 +41,8 @@ export function alertsView(ctx) {
         active.classList.toggle('calm', !list.length);
         active.innerHTML = list.length
           ? `<div class="ah2">Firing now · ${list.length}</div>` +
-            list.map(a => `<div class="ai2"><i>!</i><span>${esc(a)}</span></div>`).join('')
-          : `<div class="ai2 ok"><i>✓</i><span>Nothing is firing right now.</span></div>`;
+            list.map(a => `<div class="ai2"><i>${svg('warn')}</i><span>${esc(a)}</span></div>`).join('')
+          : `<div class="ai2 ok"><i>${svg('check')}</i><span>Nothing is firing right now</span></div>`;
       }
 
       /* Newest first. The file keeps them oldest first, and drawing it in that
@@ -100,7 +101,14 @@ export function healthView(ctx) {
           if (!groups.has(g)) groups.set(g, []);
           groups.get(g).push(c);
         }
-        const lvl = c => (c.Level || c.level || 'ok').toLowerCase();
+        /* The server says ok, warn, fail or info (handlers_monitoring.go). This
+           read "error" for a failure, which the server never sends: a failed
+           check — the engine binary missing, say — was drawn with the green
+           dot and the tally said "0 broken". Info is a fact, not a pass. */
+        const lvl = c => {
+          const l = String(c.Level || c.level || 'ok').toLowerCase();
+          return l === 'fail' ? 'error' : l;
+        };
         const counts = { ok: 0, warn: 0, error: 0 };
         checks.forEach(c => { counts[lvl(c)] = (counts[lvl(c)] || 0) + 1; });
 

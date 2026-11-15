@@ -18,18 +18,18 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 @media (max-width:780px){.cell.open{grid-column:span 1}}
 .c7{background:var(--s1);border:1px solid var(--ln);border-radius:18px;position:relative;overflow:hidden;
     display:flex;flex-direction:column;min-height:318px;transition:border-color .3s var(--spring)}
-.c7 .hd,.ed .eh{display:flex;align-items:center;gap:10px}
+.c7 .hd{display:flex;align-items:center;gap:10px}
 .fl{width:30px;height:30px;border-radius:9px;background:var(--s3);border:1px solid var(--ln);
-    display:grid;place-items:center;font-size:15px;flex:none}
-.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:-.022em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    display:grid;place-items:center;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mu);flex:none}
+.c7 .id b{display:block;font-size:14.5px;font-weight:640;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .c7 .id small{display:block;font-size:11px;color:var(--dim);margin-top:1px}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;display:block;background:var(--ok);animation:bp 2.6s ease-out infinite}
 @keyframes bp{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
-.c7 .kind span{font-size:10.5px;font-weight:620;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
+.c7 .kind span{font-size:12px;font-weight:620;letter-spacing:0;padding:3px 8px;border-radius:6px;background:var(--sunk);color:var(--mu)}
 .c7 .kind span.q{background:transparent;border:1px solid var(--ln);color:var(--dim);text-transform:none;letter-spacing:0;font-weight:560}
 .relay{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:620;padding:5px 9px 5px 7px;
   border-radius:8px;background:var(--sunk);border:1px solid var(--ln);color:var(--tx2)}
-.relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.relay svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 
 /* The switches and menus were drawn as divs and are controls now.
  *
@@ -61,7 +61,7 @@ body[data-t="light"]{background:#f2f2f2;color:#0a0a0a;
 .dlg .ed-hand{display:flex;flex-direction:column;gap:14px;padding:18px;animation:edh-in .45s cubic-bezier(.32,.72,0,1) both}
 @keyframes edh-in{from{opacity:0;transform:translateY(8px)}}
 .dlg .ed-hand-h{display:flex;gap:12px;align-items:flex-start}
-.dlg .ed-hand-h b{display:block;font-size:14px;font-weight:650;letter-spacing:-.02em}
+.dlg .ed-hand-h b{display:block;font-size:14px;font-weight:600;letter-spacing:0}
 .dlg .ed-hand-h small{display:block;font-size:12px;color:var(--dim);line-height:1.55;margin-top:3px}
 .dlg .ed-ok{width:30px;height:30px;border-radius:50%;flex:none;position:relative;
   background:color-mix(in srgb,var(--ok) 15%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}

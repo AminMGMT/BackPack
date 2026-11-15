@@ -84,9 +84,9 @@ test('kindLabel names the direction and the carrier', () => {
   assert.equal(kindLabel({ direction: 'reverse' }), 'reverse ');
 });
 
-test('flag renders a two-letter country and nothing else', () => {
-  assert.equal(flag('ir'), '🇮🇷');
-  assert.equal(flag('DE'), '🇩🇪');
+test('flag renders a two-letter country code as text and nothing else', () => {
+  assert.equal(flag('ir'), 'IR');
+  assert.equal(flag('DE'), 'DE');
   assert.equal(flag(''), '');
   assert.equal(flag('xyz'), '');
   assert.equal(flag(undefined), '');

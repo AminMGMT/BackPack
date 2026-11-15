@@ -8,17 +8,14 @@
    number and becomes the tile itself — the same move the tunnel
    card makes with its rate chart, so the two read as one family.
    ============================================================ */
-.RX{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln)}
+
 
 /* V3 — heartbeat columns */
-/* A chip, not a card: the same material but a lighter blur, because a small
-   surface that blurs as hard as a big one reads as thicker than it is. */
-.RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);
-  -webkit-backdrop-filter:blur(12px) saturate(140%);backdrop-filter:blur(12px) saturate(140%)}
+.RZ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ln);}
 .RZ .t4{background:var(--glass);padding:14px 15px 13px;display:flex;flex-direction:column;gap:9px}
 .RZ .head6{display:flex;align-items:baseline;gap:9px}
 .RZ .k{font-size:11px;color:var(--dim);font-weight:560}
-.RZ .v{font-size:24px;font-weight:660;letter-spacing:-.036em;font-variant-numeric:tabular-nums;line-height:1}
+.RZ .v{font-size:24px;font-weight:600;letter-spacing:-.036em;font-variant-numeric:tabular-nums;line-height:1}
 .RZ .v em{font-style:normal;font-size:12px;color:var(--mu);font-weight:560;margin-left:2px}
 .RZ .trend{margin-left:auto;font-size:10.5px;font-weight:620;padding:2px 7px;border-radius:6px;
   background:var(--sunk);color:var(--mu)}
@@ -33,5 +30,5 @@
 .RZ .cols i.now.over{opacity:1}
 .RZ .s{font-size:11px;color:var(--dim)}
 
-@container pg (max-width:900px){ .RX,.RY,.RZ{grid-template-columns:repeat(2,1fr)} }
-@container pg (max-width:520px){ .RX,.RY,.RZ{grid-template-columns:1fr} }
+@container pg (max-width:900px){ .RZ{grid-template-columns:repeat(2,1fr)} }
+@container pg (max-width:520px){ .RZ{grid-template-columns:1fr} }

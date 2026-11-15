@@ -7,22 +7,6 @@ import * as router from './router.js';
 import { toast } from './ui/toast.js';
 import { dashboard } from './views/dashboard.js';
 import { overview } from './views/overview.js';
-import { logsView } from './views/logs.js';
-import { metricsView } from './views/metrics.js';
-import { historyView } from './views/history.js';
-import { linkTestView } from './views/linktest.js';
-import { editView } from './views/edit.js';
-import { addView } from './views/add.js';
-import { settingsView } from './views/settings.js';
-import { serversView } from './views/servers.js';
-import { connTestView } from './views/conntest.js';
-import { terminalView } from './views/terminal.js';
-import { manageView } from './views/manage.js';
-import { shareView } from './views/share.js';
-import { quotaView } from './views/quota.js';
-import { maintView, undoView } from './views/maint.js';
-import { alertsView, healthView } from './views/monitor.js';
-import { starView, supportView } from './views/support.js';
 import { closeScreen } from './ui/screen.js';
 import { mountStrip } from './ui/strip.js';
 import { startPWA } from './ui/pwa.js';
@@ -93,6 +77,48 @@ function paintHeader(state) {
 }
 
 /* ---- routes -------------------------------------------------------------- */
+
+/* Every screen but the two the panel opens on is fetched the first time it is
+   visited. They were all imported here, so opening the panel downloaded every
+   screen — the terminal with xterm.js among them, 345 KB of an emulator most
+   visits never show — before drawing the overview.
+
+   A lazy view is an ordinary view: it takes the same ctx and hands its
+   teardown back the same way. One left before its module arrived is never
+   drawn, so a fast click through the dock does not paint a stale screen over
+   the one that is current. */
+function lazy(load, pick) {
+  return ctx => {
+    let gone = false;
+    let down = () => {};
+    ctx.setTeardown(() => { gone = true; down(); });
+    load().then(m => {
+      if (gone) return;
+      m[pick]({ ...ctx, setTeardown: fn => { if (fn) down = fn; } });
+    }).catch(err => {
+      if (!gone) toast(`This screen could not be loaded (${err.message}) — reload the page.`);
+    });
+  };
+}
+const connTestView = lazy(() => import('./views/conntest.js'), 'connTestView');
+const terminalView = lazy(() => import('./views/terminal.js'), 'terminalView');
+const manageView   = lazy(() => import('./views/manage.js'), 'manageView');
+const serversView  = lazy(() => import('./views/servers.js'), 'serversView');
+const logsView     = lazy(() => import('./views/logs.js'), 'logsView');
+const metricsView  = lazy(() => import('./views/metrics.js'), 'metricsView');
+const historyView  = lazy(() => import('./views/history.js'), 'historyView');
+const linkTestView = lazy(() => import('./views/linktest.js'), 'linkTestView');
+const editView     = lazy(() => import('./views/edit.js'), 'editView');
+const addView      = lazy(() => import('./views/add.js'), 'addView');
+const settingsView = lazy(() => import('./views/settings.js'), 'settingsView');
+const shareView    = lazy(() => import('./views/share.js'), 'shareView');
+const quotaView    = lazy(() => import('./views/quota.js'), 'quotaView');
+const maintView    = lazy(() => import('./views/maint.js'), 'maintView');
+const undoView     = lazy(() => import('./views/maint.js'), 'undoView');
+const alertsView   = lazy(() => import('./views/monitor.js'), 'alertsView');
+const healthView   = lazy(() => import('./views/monitor.js'), 'healthView');
+const starView     = lazy(() => import('./views/support.js'), 'starView');
+const supportView  = lazy(() => import('./views/support.js'), 'supportView');
 /* The four sections. Each renders into #view; the strip above them is chrome
    and belongs to no section. */
 router.route('/', overview);
@@ -211,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let theme = 'dark', accent = 'none';
   try {
     theme = localStorage.getItem('bp_theme') || 'dark';
-    accent = localStorage.getItem('bp_accent') || 'none';
+    accent = localStorage.getItem('bp_accent') || 'signal';
   } catch (e) {}
   setTheme(theme);
   setAccent(accent);

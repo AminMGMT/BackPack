@@ -54,6 +54,8 @@ test('the panel has modules to check, so this test is looking in the right place
 });
 
 test('every module is imported by another, except the entry point', () => {
+  // A screen loaded with import() on first visit counts: main.js loads every
+  // screen but the two the panel opens on that way.
   const entry = join(JS, 'main.js');
   for (const file of files) {
     if (file === entry) continue;
@@ -61,7 +63,7 @@ test('every module is imported by another, except the entry point', () => {
     // relative() uses backslashes on Windows; imports use forward slashes.
     const base = basename(file);
     const used = [...sources].some(([other, src]) =>
-      other !== file && new RegExp(`from\\s+['"][^'"]*${base.replace('.', '\\.')}['"]`).test(src));
+      other !== file && new RegExp(`(?:from\\s+|import\\(\\s*)['"][^'"]*${base.replace('.', '\\.')}['"]`).test(src));
     assert.ok(used, `${spec} is imported by nothing — it is either dead or the import was lost`);
   }
 });
@@ -88,7 +90,8 @@ test('nothing is exported that nobody uses', () => {
  * has no build step to catch it first. */
 test('every relative import resolves to a file that exists', () => {
   for (const [file, src] of sources) {
-    for (const m of src.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+    // Static imports, and the screens main.js loads on first visit.
+    for (const m of src.matchAll(/(?:from\s+|import\(\s*)['"](\.[^'"]+)['"]/g)) {
       const target = resolve(dirname(file), m[1]);
       assert.ok(sources.has(target),
         `${relative(JS, file)} imports ${m[1]}, which is not a module in this panel`);

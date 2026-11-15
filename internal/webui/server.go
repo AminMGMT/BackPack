@@ -249,12 +249,6 @@ type server struct {
 // change — the one that made it.
 func basePrefix() string { return Load().PathPrefix() }
 
-// password always reads the current password from disk, so a change made from
-// the CLI or the web UI takes effect immediately — no restart, no stale cache.
-func (s *server) password() string {
-	return Load().Password
-}
-
 // updatePassword persists a new password (read fresh on the next login).
 func (s *server) updatePassword(pw string) error {
 	_, err := UpdateConfig(func(c *Config) error { c.Password = pw; return nil })

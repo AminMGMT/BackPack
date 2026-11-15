@@ -15,6 +15,7 @@ import { $, esc, copyText, flashCopied } from '../lib/dom.js';
 import * as api from '../api.js';
 import { toast, oops } from '../ui/toast.js';
 import { confirmBox } from '../ui/confirm.js';
+import { svg } from '../lib/icons.js';
 
 const PRESETS = [
   { v: 'balance', label: 'Balance', note: 'least memory' },
@@ -59,7 +60,7 @@ function stepper(st) {
   ];
   return `<ol class="ct-steps">${steps.map(([b, s], i) => {
     const cls = i < at ? 'done' : i === at ? 'on' : '';
-    return `<li class="${cls}"><span class="n">${i < at ? '✓' : i + 1}</span>
+    return `<li class="${cls}"><span class="n">${i < at ? svg('check') : i + 1}</span>
       <span class="tx"><b>${b}</b><small>${s}</small></span></li>`;
   }).join('<li class="bar" aria-hidden="true"></li>')}</ol>`;
 }

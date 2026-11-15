@@ -17,6 +17,14 @@ body {
   --ac-soft: var(--sunk);   /* a wash of it */
 }
 
+/* Signal: the green of a rack LED, and the default. It is spent on the live
+   things only — the current reading on the meters, the traffic series, the
+   live dot on the route line — and never on the chrome: buttons, the mark,
+   tabs and selections stay in the ramp, so green always means "this is
+   happening now". That is why the chrome rules below skip it. */
+body[data-t="dark"][data-accent="signal"] { --ac: #4cc38a; --ac-on: #07140d; }
+body[data-t="light"][data-accent="signal"] { --ac: #15803d; --ac-on: #ffffff; }
+
 body[data-t="dark"][data-accent="crimson"] { --ac: #b3001b; --ac-on: #ffffff; }
 body[data-t="light"][data-accent="crimson"] { --ac: #4f000b; --ac-on: #ffffff; }
 
@@ -29,44 +37,39 @@ body[data-t="light"][data-accent="lime"] { --ac: #5f8a00; --ac-on: #ffffff; }
 body[data-t="dark"][data-accent="azure"] { --ac: #41bbd9; --ac-on: #08222a; }
 body[data-t="light"][data-accent="azure"] { --ac: #1d87a5; --ac-on: #ffffff; }
 
-body[data-accent] { --ac-soft: color-mix(in srgb, var(--ac) 14%, transparent); }
+body[data-accent]:not([data-accent="signal"]) { --ac-soft: color-mix(in srgb, var(--ac) 14%, transparent); }
 
 /* ---- where it lands ------------------------------------------------------ */
 
 /* the mark, in the header and in the menu */
-body[data-accent] .HH .mk,
-body[data-accent] .menuM .mpa,
-body[data-accent] .boot-in { background: var(--ac); color: var(--ac-on); }
+body[data-accent]:not([data-accent="signal"]) .HH .mk,
+body[data-accent]:not([data-accent="signal"]) .boot-in{ background: var(--ac); color: var(--ac-on); }
 
 /* the rate line under a tunnel card, and every other spark drawn from it */
 body[data-accent] { --spark: var(--ac); }
 
 /* the one button on a screen that commits something */
-body[data-accent] .sech2 .sb.primary,
-body[data-accent] .btn-solid,
-body[data-accent] .dlg .btn6.solid,
-body[data-accent] .unlock,
-body[data-accent] .nb.solid2 {
+body[data-accent]:not([data-accent="signal"]) .sech2 .sb.primary,
+body[data-accent]:not([data-accent="signal"]) .dlg .btn6.solid,
+body[data-accent]:not([data-accent="signal"]) .nb.solid2{
   background: var(--ac); color: var(--ac-on); border-color: transparent;
 }
 
 /* what is selected, and what has focus */
-body[data-accent] .dlg .tabs button.on { color: var(--ac); border-bottom-color: var(--ac); }
-body[data-accent] .steps .st2.on .n3 { background: var(--ac); color: var(--ac-on); }
-body[data-accent] .tr.on, body[data-accent] .rp.on,
-body[data-accent] .ch4.on, body[data-accent] .dc.on { border-color: var(--ac); }
-body[data-accent] :focus-visible { outline-color: var(--ac); }
+body[data-accent]:not([data-accent="signal"]) .dlg .tabs button.on { color: var(--ac); border-bottom-color: var(--ac); }
+body[data-accent]:not([data-accent="signal"]) .steps .st2.on .n3 { background: var(--ac); color: var(--ac-on); }
+body[data-accent]:not([data-accent="signal"]) .tr.on, body[data-accent]:not([data-accent="signal"]) .rp.on,
+body[data-accent]:not([data-accent="signal"]) .ch4.on, body[data-accent]:not([data-accent="signal"]) .dc.on { border-color: var(--ac); }
+body[data-accent]:not([data-accent="signal"]) :focus-visible { outline-color: var(--ac); }
 
 /* the ring that fills while the panel loads */
-body[data-accent] .boot-mark .arc { stroke: var(--ac); }
+body[data-accent]:not([data-accent="signal"]) .boot-mark .arc { stroke: var(--ac); }
 
 /* the meter bars on the server strip — load, not status */
 body[data-accent] .RZ .cols i.now { background: var(--ac); opacity: 1; }
 
 /* the rule under a section title */
-body[data-accent] .sectitle .ln {
-  background: linear-gradient(90deg, var(--ac-soft), var(--ln) 38%);
-}
+body[data-accent] .sectitle .ln { background: var(--ln); }
 
 /* ---- the control in the header ------------------------------------------- */
 .HH .pal2 .sw0 { width: 13px; height: 13px; border-radius: 50%; flex: none;
@@ -82,8 +85,7 @@ body[data-accent="none"] .HH .pal2 .sw0 {
           transform: scale(.94) translateY(-6px); opacity: 0; pointer-events: none;
           transition: transform .28s var(--spring), opacity .2s ease; }
 .appear.on { transform: none; opacity: 1; pointer-events: auto; }
-.appear h4 { font-size: 10px; font-weight: 660; letter-spacing: .09em;
-             text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+.appear h4 { font-size:12px; font-weight: 600; letter-spacing:0; color: var(--dim); margin-bottom: 8px; }
 .appear h4 + * { margin-bottom: 14px; }
 .appear .seg { display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: var(--sunk); }
 .appear .seg button { flex: 1; font: inherit; font-size: 11.5px; font-weight: 600;

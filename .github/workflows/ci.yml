@@ -242,16 +242,24 @@ jobs:
         # packet socket sees every frame on the interface, and the setup link is
         # pasted in by a person from wherever it arrived. Both of the bugs found
         # when these were written were found in the first minute.
+        #
+        # The budgets are counts of inputs, not seconds. A time budget trips a
+        # race in Go's fuzz coordinator (internal/fuzz, Go 1.26): when the
+        # deadline fires, the loop can see it before the workers' context has
+        # been cancelled, and reports "context deadline exceeded" as a failure
+        # with no failing input written. It failed one run in six here. A count
+        # sets no deadline at all. Each is about what the seconds used to buy
+        # on a GitHub runner; -timeout only guards against a runner that stalls.
         run: |
           set -eux
-          go test ./internal/tunnel/l3/        -run=X -fuzz=FuzzParseHeader        -fuzztime=30s
-          go test ./internal/tunnel/l3/        -run=X -fuzz=FuzzParseReplyPayload  -fuzztime=30s
-          go test ./internal/utils/network/    -run=X -fuzz=FuzzParsePckFrame      -fuzztime=30s
-          go test ./internal/utils/network/    -run=X -fuzz=FuzzDecodeXdiPayload   -fuzztime=30s
-          go test ./internal/utils/network/    -run=X -fuzz=FuzzParseTCPFlags      -fuzztime=20s
-          go test ./internal/utils/network/    -run=X -fuzz=FuzzParseSpoofProfile  -fuzztime=20s
-          go test ./internal/manage/           -run=X -fuzz=FuzzDecodeShareLink    -fuzztime=30s
-          go test ./internal/manage/           -run=X -fuzz=FuzzShareLinkRoundTrip -fuzztime=30s
+          go test ./internal/tunnel/l3/        -run=X -fuzz=FuzzParseHeader        -fuzztime=300000x -timeout=10m
+          go test ./internal/tunnel/l3/        -run=X -fuzz=FuzzParseReplyPayload  -fuzztime=300000x -timeout=10m
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzParsePckFrame      -fuzztime=300000x -timeout=10m
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzDecodeXdiPayload   -fuzztime=300000x -timeout=10m
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzParseTCPFlags      -fuzztime=200000x -timeout=10m
+          go test ./internal/utils/network/    -run=X -fuzz=FuzzParseSpoofProfile  -fuzztime=200000x -timeout=10m
+          go test ./internal/manage/           -run=X -fuzz=FuzzDecodeShareLink    -fuzztime=200000x -timeout=10m
+          go test ./internal/manage/           -run=X -fuzz=FuzzShareLinkRoundTrip -fuzztime=60000x  -timeout=10m
 
       - name: Report a crasher
         if: failure()

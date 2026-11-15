@@ -21,13 +21,13 @@
   animation:ov-in .38s var(--spring) both;animation-delay:calc(var(--i,0) * 40ms);
   transition:background .18s ease,border-color .18s ease}
 .panel .ov-pill:hover{background:var(--s3);border-color:var(--ln2)}
+/* The notices: a quiet row with a coloured dot. The border used to take the
+   status colour too, with a halo round the dot — three signals for one fact. */
 .panel .ov-pill .ov-dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ln3)}
-.panel .ov-pill.er{border-color:color-mix(in srgb,var(--er) 38%,transparent)}
-.panel .ov-pill.er .ov-dot{background:var(--er);box-shadow:0 0 0 3px color-mix(in srgb,var(--er) 18%,transparent)}
-.panel .ov-pill.wr{border-color:color-mix(in srgb,var(--wr) 32%,transparent)}
-.panel .ov-pill.wr .ov-dot{background:var(--wr);box-shadow:0 0 0 3px color-mix(in srgb,var(--wr) 18%,transparent)}
-.panel .ov-pill.ok{cursor:default;border-color:color-mix(in srgb,var(--ok) 30%,transparent)}
-.panel .ov-pill.ok .ov-dot{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+.panel .ov-pill.er .ov-dot{background:var(--er)}
+.panel .ov-pill.wr .ov-dot{background:var(--wr)}
+.panel .ov-pill.ok{cursor:default}
+.panel .ov-pill.ok .ov-dot{background:var(--ok)}
 
 @keyframes ov-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
@@ -37,15 +37,11 @@
   -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);
   padding:18px 18px 14px;position:relative;overflow:hidden;
   animation:ov-in .5s var(--spring) both}
-/* A single wash from the top, so the card has a light source and the month of
-   bars along its base sits in the dark half of it. */
-.panel .tk::before{content:'';position:absolute;inset:0;pointer-events:none;
-  background:radial-gradient(120% 80% at 12% -20%,var(--sunk),transparent 60%)}
 .panel .tk>*{position:relative}
 
 .panel .tk-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
 .panel .tk-tot{min-width:0}
-.panel .tk-num{display:block;font-size:38px;font-weight:670;letter-spacing:-.045em;
+.panel .tk-num{display:block;font-size:38px;font-weight:600;letter-spacing:-.045em;
   line-height:1;font-variant-numeric:tabular-nums}
 .panel .tk-cap{display:block;font-size:11.5px;color:var(--dim);margin-top:7px}
 .panel .tk-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
@@ -67,7 +63,7 @@
 /* A month, one column a day, filling left to right in the order they happened. */
 .panel .tk-days{display:flex;align-items:flex-end;gap:3px;height:64px}
 .panel .tk-days i{flex:1;min-width:2px;border-radius:2px 2px 1px 1px;height:var(--h);
-  background:linear-gradient(180deg,var(--spark),color-mix(in srgb,var(--spark) 28%,transparent));
+  background:var(--spark);
   opacity:.55;transform-origin:bottom;
   animation:tk-rise .5s var(--spring) both;
   animation-delay:calc(var(--i) * 18ms + 140ms);
@@ -84,8 +80,7 @@
 /* ---- the traffic pair ----------------------------------------------------
    One figure and its breakdown are one thought. They used to be a page apart,
    which made the second read as a separate report of the same thing. */
-.panel .ov-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-  gap:14px;align-items:start;margin-top:14px}
+
 
 /* ---- who wrote it -------------------------------------------------------- */
 .panel .ov-foot{display:flex;flex-direction:column;align-items:center;gap:8px;
@@ -100,9 +95,9 @@
 .panel .ov-by:hover{color:var(--tx2);text-decoration:underline}
 
 @container pg (max-width:700px){
-  .panel .ov-row{grid-template-columns:1fr}
-  .panel .tk-row{grid-template-columns:8px minmax(0,1fr) auto}
-  .panel .tk-bar{display:none}
+  
+  
+  
   .panel .tk-num{font-size:30px}
   .panel .tk-chips{margin-left:0;width:100%}
 }
@@ -216,8 +211,7 @@
 @container pg (max-width:1000px){ .panel .ov-facts{grid-template-columns:repeat(2,1fr)} }
 @container pg (max-width:430px){ .panel .ov-facts{grid-template-columns:1fr} }
 .panel .ov-fact{background:var(--glass);padding:12px 15px;min-width:0}
-.panel .ov-fact span{display:block;font-size:10.5px;font-weight:620;letter-spacing:.06em;
-  text-transform:uppercase;color:var(--dim);
+.panel .ov-fact span{display:block;font-size:12px;font-weight:620;letter-spacing:0;color:var(--dim);
   /* One line, like the value under it: a label that wrapped at one width made
      its row, and so the whole block, taller there than at the next. */
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -229,12 +223,11 @@
    overview replays itself every time the poller comes back. */
 .panel .ov.settled *{animation:none!important}
 .panel .ov.settled .tk-days i{transform:none}
-.panel .ov.settled .tk-split i,
-.panel .ov.settled .tk-bar i{transition:width .5s var(--spring)}
+.panel .ov.settled .tk-split i{transition:width .5s var(--spring)}
 
 /* The whole page reads the same with none of it. */
 @media (prefers-reduced-motion:reduce){
   .panel .ov *{animation:none!important;transition:none!important}
   .panel .tk-days i{transform:none}
-  .panel .tk-split i,.panel .tk-bar i{width:var(--w)}
+  .panel .tk-split i{width:var(--w)}
 }

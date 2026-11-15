@@ -386,6 +386,25 @@ All notable changes to Backpack are documented here.
   there. The floor is now per unit: 64 KiB for the 7- and 30-day totals, 1 KiB/s
   for the rate windows. The arithmetic moved to `js/lib/trend.js` and has tests.
 
+- **The panel opens on a sixth of what it downloaded.** Its first load was 53
+  files, 972 KB, 300 KB gzipped, over the route from Iran most panels are
+  reached by. It is now 31 files, 175 KB, 53 KB gzipped:
+  - every screen but the overview and the tunnels is fetched the first time it
+    is visited — main.js imported all of them, the terminal and its 345 KB
+    xterm.js among them, before drawing anything; xterm's stylesheet comes with
+    the terminal too;
+  - the files go out without their comments: they are the documentation of
+    this front end and stay in the source, but a quarter of the CSS and a third
+    of the JavaScript, gzipped, was comments every visit downloaded. Stripped
+    once when a file is first served, with nothing renamed or rewritten
+    (`internal/webui/panelmin.go`; a test checks every served file still parses
+    and the panel's own tests pass against them);
+  - 8 KB of CSS rules whose selectors name classes nothing uses any more;
+  - preview text the screens always replaced: the Alerts dialog opened showing
+    two invented alerts and a feed of events about tunnels that do not exist
+    until its data arrived, and the Health dialog a list of invented checks.
+  Two test-only helpers moved out of the package.
+
 - **CI was red on every run since v1.9.0; each cause is fixed.** Read from the
   Actions logs of all 31 runs since the v1.9.0 tag:
   - *Cross-build* and the release build: the ARMv5 cross compiler was
@@ -418,6 +437,18 @@ All notable changes to Backpack are documented here.
   - Dependencies: gopacket 1.7.7 (a security release for decoding untrusted
     traffic), quic-go 0.65.0, gopsutil 4.26.10, x/crypto 0.59.0, x/net 0.62.0,
     x/sys 0.50.0 — the open Dependabot group update.
+  - Three that failed after that push, each in one run of two:
+    - *Fuzz*: `FuzzParsePckFrame` failed with "context deadline exceeded" and
+      no failing input. That is a race in Go's own fuzz coordinator when a
+      `-fuzztime` given in seconds runs out (one run in six locally). The
+      budgets are now counts of inputs, which set no deadline, sized to what the
+      seconds bought on a runner.
+    - *Managed HTTPS carriers over IPv6*: the loopback Connection Test takes
+      231–243 s on a runner and had a four-minute budget. It has six now.
+    - *Build and test*: the churn test's next client could prove itself ready
+      through the previous client's mux session still winding down, then lose
+      its transfer when that generation ended. It now waits for each client to
+      stop carrying before the next one starts.
 
 - **The pinned NaiveProxy release had been withdrawn.** `v154.0.8037.49-4` has
   no assets on GitHub any more, so `BP_HELPERS=naive bash install.sh` failed on

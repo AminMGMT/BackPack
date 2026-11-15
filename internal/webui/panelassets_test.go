@@ -15,9 +15,14 @@ import (
 // return visit gets a 304 and no body.
 func TestThePanelFilesAreCompressedAndRevalidated(t *testing.T) {
 	loadPanel()
-	want, err := fs.ReadFile(panelRoot, "js/main.js")
+	raw, err := fs.ReadFile(panelRoot, "js/main.js")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// What goes out is the served form: the source without its comments.
+	want := minifyAsset("js/main.js", raw)
+	if len(want) >= len(raw) {
+		t.Errorf("the served main.js is %d bytes, the source %d: nothing was taken out", len(want), len(raw))
 	}
 
 	req := httptest.NewRequest("GET", "/js/main.js", nil)

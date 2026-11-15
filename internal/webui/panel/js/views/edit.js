@@ -230,6 +230,23 @@ async function choicesFor(name, opts, family) {
   }
 }
 
+/* The line under the transport and the preset says what the chosen one is,
+   from the server's own descriptions. Both were the preview's text, never
+   replaced: every tunnel read "A websocket inside TLS…" under its transport —
+   a PCK one included — and "Keepalive 20s, mux 8, pool 8" under any preset. */
+function paintDescriptions(root, opts) {
+  if (!opts) return;
+  const tr = root.querySelector('input[name="transport"]')?.value || '';
+  const pr = root.querySelector('input[name="preset"]')?.value || '';
+  const trDesc = root.querySelector('.sel[data-name="transport"]')?.closest('.two')
+    ?.nextElementSibling?.querySelector('.tdesc');
+  const prDesc = root.querySelector('.sel[data-name="preset"]')?.closest('.f')?.querySelector('.tdesc');
+  const entry = (opts.families || []).flatMap(f => f.entries || []).find(e => e.value === tr);
+  const preset = (opts.presets || []).find(p => p.value === pr);
+  if (trDesc) { trDesc.textContent = entry?.desc || ''; trDesc.hidden = !entry?.desc; }
+  if (prDesc) { prDesc.textContent = preset?.desc || ''; prDesc.hidden = !preset?.desc; }
+}
+
 /* Points the family menu at whichever family offers `transport`, and refreshes
    the transport menu underneath it so its list matches. */
 function selectFamilyFor(root, opts, transport) {
@@ -579,6 +596,10 @@ export async function editView(ctx) {
            family is whichever one lists this tunnel's transport. */
         selectFamilyFor(root, wireControls.opts, settings.transport);
         syncControls(root);
+        paintDescriptions(root, wireControls.opts);
+        root.addEventListener('change', ev => {
+          if (ev.target.name === 'transport' || ev.target.name === 'preset') paintDescriptions(root, wireControls.opts);
+        });
       }
 
       if (direct) directBaseline.set(root, readDirect(root));

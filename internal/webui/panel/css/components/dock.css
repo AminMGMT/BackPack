@@ -18,7 +18,7 @@
   border:1px solid var(--ln);background:var(--s2)}
 
 .panel .dock button{font:inherit;display:inline-flex;align-items:center;gap:8px;
-  font-size:12.5px;font-weight:590;letter-spacing:-.012em;
+  font-size:12.5px;font-weight:590;letter-spacing:0;
   padding:8px 14px;border-radius:10px;border:0;background:transparent;color:var(--mu);
   cursor:pointer;transition:background .2s ease,color .2s ease}
 .panel .dock button:hover{color:var(--tx2)}

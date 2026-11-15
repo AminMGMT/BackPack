@@ -310,6 +310,37 @@ func (tn *tunnel) waitReady(timeout time.Duration) error {
 	return lastErr
 }
 
+// waitGone polls the entry port until a short round trip no longer gets
+// through: the client behind it has gone, and nothing it left behind is still
+// carrying for it.
+func (tn *tunnel) waitGone(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !tn.carries(time.Second) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("the tunnel still carried traffic %v after its client stopped", timeout)
+}
+
+// carries reports whether one small round trip gets through within wait.
+func (tn *tunnel) carries(wait time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", tn.Entry, wait)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(wait))
+	probe := []byte("gone?")
+	if _, err := conn.Write(probe); err != nil {
+		return false
+	}
+	got := make([]byte, len(probe))
+	_, err = io.ReadFull(conn, got)
+	return err == nil && bytes.Equal(got, probe)
+}
+
 // roundTrip sends payload through the tunnel and verifies it comes back byte
 // for byte.
 func (tn *tunnel) roundTrip(payload []byte) error {
