@@ -98,14 +98,27 @@ func removeScheduledRestart(name string) {
 	_ = DaemonReload()
 }
 
-// EffectiveRestartHours is the interval a schedule really gets: any number of
-// hours below a day, whole days above it.
+// EffectiveRestartHours is the interval a schedule really gets: below a day, the
+// largest number of hours that divides a day; above it, whole days.
+//
+// The calendar counts hours from midnight UTC, as cron does, because that is
+// what lets two servers fire at the same instant with nothing shared but the
+// hours and the minute. An interval that does not divide 24 breaks at midnight:
+// "every 7 hours" fired at 00, 07, 14 and 21 and then at 00 again, three hours
+// later, and "every 23 hours" at 23:00 and again at 00:00 — two restarts an hour
+// apart. So 5 becomes 4, 7 becomes 6, 13 to 23 become 12, and the screens say
+// the interval it really is.
 func EffectiveRestartHours(hours int) int {
 	switch {
 	case hours <= 0:
 		return 0
-	case hours <= 24:
-		return hours
+	case hours < 24:
+		for d := hours; d > 1; d-- {
+			if 24%d == 0 {
+				return d
+			}
+		}
+		return 1
 	default:
 		return (hours / 24) * 24
 	}

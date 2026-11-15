@@ -451,3 +451,69 @@ func TestRevToleranceWidensTheSlackByHalfTheQueueOfTheWayBack(t *testing.T) {
 		t.Fatal("60 ms over the base was cut with 400 ms of queue on the way back and the tolerance on")
 	}
 }
+
+// A peer that does not run the control (the previous release) keeps the
+// bottleneck queue full: the round trip stands far above the path's low, and
+// the rolling base climbs with it. The window was cut to its floor and stayed
+// there. With RevTolerant (the reverse transports, which can face such a peer)
+// a window at the floor whose round trip has not come near the low of the last
+// two minutes for competeAfter stops reading delay as its own: it grows, and
+// overflow still cuts it. The first reading back near that low ends the mode.
+func TestAWindowAtItsFloorBesideAQueueItDoesNotFillCompetes(t *testing.T) {
+	run := func(revTolerant bool) (atFloor, competing, grown, ended float64, s *ctlState) {
+		s = newCtlState(1024)
+		s.revTolerant = revTolerant
+		t0 := time.Unix(1_000_000, 0)
+		at := time.Duration(0)
+		feed := func(until time.Duration, srtt, cur, base time.Duration) {
+			for ; at < until; at += ctlTick {
+				s.decide(reading(t0, at, srtt, cur, base, 0))
+			}
+		}
+		feed(3*time.Second, ms(30), ms(30), ms(30)) // a clean start: the low is 30 ms
+		// The old peer fills the queue: 130 ms, the rolling base at 60.
+		// Cut by a quarter at most per look, so it takes a while to get there;
+		// the mode cannot start before (the window is what says this side is
+		// not the one filling the queue), so the lowest it reaches is the floor.
+		lowest := s.w
+		for ; at < 40*time.Second; at += ctlTick {
+			s.decide(reading(t0, at, ms(130), ms(130), ms(60), 0))
+			lowest = min(lowest, s.w)
+			if s.competing {
+				competing = 1
+			}
+		}
+		atFloor = lowest
+		feed(100*time.Second, ms(130), ms(130), ms(60))
+		grown = s.w
+		// The queue drains (the probe, or the peer stopped): back near 30 ms.
+		feed(101*time.Second, ms(35), ms(35), ms(30))
+		if s.competing {
+			ended = 0
+		} else {
+			ended = 1
+		}
+		return
+	}
+
+	atFloor, competing, grown, ended, s := run(true)
+	if atFloor > 2*s.floor {
+		t.Fatalf("the window was not cut by the standing queue first: %v", atFloor)
+	}
+	if competing != 1 {
+		t.Fatal("a window at its floor beside a queue it does not fill never started competing")
+	}
+	if grown < 512 {
+		t.Errorf("competing, the window only reached %v of 1024", grown)
+	}
+	if ended != 1 {
+		t.Error("a round trip back near the low did not end the competing mode")
+	}
+
+	// Without RevTolerant (the direct engine, whose peers are all of one
+	// release) nothing changes: the window stays where the queue puts it.
+	_, competing, grown, _, s = run(false)
+	if competing != 0 || grown > 2*s.floor {
+		t.Errorf("without RevTolerant: competing %v, window %v", competing, grown)
+	}
+}

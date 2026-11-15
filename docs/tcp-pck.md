@@ -211,13 +211,15 @@ bounded now: one session reading a round trip of seconds (a late timer) had
 slowed the pace of all of them, which delayed the packets and lengthened the
 round trip further, once stopping a 10%-loss run for 27 s.
 
-Next to a v1.9.0 end the sending of each side improves on its own, and the wire
-is the same: at 1% loss a v2.0.0 Iran with a v1.9.0 kharej carried 55.8 Mbit/s
-down, 7.8 up and 99.7% of the UDP, a v1.9.0 Iran with a v2.0.0 kharej 12.8 down,
-25.9 up (two v1.9.0 ends 28.7 / 18.5), and neither lost a session or corrupted
-a byte; update both. The test's short connections half-close and wait for a
-reply, which the reverse relay has never carried, so they read 0% before and
-after. A v2.0.0 tunnel comes back by itself when its interface goes down and up
+Next to a v1.9.0 end nothing changes on the wire and nothing breaks, but the
+old end fills its own direction's queue and never lets it drain. A v2.0.0 end
+recognises that (its window at the floor, the round trip never back near its
+low) and stops treating delay as its own signal, so a v2.0.0 kharej beside a
+v1.9.0 Iran carries about as much as two v1.9.0 ends (55 Mbit/s down at 1% loss,
+48 for two old ends). A v2.0.0 Iran beside a v1.9.0 kharej still sends less up
+(23-34 Mbit/s, old ends ~50); update both.
+
+A v2.0.0 tunnel comes back by itself when its interface goes down and up
 (within a second of the link returning), and when the interface is deleted and
 created again under the same name — a veth, ppp or wg device recreated, a NIC
 replugged — it reopens on the new one and says so in the log ("the interface …

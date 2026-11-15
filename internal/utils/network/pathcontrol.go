@@ -182,9 +182,8 @@ func (p *PathControl) Ceiling() int { return p.ceiling }
 // governor, and the session is put under the tunnel's path control when it has
 // one. Closing the returned conn releases both.
 func PooledKCP(session *kcp.UDPSession, s KCPSettings) net.Conn {
-	c := newIdleKCP(session, s, s.AckNoDelay)
+	c := newIdleKCP(session, s, s.AckNoDelay, s.Path)
 	if s.Path != nil {
-		c.path = s.Path
 		s.Path.add(c, session.PacketConn())
 	}
 	return c

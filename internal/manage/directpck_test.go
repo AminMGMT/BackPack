@@ -199,7 +199,12 @@ func TestThePckWizardAsksNothingAboutATun(t *testing.T) {
 // The wizard stops before asking anything on a build that cannot capture.
 // Run on every machine through the seam rather than the constant.
 func TestThePckKharejManualAsksForTheKeyAndNothingAboutATun(t *testing.T) {
-	restore := tui.SetInput(strings.NewReader("\nmy-kharej\nthe-iran-token\n\nn\nn\n"))
+	// Port, token, name, preset, fine-tune, and "n" to Create. The preset is
+	// chosen by number: an empty line there was read as no choice, the two
+	// answers after it went to the wrong questions, and Create took its default
+	// — so on a machine where /etc/backpack is writable (CI) the test made a
+	// real tunnel file, and the tests after it found port 9000 taken.
+	restore := tui.SetInput(strings.NewReader("\nthe-iran-token\nmy-kharej\n1\nn\nn\n"))
 	var out string
 	func() {
 		defer restore()

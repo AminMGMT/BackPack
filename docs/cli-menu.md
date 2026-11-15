@@ -81,7 +81,7 @@ server pastes.
 | **Send Real Client IP (PROXY Protocol)** `[y/N]` | where the transport can carry it. [Real client IP](real-client-ip.md) |
 | **How Should The Tunnel Be Tuned?** | [Presets](performance-presets.md) |
 | **Fine-Tune The Advanced Settings** `[y/N]` | [↓ the advanced settings](#the-advanced-settings-fine-tune) |
-| **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | off by default — the tunnel recovers from a dropped path on its own. When set, both servers restart it at the same moment (a systemd timer in UTC; the link carries the schedule) |
+| **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | off by default — the tunnel recovers from a dropped path on its own. When set, both servers restart it at the same moment (a systemd timer in UTC; the link carries the schedule). Hours count from midnight UTC, so under a day the interval is rounded down to one that divides the day (1, 2, 3, 4, 6, 8, 12); 24 and over, to whole days |
 
 Then one short summary — *Reverse TCP*, where it listens, the address kharej
 dials, the forwarded ports and where each lands on kharej, the certificate,

@@ -91,6 +91,11 @@ func TestTheTestSettingsFitOnePacketAndCarryNoToken(t *testing.T) {
 		t.Errorf("the settings are %d bytes; they have to fit one packet", len(reply))
 	}
 	for _, c := range s.link.Cases {
+		// A kernel GRE link has no token at all (its case is offered only where
+		// this runs as root), so there is nothing to travel or to derive.
+		if c.Tok == "" && l3KernelCase(c.Tr) {
+			continue
+		}
 		if strings.Contains(reply, c.Tok) {
 			t.Errorf("the %s token travels in the settings", c.Tr)
 		}
@@ -741,3 +746,5 @@ func TestADownPckOrGRERowNamesTheReleaseItNeeds(t *testing.T) {
 		}
 	}
 }
+
+func l3KernelCase(tr string) bool { return tr == "gre" || tr == "ip6gre" }

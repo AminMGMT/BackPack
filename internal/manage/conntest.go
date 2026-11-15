@@ -369,7 +369,8 @@ func ctNeedsV2Note(kind, tr string) string {
 	case "pck":
 		return " — if the kharej runs a release before v2.0.0, update it: the PCK wire changed in v2.0.0"
 	case "gre":
-		return " — if the kharej runs a release before v2.0.0, update it: GRE is new in v2.0.0"
+		return " — the path may drop IP protocol 47 (many do; then use xDi or PCK), or the kharej runs a " +
+			"release before v2.0.0 and has to be updated: GRE is new in v2.0.0"
 	}
 	return ""
 }

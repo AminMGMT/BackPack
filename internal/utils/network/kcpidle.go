@@ -55,11 +55,15 @@ type kcpTuner interface {
 // while it is busy — the tunnel's setting, or true for a session that forces
 // it, such as the control channel.
 func IdleAwareKCP(session *kcp.UDPSession, s KCPSettings, ackNoDelay bool) net.Conn {
-	return newIdleKCP(session, s, ackNoDelay)
+	return newIdleKCP(session, s, ackNoDelay, nil)
 }
 
-func newIdleKCP(session *kcp.UDPSession, s KCPSettings, ackNoDelay bool) *idleKCP {
-	c := &idleKCP{UDPSession: session, tuner: session, delayer: session, interval: s.Interval, ack: ackNoDelay}
+// newIdleKCP wraps session and hands it to the idle governor. path is set here,
+// before the governor can see the session: its sweep reads it from another
+// goroutine, and PooledKCP setting it after the hand-over was a data race
+// (seen under -race once reverse kcp came under path control).
+func newIdleKCP(session *kcp.UDPSession, s KCPSettings, ackNoDelay bool, path *PathControl) *idleKCP {
+	c := &idleKCP{UDPSession: session, tuner: session, delayer: session, interval: s.Interval, ack: ackNoDelay, path: path}
 	c.touch()
 	idleGov.add(c)
 	return c

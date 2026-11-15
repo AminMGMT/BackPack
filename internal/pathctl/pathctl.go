@@ -188,6 +188,16 @@ const (
 
 	minWindow   = 32
 	startWindow = 64
+
+	// The competing mode's memory (see ctlState): the lowest round trip of the
+	// last longBaseWindow, kept as longBuckets of longBucket, and how long the
+	// round trip must stay clear of it, with the window near its floor, before
+	// the delay stops counting.
+	longBucket     = 10 * time.Second
+	longBuckets    = 12
+	longBaseWindow = longBucket * longBuckets
+	competeAfter   = 10 * time.Second
+	compWindowMul  = 2
 )
 
 // ctlInput is what the controller read in one tick.
@@ -222,8 +232,78 @@ type ctlState struct {
 	spanStart            time.Time
 	cuts                 uint64
 	// revTolerant widens the slack by half the queue of the way back; see
-	// Config.RevTolerant.
+	// Config.RevTolerant. It also turns on the competing mode below.
 	revTolerant bool
+
+	// Competing with a peer that does not run this control.
+	//
+	// Such a peer (the previous release) fills the bottleneck queue of its own
+	// direction and never lets it drain, so the queue stands under every
+	// reading this side takes: the lowest round trip of the last baseWindow
+	// creeps up with it (21 → 70 ms in a minute on a 30 ms path), the one-way
+	// floor the reverse queue is measured from does too (so rev reads near 0),
+	// and what is left — the swing of a queue this side does not drive — is
+	// read as its own. The window was cut to its floor and stayed there: a new
+	// kharej next to a v1.9.0 Iran carried 13 Mbit/s where two v1.9.0 ends
+	// carry 47. Like Copa's competitive mode, when the window is near the floor
+	// (so this side is not what fills the queue) and the round trip has
+	// not come near the lowest of the last longBaseWindow for competeAfter, the
+	// delay stops counting as a signal: the window grows and only the local
+	// queue overflowing cuts it. The first reading near that low ends it.
+	// Measured, 300 s at 1% loss: that kharej 54.6-55.9 Mbit/s over four runs
+	// (13 before; two v1.9.0 ends 48), and a peer that runs the control never
+	// entered the mode (0 seconds of 300, at 0, 1, 3 and 10% loss).
+	longMin   [longBuckets]time.Duration
+	longEpoch [longBuckets]int64 // which longBucket-long span of time each holds
+	nearBase  time.Time
+	competing bool
+	// compBase is the low the competing mode began under, kept while it lasts:
+	// the rolling one climbs to the standing queue within longBaseWindow and
+	// would end the mode with the queue still there. The controller's probe
+	// (the window halved every probeEvery) is what reaches it again once the
+	// other end stops filling the queue.
+	compBase time.Duration
+}
+
+// longBase is the lowest round trip of the last longBaseWindow, 0 for none.
+func (s *ctlState) longBase() time.Duration {
+	lb := time.Duration(0)
+	for _, v := range s.longMin {
+		if v > 0 && (lb == 0 || v < lb) {
+			lb = v
+		}
+	}
+	return lb
+}
+
+// noteCompeting updates the competing mode from one reading; see ctlState.
+func (s *ctlState) noteCompeting(in ctlInput, slack time.Duration) {
+	if !s.revTolerant || !in.sample || in.cur <= 0 {
+		return
+	}
+	if s.nearBase.IsZero() {
+		s.nearBase = in.now
+	}
+	epoch := in.now.UnixNano() / int64(longBucket)
+	i := int(epoch % longBuckets)
+	if s.longEpoch[i] != epoch {
+		s.longEpoch[i], s.longMin[i] = epoch, 0 // come round again: forget what it held
+	}
+	if v := s.longMin[i]; v == 0 || in.cur < v {
+		s.longMin[i] = in.cur
+	}
+	lb := s.longBase()
+	if s.competing {
+		lb = s.compBase
+	}
+	if in.cur <= lb+slack {
+		s.nearBase = in.now
+		s.competing = false
+		return
+	}
+	if !s.competing && !s.slow && s.w <= compWindowMul*s.floor && in.now.Sub(s.nearBase) >= competeAfter {
+		s.competing, s.compBase = true, lb
+	}
 }
 
 // overflow reports whether the local queue has refused a noticeable share of
@@ -259,6 +339,7 @@ func (s *ctlState) decide(in ctlInput) float64 {
 	}
 	rttSpan := max(in.srtt, 100*time.Millisecond)
 	errs := s.overflow(in)
+	s.noteCompeting(in, slack)
 	if s.slow && !errs && in.now.Sub(s.spanStart) >= overflowSpan {
 		s.restartSpan(in)
 	}
@@ -282,7 +363,7 @@ func (s *ctlState) decide(in ctlInput) float64 {
 		s.lastStep = in.now
 		excess := in.cur - in.base
 		f := 1.0
-		if in.sample && excess > slack {
+		if in.sample && excess > slack && !s.competing {
 			f = min(0.95, max(0.75, float64(in.base+slack)/float64(in.cur)))
 		}
 		if errs {
@@ -295,7 +376,7 @@ func (s *ctlState) decide(in ctlInput) float64 {
 			// What was sent before the cut is still arriving, as a queue and
 			// as errors: wait it out before reading again.
 			s.lastStep = in.now.Add(cutWait)
-		case in.sample && excess < slack/2 && !errs:
+		case (in.sample && excess < slack/2 || s.competing) && !errs:
 			s.w += max(2, s.w*0.08)
 		}
 		s.restartSpan(in)

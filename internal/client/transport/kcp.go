@@ -2,6 +2,8 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -173,6 +175,24 @@ func (c *KcpTransport) dial(addr string) (*kcp.UDPSession, error) {
 	return network.KCPDialContext(ctx, addr, c.config.Token, c.kcpSettings)
 }
 
+// silentServer says what a control channel that got no answer means. Over a
+// datagram carrier nothing refuses a connection, so a firewall that drops the
+// tunnel's packets and a server that is not running look the same from here:
+// silence. The message names what has to be let in.
+func (c *KcpTransport) silentServer(addr string) string {
+	_, port, _ := net.SplitHostPort(addr)
+	what := "UDP port " + port
+	switch {
+	case c.config.UseICMP:
+		what = "ICMP echo (ping)"
+	case c.config.UsePck:
+		what = "TCP port " + port
+	}
+	return fmt.Sprintf("no answer from the server at %s on the %s control channel. Check that it runs "+
+		"this tunnel with the same token, and that its firewall — and the provider's, if it has one — lets %s in",
+		addr, c.transportLabel(), what)
+}
+
 func (c *KcpTransport) channelDialer() {
 	c.logger.Info("attempting to establish a new kcp control channel connection...")
 
@@ -186,7 +206,8 @@ func (c *KcpTransport) channelDialer() {
 		case <-c.state.Ctx().Done():
 			return
 		default:
-			tunnelConn, err := c.dial(c.config.Endpoints.Current())
+			addr := c.config.Endpoints.Current()
+			tunnelConn, err := c.dial(addr)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
@@ -219,8 +240,11 @@ func (c *KcpTransport) channelDialer() {
 
 			message, answer, err := utils.ReceiveBinaryTransportString(tunnelConn)
 			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					c.logger.Warn("timeout while waiting for control channel response")
+				// The error comes wrapped ("failed to read message length ...:
+				// timeout"), so a type assertion never matched and a silent
+				// server was reported as a bare read failure.
+				if netErr := net.Error(nil); errors.As(err, &netErr) && netErr.Timeout() {
+					c.logger.Warn(c.silentServer(addr))
 				} else {
 					c.logger.Errorf("failed to receive control channel response: %v", err)
 				}

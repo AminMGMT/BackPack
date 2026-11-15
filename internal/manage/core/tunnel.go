@@ -133,6 +133,11 @@ func Delete(name string) error {
 		if cfg.L3.Enabled() && l3.KernelCarrier(cfg.L3.Carrier) {
 			l3.CleanupGRE(cfg.L3.Iface, strings.ToLower(strings.TrimSpace(cfg.L3.Carrier)), cfg.L3.Addr)
 		}
+		// And the rule that let its interface's traffic in, which a killed
+		// engine left in place.
+		if cfg.L3.Enabled() {
+			l3.CleanupIfaceAccept(cfg.L3.Iface)
+		}
 	}
 	removeUnit(name)
 	removeScheduledRestart(name)

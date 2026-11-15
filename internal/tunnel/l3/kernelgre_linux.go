@@ -61,6 +61,8 @@ func (t *Tunnel) runKernelGRE(ctx context.Context) error {
 
 	accept := installGREAccept(spec, t.log)
 	defer accept.remove()
+	inside := installIfaceAccept(name, t.log)
+	defer inside.remove()
 
 	key := "no key"
 	if spec.Key != 0 {
@@ -95,6 +97,11 @@ func (t *Tunnel) runKernelGRE(ctx context.Context) error {
 	}
 
 	reported := false
+	// A link the other end never answers on says nothing otherwise: the warning
+	// below is for an answer that stopped, and a path that drops protocol 47
+	// from the start — common, and the reason GRE is blocked by one rule — left
+	// a tunnel "up" in the log and silent.
+	started, toldNever := time.Now(), false
 	tick := time.NewTicker(greKeepalive)
 	defer tick.Stop()
 	for {
@@ -113,6 +120,12 @@ func (t *Tunnel) runKernelGRE(ctx context.Context) error {
 				"running and that nothing between the two servers drops IP protocol 47", name, greSilentAfter)
 			metrics.ClearPeer()
 			reported = false
+		case !up && !reported && !toldNever && pinger != nil && time.Since(started) >= greNeverAnsweredAfter:
+			t.log.Warnf("l3: the other end has not answered across %s since the tunnel started %s ago — check "+
+				"that its tunnel is running with this server's address (%s) and the same key, and that nothing "+
+				"between the two servers drops IP protocol 47. Many providers and filtered routes do; if this "+
+				"one does, GRE cannot work here — use xDi or PCK instead", name, greNeverAnsweredAfter, local)
+			toldNever = true
 		}
 		select {
 		case <-ctx.Done():

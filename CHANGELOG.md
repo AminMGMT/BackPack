@@ -386,6 +386,56 @@ All notable changes to Backpack are documented here.
   there. The floor is now per unit: 64 KiB for the 7- and 30-day totals, 1 KiB/s
   for the rate windows. The arithmetic moved to `js/lib/trend.js` and has tests.
 
+- **A v2.0.0 end next to a v1.9.0 one no longer starves its own direction.**
+  The old end fills the bottleneck queue of its direction and never lets it
+  drain, so the queue stood under every reading the new end's control took: its
+  lowest round trip crept up with it, and the swing of a queue it does not
+  drive was read as its own. A v2.0.0 kharej beside a v1.9.0 Iran was cut to its
+  floor and carried 12.8-16.5 Mbit/s down where two v1.9.0 ends carry 47-48.
+  Like Copa's competitive mode, the reverse transports' control now stops
+  reading delay as its signal when its window sits at the floor and the round
+  trip has not come near the low of the last two minutes for ten seconds; the
+  window grows and only the local queue overflowing cuts it, until a reading is
+  back near the low that held when the mode began. Measured, 300 s: that kharej
+  54.6-55.9 down over four runs at 1% loss and 54.0 at 10% (reverse kcp 48.8
+  beside 53.2 for two v1.9.0 ends), and two v2.0.0 ends never entered the mode
+  (0 of 300 seconds, at 0, 1, 3 and 10% loss; their numbers unchanged). Still
+  short: a v2.0.0 Iran beside a v1.9.0 kharej sends 23-34 Mbit/s up (two v1.9.0
+  ends ~50) — its window swings rather than sitting at the floor, so the mode
+  does not engage. Update both ends.
+
+- **A data race between a new pooled KCP session and the idle governor.** A
+  session under the path control was handed to the governor, whose sweep runs on
+  its own goroutine and reads the session's path control, before that field was
+  set. Reverse pck had it from the start, but its tests need root and never ran
+  under the race detector; with kcp under the same control the e2e suite caught
+  it under `-race` (one run in three). The field is now set before the hand-over.
+
+- **Built with Go 1.26.11, and two compression libraries updated.**
+  `govulncheck` found four vulnerabilities this code reaches: in the standard
+  library `net/http` (fixed in 1.26.11) and `crypto/x509` (1.26.10), and in
+  `github.com/andybalholm/brotli` 1.0.6 and `github.com/klauspost/compress`
+  1.18.0, which uTLS pulls in (now 1.2.7 and 1.20.2). After the update it
+  reports none. The installer's build-from-source fallback pins 1.26.11 with
+  the official checksums.
+
+- **Tests no longer write a real tunnel into `/etc/backpack`.** One wizard test
+  answered the PCK kharej questions out of step, so "Create This Tunnel" took
+  its default and wrote `/etc/backpack/the-iran-token.toml` wherever that
+  directory is writable — as it is in CI — and two later tests found port 9000
+  taken. A Connection Test test also counted the tokenless GRE case, offered
+  only when the tests run as root, as a token leak. Both fixed; the whole
+  `manage` package passes with a writable `/etc`. And a staticcheck finding
+  (SA4000) in a health test.
+
+- **A scheduled restart every 23 hours restarted twice in an hour.** The timer
+  counts hours from midnight UTC, as cron does, which is what keeps the two
+  servers in step — so an interval that does not divide a day broke at
+  midnight: every 7 hours fired at 00, 07, 14, 21 and 00 again three hours
+  later, every 23 hours at 23:00 and 00:00. An interval under a day is now the
+  largest that divides it (5 → 4, 7 → 6, 13-23 → 12), on both servers, and the
+  screens show that interval. Checked with `systemd-analyze calendar`.
+
 - **Connection Test said nothing about an old kharej.** Next to a kharej on
   v1.9.0, everything passed but direct PCK and GRE, which read only "never
   carried traffic". Both are new in v2.0.0 (PCK's wire changed, GRE did not

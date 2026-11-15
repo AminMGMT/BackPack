@@ -275,6 +275,10 @@ const (
 	// reported down. The same fifteen seconds the session carriers use, for
 	// the same reason: long enough not to flap on a lost reply or two.
 	greSilentAfter = 15 * time.Second
+	// greNeverAnsweredAfter is how long a link that has had no answer at all
+	// waits before saying so: long enough for the other end to be started a
+	// little later.
+	greNeverAnsweredAfter = 30 * time.Second
 
 	// grePingTimeout bounds one ping.
 	grePingTimeout = 2 * time.Second

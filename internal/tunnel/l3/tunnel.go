@@ -415,6 +415,8 @@ func (t *Tunnel) Run(ctx context.Context) error {
 	t.tun = tun
 	t.setCurrentMTU(tun.MTU())
 	defer tun.Close()
+	inside := installIfaceAccept(tun.Name(), t.log)
+	defer inside.remove()
 
 	suggested := MTUFor(1500, carrier.Overhead(), t.encap.Overhead())
 	t.log.Infof("l3: %s up on %s, %s over %s, mtu %d (a 1500-byte path fits %d)",

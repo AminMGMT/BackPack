@@ -90,7 +90,9 @@ func TestASnapshotReadTwiceIsOneFailure(t *testing.T) {
 		t.Fatal("a reading of one tunnel kept another's from counting")
 	}
 	// A verdict from the socket table is read fresh on every pass.
-	if !newFailure(counted, "socket", time.Time{}) || !newFailure(counted, "socket", time.Time{}) {
+	first := newFailure(counted, "socket", time.Time{})
+	second := newFailure(counted, "socket", time.Time{})
+	if !first || !second {
 		t.Fatal("a fresh reading with no snapshot behind it was not counted every time")
 	}
 }
