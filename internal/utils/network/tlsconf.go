@@ -328,10 +328,16 @@ func acmeTLSConfig(s TLSSettings, logf func(string, ...any)) (*tls.Config, error
 	// not started afresh here.
 	acmeResponder.use(m, logf)
 
-	primeACMECert(m, s.ACMEDomain, fallback != nil, logf)
+	primeACME(m, s.ACMEDomain, fallback != nil, logf)
 
 	return cfg, nil
 }
+
+// primeACME is primeACMECert, a variable so a test that only reads the
+// config's behaviour does not start a real issuance in the background — one
+// that registered an account with Let's Encrypt and wrote its key into the
+// test's directory after the test had returned, failing its cleanup.
+var primeACME = primeACMECert
 
 // acmePrimeTimeout bounds the startup attempt. autocert applies five minutes of
 // its own to issuance; this is only the outer bound on the goroutine.

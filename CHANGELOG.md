@@ -386,6 +386,39 @@ All notable changes to Backpack are documented here.
   there. The floor is now per unit: 64 KiB for the 7- and 30-day totals, 1 KiB/s
   for the rate windows. The arithmetic moved to `js/lib/trend.js` and has tests.
 
+- **CI was red on every run since v1.9.0; each cause is fixed.** Read from the
+  Actions logs of all 31 runs since the v1.9.0 tag:
+  - *Cross-build* and the release build: the ARMv5 cross compiler was
+    installed with `--no-install-recommends`, which leaves out its C library
+    (`libc6-dev-armel-cross`), so libpcap's configure said "C compiler cannot
+    create executables". Both workflows install it now. The whole `make release`
+    was rerun locally: seven static binaries.
+  - *Connection Test over an IPv6-only path*: the step runs `go test` through
+    `sudo env`, which dropped the cgo variables the libpcap action sets, so the
+    build could not find `pcap.h`. They are passed through.
+  - *Managed HTTPS carriers*: the withdrawn NaiveProxy pin (below).
+  - *Vulnerabilities*: the toolchain and library updates (below).
+  - *Build and test*: the packet-path budget gate failed in five runs with the
+    path unchanged (3-8 µs to seal on the runner, 0.78 here) — packages run side
+    by side and the heavy ones now run next to it. It is measured best of three
+    beside a ChaCha20-Poly1305 calibration and scaled by it, and only counts
+    allocations under coverage. And four tests that depended on timing or on
+    the machine: the PCK datagram lane's (the first datagrams go by the stream
+    until the server's verdict arrives — one on a fast machine, a dozen on the
+    runner), QUIC over a 1280-byte path (a Path MTU probe after the handshake was
+    counted as a failure; only the handshake's packets must fit), KCP's refusal
+    reason (the server got 700 ms to bind; the dial now retries), and an ACME
+    test whose background issuance wrote into its directory during cleanup (and
+    contacted Let's Encrypt; it no longer starts one). Plus the two from the
+    wizard test that wrote `/etc/backpack` and the GRE token check as root.
+  - *The v1.9.0 release run* itself failed its tests: `release.yml` never made
+    the `/etc/backpack` the configuration tests use, as `ci.yml` does. It does now.
+  - `actions/cache` moves to v5 (Node 24; v4 ran on the deprecated Node 20), and
+    `softprops/action-gh-release` to v3.0.4, pinned by commit as before.
+  - Dependencies: gopacket 1.7.7 (a security release for decoding untrusted
+    traffic), quic-go 0.65.0, gopsutil 4.26.10, x/crypto 0.59.0, x/net 0.62.0,
+    x/sys 0.50.0 — the open Dependabot group update.
+
 - **The pinned NaiveProxy release had been withdrawn.** `v154.0.8037.49-4` has
   no assets on GitHub any more, so `BP_HELPERS=naive bash install.sh` failed on
   every server. The installer, the wizard's suggested path and the docs now pin

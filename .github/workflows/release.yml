@@ -79,13 +79,22 @@ jobs:
       - name: Install the build toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flex bison gcc-arm-linux-gnueabi
+          # libc6-dev-armel-cross is only a Recommends of the cross compiler, and
+          # --no-install-recommends leaves it out: the compiler is there but has
+          # no C library to link against, and libpcap's configure stops with
+          # "C compiler cannot create executables" (every run since 2026-11-12).
+          sudo apt-get install -y --no-install-recommends flex bison gcc-arm-linux-gnueabi libc6-dev-armel-cross
           ZIG_VERSION=0.17.0
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz
           sudo mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
           echo "/opt/zig" >> "$GITHUB_PATH"
 
       - uses: ./.github/actions/libpcap
+
+      # The configuration round-trip tests exercise the real /etc/backpack, as in
+      # ci.yml; without it the v1.9.0 release run failed its tests here.
+      - name: Prepare configuration test fixtures
+        run: sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" /etc/backpack
 
       - name: Test before publishing
         # Nothing gets published that has not passed the suite. A broken
@@ -149,7 +158,7 @@ jobs:
         # can repoint that tag can read the one secret the whole update
         # verification design rests on. Update deliberately, with the tag the
         # SHA belongs to written beside it.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           # Explicit, because a manual run on a branch has no tag in its ref.
           # For a pushed tag this is the same tag, so nothing changes there.

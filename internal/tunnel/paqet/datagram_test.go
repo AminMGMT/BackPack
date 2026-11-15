@@ -110,16 +110,31 @@ func TestSmallDatagramsTravelTheLaneAndLargeOnesTheStream(t *testing.T) {
 			t.Fatalf("a datagram of %d bytes came back as %d different bytes", n, got)
 		}
 	}
-	// The first goes before the server's verdict is in, so by the stream.
+	// The first go before the server's verdict is in, so by the stream. How
+	// many is a matter of timing: one on a fast machine, a dozen on a loaded CI
+	// runner (client out 38 of 50 there). So wait for the lane to carry one
+	// from each side, and count the next ones.
 	roundTrip(100)
+	for i := 0; ; i++ {
+		if cOut, cIn, _, _ := laneCounters(p); cOut > 0 && cIn > 0 {
+			break
+		}
+		if i == 500 {
+			t.Fatal("the lane never came up")
+		}
+		roundTrip(300)
+	}
+	c0, ci0, s0, si0 := laneCounters(p)
 	const small = 50
 	for i := 0; i < small; i++ {
 		roundTrip(300)
 	}
-	cOut, cIn, sOut, sIn := laneCounters(p)
+	c1, ci1, s1, si1 := laneCounters(p)
+	cOut, cIn, sOut, sIn := c1-c0, ci1-ci0, s1-s0, si1-si0
 	if cOut < small || sIn < small || sOut < small || cIn < small {
 		t.Fatalf("%d small datagrams each way, but the lane carried client out %d in %d, server out %d in %d", small, cOut, cIn, sOut, sIn)
 	}
+	cOut = c1
 	// One too large for a segment goes by the stream, as before.
 	roundTrip(9000)
 	if o, _, _, _ := laneCounters(p); o != cOut {

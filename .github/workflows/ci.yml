@@ -179,7 +179,10 @@ jobs:
             -run '^(TestConnectionTest|TestAnUnreachablePath|TestIPv6RawCarriers|TestBothFamilies|TestUnjoinedFamilies|TestStoppingASuite|TestStoppingBetweenPaths|TestBackgroundProbes|TestTheScreensReadTunnelStateThroughOnePlace|TestEveryPanelCallReachesAHandlerThatReadsWhatItSends)'
       - name: Native transports, direct UDP/QUIC, PMTU and unsupported raw carriers
         run: |
+          # sudo starts a clean environment: without the cgo variables the
+          # libpcap action exported, the build cannot find pcap.h.
           sudo env PATH="$PATH" GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" BP_L3_LIVE=1 \
+            CGO_ENABLED="$CGO_ENABLED" CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" \
             go test ./internal/manage -run '^TestTheConnectionTestAcrossAnIPv6OnlyPath$' -count=1 -v -timeout 10m
 
   audit:
@@ -345,14 +348,18 @@ jobs:
       - name: Install the cross toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flex bison gcc-arm-linux-gnueabi
+          # libc6-dev-armel-cross is only a Recommends of the cross compiler, and
+          # --no-install-recommends leaves it out: the compiler is there but has
+          # no C library to link against, and libpcap's configure stops with
+          # "C compiler cannot create executables" (every run since 2026-11-12).
+          sudo apt-get install -y --no-install-recommends flex bison gcc-arm-linux-gnueabi libc6-dev-armel-cross
           ZIG_VERSION=0.17.0
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz
           sudo mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
           echo "/opt/zig" >> "$GITHUB_PATH"
 
       - name: Cache the per-architecture libpcap builds
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/backpack-libpcap
           key: libpcap-cross-1.10.6-${{ hashFiles('scripts/build-libpcap.sh', 'scripts/build-linux.sh') }}

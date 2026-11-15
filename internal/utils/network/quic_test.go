@@ -177,6 +177,15 @@ func TestQUICCrossesA1280BytePath(t *testing.T) {
 		t.Fatalf("dial across a 1280-byte path: %v", err)
 	}
 	defer conn.CloseWithError(0, "")
+	// The handshake's packets are the ones that have to fit: the bug was an
+	// Initial packet too big for the path. Once the connection is up, Path MTU
+	// Discovery probes for more on purpose, and a probe this path drops is the
+	// discovery working — a loaded runner once sent one before the test ended
+	// (quic-go 0.64), and counting it failed the test. So the drops are counted
+	// here, before any probing can start.
+	if n := path.dropCount(); n != 0 {
+		t.Fatalf("%d handshake datagrams were too big for a 1280-byte path", n)
+	}
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -206,11 +215,6 @@ func TestQUICCrossesA1280BytePath(t *testing.T) {
 		t.Fatalf("server side: %v", err)
 	}
 
-	// Nothing should have been dropped: the whole point of the fix is that
-	// every packet now fits. A drop here means something still oversteps.
-	if n := path.dropCount(); n != 0 {
-		t.Fatalf("%d datagrams were too big for a 1280-byte path", n)
-	}
 }
 
 // TestNarrowPathDropsOversizeDatagrams checks the emulation itself. Without it

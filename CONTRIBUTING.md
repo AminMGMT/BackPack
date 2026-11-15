@@ -73,7 +73,7 @@ run on a server with no libpcap. `make release-linux` builds each with a libpcap
 built for that architecture (`scripts/build-linux.sh <arch>`), using
 [Zig](https://ziglang.org)'s C compiler and its bundled musl as the cross
 compiler — no containers, no sudo, byte-for-byte reproducible. It needs `zig` on
-`PATH` (0.17.0 is what CI uses), plus `gcc-arm-linux-gnueabi` for `armv5`, which
+`PATH` (0.17.0 is what CI uses), plus `gcc-arm-linux-gnueabi` and `libc6-dev-armel-cross` (its C library, which `--no-install-recommends` leaves out) for `armv5`, which
 Zig's musl cannot target. `-tags netgo,osusergo` keeps the pure-Go resolver, so
 cgo does not change how names are resolved. To check one:
 

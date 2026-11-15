@@ -2,6 +2,8 @@ package network
 
 import (
 	"crypto/tls"
+	"golang.org/x/crypto/acme/autocert"
+	"os"
 	"strings"
 	"testing"
 )
@@ -16,9 +18,18 @@ import (
 // ever attempted an issuance. Nothing was wrong with Let's Encrypt, and nothing
 // in the log said so.
 func TestAnSNIlessHandshakeIsAnsweredWithTheConfiguredDomain(t *testing.T) {
+	noACMEPrime(t)
+	// This one does reach for a certificate, and an issuance the handshake
+	// gives up on carries on in the background and writes into the cache — so
+	// the directory is removed best effort, not by t.TempDir's strict cleanup.
+	dir, err := os.MkdirTemp("", "acme-sniless-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cfg, err := acmeTLSConfig(TLSSettings{
 		ACMEDomain:   "tunnel.example.com",
-		ACMECacheDir: t.TempDir(),
+		ACMECacheDir: dir,
 	}, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("building the ACME config: %v", err)
@@ -42,6 +53,7 @@ func TestAnSNIlessHandshakeIsAnsweredWithTheConfiguredDomain(t *testing.T) {
 // A handshake that does name a host must be left alone, or a listener would
 // answer for names it was never configured to serve.
 func TestAnExplicitServerNameIsNotRewritten(t *testing.T) {
+	noACMEPrime(t)
 	cfg, err := acmeTLSConfig(TLSSettings{
 		ACMEDomain:   "tunnel.example.com",
 		ACMECacheDir: t.TempDir(),
@@ -123,4 +135,15 @@ func helloSupportsECDSA(hello *tls.ClientHelloInfo) bool {
 		}
 	}
 	return false
+}
+
+// noACMEPrime keeps acmeTLSConfig from starting its startup issuance for the
+// rest of the test: these tests read how the config answers a handshake, and
+// the background attempt contacted Let's Encrypt and wrote an account key into
+// the test's directory as its cleanup ran ("directory not empty").
+func noACMEPrime(t *testing.T) {
+	t.Helper()
+	prev := primeACME
+	primeACME = func(*autocert.Manager, string, bool, func(string, ...any)) {}
+	t.Cleanup(func() { primeACME = prev })
 }
