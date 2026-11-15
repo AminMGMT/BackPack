@@ -386,6 +386,27 @@ All notable changes to Backpack are documented here.
   there. The floor is now per unit: 64 KiB for the 7- and 30-day totals, 1 KiB/s
   for the rate windows. The arithmetic moved to `js/lib/trend.js` and has tests.
 
+- **The pinned NaiveProxy release had been withdrawn.** `v154.0.8037.49-4` has
+  no assets on GitHub any more, so `BP_HELPERS=naive bash install.sh` failed on
+  every server. The installer, the wizard's suggested path and the docs now pin
+  `v154.0.8037.49-5`, with the digests GitHub publishes for it (amd64 and
+  arm64); sing-box `v1.14.2` and Xray `v26.3.27` are unchanged and still verify.
+
+- **Naive / HTTP2 is 20 times faster one way.** The Naive client ran every
+  pooled reverse connection as a stream of ONE HTTP/2 connection, so one
+  flow-control window per round trip was the tunnel's speed: the Connection
+  Test measured 22.5 Mbit/s down and 378 up on a 70 ms path between two
+  namespaces. It now opens four (NaiveProxy's `insecure-concurrency`; new
+  `client.naive.connections`, 1-16, unset = 4, 1 for a single connection):
+  467 / 1056 on the same path. Without the tunnel the helper pair went from
+  401 / 120 to 1073 / 475; at 1% loss and 100 Mbit/s, 2.1 to 9 Mbit/s.
+
+- **XHTTP / TLS gives each pooled connection its own HTTP/2 connection.**
+  Xray's `xmux` `maxConcurrency` 1 on the outside client: the slower direction
+  went from 518-599 to 713-864 Mbit/s in the Connection Test (two runs each),
+  the other stayed 1140-1840. REALITY / Vision needed nothing: 2329 / 1411
+  through the tunnel, with a TCP connection per pooled connection already.
+
 - **A v2.0.0 end next to a v1.9.0 one no longer starves its own direction.**
   The old end fills the bottleneck queue of its direction and never lets it
   drain, so the queue stood under every reading the new end's control took: its

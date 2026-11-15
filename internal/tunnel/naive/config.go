@@ -116,6 +116,9 @@ func ValidateClient(c *config.ClientConfig) error {
 	if err := credentials(n.Binary, n.Username, n.Password); err != nil {
 		return err
 	}
+	if n.Connections < 0 || n.Connections > 16 {
+		return errors.New("client.naive.connections must be between 1 and 16 (0 = the default, 4)")
+	}
 	if n.CAFile != "" {
 		if err := readableFile(n.CAFile); err != nil {
 			return err
@@ -178,7 +181,13 @@ func ValidateServer(c *config.ServerConfig) error {
 
 func clientJSON(n config.NaiveClientConfig, socksAddr string) ([]byte, error) {
 	u := url.URL{Scheme: "https", Host: n.Server, User: url.UserPassword(n.Username, n.Password)}
-	return json.Marshal(map[string]any{"listen": "socks://" + socksAddr, "proxy": u.String(), "log": ""})
+	return json.Marshal(map[string]any{"listen": "socks://" + socksAddr, "proxy": u.String(), "log": "",
+		// Without it every pooled reverse connection is a stream of ONE
+		// HTTP/2 connection, and that connection's flow-control window per
+		// round trip is the tunnel's speed: 22 Mbit/s up through the whole
+		// tunnel in the Connection Test on a 70 ms path. See
+		// config.NaiveClientConfig.Connections.
+		"insecure-concurrency": strconv.Itoa(n.NaiveConnections())})
 }
 
 func serverJSON(c *config.ServerConfig) ([]byte, error) {
@@ -528,8 +537,14 @@ func XrayClientJSON(c *config.ClientConfig, socksAddr string) ([]byte, error) {
 		// The pinned helper's packet upload writer reads buffer lengths after
 		// passing ownership to a concurrent consumer. Streaming uploads avoid
 		// that short-write race and the per-packet POST batching delay.
+		// xmux maxConcurrency 1: each pooled reverse connection gets an HTTP/2
+		// connection of its own instead of sharing one's flow-control window
+		// and TCP congestion window with up to 32 others. Measured between two
+		// namespaces, 70 ms, four streams: 1084 / 321 Mbit/s down / up shared,
+		// 1196 / 413 apart. The pool size is then the connection count.
 		stream = map[string]any{"network": "xhttp", "security": "tls", "tlsSettings": tlsConfig,
-			"xhttpSettings": map[string]any{"path": x.Path, "host": httpHost, "mode": "stream-up"}}
+			"xhttpSettings": map[string]any{"path": x.Path, "host": httpHost, "mode": "stream-up",
+				"xmux": map[string]any{"maxConcurrency": "1"}}}
 	}
 	routing, err := xrayRouting("local", c.RemoteAddr, "carrier")
 	if err != nil {

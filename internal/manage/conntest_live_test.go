@@ -115,8 +115,10 @@ func TestConnTestIranSide(t *testing.T) {
 			connTestDirect = []string{tr}
 		}
 	}
+	// CT_REALITY=host:port names the REALITY cover, for a namespace with no
+	// way to the public covers the test otherwise looks for.
 	s, link, err := StartConnTestIran(ConnTestOptions{Host: os.Getenv("CT_HOST"), Direct: true, SNIDomain: "www.example.com",
-		SpoofSrc: "10.10.10.10", Preset: os.Getenv("CT_PRESET")})
+		SpoofSrc: "10.10.10.10", Preset: os.Getenv("CT_PRESET"), RealityTarget: os.Getenv("CT_REALITY")})
 	if err != nil {
 		t.Fatal(err)
 	}

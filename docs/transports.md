@@ -100,7 +100,7 @@ certificate verification or select an unverified SNI as a purported fix.
 ### Naive HTTP/2
 
 Install with `BP_HELPERS=naive bash install.sh`. The pinned versions are
-NaiveProxy `v154.0.8037.49-4` and sing-box `v1.14.2`. On amd64, for example:
+NaiveProxy `v154.0.8037.49-5` and sing-box `v1.14.2`. On amd64, for example:
 
 ```toml
 # Iran; the ordinary [server] table still owns token, ports and pool tuning.
@@ -126,7 +126,7 @@ remote_addr = "127.0.0.1:3080"
 transport = "tcp"
 token = "REPLACE-WITH-A-RANDOM-SHARED-TOKEN"
 [client.naive]
-binary = "/usr/local/lib/backpack/helpers/naive/v154.0.8037.49-4-amd64/naive"
+binary = "/usr/local/lib/backpack/helpers/naive/v154.0.8037.49-5-amd64/naive"
 server = "tunnel.example.com:443"
 username = "REPLACE-WITH-A-PRIVATE-USERNAME"
 password = "REPLACE-WITH-A-RANDOM-PASSWORD"
@@ -135,6 +135,15 @@ password = "REPLACE-WITH-A-RANDOM-PASSWORD"
 
 Use a valid certificate for the outer hostname. This sing-box inbound does not
 include a complete website frontend or an active-probe camouflage guarantee.
+
+`connections` (outside side, optional) is how many HTTP/2 connections the Naive
+client spreads the tunnel over; unset is 4, `1` is a single connection. One
+HTTP/2 connection carries at most one flow-control window per round trip: on a
+70 ms path the tunnel moved 22 Mbit/s one way with one connection and 467 with
+four (1056 the other way). On a lossy path each connection is also its own TCP
+congestion window. The cost is that several connections to one host are
+something an observer can count; NaiveProxy names the option
+`insecure-concurrency` for that reason.
 
 ### XHTTP over TLS
 
@@ -173,6 +182,11 @@ path = "/REPLACE-WITH-A-RANDOM-PRIVATE-PATH"
 # ca_file = "/absolute/path/to/private-ca.pem"
 ```
 
+Each pooled reverse connection gets an HTTP/2 connection of its own (Xray's
+`xmux` with `maxConcurrency` 1), so the reverse pool size is the connection
+count; sharing one connection held the slower direction to about 560 Mbit/s on
+a 70 ms path where separate ones carried about 790.
+
 TLS verification remains enabled and HTTP/2 is selected. Optional `host` sets
 the HTTP host and must match on both sides; empty uses `server_name`. A CDN must
 support the selected XHTTP requests, response streaming, timeouts and origin
@@ -204,6 +218,12 @@ The Xray SOCKS listener permits only the reverse target, and authenticated Iran
 traffic can reach only that target. The REALITY unauthenticated cover behavior
 uses the explicitly configured cover endpoint. None of these carriers promises
 availability on every filtered network; validate your own Iran/outside route.
+
+All three carry the reverse engine over TCP, so on a path that loses packets
+their speed is TCP's: with CUBIC at 1% loss and 70 ms each connection holds
+about 2 Mbit/s, whatever the helper. More connections (Naive's `connections`,
+the reverse pool size) multiply it, and BBR — what **Optimize** sets on both
+servers — is the larger lever there.
 
 For XHTTP and Naive, certificate renewal is external. Valid changes to the
 certificate/key files or a configured CA file reload the tunnel without a TOML

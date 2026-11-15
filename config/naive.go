@@ -13,6 +13,27 @@ type NaiveClientConfig struct {
 	Password string `toml:"password"`
 	// CAFile optionally trusts a PEM CA for this helper alone; empty uses the official client's normal certificate verification.
 	CAFile string `toml:"ca_file"`
+	// Connections is how many HTTP/2 connections the client spreads the
+	// tunnel's streams over (NaiveProxy's insecure-concurrency); 0 means
+	// DefaultNaiveConnections, 1 a single connection, as one browser tab
+	// opens. One connection carried at most ~120 Mbit/s up on a 70 ms path —
+	// one HTTP/2 flow-control window per round trip — and four carried four
+	// times that; on a lossy path each is its own TCP congestion window, so
+	// the gain is the same factor. More connections to one host is also
+	// something an observer can count.
+	Connections int `toml:"connections"`
+}
+
+// DefaultNaiveConnections is the Naive client's connection count when
+// client.naive.connections is unset.
+const DefaultNaiveConnections = 4
+
+// NaiveConnections is the connection count the client runs with.
+func (n NaiveClientConfig) NaiveConnections() int {
+	if n.Connections <= 0 {
+		return DefaultNaiveConnections
+	}
+	return n.Connections
 }
 
 func (n NaiveClientConfig) Enabled() bool { return n != (NaiveClientConfig{}) }

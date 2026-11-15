@@ -150,8 +150,8 @@ helpers_validate() {
 helper_spec() {
   helper_tool="$1"; helper_arch="$2"; helper_extra=""
   case "$helper_tool/$helper_arch" in
-    naive/amd64) helper_sha=9d765620b90f7c60eb40c7c68b2f82537757cc52a8693dee7a00f8ba8b13dfd0; helper_arch=x64 ;;
-    naive/arm64) helper_sha=dfa99dc36dafa1ee7f97f48bde14e9ee96bc4011e5cc10c7881fa7883859a036 ;;
+    naive/amd64) helper_sha=80214dfea1767f6ecf63a3a79dc9f48b203460f51abc609357fff48dd5844c7d; helper_arch=x64 ;;
+    naive/arm64) helper_sha=8f4d917fa39a5d8cf1c17fc12ffd99ba84c015b62b43461d09cc074ca4114d8d ;;
     sing-box/amd64) helper_sha=a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6 ;;
     sing-box/arm64) helper_sha=b43a1fb1bda131c6653576741ce527eb2bdeab7c9308ca90ee8b972abb7e4a7f ;;
     xray/amd64) helper_sha=23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae; helper_arch=64 ;;
@@ -160,7 +160,7 @@ helper_spec() {
   esac
   case "$helper_tool" in
     naive)
-      helper_version=v154.0.8037.49-4; helper_repo=klzgrad/naiveproxy
+      helper_version=v154.0.8037.49-5; helper_repo=klzgrad/naiveproxy
       helper_stem="naiveproxy-$helper_version-linux-$helper_arch"
       helper_asset="$helper_stem.tar.xz"; helper_member="$helper_stem/naive"; helper_kind=xz ;;
     sing-box)

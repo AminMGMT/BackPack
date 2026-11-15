@@ -114,7 +114,7 @@ func clearManagedTransport(s *TunnelSpec) {
 }
 
 func managedHelperPath(tool string) string {
-	version := map[string]string{"naive": "v154.0.8037.49-4", "sing-box": "v1.14.2", "xray": "v26.3.27"}[tool]
+	version := map[string]string{"naive": "v154.0.8037.49-5", "sing-box": "v1.14.2", "xray": "v26.3.27"}[tool]
 	return filepath.Join("/usr/local/lib/backpack/helpers", tool, version+"-"+runtime.GOARCH, tool)
 }
 
