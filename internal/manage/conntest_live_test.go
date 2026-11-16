@@ -73,6 +73,9 @@ func TestTheConnectionTestAcrossARealPath(t *testing.T) {
 				t.Errorf("the kharej did not print the verdict\n%s", out)
 			}
 			for _, r := range results {
+				if r.Phase != "" {
+					t.Errorf("%s %s finished in phase %q", r.Kind, r.Transport, r.Phase)
+				}
 				if managedTransport(r.Transport) && r.Status == ctSkipped {
 					t.Logf("optional %s skipped: %s", r.Transport, r.Detail)
 					continue

@@ -21,11 +21,44 @@ func ConnTestRunTime() time.Duration {
 }
 
 // ConnTestSpeedTime estimates the serial speed phase for healthy tunnels:
-// both directions, at every connection count.
+// both directions at every connection count, then both once more in the
+// second pass.
 func ConnTestSpeedTime(tunnels int) time.Duration {
-	runs := time.Duration(2 * len(ctSpeedStages))
-	return time.Duration(tunnels) * (runs*(ctSpeedWarmup+ctSpeedMaximum) + time.Second)
+	return time.Duration(tunnels) * (ctSpeedFirstPass() + ctSpeedSecondPass())
 }
+
+// ConnTestSpeedLeft estimates what is left of the speed phase from the rows'
+// phases, or 0 when it has not started.
+func ConnTestSpeedLeft(phases []string) time.Duration {
+	var left time.Duration
+	started := false
+	for _, p := range phases {
+		switch p {
+		case "speed-queued":
+			left += ctSpeedFirstPass() + ctSpeedSecondPass()
+		case "speed":
+			started = true
+			left += ctSpeedFirstPass() + ctSpeedSecondPass()
+		case ctPhaseAgain, ctPhaseSecond:
+			started = true
+			left += ctSpeedSecondPass()
+		}
+	}
+	if !started {
+		return 0
+	}
+	return left
+}
+
+// ConnTestSpeedPhase is a phase in which a row is being measured, in either
+// pass.
+func ConnTestSpeedPhase(phase string) bool { return phase == "speed" || phase == ctPhaseSecond }
+
+func ctSpeedFirstPass() time.Duration {
+	return time.Duration(2*len(ctSpeedStages))*(ctSpeedWarmup+ctSpeedMaximum) + time.Second
+}
+
+func ctSpeedSecondPass() time.Duration { return 2*(ctSpeedWarmup+ctSpeedMaximum) + time.Second }
 
 // ConnTestName is a tested transport's name as the menus print it: "TCP MUX",
 // "KCP FEC", "Iran→Kharej".

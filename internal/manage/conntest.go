@@ -36,6 +36,7 @@ import (
 	"github.com/backpack/backpack/internal/spooftest"
 	"github.com/backpack/backpack/internal/tunnel/l3"
 	"github.com/backpack/backpack/internal/tunnel/naive"
+	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
@@ -1113,6 +1114,13 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 	wg.Wait()
 	// Stability probes finish before any bandwidth test starts. Heavy traffic
 	// must not change another tunnel's loss/RTT or share its speed measurement.
+	speeds := map[int]ctSpeedResult{}
+	queued := 0
+	for _, r := range results {
+		if r.Phase == "speed-queued" {
+			queued++
+		}
+	}
 	for i, c := range s.cases {
 		r := results[i]
 		if r.Phase != "speed-queued" {
@@ -1130,13 +1138,36 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 		if err != nil {
 			r.Status, r.Detail = ctUnstable, "speed test failed ("+ctShortErr(err)+")"
 		} else {
-			r.Status, r.Mbps, r.UploadMbps, r.SpeedStable = ctOK, speed.download, speed.upload, speed.stable
-			r.PeakMbps, r.UploadPeakMbps, r.SpeedStreams = speed.downloadPeak, speed.uploadPeak, speed.streams
-			if !speed.stable {
-				r.Detail = "speed varied during the sample; repeat to confirm"
+			speeds[i] = speed
+			ctPutSpeed(&r, speed)
+			if queued > 1 {
+				r.Phase = ctPhaseAgain
 			}
 		}
 		reportRow(i, r)
+	}
+	// A second pass in the opposite order, each tunnel keeping its better
+	// figures. One pass does not give every tunnel the same path: the first
+	// has it fresh, the last runs after minutes of load, when a provider's
+	// burst allowance or a shaper's patience may be spent. In reverse the
+	// last goes first, so no figure rests on its place in the queue.
+	if len(speeds) > 1 {
+		for i := len(s.cases) - 1; i >= 0; i-- {
+			first, ok := speeds[i]
+			if !ok {
+				continue
+			}
+			c, r := s.cases[i], results[i]
+			if ctx.Err() != nil {
+				r.Phase = ""
+				reportRow(i, r)
+				continue
+			}
+			r.Phase, r.Detail = ctPhaseSecond, "second pass, in reverse order"
+			reportRow(i, r)
+			ctPutSpeed(&r, ctSpeedAgain(ctx, func() (net.Conn, error) { return ctDial(ctx, c, s.link.L3) }, first))
+			reportRow(i, r)
+		}
 	}
 
 	// The kharej's path-MTU measurement, which it has usually sent long before.
@@ -1153,6 +1184,23 @@ func (s *ConnTestIran) Run(ctx context.Context, progress func(int, ConnTestResul
 	}
 	s.coord.publish(results, s.best)
 	return results
+}
+
+// A row's phases in the second speed pass: measured once and waiting for it,
+// with the first pass's figures already in it, then being measured again.
+const (
+	ctPhaseAgain  = "speed-again"
+	ctPhaseSecond = "speed-second"
+)
+
+// ctPutSpeed writes a passed speed test into its row.
+func ctPutSpeed(r *ConnTestResult, speed ctSpeedResult) {
+	r.Status, r.Mbps, r.UploadMbps, r.SpeedStable = ctOK, speed.download, speed.upload, speed.stable
+	r.PeakMbps, r.UploadPeakMbps, r.SpeedStreams = speed.downloadPeak, speed.uploadPeak, speed.streams
+	r.Phase, r.Detail = "", ""
+	if !speed.stable {
+		r.Detail = "speed varied during the sample; repeat to confirm"
+	}
 }
 
 // Best is the recommendation the finished test came to.
@@ -1450,14 +1498,20 @@ func ctProbe(ctx context.Context, c *connTestCase, l3Echo int, report func(ConnT
 }
 
 func ctDial(ctx context.Context, c *connTestCase, l3Echo int) (net.Conn, error) {
-	network, addr := "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(c.entry))
+	proto, addr := "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(c.entry))
 	if c.udp {
-		network = "udp"
+		proto = "udp"
 	}
+	d := &net.Dialer{Timeout: 3 * time.Second}
 	if c.kind == "direct" && c.tr != l3.CarrierPck {
 		addr = net.JoinHostPort(c.peerIP, strconv.Itoa(l3Echo))
+		// Through a TUN the test's own TCP is what crosses the path, so it
+		// asks for the congestion control every tunnel socket gets. On the
+		// system default (cubic) a lossy long path held a direct tunnel to a
+		// fraction of what the reverse ones, all BBR, were measured at.
+		d.Control = network.CongestionControl
 	}
-	return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, network, addr)
+	return d.DialContext(ctx, proto, addr)
 }
 
 // connectWaitFor is how long a tunnel is given to come up. The direct ones
@@ -2312,7 +2366,9 @@ func ctStartEchoes(ctx context.Context, link ConnTestLink) (*ctEchoes, error) {
 func (e *ctEchoes) l3(ctx context.Context, ip string, port int) {
 	go func() {
 		for ctx.Err() == nil {
-			l, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
+			// The download's sender: BBR as on the Iran side (see ctDial).
+			lc := net.ListenConfig{Control: network.CongestionControl}
+			l, err := lc.Listen(ctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
 			if err == nil {
 				e.add(l)
 				ctServeTCPEcho(l, e)

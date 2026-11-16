@@ -313,8 +313,8 @@ func ConnTestBestTable(b ConnTestBest) string {
 			row("Upload", fmt.Sprintf("%.1f Mbps", b.UploadMbps), "sustained, verified receiver bytes")
 		}
 		if b.PeakMbps > 0 {
-			row("Max download", fmt.Sprintf("%.1f Mbps", b.PeakMbps), "best second, up to 16 connections")
-			row("Max upload", fmt.Sprintf("%.1f Mbps", b.UploadPeakMbps), "best second, up to 16 connections")
+			row("Max download", fmt.Sprintf("%.1f Mbps", b.PeakMbps), "best second of both passes, up to 16 connections")
+			row("Max upload", fmt.Sprintf("%.1f Mbps", b.UploadPeakMbps), "best second of both passes, up to 16 connections")
 		}
 	} else {
 		row("Transport", "-", "nothing carried traffic steadily")

@@ -165,7 +165,8 @@ function runPane(v) {
 
 function settled(v) {
   const live = (v.rows || []).filter(r => r.status !== 'skipped');
-  const speed = live.find(r => r.phase === 'speed');
+  const speed = live.find(r => r.phase === 'speed' || r.phase === 'speed-second');
+  if (speed && speed.phase === 'speed-second') return `Speed, second pass in reverse order: ${esc(speed.name)} — ${live.filter(r => r.phase === 'speed-again').length} to go.`;
   if (speed) return `Measuring download and upload on ${esc(speed.name)} — ${live.filter(r => r.phase === 'speed-queued').length} healthy tunnels waiting.`;
   const done = live.filter(r => r.status !== 'testing').length;
   return live.length ? `${done} of ${live.length} transports judged.`
@@ -245,8 +246,8 @@ function rowHTML() {
 
 /* A rate as the rows print it: one decimal under ten, whole above. */
 const mbps = v => v.toFixed(v < 10 ? 1 : 0);
-/* The best second beside the sustained rate, when the test measured one. */
-const maxOf = v => v ? ` <span class="mx">max <b>${mbps(v)}</b></span>` : '';
+/* The best second leads; the sustained rate sits beside it, quieter. */
+const rate = (avg, peak) => `<b>${mbps(Math.max(avg, peak || 0))}</b> Mb/s${peak > avg ? ` <span class="mx">avg ${mbps(avg)}</span>` : ''}`;
 
 /* A row is patched, never redrawn, so its bar slides from where it was and the
    list does not flicker every two seconds. */
@@ -259,16 +260,16 @@ function fillRow(n, r) {
   nb.textContent = r.name;
   nb.title = r.name;
   const sm = n.querySelector('.nm small');
-  sm.textContent = r.detail || (r.uploadMbps ? 'sustained · max is the best second' : '');
+  sm.textContent = r.detail || (r.uploadMbps ? 'max: best second of both passes' : '');
   sm.title = r.detail || '';
   n.querySelector('.bar i').style.setProperty('--w', (share * 100).toFixed(1) + '%');
   n.querySelector('.ec').textContent = r.status === 'skipped' ? '—' : `${testing ? r.tried : r.ok}/${total}`;
   n.querySelector('.fg').innerHTML = [
     r.rtt ? `<span><b>${r.rtt}</b> ms</span>` : '',
-    r.mbps ? `<span>↓ <b>${mbps(r.mbps)}</b>${maxOf(r.peakMbps)} Mb/s</span>` : '',
-    r.uploadMbps ? `<span>↑ <b>${mbps(r.uploadMbps)}</b>${maxOf(r.uploadPeakMbps)} Mb/s</span>` : '',
+    r.mbps ? `<span>↓ ${rate(r.mbps, r.peakMbps)}</span>` : '',
+    r.uploadMbps ? `<span>↑ ${rate(r.uploadMbps, r.uploadPeakMbps)}</span>` : '',
   ].join('');
-  n.querySelector('.st').textContent = r.phase === 'speed' ? 'Speed test' : r.phase === 'speed-queued' ? 'Queued' : statusWord(r.status);
+  n.querySelector('.st').textContent = r.phase === 'speed' || r.phase === 'speed-second' ? 'Speed test' : r.phase === 'speed-queued' ? 'Queued' : statusWord(r.status);
 }
 
 function emptyRight(st) {

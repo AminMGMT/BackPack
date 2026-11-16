@@ -180,3 +180,53 @@ func TestUploadCountsArePacedAndComplete(t *testing.T) {
 		t.Errorf("%d counts for %d bytes (%d reads' worth) in %s: not paced", len(counts), sent, reads, span)
 	}
 }
+
+// The second pass keeps each tunnel's better figures: a slower second
+// measurement does not lower the first, and one that cannot run at all leaves
+// the first pass's standing.
+func TestTheSecondSpeedPassKeepsTheBetterFigures(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the real speed test")
+	}
+	dial, conns := speedServer(t)
+	high := ctSpeedResult{download: 1e6, upload: 1e6, downloadPeak: 1e6, uploadPeak: 1e6, streams: 4, uploadStreams: 16}
+	got := ctSpeedAgain(context.Background(), dial, high)
+	if got.download != high.download || got.upload != high.upload || got.downloadPeak != high.downloadPeak {
+		t.Errorf("a slower second pass replaced the first: %+v", got)
+	}
+	if n := conns.Load(); n != 4+16 {
+		t.Errorf("%d connections, want each direction once at the count it did best with", n)
+	}
+
+	low := ctSpeedResult{download: 0.001, upload: 0.001, streams: 4, uploadStreams: 4}
+	if got := ctSpeedAgain(context.Background(), dial, low); got.download <= low.download || got.upload <= low.upload ||
+		got.downloadPeak < got.download {
+		t.Errorf("a faster second pass was not kept: %+v", got)
+	}
+
+	refused := func() (net.Conn, error) { return nil, io.ErrClosedPipe }
+	if got := ctSpeedAgain(context.Background(), refused, high); got != high {
+		t.Errorf("a failed second pass changed the result: %+v", got)
+	}
+}
+
+// The panel's countdown in the speed phase: a full measurement for each
+// tunnel still to be measured the first time, the second pass for each
+// measured once, nothing before the phase starts.
+func TestTheSpeedPhaseCountdown(t *testing.T) {
+	first, second := ctSpeedFirstPass(), ctSpeedSecondPass()
+	for _, c := range []struct {
+		phases []string
+		want   time.Duration
+	}{
+		{[]string{"", "speed-queued", "speed-queued"}, 0},
+		{[]string{"speed", "speed-queued", ""}, 2 * (first + second)},
+		{[]string{ctPhaseAgain, "speed", "speed-queued"}, second + 2*(first+second)},
+		{[]string{ctPhaseAgain, ctPhaseSecond, ""}, 2 * second},
+		{[]string{"", ctPhaseSecond}, second},
+	} {
+		if got := ConnTestSpeedLeft(c.phases); got != c.want {
+			t.Errorf("%q: %v left, want %v", c.phases, got, c.want)
+		}
+	}
+}

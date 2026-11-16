@@ -90,7 +90,7 @@ func ctRow(r ConnTestResult) string {
 }
 
 func ctStatusLabel(r ConnTestResult) string {
-	if r.Phase == "speed" {
+	if ConnTestSpeedPhase(r.Phase) {
 		return "SPEED"
 	}
 	if r.Phase == "speed-queued" {
@@ -127,13 +127,15 @@ func ConnTestTable(results []ConnTestResult) string {
 			} else if r.OK > 0 && r.Kind != "spoof" {
 				rtt = "<1ms"
 			}
+			// The most it carried leads; the sustained rate follows.
 			if r.Mbps > 0 {
 				speed = fmt.Sprintf("%.1f Mbps", r.Mbps)
 				if r.UploadMbps > 0 {
 					speed = fmt.Sprintf("↓ %.1f / ↑ %.1f Mbps", r.Mbps, r.UploadMbps)
 				}
 				if r.PeakMbps > 0 {
-					speed += fmt.Sprintf(" · max ↓ %.1f / ↑ %.1f", r.PeakMbps, r.UploadPeakMbps)
+					speed = fmt.Sprintf("max ↓ %.1f / ↑ %.1f Mbps · avg ↓ %.1f / ↑ %.1f",
+						max(r.PeakMbps, r.Mbps), max(r.UploadPeakMbps, r.UploadMbps), r.Mbps, r.UploadMbps)
 				}
 			}
 			fmt.Fprintf(&b, "%s %-26s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)

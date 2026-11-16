@@ -199,18 +199,12 @@ func (c *conntestRunner) start(parent context.Context, hosts []string, preset st
 					v.State, v.Host, v.Kharej, v.Rows = ctRunning, p.Host, p.Kharej, append([]conntestRow(nil), p.Rows...)
 					v.Ran = p.Started
 					v.Ends = time.Unix(p.Started, 0).Add(manage.ConnTestRunTime()).Unix()
-					pending := 0
-					speed := false
-					for _, r := range p.Rows {
-						if r.Phase == "speed" {
-							speed = true
-						}
-						if r.Phase == "speed" || r.Phase == "speed-queued" {
-							pending++
-						}
+					phases := make([]string, len(p.Rows))
+					for i, r := range p.Rows {
+						phases[i] = r.Phase
 					}
-					if speed {
-						v.Ends = time.Now().Add(manage.ConnTestSpeedTime(pending) + 15*time.Second).Unix()
+					if left := manage.ConnTestSpeedLeft(phases); left > 0 {
+						v.Ends = time.Now().Add(left + 15*time.Second).Unix()
 					}
 				} else {
 					v.State = ctWaiting

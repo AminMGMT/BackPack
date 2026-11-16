@@ -4,6 +4,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // Reporting which congestion control the tunnel actually got.
@@ -24,6 +25,15 @@ import (
 //
 // That is exactly the kind of thing the panel exists to say out loud, so the
 // answer is read back here rather than assumed.
+
+// CongestionControl is a net.Dialer or net.ListenConfig Control that asks for
+// TCPCongestion, as every tunnel socket does, for a socket opened outside the
+// tunnel's own dialers. Sockets a listener accepts inherit it. Best effort,
+// like setCongestion; it never fails the socket.
+func CongestionControl(_, _ string, c syscall.RawConn) error {
+	_ = c.Control(func(fd uintptr) { setCongestion(fd, TCPCongestion) })
+	return nil
+}
 
 // TunnelCongestion reports the congestion control algorithm the tunnel's TCP
 // sockets end up running under, and the one they asked for.

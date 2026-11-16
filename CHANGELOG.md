@@ -384,6 +384,18 @@ All notable changes to Backpack are documented here.
 
 ### Fixed
 
+- **Connection Test measured direct tunnels too low.** Through a TUN the
+  test's own TCP crosses the path, and it ran on the system's congestion
+  control (often cubic), while every reverse tunnel's sockets ask for BBR. On a
+  lossy long path that held a direct tunnel to a fraction of what it carries.
+  The test's sockets on both servers now ask for BBR too.
+
+- **Connection Test speeds no longer depend on the order.** The tunnel measured
+  first had the path fresh; the last ran after minutes of load. A second pass
+  now measures every tunnel again in reverse order, and each keeps its better
+  figures. The rows lead with the maximum (the best second of both passes),
+  with the sustained rate beside it.
+
 - **Health check's Run again ran the checks twice.** It also reopened the
   dialog, and the button called a function that does not exist. It now reloads
   the list once.

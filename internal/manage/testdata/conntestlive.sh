@@ -7,7 +7,8 @@
 # Env: BIN (the engine), TESTBIN (the test binary, re-run as the Iran side),
 # W (work dir), SOAK (seconds), FILTER (packets a flow may carry before the
 # path drops the rest of it — what an Iran route was measured doing; unset for
-# a clean path), PATHMTU (the veth MTU, to test the path-MTU measurement).
+# a clean path), PATHMTU (the veth MTU, to test the path-MTU measurement),
+# NETEM (more netem options for both ends, e.g. "rate 200mbit loss 0.5%").
 set -u
 mount -t tmpfs none /run 2>/dev/null; mkdir -p /run/netns
 ip netns add iran; ip netns add kharej
@@ -28,8 +29,8 @@ ip -n iran link set vi up; ip -n kharej link set vk up
 if [ -n "${PATHMTU:-}" ]; then
   ip -n iran link set vi mtu "$PATHMTU"; ip -n kharej link set vk mtu "$PATHMTU"
 fi
-ip netns exec iran tc qdisc add dev vi root netem delay 35ms
-ip netns exec kharej tc qdisc add dev vk root netem delay 35ms
+ip netns exec iran tc qdisc add dev vi root netem delay 35ms ${NETEM:-}
+ip netns exec kharej tc qdisc add dev vk root netem delay 35ms ${NETEM:-}
 # A strict rp_filter drops a forged source before the spoof carrier sees it,
 # and a loose one does too here, where no default route covers it; off, as
 # l3live.sh has it. A real server with a default route needs only loose (2).

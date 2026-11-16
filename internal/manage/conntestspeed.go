@@ -58,9 +58,10 @@ type ctSpeedResult struct {
 	// downloadPeak and uploadPeak are the most the tunnel carried over any
 	// ctSpeedPeakWindow of either stage: the maximum it can be got to move.
 	downloadPeak, uploadPeak float64
-	// streams is how many connections the download figure came from.
-	streams int
-	stable  bool
+	// streams and uploadStreams are how many connections each figure came
+	// from.
+	streams, uploadStreams int
+	stable                 bool
 }
 
 // ctSpeed measures one tunnel at a time. Streams share the same sampling
@@ -78,9 +79,35 @@ func ctSpeed(ctx context.Context, dial func() (net.Conn, error)) (ctSpeedResult,
 		return r, fmt.Errorf("upload: %w", err)
 	}
 	r.download, r.downloadPeak, r.streams = down.avg, down.peak, down.streams
-	r.upload, r.uploadPeak = up.avg, up.peak
+	r.upload, r.uploadPeak, r.uploadStreams = up.avg, up.peak, up.streams
 	r.stable = down.stable && up.stable
 	return r, nil
+}
+
+// ctSpeedAgain measures both directions once more, at the connection counts
+// the first pass did best with, and keeps the better figures of the two. A
+// direction that fails this time keeps the first pass's: that one passed.
+func ctSpeedAgain(ctx context.Context, dial func() (net.Conn, error), first ctSpeedResult) ctSpeedResult {
+	ctx, cancel := context.WithTimeout(ctx, ctSpeedBudget)
+	defer cancel()
+	r, stable := first, true
+	down, err := ctSpeedDirection(ctx, dial, 'D', max(first.streams, ctSpeedStages[0]))
+	if err == nil {
+		if down.avg > r.download {
+			r.download, r.streams = down.avg, down.streams
+		}
+		r.downloadPeak = max(r.downloadPeak, down.peak)
+	}
+	stable = stable && err == nil && down.stable
+	up, err := ctSpeedDirection(ctx, dial, 'U', max(first.uploadStreams, ctSpeedStages[0]))
+	if err == nil {
+		if up.avg > r.upload {
+			r.upload, r.uploadStreams = up.avg, up.streams
+		}
+		r.uploadPeak = max(r.uploadPeak, up.peak)
+	}
+	r.stable = first.stable || stable && err == nil && up.stable
+	return r
 }
 
 // ctSpeedRun is one direction measured at one connection count.
