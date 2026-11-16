@@ -12,9 +12,9 @@ import { openScreen } from '../ui/screen.js';
 import { oops } from '../ui/toast.js';
 
 const KCP_CAVEATS = [
-  'KCP runs over UDP — if your provider throttles UDP this will be worse, not better, so test it before committing',
-  'if KCP does not hold up on this link, QUIC is the other UDP option worth trying: it recovers losses on its own and needs no tuning',
-  'and if UDP itself is the problem here, TCP + PCK carries the same KCP inside TCP-shaped packets built below the kernel — Linux and root on both ends',
+  'KCP runs over UDP — if UDP is throttled it will be worse, so test first',
+  'if KCP struggles, try QUIC: it recovers losses itself and needs no tuning',
+  'if UDP is the problem, TCP + PCK carries KCP in TCP-shaped packets — Linux and root on both ends',
 ];
 
 /* The same branches the server takes, so the panel never explains a different
@@ -24,36 +24,36 @@ function recommend(r, current) {
   const out = { preset: 'Turbo', why: [], caveats: [], fec: null };
   if (!usable) {
     out.label = 'WSS'; out.transport = 'wss';
-    out.why = ["the server's tunnel port barely answered, which usually means filtering rather than a slow link",
-               'WSS looks like ordinary HTTPS web traffic, so it is the most likely to get through'];
-    out.caveats = ['first make sure the server is actually running and the port is open — a stopped server looks exactly the same from here'];
+    out.why = ["the tunnel port barely answered — usually filtering, not a slow link",
+               'WSS looks like ordinary HTTPS, so it is the likeliest to get through'];
+    out.caveats = ['first check the server is running and the port is open — a stopped server looks the same'];
   } else if (loss >= 20) {
     out.label = 'UDP + KCP + FEC'; out.transport = 'kcp'; out.preset = 'Aggressive';
-    out.why = [`${loss.toFixed(0)}% of probes never completed — this link loses a lot of packets`,
-               'KCP repairs losses with error correction instead of waiting for retransmits, which is exactly this problem'];
+    out.why = [`${loss.toFixed(0)}% of probes never completed — this link loses a lot`,
+               'KCP repairs losses with error correction instead of retransmits'];
     out.caveats = KCP_CAVEATS;
   } else if (loss >= 2) {
     out.label = 'UDP + KCP + FEC'; out.transport = 'kcp';
-    out.why = [`${loss.toFixed(0)}% packet loss measured — enough that TCP keeps backing off and losing speed`,
-               "KCP's error correction recovers those losses without a full round trip"];
+    out.why = [`${loss.toFixed(0)}% packet loss — enough to keep TCP backing off`,
+               "KCP's error correction recovers it without a round trip"];
     out.caveats = KCP_CAVEATS;
   } else if (r.jitterMs > r.avgMs / 3) {
     out.label = 'TCP Mux'; out.transport = 'tcpmux';
-    out.why = [`latency swings a lot (±${r.jitterMs}ms around ${r.avgMs}ms) — a congested or shaped path`,
-               'multiplexing many streams over a few steady connections rides this out far better than one connection per stream'];
+    out.why = [`latency swings (±${r.jitterMs}ms around ${r.avgMs}ms) — a congested or shaped path`,
+               'multiplexing over a few steady connections rides this out better'];
   } else {
     out.label = 'TCP Mux'; out.transport = 'tcpmux';
-    out.why = [`the link is clean and steady (${r.avgMs}ms, ±${r.jitterMs}ms, no measurable loss)`,
-               'with nothing to repair, plain multiplexed TCP is the fastest and the lightest on CPU'];
+    out.why = [`the link is clean and steady (${r.avgMs}ms, ±${r.jitterMs}ms, no loss)`,
+               'plain multiplexed TCP is the fastest and lightest on CPU'];
   }
   if (out.transport === 'kcp') {
-    out.fec = loss < 1 ? ['20:5', 'a light 25% parity is plenty on a clean route']
+    out.fec = loss < 1 ? ['20:5', 'light 25% parity is plenty on a clean route']
             : loss < 5 ? ['10:5', '10:5 repairs bursts up to ~33%']
             : loss < 15 ? ['8:8', '8:8 repairs bursts up to ~50%']
             : ['4:8', '4:8 trades 200% overhead for repairing up to ~67%'];
     out.fec[1] = `${loss.toFixed(0)}% loss — ${out.fec[1]}`;
   }
-  if (out.transport === current) out.same = 'this is what the tunnel already uses — nothing to change';
+  if (out.transport === current) out.same = 'already what the tunnel uses';
   return out;
 }
 
@@ -104,11 +104,11 @@ function paint(root, res, current) {
 /* The two cases the server refuses before it probes anything. */
 function refusal(t) {
   if (t.role !== 'client') return [
-    'The link test runs on the client (kharej) side — it is the side that dials out.',
-    'A server tunnel has no address to probe: it waits to be dialled, so from here there is nothing to connect to. Run it from the kharej side of this same tunnel.'];
+    'The link test runs on the client (kharej) side, which dials out.',
+    'A server tunnel waits to be dialled and has nothing to probe. Run it from the kharej side.'];
   if (['udp', 'kcp', 'quic'].includes(t.transport)) return [
-    'A UDP-based tunnel cannot be probed over TCP — its metrics (loss, FEC repairs) are the honest measure of this link.',
-    'Probing a datagram tunnel’s port with a TCP connect would report a perfectly working tunnel as dead. The KCP counters on the metrics screen already measure the same thing, from the traffic itself.'];
+    'A UDP tunnel can’t be probed over TCP — its metrics (loss, FEC repairs) measure the link.',
+    'A TCP connect would report a working datagram tunnel as dead. Use the metrics screen.'];
   return null;
 }
 

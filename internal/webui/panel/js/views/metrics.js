@@ -270,7 +270,7 @@ function topBlock(root, t) {
   const chart = areaChart(rows, null, 'mlive', false);
   box.outerHTML = legend()
     + (chart || nothing('Not enough samples yet',
-        'Speed is the difference between two readings, so the chart appears once there are two.'))
+        'The chart appears once there are two readings.'))
     + `<div class="mrows"></div>`;
   /* The preview's key rows named a single series and a colour this does not
      use; the legend above each chart says what is actually drawn. */
@@ -346,7 +346,7 @@ export async function metricsView(ctx) {
         setSection(root, 'Last 24 hours',
           (areaChart(rows, h.changes, 'mday') ? legend() + areaChart(rows, h.changes, 'mday') : null) ||
           nothing('Not enough samples yet',
-            'Speed is the difference between two five-minute samples, so the chart appears once there are two.'));
+            'The chart appears once there are two five-minute samples.'));
 
         /* The headline figures, under the chart at the top they come from. */
         const last = series[series.length - 1], prev = series[series.length - 2];
@@ -390,7 +390,7 @@ export async function metricsView(ctx) {
                <span class="what">${esc(c.note || 'the configuration in place before this')}</span>
                <button class="mini2" data-to="undo">Restore</button></div>`).join('')}</div>`
           : nothing('Nothing to go back to',
-              'Nothing has been changed on this tunnel yet, so there is no earlier configuration kept.'));
+              'No changes yet, so no earlier configuration is kept.'));
         const badge = sec?.querySelector('.badge2');
         if (badge) badge.textContent = changes.length ? `${changes.length} kept` : 'none kept';
       } catch (e) {

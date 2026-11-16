@@ -552,7 +552,7 @@ export function dashboard(ctx) {
       case 'restartall': {
         if (!await confirmBox({
           title: 'Restart every tunnel?',
-          body: 'Each one drops and rebuilds its connection. Traffic stops for a moment on all of them.',
+          body: 'Traffic stops briefly on all of them.',
           go: 'Restart all',
         })) return;
         toast('Restarting every tunnel…');
@@ -579,9 +579,7 @@ export function dashboard(ctx) {
       const t = store.tunnel(name);
       const ok = await confirmBox({
         title: `Unlink <q>${esc(name)}</q> from ${esc(t && t.node || '')}?`,
-        body: 'Nothing is deleted or stopped on either machine. This panel simply '
-            + 'stops treating them as two ends of one tunnel, so edits, start and stop, '
-            + 'and the far journal go back to reaching this end only.',
+        body: 'Nothing is deleted or stopped. The panel just stops treating them as one tunnel.',
         go: 'Unlink',
       });
       if (!ok) return;
@@ -613,8 +611,7 @@ export function dashboard(ctx) {
         const far = t.peerName || name;
         const alsoFar = await confirmBox({
           title: `Also delete <q>${esc(far)}</q> on ${esc(t.node)}?`,
-          body: `${name} is gone from this server either way. This is about the other `
-              + `half of it, on a different machine. There is no undo for that one either.`,
+          body: `${name} is gone from this server either way. This is the other half, on another machine — no undo.`,
           lines: [{ text: `${t.node}: ${far}` }],
           go: 'Delete there too', danger: true, defaultNo: true,
         });

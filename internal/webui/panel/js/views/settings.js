@@ -123,7 +123,7 @@ export function settingsView(ctx) {
     pick: '.dlg',
     bind: async (root, close) => {
       dialogSubtitle(root, store.get().stats,
-        'changes apply as you make them unless a control says otherwise');
+        'changes apply as you make them');
       const [tg, ch, ses, ab, upd, cert] = await Promise.allSettled([
         api.telegram(), api.channel(), api.sessions(),
         api.autoBackup(), api.updateCheck(), api.panelCertRead(),
@@ -182,8 +182,7 @@ export function settingsView(ctx) {
           + `<input id="${id}" type="password" placeholder="Panel password"></div>`;
 
         const showCodes = codes => `<pre class="tokout">${esc(codes.join('\n'))}\n\n`
-          + `Keep these somewhere that is not this server. Each one signs you in once, `
-          + `and they are the way back if the phone is gone.</pre>`;
+          + `Keep these off this server. Each signs you in once; they are the way back if the phone is gone.</pre>`;
 
         const draw = st => {
           if (st.enabled) {
@@ -238,7 +237,7 @@ export function settingsView(ctx) {
             if (id === 'tfoff') {
               if (!await confirmBox({
                 title: 'Turn two-factor off?',
-                body: 'The password becomes the whole login again, and the recovery codes stop working.',
+                body: 'The password alone logs in again, and recovery codes stop working.',
                 go: 'Turn off' })) return;
               await api.totpDisable(pw());
               draw({ enabled: false, recoveryLeft: 0 });
@@ -297,7 +296,7 @@ export function settingsView(ctx) {
           if (!name) return;
           if (!await confirmBox({
             title: `Revoke ${esc(name)}?`,
-            body: 'Anything still using it stops working immediately. It cannot be undone — a new token would be a new secret.',
+            body: 'Anything using it stops working at once. A new token is a new secret.',
             go: 'Revoke' })) return;
           try { drawTokens((await api.tokenRevoke(name)).tokens || []); toast(`${name} revoked.`); drawAudit(); }
           catch (e) { oops(e); }
@@ -479,11 +478,8 @@ export function settingsView(ctx) {
             : certMode === 'acme'
             ? `<b>Trusted by every browser.</b> ${esc(snap.acmeNote || '')}`
             : certMode === 'self'
-              ? '<b>The browser warns once.</b> It works on a bare IP, and the warning '
-                + 'is accepted per device. Installing it as an app needs a trusted '
-                + 'certificate — only an iPhone adds it to the home screen anyway.'
-              : '<b>No certificate.</b> The page travels in the clear and cannot be '
-                + 'installed as an app.';
+              ? '<b>The browser warns once.</b> Works on a bare IP; installing as an app needs a trusted certificate.'
+              : '<b>No certificate.</b> The page travels in the clear and can’t be installed as an app.';
         }
         /* An option that cannot work here says so rather than failing after the
            restart, which is when the panel is already unreachable. */
@@ -578,7 +574,7 @@ export function settingsView(ctx) {
               return;
             }
             if (act === 'code') {
-              if (!await confirmBox({ title: 'Generate a new login code?', body: 'The current password stops working and every device is signed out, including this one.', go: 'Generate', danger: true })) return;
+              if (!await confirmBox({ title: 'Generate a new login code?', body: 'The current password stops working and every device is signed out.', go: 'Generate', danger: true })) return;
               const r = await api.panelNewCode();
               /* Shown once, big, with a copy — the old password is already gone. */
               out.innerHTML = `<div class="caution" style="margin-top:12px"><span class="ic3">!</span><span>
@@ -595,7 +591,7 @@ export function settingsView(ctx) {
             const next = act === 'random' ? 'a new random path' : act === 'none' ? 'the root, with no path' : `/${custom}/`;
             if (!await confirmBox({
               title: `Move the panel to ${esc(next)}?`,
-              body: 'The current address stops working at once. This page follows the panel to the new one — note it down.',
+              body: 'The current address stops working at once. Note the new one.',
               go: 'Move', danger: act === 'none',
             })) return;
             const r = await api.panelPath(act, custom);
@@ -618,7 +614,7 @@ export function settingsView(ctx) {
           .map(s => root.querySelector(s)?.textContent || '').join('').trim();
         const ok = await copyText(text);
         flashCopied(btn, ok);
-        if (!ok) toast('The browser would not copy it — select the address and copy it by hand.', true);
+        if (!ok) toast('Copy failed — select the address and copy it by hand.', true);
       });
 
       certOpts.forEach(o => o.addEventListener('click', () => {
@@ -652,7 +648,7 @@ export function settingsView(ctx) {
         if (b && s) {
           if (next) {
             b.textContent = `Install ${next}`;
-            s.textContent = `You are on ${runningTag || 'an older version'} · a restore point is taken first · tunnels restart once`;
+            s.textContent = `On ${runningTag || 'an older version'} · restore point first · tunnels restart once`;
             inst.hidden = false;
           } else {
             b.textContent = runningTag ? `${runningTag} is the latest` : 'Up to date';
@@ -739,7 +735,7 @@ export function settingsView(ctx) {
       byText(/^install/i).forEach(b => b.addEventListener('click', async () => {
         if (!await confirmBox({
           title: 'Install the update?',
-          body: 'A restore point is saved first, and it rolls itself back if the tunnels do not come back up.',
+          body: 'A restore point is saved first, and rolled back if the tunnels don’t return.',
           go: 'Install',
         })) return;
         b.disabled = true;
@@ -766,8 +762,7 @@ export function settingsView(ctx) {
                : certMode === 'self' ? 'Use a self-signed certificate?'
                : certMode === 'own' ? 'Serve the panel with your certificate?'
                : 'Get a certificate from Let’s Encrypt?',
-          body: 'The panel restarts and its address changes. This page follows it; '
-              + 'if it does not, open the address shown above.',
+          body: 'The panel restarts and its address changes. This page follows it.',
           go: 'Apply', danger: certMode === 'http',
         })) return;
         try {
@@ -850,8 +845,7 @@ export function settingsView(ctx) {
           if (!file) return;
           if (!await confirmBox({
             title: 'Restore from this backup?',
-            body: 'It replaces the tunnels, the panel password and the bot settings on this '
-                + 'server with the ones in the file, and restarts the tunnels.',
+            body: 'Replaces this server’s tunnels, panel password and bot settings, then restarts the tunnels.',
             lines: [{ text: file.name }],
             go: 'Restore', danger: true,
           })) return;
@@ -1050,8 +1044,8 @@ export function settingsView(ctx) {
       if (bkState) {
         bkState.classList.toggle('ok', !!abNow.enabled);
         bkState.textContent = abNow.enabled
-          ? 'The weekly backup is on — one is taken automatically and kept on this server.'
-          : 'The weekly backup is off. Download one below, or turn it on.';
+          ? 'Weekly backup is on, kept on this server.'
+          : 'Weekly backup is off. Download one below or turn it on.';
       }
       const setSel = (n, v, label) => {
         const c = ctlOf(n);

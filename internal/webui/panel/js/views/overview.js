@@ -95,14 +95,14 @@ function troubles(state, fleet, backup) {
     out.push({
       k: 'wr',
       b: offline.length === 1 ? `${offline[0].name} is not connected` : `${offline.length} servers are not connected`,
-      s: 'Tunnels there keep running, but this panel cannot change them until they are back.',
+      s: 'Their tunnels keep running; this panel can’t change them until they’re back.',
       act: 'Servers', to: '/servers',
     });
   }
   if (s.monitorRunning === false) {
     out.push({
       k: 'wr', b: 'The monitor service is not running',
-      s: 'The watchdog, the bot and the alerts live in it. A tunnel that drops will not be restarted.',
+      s: 'Watchdog, bot and alerts live in it; a dropped tunnel won’t be restarted.',
       act: 'Health', to: '/health',
     });
   }
@@ -131,13 +131,13 @@ function troubles(state, fleet, backup) {
   if (backup && backup.enabled === false) {
     out.push({
       k: 'wr', b: 'Automatic backups are off',
-      s: 'A backup holds every config, token and certificate — the one loss on this server that cannot be undone.',
+      s: 'A backup holds every config, token and certificate — that loss can’t be undone.',
       act: 'Backup', to: '/maintenance',
     });
   } else if (backup?.last && staleDays(backup.last) > 10) {
     out.push({
       k: 'wr', b: `The last backup was ${staleDays(backup.last)} days ago`,
-      s: 'Automatic backups are weekly, so one this old means they are not completing.',
+      s: 'Backups are weekly, so they are not completing.',
       act: 'Backup', to: '/maintenance',
     });
   }

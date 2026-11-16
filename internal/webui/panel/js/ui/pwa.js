@@ -55,7 +55,7 @@ async function install() {
   if (isIOS()) {
     await confirmBox({
       title: 'Install Backpack on this device',
-      body: 'Safari installs it from the Share sheet. It opens full screen, like any other app.',
+      body: 'Safari installs it from the Share sheet, and it opens full screen.',
       lines: [
         { text: '1. Tap Share at the bottom of Safari' },
         { text: '2. Choose “Add to Home Screen”' },

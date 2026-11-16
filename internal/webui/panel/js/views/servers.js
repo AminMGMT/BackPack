@@ -32,10 +32,10 @@ const ago = ts => {
    about which tunnels, and the answer is the reason to hesitate. */
 function builtThere(n) {
   const c = (n.tunnels || []).length;
-  if (!c) return 'Nothing was built there from this panel';
+  if (!c) return 'No tunnels were built there from this panel';
   return c === 1
-    ? `The tunnel built there from this panel (<b>${esc(n.tunnels[0])}</b>) keeps running`
-    : `The ${c} tunnels built there from this panel keep running`;
+    ? `Its tunnel (<b>${esc(n.tunnels[0])}</b>) keeps running`
+    : `Its ${c} tunnels keep running`;
 }
 
 /* The ground the add-a-server form sits on.
@@ -204,8 +204,7 @@ export function serversView(ctx) {
   stopB.addEventListener('click', async () => {
     if (!await confirmBox({
       title: 'Stop the rollout?',
-      body: 'It will finish the server it is on and then stop. Servers already '
-          + 'upgraded stay upgraded — this does not roll anything back.',
+      body: 'Finishes the current server, then stops. Upgraded servers stay upgraded.',
       go: 'Stop it' })) return;
     stopB.disabled = true;
     try {
@@ -235,9 +234,7 @@ export function serversView(ctx) {
 
     if (!await confirmBox({
       title: 'Upgrade the fleet?',
-      body: 'One server goes first and is watched before any other is touched. '
-          + 'If it does not come back healthy, nothing else is upgraded. '
-          + 'This takes several minutes and the page waits for it.',
+      body: 'One server goes first; if it doesn’t return healthy, nothing else is upgraded. Takes several minutes.',
       go: 'Start the rollout' })) { rollB.disabled = false; return; }
 
     rollB.textContent = 'Rolling out…';
@@ -441,7 +438,7 @@ export function serversView(ctx) {
     card.append(editor);
 
     const confirm = el('div', { class: 'cf7' }, [
-      el('p', { html: `Stop managing <b>${esc(n.name)}</b>? ${builtThere(n)} — this panel just loses the way to change them.` }),
+      el('p', { html: `Stop managing <b>${esc(n.name)}</b>? ${builtThere(n)}; the panel just can’t change them.` }),
       el('button', { class: 'btn7 warn', text: 'Remove' }),
       el('button', { class: 'btn7', text: 'Cancel' }),
     ]);
@@ -464,8 +461,8 @@ export function serversView(ctx) {
           return;
         }
         const reason = prompt(
-          `Why is ${n.name} being held back from fleet upgrades?\n` +
-          'This is shown next to it, so the next person knows whether it still applies.');
+          `Why is ${n.name} held back from fleet upgrades?\n` +
+          'Shown next to it.');
         if (!reason || !reason.trim()) { pinB.disabled = false; return; }
         paint(await api.nodePin(n.name, reason.trim()));
         toast(`${n.name} is pinned.`);
@@ -475,8 +472,7 @@ export function serversView(ctx) {
     upB?.addEventListener('click', async () => {
       if (!await confirmBox({
         title: `Upgrade ${esc(n.name)} to ${esc(mine)}?`,
-        body: `It is on ${i.version}. The release is installed there and its tunnels `
-            + 'restart once. It takes a couple of minutes, and this page waits for it.',
+        body: `It is on ${i.version}. Its tunnels restart once; takes a couple of minutes.`,
         go: 'Upgrade' })) return;
       upB.disabled = true; upB.textContent = 'Upgrading…';
       try {
@@ -726,7 +722,7 @@ export function serversView(ctx) {
          <label class="wide">New password<input name="password" type="password"
            placeholder="unchanged" autocomplete="new-password"></label>` }),
       el('div', { class: 'ed-n', text:
-        'Changing the address forgets the host key — a different machine is entitled to a different one.' }),
+        'Changing the address forgets the host key.' }),
       el('div', { class: 'ed-f' }, [
         el('button', { type: 'button', class: 'btn7', text: 'Cancel' }),
         el('button', { type: 'submit', class: 'btn7 solid', text: 'Save' }),
@@ -901,8 +897,7 @@ async function offerPairs(suggestions) {
   for (const s of suggestions) {
     const ok = await confirmBox({
       title: `Is <q>${esc(s.name)}</q> the same tunnel as <q>${esc(s.peerName)}</q>?`,
-      body: `${s.why}. Linking them lets this panel carry edits across, start and `
-          + `stop both halves together, and read that server's journal for it. Nothing is changed on either machine.`,
+      body: `${s.why}. Linking lets the panel carry edits across, start and stop both halves, and read the far journal. Nothing changes on either machine.`,
       lines: [{ text: `${s.node}: ${s.peerName}` }],
       go: 'Link them', icon: 'check',
     });
@@ -936,16 +931,15 @@ function describeDrift(rep) {
     lines.push('');
   }
   if (clean.length) {
-    lines.push(`Running exactly what this panel asked for: ${clean.map(n => n.node).join(', ')}`);
+    lines.push(`In sync: ${clean.map(n => n.node).join(', ')}`);
   }
   if (unreachable.length) {
     lines.push('');
-    lines.push('Could not be asked — a server that is down has not drifted, it is');
-    lines.push('simply not answering:');
+    lines.push('Not answering (down, not drifted):');
     for (const n of unreachable) lines.push(`  ${n.node}: ${n.error || 'no answer'}`);
   }
   if (!drifted.length && !unreachable.length) {
-    return `Every server is running exactly what this panel asked for (${clean.length} checked).`;
+    return `Every server is in sync (${clean.length} checked).`;
   }
   return lines.join('\n').trim();
 }

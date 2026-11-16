@@ -326,7 +326,7 @@ export function manageView(ctx) {
       return;
     }
     if (b.id === 'pxOff') {
-      if (!await confirmBox({ title: 'Disable the built-in proxy?', body: 'Any tunnel port forwarded to it stops working until it is enabled again.', go: 'Disable' })) return;
+      if (!await confirmBox({ title: 'Disable the built-in proxy?', body: 'Ports forwarded to it stop working until it’s enabled again.', go: 'Disable' })) return;
       try { st.proxy = await api.proxyDisable(); test = null; repaintProxy(); toast('The proxy is off.'); } catch (e) { oops(e); }
       return;
     }
@@ -345,7 +345,7 @@ export function manageView(ctx) {
     const pub = Number($('#pxPub', view)?.value), port = Number($('#pxPort', view)?.value);
     const user = $('#pxUser', view)?.value.trim() || '', pass = $('#pxPass', view)?.value || '';
     if (!t) { toast('Choose the tunnel.', true); return; }
-    if (!pub || !port) { toast('Give both ports: the one people connect to here, and the proxy’s on the kharej.', true); return; }
+    if (!pub || !port) { toast('Give both ports: the one users connect to, and the proxy’s on the kharej.', true); return; }
     if (!!user !== !!pass) { toast('Give both a username and a password, or neither.', true); return; }
     const have = String(t.ports || '').split(',').map(x => x.trim()).filter(Boolean);
     if (have.some(x => x.split('=')[0].split(':').pop() === String(pub))) {

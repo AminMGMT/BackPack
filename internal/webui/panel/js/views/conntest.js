@@ -168,8 +168,8 @@ function settled(v) {
   const speed = live.find(r => r.phase === 'speed');
   if (speed) return `Measuring download and upload on ${esc(speed.name)} — ${live.filter(r => r.phase === 'speed-queued').length} healthy tunnels waiting.`;
   const done = live.filter(r => r.status !== 'testing').length;
-  return live.length ? `${done} of ${live.length} transports judged — the rest are still carrying their echoes.`
-    : 'The kharej is building its end of every test tunnel.';
+  return live.length ? `${done} of ${live.length} transports judged.`
+    : 'The kharej is building its end of each test tunnel.';
 }
 
 const title = s => (s ? s[0].toUpperCase() + s.slice(1) : 'Turbo');
@@ -276,8 +276,8 @@ function emptyRight(st) {
   return `<div class="ct-empty ${waiting ? 'live' : ''}">
     <div class="ct-radar"><i></i><i></i><i></i><span>${ICON.radar}</span></div>
     <b>${waiting ? 'Waiting for the kharej to join' : 'Results land here'}</b>
-    <small>${waiting ? 'The moment it checks in, every transport gets a row and starts filling.'
-      : 'Each transport gets a row once the kharej runs its line: held, unstable or down, with its round trip and speed.'}</small>
+    <small>${waiting ? 'Each transport gets a row once it checks in.'
+      : 'Each transport gets a row once the kharej runs its line.'}</small>
     <div class="ct-ghosts">${'<span><i></i><i></i><i></i></span>'.repeat(4)}</div>
   </div>`;
 }
@@ -521,7 +521,7 @@ export function connTestView(ctx) {
       return;
     }
     if (b.id === 'ctStop' || b.id === 'ctStopPaths') {
-      if (!await confirmBox({ title: 'Stop the test?', body: 'Every test tunnel on this server is taken down. The kharej notices on its own and stops too.', go: 'Stop' })) return;
+      if (!await confirmBox({ title: 'Stop the test?', body: 'Every test tunnel here is taken down; the kharej stops too.', go: 'Stop' })) return;
       try { paint(await api.connTestStop()); toast('Stopping the test…'); } catch (e) { oops(e); }
       setTimeout(load, 1200);
     }

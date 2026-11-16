@@ -431,8 +431,8 @@ export function addView(ctx) {
            under "Reverse — the kharej server dials in to Iran". */
         const note = root.querySelector('#dirnote');
         if (note) note.textContent = direct
-          ? 'Direct — this server dials out to the kharej over a layer-3 carrier. For paths where reverse is filtered.'
-          : 'Reverse — the kharej server dials in to Iran. The usual choice, and what to try first.';
+          ? 'Direct — this server dials out over a layer-3 carrier. For paths where reverse is filtered.'
+          : 'Reverse — the kharej dials in to Iran. Try this first.';
         if (direct) suggestDirect(chosen.side);
 
         /* "server" is the Iran side, "client" the kharej side — the words the
@@ -610,7 +610,7 @@ export function addView(ctx) {
 
         if (title) title.textContent = up ? 'Built on this server' : 'Created, not up yet';
         if (sub) sub.textContent = up ? 'Now build the other end with the line below.'
-          : 'The config is written but the service did not start — its log says why.';
+          : 'Config written, service not started — its log says why.';
         if (result) {
           result.innerHTML = `<div class="sl-wait">Building the setup link…</div>`;
           bindSetupLink(result);
@@ -828,9 +828,8 @@ export function addView(ctx) {
           } catch (e) { oops(e); }
         });
         const hint = wrap.parentElement?.querySelector('.hint');
-        if (hint) hint.textContent = 'Users connect to these ports on this server. A bare port is handed to the same '
-          + 'port on the kharej, so the service there has to listen on it — 443=8080 sends this server’s 443 to '
-          + 'the kharej’s 8080. Random adds a port that is free here. Separate several with commas.';
+        if (hint) hint.textContent = 'Users connect to these ports here. A bare port goes to the same port on the kharej; '
+          + '443=8080 sends 443 to its 8080. Separate several with commas.';
       });
 
       [...root.querySelectorAll('button')]

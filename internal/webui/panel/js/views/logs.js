@@ -53,10 +53,8 @@ const KNOWN = [
        older than the fix still tears down over it. */
     when: ({ kindOf, olderThan }) => kindOf('l3') && olderThan('1.7.5'),
     title: 'The layer-3 read is failing',
-    detail: 'too many segments means the kernel handed the tunnel a coalesced run of '
-          + 'small packets that split into more pieces than there were buffers for it.',
-    fix: 'Update to 1.7.5 or later, where a run that overflows keeps the packets that fit '
-       + 'and the tunnel stays up. Nothing needs changing on the kharej side.',
+    detail: 'too many segments means the kernel passed more packet pieces than the tunnel had buffers for.',
+    fix: 'Update to 1.7.5 or later. Nothing to change on the kharej.',
   },
   {
     rx: /too many segments/i,
@@ -64,25 +62,20 @@ const KNOWN = [
        it is alarming and it is not a fault. */
     when: ({ kindOf }) => kindOf('l3'),
     title: 'A burst the device could not split in one go',
-    detail: 'The kernel handed the tunnel a coalesced run of small packets that split into '
-          + 'more pieces than there were buffers for it. This build keeps the packets that '
-          + 'fit and reads the rest next time.',
-    fix: 'Nothing. The tunnel stays up; the line records a busy moment, not a failure.',
+    detail: 'The kernel passed more packet pieces than there were buffers. This build keeps what fits and reads the rest next time.',
+    fix: 'Nothing. A busy moment, not a failure.',
   },
   {
     rx: /bind: address already in use/i,
     title: 'A port it needs is taken',
-    detail: 'Something else on this machine is already listening on that port, so the '
-          + 'tunnel cannot claim it.',
-    fix: 'Find the holder with ss -ltnp, then either stop it or move this tunnel to '
-       + 'another port from Edit.',
+    detail: 'Something else is already listening on that port.',
+    fix: 'Find it with ss -ltnp, then stop it or move this tunnel to another port.',
   },
   {
     rx: /no route to host|connection refused/i,
     title: 'The peer is not answering',
     detail: 'The address resolves but nothing accepts a connection on that port.',
-    fix: 'Check the other side is running and its firewall lets this address in. '
-       + 'Link Test measures the same path.',
+    fix: 'Check the other side is running and its firewall allows this address.',
   },
 ];
 

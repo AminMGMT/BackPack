@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -310,35 +312,46 @@ func (tn *tunnel) waitReady(timeout time.Duration) error {
 	return lastErr
 }
 
-// waitGone polls the entry port until a short round trip no longer gets
-// through: the client behind it has gone, and nothing it left behind is still
-// carrying for it.
+// waitGone waits until no connection from this process to the tunnel port is
+// still established: the client that was stopped has closed every socket it
+// had to the server, so nothing it left behind can carry for the next one.
+//
+// It reads /proc/net rather than probing the entry port. A probe is a user
+// connection the server accepts and holds while it pairs it, so the probes
+// themselves showed up as open files in the churn test's leak count.
 func (tn *tunnel) waitGone(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !tn.carries(time.Second) {
-			return nil
+	for {
+		n, err := establishedTo(tn.TunnelPort)
+		if err != nil || n == 0 {
+			return nil // no /proc to read: nothing to wait on
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%d connections to the tunnel port still open %v after the client stopped", n, timeout)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("the tunnel still carried traffic %v after its client stopped", timeout)
 }
 
-// carries reports whether one small round trip gets through within wait.
-func (tn *tunnel) carries(wait time.Duration) bool {
-	conn, err := net.DialTimeout("tcp", tn.Entry, wait)
-	if err != nil {
-		return false
+// establishedTo counts the sockets in /proc/net/{tcp,tcp6,udp,udp6} that are
+// established (state 01; a connected UDP socket reports the same) with port as
+// their remote end — the client side of a tunnel, not the server's.
+func establishedTo(port int) (int, error) {
+	want := fmt.Sprintf(":%04X", port)
+	n := 0
+	for _, f := range []string{"/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return 0, err
+		}
+		for _, line := range strings.Split(string(b), "\n")[1:] {
+			fields := strings.Fields(line)
+			if len(fields) > 3 && fields[3] == "01" && strings.HasSuffix(fields[2], want) {
+				n++
+			}
+		}
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(wait))
-	probe := []byte("gone?")
-	if _, err := conn.Write(probe); err != nil {
-		return false
-	}
-	got := make([]byte, len(probe))
-	_, err = io.ReadFull(conn, got)
-	return err == nil && bytes.Equal(got, probe)
+	return n, nil
 }
 
 // roundTrip sends payload through the tunnel and verifies it comes back byte

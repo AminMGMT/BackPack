@@ -45,8 +45,8 @@ export function setupLinkHTML(info) {
       ? `<div class="tl-note wr">This server's own address could not be found, so the link does not name it. Put the address the kharej reaches this server at in place of IRAN_SERVER_IP above.</div>`
       : `<div class="tl-note wr">This server's public address could not be found, so the other side will ask for it.</div>`) : ''}
     <div class="tl-note">${info.gre
-      ? 'The link holds the GRE key and both servers\' addresses — send it only to the server it is for.'
-      : 'The link holds the tunnel\'s token — send it only to the server it is for.'}</div>
+      ? 'Holds the GRE key and both addresses — send it only to the server it is for.'
+      : 'Holds the tunnel token — send it only to the server it is for.'}</div>
   </div>`;
 }
 

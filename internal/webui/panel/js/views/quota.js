@@ -55,9 +55,8 @@ export function quotaView(ctx) {
         const btn = root.querySelector('#qtReset');
         if (!await confirmBox({
           title: `Reset the usage of <q>${esc(name)}</q>?`,
-          body: `What it has carried goes back to zero${q.limit ? ', so its whole limit is available again' : ''}. `
-              + 'The tunnel restarts to do it, so traffic stops for a moment. '
-              + 'The server\'s lifetime total keeps what it carried.',
+          body: `Usage goes back to zero${q.limit ? ' and the whole limit is available again' : ''}. `
+              + 'The tunnel restarts briefly; the lifetime total is kept.',
           go: 'Reset usage',
           danger: true,
         })) return;
@@ -99,8 +98,7 @@ export function quotaView(ctx) {
           : q.limit && used / q.limit >= 0.9
             ? `<div class="qt-state wr"><i></i><span><b>Nearly used up.</b> The tunnel goes offline the moment it reaches
                 ${esc(bytes(q.limit))}, and stays offline until the limit is raised.</span></div>`
-            : `<div class="qt-state"><i></i><span>${q.limit ? `Goes offline the moment it has carried <b>${esc(bytes(q.limit))}</b>,
-                and comes back as soon as the limit is raised.` : '<b>No limit.</b> Set one and the tunnel goes offline the moment it reaches it.'}</span></div>`;
+            : `<div class="qt-state"><i></i><span>${q.limit ? `Goes offline at <b>${esc(bytes(q.limit))}</b>; back when the limit is raised.` : '<b>No limit.</b> The tunnel goes offline when it reaches one.'}</span></div>`;
         body.innerHTML = `
           <div class="qt-hero">
             <div class="qt-ring ${want ? '' : 'inf'}" style="--p:${pct.toFixed(4)};--c:${TONE_COLOR[tone]}">
@@ -136,8 +134,8 @@ export function quotaView(ctx) {
       const preview = used => {
         if (want === (q.limit || 0)) return '';
         if (!want) return 'Saving removes the limit — <b>the tunnel runs without one</b>.';
-        if (want <= used) return `<b>That is below what it has already carried</b> — the tunnel goes offline as soon as you save.`;
-        return `New limit <b>${esc(bytes(want))}</b> — <b>${esc(bytes(want - used))}</b> left from now${q.hit ? ', and the tunnel comes back online' : ''}.`;
+        if (want <= used) return `<b>Below what it has carried</b> — the tunnel goes offline on save.`;
+        return `New limit <b>${esc(bytes(want))}</b> — <b>${esc(bytes(want - used))}</b> left${q.hit ? '; the tunnel comes back online' : ''}.`;
       };
 
       body.addEventListener('click', ev => {
@@ -179,7 +177,7 @@ export function quotaView(ctx) {
           const was = q;
           q = await api.setTunnelQuota(name, want);
           toast(!q.limit ? `${name} has no traffic limit now.`
-            : was.hit && !q.hit ? `${name} has ${bytes(q.limit - q.used)} again — it is coming back online.`
+            : was.hit && !q.hit ? `${name} has ${bytes(q.limit - q.used)} again — coming back online.`
               : `${name} goes offline at ${bytes(q.limit)}.`);
           store.refresh();
           close();

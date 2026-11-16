@@ -65,7 +65,7 @@ func TestAServerOutlivesItsClientsWithoutLeaking(t *testing.T) {
 				// meet the server ending this generation: "client 7 could not
 				// carry traffic: read back: EOF", on a loaded CI runner. Each
 				// client is checked on its own tunnel only once this one has
-				// stopped carrying.
+				// closed every connection it had to the server.
 				if err := tun.waitGone(10 * time.Second); err != nil {
 					t.Fatalf("client %d: %v", i, err)
 				}

@@ -405,6 +405,11 @@ All notable changes to Backpack are documented here.
     until its data arrived, and the Health dialog a list of invented checks.
   Two test-only helpers moved out of the package.
 
+- **The panel's text is short.** About 170 hints, descriptions and dialog
+  bodies across the screens were a sentence or three of explanation each; they
+  are one short line now (the reasons stay in the source comments). The same
+  goes for anything added from here on.
+
 - **CI was red on every run since v1.9.0; each cause is fixed.** Read from the
   Actions logs of all 31 runs since the v1.9.0 tag:
   - *Cross-build* and the release build: the ARMv5 cross compiler was
@@ -447,8 +452,11 @@ All notable changes to Backpack are documented here.
       231–243 s on a runner and had a four-minute budget. It has six now.
     - *Build and test*: the churn test's next client could prove itself ready
       through the previous client's mux session still winding down, then lose
-      its transfer when that generation ended. It now waits for each client to
-      stop carrying before the next one starts.
+      its transfer when that generation ended. It now waits until the stopped
+      client has closed every connection to the tunnel port (read from
+      `/proc/net`) before the next one starts. The first version of this probed
+      the entry port instead, and the server holds a probe while it pairs it, so
+      the probes counted as leaked open files on the `tcp` run under coverage.
 
 - **The pinned NaiveProxy release had been withdrawn.** `v154.0.8037.49-4` has
   no assets on GitHub any more, so `BP_HELPERS=naive bash install.sh` failed on

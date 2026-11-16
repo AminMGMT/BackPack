@@ -433,8 +433,7 @@ function pckMarkup(set) {
     `<span class="sp"></span>${chev}</div></div>`;
   return `<div class="pane" data-tab="Direct">` +
     `<div class="f"><label>Carrier</label><div class="sel" data-name="carrier">${esc(set.carrier || '')}<span class="sp"></span>${chev}</div>` +
-    `<div class="hint">PCK forwards ports over KCP and has no TUN device, so it cannot be changed into a carrier that routes ` +
-    `traffic: add that tunnel on both servers instead. Both ends must run PCK.</div></div>` +
+    `<div class="hint">PCK has no TUN device, so it can't become a routing carrier — add a new tunnel on both servers.</div></div>` +
     ((set.pckNotes || []).length ? `<div class="hint pcknote">${esc(set.pckNotes.join(' · '))}</div>` : '') +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. PCK carries ports only, so at least one is needed.') +
       sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
@@ -442,8 +441,7 @@ function pckMarkup(set) {
     `<div class="tdesc" id="pckEffective">${set.pckEffective ? 'Runs with ' + esc(set.pckEffective) : ''}</div></div>` +
     `<div class="drawer"><button class="dhh" data-fn="dr" data-args="this">PCK fine-tune<span class="note">optional</span>` +
     `<svg class="cv" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button><div class="db">` +
-    `<div class="lead">Empty takes the preset’s value, shown in grey. Choosing another preset clears these. ` +
-    `The cipher is the one setting both ends must agree on; the packet size should match too.</div>` +
+    `<div class="lead">Empty takes the preset’s value (grey). Changing the preset clears these. Both ends must share the cipher.</div>` +
     `<div class="ftgrid">${ports ? field('pckConns', 'KCP sessions', '1 to 16. Each is its own TCP flow.') : ''}` +
     menu('pckKcpMode', 'Speed mode', 'From the preset') +
     field('pckKcpSndWnd', 'Send window (packets)') + field('pckKcpRcvWnd', 'Receive window (packets)') +
@@ -462,9 +460,8 @@ function directMarkup(set) {
     `<div class="f"><label>Carrier</label><div class="sel" data-name="carrier">${esc(set.carrier || '')}` +
     `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>` +
     (set.unrunnable ? `<div class="hint warn">${esc(set.unrunnable)}</div>` : '') +
-    (gre ? `<div class="hint warn">Kernel GRE is not encrypted: it travels as bare IP protocol 47, and ` +
-      `whatever crosses it is in the clear unless it is encrypted itself. GRE key ${esc(String(set.greKey || 0))} ` +
-      `— the same on both servers.</div>`
+    (gre ? `<div class="hint warn">GRE is not encrypted — encrypt inside it. GRE key ${esc(String(set.greKey || 0))}, ` +
+      `the same on both servers.</div>`
       : `<div class="hint">Both ends must match — change the other server too.</div>`) + `</div>` +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. Blank leaves a plain TUN tunnel.') +
       sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
