@@ -60,8 +60,8 @@ var transportGroups = []transportGroup{
 	}},
 }
 
-// The terminal collects helper credentials; the web form cannot collect them.
-// Keep these selections out of the ordinary transport API until it can.
+// The engine's transports plus the managed HTTPS ones. The panel offers the
+// HTTPS ones on the Iran side only; see TransportFamilies.
 func cliTransportGroups() []transportGroup {
 	return append(append([]transportGroup(nil), transportGroups...), transportGroup{
 		"HTTPS", "encrypted reverse TCP — Linux, matching versions on both sides", []transportEntry{

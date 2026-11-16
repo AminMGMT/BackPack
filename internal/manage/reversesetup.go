@@ -452,6 +452,9 @@ func reverseClientFromLink(link ShareLink, host string) TunnelSpec {
 	// holds, in the same order.
 	s.FallbackTransports = append([]string(nil), link.Fallbacks...)
 	s.FallbackDwell = link.Dwell
+	if edge := strings.TrimSpace(link.Edge); edge != "" && isWS(link.Tr) && net.ParseIP(edge) != nil {
+		s.EdgeIP = edge
+	}
 	if managedTransport(link.Tr) {
 		managedClientFromLink(&s, link, host)
 	}

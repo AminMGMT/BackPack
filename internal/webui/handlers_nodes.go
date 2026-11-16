@@ -600,6 +600,14 @@ func (s *server) handleNodePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "managed servers are turned off", http.StatusBadRequest)
 		return
 	}
+	// An HTTPS tunnel's kharej end needs its helper and the private
+	// certificate's trust file, which a node's apply does not carry; it is set
+	// up from the setup link. Refused before anything is written.
+	if req.Tunnel != nil && manage.IsHTTPSTransport(req.Tunnel.Transport) {
+		http.Error(w, "an HTTPS tunnel's kharej end is set up from its setup link — build this end alone, "+
+			"then run the link on the other server", http.StatusBadRequest)
+		return
+	}
 	// Checked before anything is written. Creating this end and then finding
 	// the other server unreachable leaves half a tunnel and an operator who has
 	// to know that is what happened.

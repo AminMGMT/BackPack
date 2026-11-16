@@ -405,6 +405,31 @@ All notable changes to Backpack are documented here.
     until its data arrived, and the Health dialog a list of invented checks.
   Two test-only helpers moved out of the package.
 
+- **Every reverse transport can be added from the panel.** The Add form offered
+  eleven reverse transports; the CLI offers fourteen.
+  - **HTTPS (Naive, XHTTP, REALITY)** is a fourth family on the Iran side. The
+    panel builds the Iran end with the CLI wizard's own defaults: the installed
+    helper, a generated user, password, UUID, path or key pair, and a private
+    certificate for the address the panel was reached on. REALITY takes an
+    optional cover; empty tries the suggested ones and keeps the first that
+    passes a real check from this server. XHTTP asks for a TLS name when the
+    panel is reached by IP. The kharej end is set up from the setup link, which
+    already carried everything it needs; "Build both ends" refuses HTTPS by
+    name before writing anything. Without the helpers it says how to install
+    them (`BP_HELPERS=naive,xray`).
+
+- **The Add form fits each transport, on both ends.**
+  - Settings a transport ignores are no longer offered on it: PROXY protocol
+    where the engine does not support it (udp, ws, wss, HTTPS), "Forward UDP"
+    on udp and HTTPS, zero-copy off plain TCP, the MSS clamp on the datagram
+    transports, and the connection pool on the Iran side, which never opens
+    one. The "iran only" chips are gone: the whole form is the Iran end.
+  - The kharej's own settings are asked on the Iran side and travel in the
+    setup link, so `backpack link apply` there needs nothing more: the address
+    it dials (a domain behind a CDN, say), the CDN edge IP on the websocket
+    transports (new link field `eg`), and this server's backup addresses. Only
+    a link that carries an edge needs this build to read it.
+
 - **The panel's text is short.** About 170 hints, descriptions and dialog
   bodies across the screens were a sentence or three of explanation each; they
   are one short line now (the reasons stay in the source comments). The same

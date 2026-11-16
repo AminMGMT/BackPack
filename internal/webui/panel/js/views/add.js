@@ -83,6 +83,7 @@ export function addView(ctx) {
          put a key in the config that transport never reads. */
       const isMux = t => ['tcpmux', 'wsmux', 'wssmux', 'kcp', 'xdi', 'spoof', 'pck'].includes(t);
       const isKCP = t => ['kcp', 'xdi', 'spoof', 'pck'].includes(t);
+      const isHTTPS = t => ['naive', 'xhttp', 'reality'].includes(t);
       const needsTLS = t => ['wss', 'wssmux'].includes(t);
       /* Both taken from internal/manage/config.go, because the server refuses
          these combinations by name and a form that offers them is a form that
@@ -110,18 +111,41 @@ export function addView(ctx) {
         const pk = drawer('pk');
         if (pk) { pk.hidden = t !== 'pck'; if (t !== 'pck') pk.classList.remove('open'); }
 
-        /* The other server's settings follow the transport too.
-         *
-         * They were dead markup before — conn.edgeIP carried data-when="client-ws",
-         * a value nothing matches, so it never appeared at all. Moving them into
-         * a section of their own made them appear on every transport instead,
-         * which is worse: a CDN edge offered on a plain TCP tunnel is a question
-         * with no right answer, and the server rejects it by name if it is
-         * filled in.
-         *
-         * ConnTune.apply is the authority for both of these. */
-        on('[name="peerConn.edgeIP"]', isWS(t));
-        on('[name="peerConn.proxy"]', !isDatagram(t));
+
+        /* The HTTPS transports: built here on the Iran side only, so their
+           note, and REALITY's cover, show only there. */
+        const https = isHTTPS(t) && chosen.side === 'server';
+        const hr = root.querySelector('#httpsRow');
+        if (hr) hr.hidden = !https;
+        const cr = root.querySelector('#coverRow');
+        if (cr) cr.hidden = !(https && t === 'reality');
+        const tn = root.querySelector('#tlsNameRow');
+        if (tn) tn.hidden = !(https && t === 'xhttp');
+      }
+
+      /* The settings every transport shows, hidden where this one ignores them.
+         The same rules the server applies (spec.SupportsProxyProtocol,
+         FineTune.apply, managedFromPanel) and the CLI asks by: a switch that
+         is drawn and then dropped on save is a setting that seems to work. Run
+         after the side rules, which would otherwise show them again. */
+      function transportRows() {
+        const t = chosen.transport || '';
+        const iran = chosen.side === 'server';
+        const row = sel => root.querySelector(sel)?.closest('.f3, .tg3');
+        const set = (sel, yes) => { const r = row(sel); if (r) r.hidden = !yes; };
+        const proxyOK = ['tcp', 'tcpmux', 'kcp', 'wsmux', 'wssmux', 'stealth', 'quic', 'pck'].includes(t);
+        set('[data-name="proxyProtocol"]', iran && proxyOK);
+        // udp forwards UDP ports by nature; the HTTPS helpers carry TCP only.
+        set('#ft-acceptUDP', t !== 'udp' && !isHTTPS(t));
+        set('#ft-zeroCopy', t === 'tcp');
+        set('#ft-mss', !isDatagram(t));
+        // The pool is the dialling side's; Iran never opens one.
+        set('#ft-connectionPool', !iran);
+        set('#ft-aggressivePool', !iran);
+        // What the setup link hands the kharej: an edge only means anything
+        // to a websocket transport, and the HTTPS helpers take no backups.
+        set('[name="kharejEdge"]', isWS(t));
+        set('[name="kharejBackups"]', !isHTTPS(t));
       }
 
       /* Throughput is offered only where it applies — presetSuitsTransport. */
@@ -155,8 +179,11 @@ export function addView(ctx) {
       function paintFamilies() {
         const row = root.querySelector('.fam');
         if (!row || !opts.families?.length) return;
+        /* HTTPS is built on the Iran side only; the kharej takes the link. */
+        if (opts.families[chosen.family ?? 0]?.iranOnly && chosen.side !== 'server') chosen.family = 0;
         row.innerHTML = opts.families.map((f, i) =>
-          `<button class="${i === (chosen.family ?? 0) ? 'on' : ''}" data-fn="setFam" data-args="'${i}'">
+          `<button class="${i === (chosen.family ?? 0) ? 'on' : ''}" data-fn="setFam" data-args="'${i}'"
+            ${f.iranOnly && chosen.side !== 'server' ? 'hidden' : ''}>
             <b>${esc(f.label)}</b></button>`).join('');
       }
 
@@ -477,6 +504,7 @@ export function addView(ctx) {
         });
         // The token and the far end's address are the panel's business now.
         root.querySelectorAll('.tokgone, .addrgone').forEach(n => { n.hidden = true; });
+        if (!direct) transportRows();
         paintRail();
 
         /* The spoof settings belong to the spoof carrier. They used to hang off
@@ -643,7 +671,13 @@ export function addView(ctx) {
 
       root.addEventListener('pick', ev => {
         const { fn, value, el } = ev.detail;
-        if (fn === 'setSide') chosen.side = value;
+        if (fn === 'setSide') {
+          const was = chosen.family ?? 0;
+          chosen.side = value;
+          paintFamilies();
+          if ((chosen.family ?? 0) !== was) paintTransports();
+          else applyFields();
+        }
         if (fn === 'mode3') chosen.direction = value === 'dir' ? 'direct' : 'reverse';
         if (fn === 'setFam') { chosen.family = Number(value); paintTransports(); }
         if (fn === 'setTr') { chosen.transport = value; applyFields(); applyPresets(); }
@@ -1023,7 +1057,7 @@ export function addView(ctx) {
             <button type="button" class="ch4" data-kind="rev">
               <span class="ic4"><svg viewBox="0 0 24 24"><path d="M20 12H4"/><path d="M10 6l-6 6 6 6"/></svg></span>
               <b>Reverse<span class="rec">usual</span></b>
-              <i>The kharej dials in to this server. Twelve transports, from plain TCP to WebSocket behind a CDN — what to try first.</i>
+              <i>The kharej dials in to this server. TCP, UDP, WebSocket or HTTPS — try this first.</i>
               <div class="diagram"><span class="route"><span>kharej</span><i class="rt"></i><span>Iran</span></span></div></button>
             <button type="button" class="ch4" data-kind="dir">
               <span class="ic4"><svg viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M14 6l6 6-6 6"/></svg></span>

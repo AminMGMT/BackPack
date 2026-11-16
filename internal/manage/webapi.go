@@ -26,27 +26,36 @@ type TransportOption struct {
 	Label string `json:"label"`
 	Desc  string `json:"desc"`
 	Value string `json:"value"`
+	// IranOnly marks the HTTPS transports: the panel builds their Iran end, and
+	// the kharej end is set up from that end's setup link.
+	IranOnly bool `json:"iranOnly,omitempty"`
 }
 
 // TransportFamily is one group of transports, as the setup menu asks for them:
 // the kind of connection first, the specific variant second.
 type TransportFamily struct {
-	Label   string            `json:"label"`
-	Desc    string            `json:"desc"`
-	Entries []TransportOption `json:"entries"`
+	Label    string            `json:"label"`
+	Desc     string            `json:"desc"`
+	Entries  []TransportOption `json:"entries"`
+	IranOnly bool              `json:"iranOnly,omitempty"`
 }
 
-// TransportFamilies returns the ordinary engine transport menu. Managed HTTPS
-// selections require the terminal's role-specific credential and TLS wizard.
+// TransportFamilies returns the transport menu, the CLI's own: the engine's
+// transports and the managed HTTPS ones. The panel builds an HTTPS tunnel's
+// Iran end with the wizard's defaults (see managedFromPanel); its kharej end
+// comes from the setup link, so those entries are marked IranOnly.
 func TransportFamilies() []TransportFamily {
-	out := make([]TransportFamily, 0, len(transportGroups))
-	for _, g := range transportGroups {
+	groups := cliTransportGroups()
+	out := make([]TransportFamily, 0, len(groups))
+	for _, g := range groups {
 		f := TransportFamily{Label: g.label, Desc: g.desc}
 		for _, e := range g.entries {
 			if e.value == "" {
 				continue // listed for orientation only; not selectable
 			}
-			f.Entries = append(f.Entries, TransportOption{Label: e.label, Desc: e.desc, Value: e.value})
+			managed := managedTransport(e.value)
+			f.Entries = append(f.Entries, TransportOption{Label: e.label, Desc: e.desc, Value: e.value, IranOnly: managed})
+			f.IranOnly = managed
 		}
 		out = append(out, f)
 	}
@@ -343,6 +352,9 @@ func PresetTune(preset, role, transport string) FineTune {
 	// AcceptUDP is not part of a preset — it is a defaulted setting — so it is
 	// seeded here with the answer a new tunnel gets: off. A tunnel forwards UDP
 	// only when the operator turns it on. See config.ServerConfig.ForwardsUDP.
+	if managedTransport(transport) {
+		transport = "tcp" // what an HTTPS transport runs behind its helper
+	}
 	s := TunnelSpec{Role: role, Transport: transport, AcceptUDP: false}
 	ApplyPreset(&s, preset)
 	return tuneOf(s)
@@ -374,6 +386,28 @@ type NewTunnel struct {
 	Pck    *PckTune      `json:"pck"`
 	Conn   *ConnTune     `json:"conn"`
 	Limits *TunnelLimits `json:"limits"`
+
+	// RealityCover is the REALITY cover endpoint (hostname:port). Empty picks
+	// the first suggestion that passes a check from this server.
+	RealityCover string `json:"realityCover"`
+
+	// TLSName is the name XHTTP's TLS presents. It must be a DNS name; empty
+	// takes Host when that is one.
+	TLSName string `json:"tlsName"`
+
+	// The kharej's own settings, which travel in the setup link so that
+	// `link apply` there needs nothing more: the address it dials this server
+	// on (a domain behind a CDN, say; empty is the panel's own), the CDN edge
+	// IP a websocket transport dials instead, and this server's other
+	// addresses as its backups.
+	KharejDial    string `json:"kharejDial"`
+	KharejEdge    string `json:"kharejEdge"`
+	KharejBackups string `json:"kharejBackups"`
+
+	// Host is the address the other end dials this server on. The panel fills
+	// it from the request, never the form: the HTTPS transports name it in the
+	// private certificate the setup link hands to Kharej.
+	Host string `json:"-"`
 }
 
 // CreateTunnel builds a tunnel from a filled form and starts it. It returns the
@@ -391,6 +425,10 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
+	link, err := kharejLinkSettings(n, s.Transport)
+	if err != nil {
+		return "", false, err
+	}
 	if err := refuseBusyForwards(s); err != nil {
 		return "", false, err
 	}
@@ -398,7 +436,52 @@ func CreateTunnel(n NewTunnel) (service string, active bool, err error) {
 	if err != nil {
 		return service, false, err
 	}
+	link.record(s.Name)
 	return service, IsActive(service), nil
+}
+
+// kharejLink is what the Add form says about the kharej end, checked.
+type kharejLink struct {
+	dial, edge string
+	backups    []string
+}
+
+// kharejLinkSettings checks the form's kharej settings. transport is the
+// engine's (tcp for an HTTPS one); the edge needs a websocket transport.
+func kharejLinkSettings(n NewTunnel, transport string) (kharejLink, error) {
+	var k kharejLink
+	if n.Role != "server" {
+		return k, nil
+	}
+	k.dial = strings.Trim(strings.TrimSpace(n.KharejDial), "[]")
+	if k.dial != "" && (strings.ContainsAny(k.dial, " /:") && net.ParseIP(k.dial) == nil) {
+		return k, fmt.Errorf("the address the kharej dials is a domain or an IP, without a port: %q", n.KharejDial)
+	}
+	if edge := strings.TrimSpace(n.KharejEdge); edge != "" {
+		if !isWS(strings.ToLower(strings.TrimSpace(n.Transport))) {
+			return k, fmt.Errorf("a CDN edge IP only applies to the websocket transports")
+		}
+		if net.ParseIP(edge) == nil {
+			return k, fmt.Errorf("the CDN edge IP must be an IP address, e.g. 104.16.0.1")
+		}
+		k.edge = edge
+	}
+	for _, h := range strings.FieldsFunc(n.KharejBackups, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' }) {
+		if h = strings.TrimSpace(h); h != "" {
+			k.backups = append(k.backups, h)
+		}
+	}
+	return k, nil
+}
+
+// record writes them where the setup link reads them.
+func (k kharejLink) record(name string) {
+	if k.dial != "" || k.edge != "" {
+		SetLinkDial(name, k.dial, k.edge)
+	}
+	if len(k.backups) > 0 {
+		SetLinkHosts(name, k.backups)
+	}
 }
 
 // ApplyTunnel writes the tunnel this form describes, whether or not it is
@@ -461,7 +544,15 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 	}
 
 	s.Transport = strings.ToLower(strings.TrimSpace(n.Transport))
-	if !validTransport(s.Transport) {
+	// The HTTPS transports are plain TCP inside a helper; managedFromPanel
+	// turns the plain tunnel built below into one, once it is complete.
+	managed := managedTransport(s.Transport)
+	if managed {
+		if s.Role != "server" {
+			return s, fmt.Errorf("set up the kharej end of a %s tunnel from the Iran server's setup link", s.Transport)
+		}
+		s.Transport = "tcp"
+	} else if !validTransport(s.Transport) {
 		return s, fmt.Errorf("unknown transport %q", n.Transport)
 	}
 
@@ -561,6 +652,20 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 	// opened one sends nothing for it, and the tunnel keeps the defaults.
 	if err := applyAdvanced(&s, n.Pck, n.Conn, n.Limits, port); err != nil {
 		return s, err
+	}
+	if managed {
+		host := strings.Trim(strings.TrimSpace(n.KharejDial), "[]")
+		if host == "" {
+			host = n.Host
+		}
+		if host == "" {
+			host = PublicIPv4()
+		}
+		form := managedForm{chosen: strings.ToLower(strings.TrimSpace(n.Transport)), host: host,
+			cover: n.RealityCover, tlsName: n.TLSName}
+		if err := managedFromPanel(&s, form, panelRealityProbe); err != nil {
+			return s, err
+		}
 	}
 	optimize.ApplyQuiet(ReservedPorts())
 	return s, nil

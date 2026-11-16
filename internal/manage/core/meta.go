@@ -16,6 +16,12 @@ type tunnelMeta struct {
 	// CDN edge — that the setup link hands to the far end as backups to the
 	// main one. Only a side the far end dials has them.
 	LinkHosts []string `json:"link_hosts,omitempty"`
+	// LinkDial is the address the setup link tells the far end to dial — a
+	// domain behind a CDN, say — when it is not the one the panel was
+	// reached on. LinkEdge is the CDN edge IP a websocket kharej dials instead
+	// of resolving it. Both are set from the panel's Add form.
+	LinkDial string `json:"link_dial,omitempty"`
+	LinkEdge string `json:"link_edge,omitempty"`
 }
 
 var metaMu sync.Mutex
@@ -69,6 +75,31 @@ func SetLinkHosts(name string, hosts []string) {
 	m := loadMeta()
 	e := m[name]
 	e.LinkHosts = hosts
+	m[name] = e
+	saveMeta(m)
+}
+
+// LinkDial returns the address the setup link names for the far end to dial.
+func LinkDial(name string) string {
+	metaMu.Lock()
+	defer metaMu.Unlock()
+	return loadMeta()[name].LinkDial
+}
+
+// LinkEdge returns the CDN edge IP the setup link hands a websocket kharej.
+func LinkEdge(name string) string {
+	metaMu.Lock()
+	defer metaMu.Unlock()
+	return loadMeta()[name].LinkEdge
+}
+
+// SetLinkDial records both: the address to dial, and the edge IP ("" for none).
+func SetLinkDial(name, dial, edge string) {
+	metaMu.Lock()
+	defer metaMu.Unlock()
+	m := loadMeta()
+	e := m[name]
+	e.LinkDial, e.LinkEdge = dial, edge
 	m[name] = e
 	saveMeta(m)
 }

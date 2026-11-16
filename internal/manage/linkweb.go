@@ -44,6 +44,9 @@ type SetupLinkInfo struct {
 // link names; empty uses this server's public address, as the menu does.
 func SetupLinkFor(name, host string) (SetupLinkInfo, error) {
 	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if dial := LinkDial(name); dial != "" {
+		host = dial
+	}
 	if host == "" {
 		host = linkHost()
 	}

@@ -36,6 +36,9 @@ var (
 	EffectiveRestartHours = core.EffectiveRestartHours
 	LinkHosts             = core.LinkHosts
 	SetLinkHosts          = core.SetLinkHosts
+	LinkDial              = core.LinkDial
+	LinkEdge              = core.LinkEdge
+	SetLinkDial           = core.SetLinkDial
 
 	RestartForNewBinary = core.RestartForNewBinary
 	RestartLater        = core.RestartLater

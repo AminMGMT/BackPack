@@ -135,6 +135,10 @@ type ShareLink struct {
 	// fails over from the day it is made rather than once somebody adds them
 	// by hand. An older build ignores them and dials Host alone.
 	Hosts []string `json:"hs,omitempty"`
+	// Edge is a CDN edge IP the kharej dials instead of resolving the Iran
+	// address, on the websocket transports: what the CLI asks the kharej as
+	// "Edge IP". The Iran side records it, so `link apply` needs no question.
+	Edge string `json:"eg,omitempty"`
 	// RestartHours and RestartMinute are a restart schedule both ends keep:
 	// every RestartHours hours at RestartMinute past, in UTC, so the two
 	// restart together. Zero hours is none. See core.SetScheduledRestart.
@@ -616,20 +620,25 @@ func ShareLinkFor(name, host string) (string, error) {
 		return "", err
 	}
 	hours, minute := ScheduledRestart(name)
-	return shareLinkWith(name, host, cfg, linkExtras{hosts: LinkHosts(name), restartHours: hours, restartMinute: minute})
+	if dial := LinkDial(name); dial != "" {
+		host = dial // the address recorded for the kharej to dial wins
+	}
+	return shareLinkWith(name, host, cfg, linkExtras{hosts: LinkHosts(name), edge: LinkEdge(name),
+		restartHours: hours, restartMinute: minute})
 }
 
 // linkExtras is what a link carries that is not in the tunnel's config: this
 // server's backup addresses and the restart schedule both ends keep.
 type linkExtras struct {
 	hosts                       []string
+	edge                        string
 	restartHours, restartMinute int
 }
 
 // shareLinkWith is shareLinkOf with the extras added.
 func shareLinkWith(name, host string, cfg config.Config, x linkExtras) (string, error) {
 	raw, err := shareLinkOf(name, host, cfg)
-	if err != nil || (len(x.hosts) == 0 && x.restartHours <= 0) {
+	if err != nil || (len(x.hosts) == 0 && x.edge == "" && x.restartHours <= 0) {
 		return raw, err
 	}
 	l, err := DecodeShareLink(raw)
@@ -637,6 +646,9 @@ func shareLinkWith(name, host string, cfg config.Config, x linkExtras) (string, 
 		return "", err
 	}
 	l.Hosts = x.hosts
+	if isWS(l.Tr) {
+		l.Edge = x.edge
+	}
 	if x.restartHours > 0 {
 		l.RestartHours, l.RestartMinute = x.restartHours, x.restartMinute
 	}
