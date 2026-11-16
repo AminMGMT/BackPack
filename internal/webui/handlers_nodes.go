@@ -63,7 +63,7 @@ type nodeView struct {
 	Info     node.Info `json:"info,omitempty"`
 
 	// Net is the path between this panel and that server — loss and round
-	// trip, measured here. See nodeprobe.go.
+	// trip, measured here. See internal/control/net.go.
 	Net control.NetHealth `json:"net"`
 
 	// Pending says this row was answered from what was already written down and
@@ -556,130 +556,6 @@ func privateHost(host string) bool {
 		return strings.EqualFold(host, "localhost")
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
-}
-
-// pairRequest is one submission of the setup form that builds both ends.
-type pairRequest struct {
-	Node   string                  `json:"node"`
-	Kind   string                  `json:"kind"` // "reverse" or "direct"
-	Tunnel *manage.NewTunnel       `json:"tunnel,omitempty"`
-	Direct *manage.NewDirectTunnel `json:"direct,omitempty"`
-
-	// PeerConn is the far end's own connectivity: the proxy it dials through,
-	// the CDN edge it fronts, the interface it leaves by, its backup addresses.
-	//
-	// These are the settings a mirror cannot produce. Everything else about the
-	// other end follows from this one — the port both must agree on, the token
-	// both must hold — but which network card a machine on another continent
-	// should use is a fact about that machine, and the only way to know it is
-	// to be told. Without this they could only be set by logging in there,
-	// which is the thing this feature exists to avoid.
-	PeerConn *manage.ConnTune `json:"peerConn,omitempty"`
-}
-
-// handleNodePair creates a tunnel here and its other end on a managed server.
-//
-// The far end is not built from the form. It is built from this end's finished
-// configuration, through exactly the path that produces a setup link: the
-// tunnel is created here first, read back, mirrored, and the mirror is what
-// travels. Deriving it from the form instead would mean two pieces of code
-// deciding what the other side should be, and the whole class of bug this
-// feature exists to remove is the two ends disagreeing.
-func (s *server) handleNodePair(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req pairRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		http.Error(w, "could not read the form: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	run := s.nodes.Runner()
-	if run == nil {
-		http.Error(w, "managed servers are turned off", http.StatusBadRequest)
-		return
-	}
-	// An HTTPS tunnel's kharej end needs its helper and the private
-	// certificate's trust file, which a node's apply does not carry; it is set
-	// up from the setup link. Refused before anything is written.
-	if req.Tunnel != nil && manage.IsHTTPSTransport(req.Tunnel.Transport) {
-		http.Error(w, "an HTTPS tunnel's kharej end is set up from its setup link — build this end alone, "+
-			"then run the link on the other server", http.StatusBadRequest)
-		return
-	}
-	// Checked before anything is written. Creating this end and then finding
-	// the other server unreachable leaves half a tunnel and an operator who has
-	// to know that is what happened.
-	if ok, why := run.Reachable(req.Node); !ok {
-		msg := req.Node + " could not be reached — nothing was created"
-		if why != "" {
-			msg += ": " + why
-		}
-		http.Error(w, msg, http.StatusBadGateway)
-		return
-	}
-
-	var (
-		name    string
-		service string
-		active  bool
-		err     error
-	)
-	switch req.Kind {
-	case "direct":
-		if req.Direct == nil {
-			http.Error(w, "the form is missing its direct settings", http.StatusBadRequest)
-			return
-		}
-		name = strings.TrimSpace(req.Direct.Name)
-		service, active, err = manage.CreateDirectTunnel(*req.Direct)
-	case "reverse", "":
-		if req.Tunnel == nil {
-			http.Error(w, "the form is missing its tunnel settings", http.StatusBadRequest)
-			return
-		}
-		name = strings.TrimSpace(req.Tunnel.Name)
-		service, active, err = manage.CreateTunnel(*req.Tunnel)
-	default:
-		http.Error(w, "unknown tunnel kind", http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	peer, perr := s.pushPeerEnd(run, req.Node, name, req.PeerConn, r)
-	resp := map[string]any{
-		"status":  "ok",
-		"name":    name,
-		"service": service,
-		"active":  active,
-		"node":    req.Node,
-	}
-	if perr != nil {
-		// This end is real and running; the other is not. Said plainly, with
-		// what to do about it, because the panel cannot undo the half that
-		// worked and should not pretend the whole thing failed.
-		resp["status"] = "partial"
-		resp["peerError"] = perr.Error()
-		resp["peerHint"] = "This end was created. The other end was not — " +
-			"try again once " + req.Node + " is back, and this end will be mirrored onto it."
-	} else {
-		resp["peer"] = peer
-		// Recorded only once both ends exist. A pairing written before the push
-		// would send later edits at a server that never took the tunnel.
-		peerName := ""
-		if m, ok := peer.(map[string]any); ok {
-			peerName, _ = m["peerName"].(string)
-		}
-		if err := manage.NoteNodePair(name, req.Node, peerName); err != nil {
-			resp["pairWarning"] = "The tunnel is up on both servers, but this panel could not " +
-				"record where the other end is, so edits will not carry across: " + err.Error()
-		}
-	}
-	writeJSON(w, resp)
 }
 
 // peerConnOnNode reads back the far end's own connectivity answers.

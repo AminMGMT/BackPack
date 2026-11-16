@@ -100,10 +100,6 @@ var (
 	connTestStopWait = 8 * time.Second
 )
 
-// connTestBulk is the legacy echo payload, retained for compatibility checks.
-// Run measures sustained directional goodput with ctSpeed instead.
-const connTestBulk = 1 << 20
-
 // connTestBinary is the engine to run; a variable so a test can point it at a
 // built binary rather than at the test itself.
 var connTestBinary = os.Executable
@@ -1498,44 +1494,6 @@ func ctEcho(c net.Conn, udp bool) error {
 		return errors.New("the echo came back different")
 	}
 	return nil
-}
-
-// ctBulkContext exercises the legacy echo transfer for compatibility checks.
-// Production speed measurements use ctSpeed after all stability probes finish.
-func ctBulkContext(ctx context.Context, dial func() (net.Conn, error)) (float64, error) {
-	c, err := dial()
-	if err != nil {
-		return 0, err
-	}
-	defer c.Close()
-	stopClose := context.AfterFunc(ctx, func() { c.Close() })
-	defer stopClose()
-	_ = c.SetDeadline(time.Now().Add(40 * time.Second))
-	payload := make([]byte, connTestBulk)
-	_, _ = rand.Read(payload)
-	start := time.Now()
-	werr := make(chan error, 1)
-	go func() {
-		n, err := c.Write(payload)
-		if err == nil && n != len(payload) {
-			err = io.ErrShortWrite
-		}
-		werr <- err
-	}()
-	got := make([]byte, len(payload))
-	if n, err := io.ReadFull(c, got); err != nil {
-		c.Close()
-		<-werr
-		return 0, fmt.Errorf("%d of %d KB back: %w", n>>10, len(payload)>>10, err)
-	}
-	if err := <-werr; err != nil {
-		return 0, err
-	}
-	if !bytes.Equal(got, payload) {
-		return 0, errors.New("the transfer came back different")
-	}
-	secs := time.Since(start).Seconds()
-	return float64(2*connTestBulk*8) / secs / 1e6, nil
 }
 
 func ctSleep(ctx context.Context, d time.Duration) {

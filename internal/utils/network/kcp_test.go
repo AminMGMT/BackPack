@@ -286,3 +286,15 @@ func TestTheStartupNotesAreToldOncePerRun(t *testing.T) {
 		t.Error("a changed MTU was suppressed as a repeat")
 	}
 }
+
+// resetStartupNotes forgets what has been said.
+//
+// The dedup is process-wide, which is right for a tunnel — one run, one telling
+// — and wrong for a test binary, where several tunnels are stood up in one
+// process and the second would be silent. It exists for that, and because
+// global state with no way to clear it is state that cannot be tested.
+func resetStartupNotes() {
+	saidOnce.Lock()
+	saidOnce.seen = map[string]bool{}
+	saidOnce.Unlock()
+}

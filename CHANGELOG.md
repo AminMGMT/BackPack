@@ -367,7 +367,26 @@ All notable changes to Backpack are documented here.
   Iran / Setup Kharej → Direct on both servers. `docs/config-reference.md` now
   shows only the few keys still read from that table.
 
+- **`backpack short-https`.** The experimental fixed-backend relay from v1.9.0
+  never reached the menu, the panel or the Connection Test. The command, its
+  package and `docs/short-https.md` are gone; no tunnel used it.
+
+- **`/api/node/pair`.** The panel stopped calling it when the Add form became
+  Iran-first: a tunnel is built here, the kharej end from its setup link, and
+  the two are joined with **Link to a server…**. Linking, edits that reach both
+  ends, and start/stop on both are unchanged. `docs/managed-servers.md` now
+  describes that flow.
+
+- **Dead code.** Functions nothing called (`UDPForward`, `ConnTestHost`,
+  `LimitsLabel`, the old 1 MB echo transfer) are gone, and helpers only tests
+  used now live in the test files, out of the binary. Five screenshots no page
+  linked and a stray error log are removed from the repository.
+
 ### Fixed
+
+- **Health check's Run again ran the checks twice.** It also reopened the
+  dialog, and the button called a function that does not exist. It now reloads
+  the list once.
 
 - **Editing a direct tunnel keeps the comments in its file.** The menu's Edit and
   the panel's both wrote the tunnel's file again from scratch, so the header and

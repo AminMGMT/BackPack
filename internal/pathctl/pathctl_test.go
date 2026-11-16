@@ -517,3 +517,6 @@ func TestAWindowAtItsFloorBesideAQueueItDoesNotFillCompetes(t *testing.T) {
 		t.Errorf("without RevTolerant: competing %v, window %v", competing, grown)
 	}
 }
+
+// queue is how far the smoothed reading stands above the lowest lately.
+func (f *delayFilter) queue() time.Duration { return max(0, f.cur-f.base) }

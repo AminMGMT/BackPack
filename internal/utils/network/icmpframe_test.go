@@ -230,3 +230,14 @@ func TestPooledXdiEncodingDoesNotLeakThePreviousPacket(t *testing.T) {
 		t.Fatalf("the short packet decoded as %x", back)
 	}
 }
+
+// encodeXdiPayload prefixes a KCP packet with the tag and direction that will
+// let the other end recognise it and everything else reject it. The buffer is
+// freshly sized so the caller may hold onto it.
+func encodeXdiPayload(tag [xdiTagLen]byte, dir byte, payload []byte) []byte {
+	out := make([]byte, xdiHeaderLen+len(payload))
+	copy(out[:xdiTagLen], tag[:])
+	out[xdiTagLen] = dir
+	copy(out[xdiHeaderLen:], payload)
+	return out
+}

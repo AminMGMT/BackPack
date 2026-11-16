@@ -27,11 +27,6 @@ import (
 // "other side" step shows already carries all of it (see shareLinkOf), so the
 // Kharej side is set up from that link, as it is from the CLI.
 
-// IsHTTPSTransport reports whether t is one of the managed HTTPS transports.
-func IsHTTPSTransport(t string) bool {
-	return managedTransport(strings.ToLower(strings.TrimSpace(t)))
-}
-
 // What managedFromPanel reaches outside itself for, so a test can supply a
 // helper and a certificate without an install or /etc/backpack.
 var (

@@ -244,16 +244,6 @@ func ctIsTerminal(w io.Writer) bool {
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }
 
-// set records one tunnel's state.
-func (b *ctBoard) set(i int, r ConnTestResult) {
-	b.mu.Lock()
-	for len(b.rows) <= i {
-		b.rows = append(b.rows, ConnTestResult{})
-	}
-	b.rows[i] = r
-	b.mu.Unlock()
-}
-
 // setAll replaces every row, for the kharej, which is sent them together.
 func (b *ctBoard) setAll(rows []ConnTestResult) {
 	b.mu.Lock()

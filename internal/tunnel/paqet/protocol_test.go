@@ -2,7 +2,9 @@ package paqet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -184,4 +186,15 @@ func FuzzReadMessage(f *testing.F) {
 			t.Fatalf("round trip: %+v -> %+v, %v", p, q, err)
 		}
 	})
+}
+
+func writeDatagram(w io.Writer, d []byte) error {
+	if len(d) > maxDatagram {
+		return fmt.Errorf("paqet: datagram of %d bytes does not fit a frame", len(d))
+	}
+	buf := make([]byte, 2+len(d))
+	binary.BigEndian.PutUint16(buf, uint16(len(d)))
+	copy(buf[2:], d)
+	_, err := w.Write(buf)
+	return err
 }

@@ -574,3 +574,7 @@ pck_remote_targets = true
 		t.Fatalf("pck_remote_targets written while off:\n%s", off)
 	}
 }
+
+// setupPckForTest is setupPck with the libpcap refusal taken out, so the
+// questions can be walked on a machine whose build has none.
+func setupPckForTest(side directSide) { setupPckAsking(side, true) }

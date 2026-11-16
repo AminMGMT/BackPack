@@ -500,9 +500,6 @@ func (f *delayFilter) add(now time.Time, dt, v time.Duration) {
 	}
 }
 
-// queue is how far the smoothed reading stands above the lowest lately.
-func (f *delayFilter) queue() time.Duration { return max(0, f.cur-f.base) }
-
 // delaySource is what the controller reads of a session.
 type delaySource interface {
 	// GetSRTT is KCP's smoothed round trip in milliseconds, 0 for none.

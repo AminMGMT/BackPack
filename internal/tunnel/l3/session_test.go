@@ -264,3 +264,26 @@ func TestNewSessionIDAvoidsZeroAndPredecessor(t *testing.T) {
 		}
 	}
 }
+
+// beginHandshake starts an attempt, returning the state and the message to
+// send. avoid is the id of the session being replaced, so a rekey cannot
+// accidentally reuse it.
+func beginHandshake(token string, avoid uint32, encap string) (*initiatorHandshake, error) {
+	return beginHandshakeFresh(token, avoid, encap, 0)
+}
+
+// respond is the listening side of the handshake: it consumes the initiator's
+// message and produces both the session and the reply to send back.
+func respond(token string, id uint32, msg []byte, encap string) (*session, []byte, error) {
+	return respondV(token, id, versionLegacy, msg, encap)
+}
+
+// respondV is respond with the version the dialler announced in its header.
+//
+// Split so the old signature keeps working for the tests and callers that do
+// not care, and so there is exactly one place that decides what a reply looks
+// like.
+func respondV(token string, id uint32, peerVersion int, msg []byte, encap string) (*session, []byte, error) {
+	sess, reply, _, err := respondFresh(token, id, peerVersion, msg, encap)
+	return sess, reply, err
+}

@@ -422,14 +422,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/direct/defaults", s.requireAuth(s.handleDirectDefaults))
 	mux.HandleFunc("/api/direct/create", s.requireAuth(s.handleDirectCreate))
 	mux.HandleFunc("/api/tunnel/settings", s.requireAuth(s.handleTunnelSettings))
-	// Handing a tunnel's paired settings to the other server, and taking them
-	// from it. See handleShareLink.
-	// Managed servers: the fleet, the login each one is reached with, and
-	// building both ends of a tunnel in a single submission. See
+	// Managed servers: the fleet and the login each one is reached with. See
 	// handlers_nodes.go.
 	mux.HandleFunc("/api/nodes", s.requireAuth(s.handleNodes))
 	mux.HandleFunc("/api/fleet/drift", s.requireReadAuth(s.handleDrift))
-	mux.HandleFunc("/api/node/pair", s.requireAuth(s.handleNodePair))
 	// Linking a tunnel that already exists to the server holding its other
 	// end. See handlers_adopt.go.
 	mux.HandleFunc("/api/tunnel/adopt", s.requireAuth(s.handleTunnelAdopt))

@@ -197,14 +197,3 @@ func (p *proto) read(r io.Reader) error {
 
 // maxDatagram is the largest datagram a UDP stream carries.
 const maxDatagram = 65535
-
-func writeDatagram(w io.Writer, d []byte) error {
-	if len(d) > maxDatagram {
-		return fmt.Errorf("paqet: datagram of %d bytes does not fit a frame", len(d))
-	}
-	buf := make([]byte, 2+len(d))
-	binary.BigEndian.PutUint16(buf, uint16(len(d)))
-	copy(buf[2:], d)
-	_, err := w.Write(buf)
-	return err
-}

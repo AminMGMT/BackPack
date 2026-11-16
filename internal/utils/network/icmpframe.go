@@ -148,17 +148,6 @@ func inboundDir(server bool) byte {
 	return xdiDirServer
 }
 
-// encodeXdiPayload prefixes a KCP packet with the tag and direction that will
-// let the other end recognise it and everything else reject it. The buffer is
-// freshly sized so the caller may hold onto it.
-func encodeXdiPayload(tag [xdiTagLen]byte, dir byte, payload []byte) []byte {
-	out := make([]byte, xdiHeaderLen+len(payload))
-	copy(out[:xdiTagLen], tag[:])
-	out[xdiTagLen] = dir
-	copy(out[xdiHeaderLen:], payload)
-	return out
-}
-
 // appendXdiPayload is encodeXdiPayload without the allocation: it writes into a
 // buffer the caller owns and reuses.
 //

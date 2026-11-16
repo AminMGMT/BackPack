@@ -19,12 +19,6 @@ require a Backpack build that implements the managed Xray wrapper.
 
 ## Managed HTTPS carriers
 
-For paths that carry only short HTTPS exchanges, an experimental IP-only fixed
-TCP relay is available through `backpack short-https`. It retains stream offsets
-across fresh HTTPS requests rather than relying on one persistent connection.
-It has lower throughput and is separate from these managed helpers and their
-menus. See [Experimental Short HTTPS](short-https.md) for paired setup and limits.
-
 Use a build containing these changes on both machines. From its source checkout,
 `BP_BUILD_FROM_SOURCE=1 BP_HELPERS=naive,xray bash install.sh` builds that checkout
 and installs the pinned helpers. Without the source flag the installer prefers

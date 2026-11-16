@@ -196,15 +196,6 @@ func route(c Config, u tgUser, data string) reply {
 	return navigate(c, lang, "home")
 }
 
-// navScreens names every read-only screen. It is what the tests check buttons
-// and commands against, in both directions: a button pointing at a screen not
-// listed here is a typo, and a screen listed here that nothing links to is code
-// no user can reach.
-var navScreens = []string{
-	"home", "overview", "tunnels", "system", "alerts",
-	"health", "history", "audit", "tools", "update", "webui", "support",
-}
-
 // secretScreens names the nav screens that hand over a credential rather than
 // report a reading. They need write permission even though they change nothing.
 //

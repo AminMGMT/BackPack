@@ -138,13 +138,6 @@ func knownCarrier(name string) bool {
 	return ok
 }
 
-// openCarrier builds the carrier named in the config. The returned address is
-// the peer to send to, or nil on the listening side of a carrier that learns
-// its peer from the packets that arrive.
-func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
-	return openCarrierContext(context.Background(), cfg)
-}
-
 // openCarrierContext lets Run cancel a carrier that is still being opened at
 // shutdown.
 func openCarrierContext(ctx context.Context, cfg Config) (DatagramCarrier, net.Addr, error) {

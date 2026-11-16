@@ -289,20 +289,6 @@ func stripGREShim(l4 []byte) ([]byte, bool) {
 	return l4[greHeaderLen:], true
 }
 
-// buildSpoofShim wraps framed in the profile's L4 header (UDP or TCP), stamping
-// port as both source and destination and computing the checksum over the given
-// addresses. seq is used only by the tcp profile, as its sequence number.
-func buildSpoofShim(profile SpoofProfile, port uint16, seq uint32, src, dst net.IP, framed []byte) []byte {
-	if profile == SpoofProfileTCP {
-		return buildTCPShim(port, seq, src, dst, framed)
-	}
-	return buildUDPShim(port, src, dst, framed)
-}
-
-func buildUDPShim(port uint16, src, dst net.IP, framed []byte) []byte {
-	return buildUDPShimPorts(port, port, src, dst, framed)
-}
-
 // buildUDPShimPorts is buildUDPShim with independent source and destination
 // ports, for callers (the spoof tester) that send from an ephemeral source port
 // to a fixed listen port.
@@ -321,10 +307,6 @@ func buildUDPShimPorts(srcPort, dstPort uint16, src, dst net.IP, framed []byte) 
 	}
 	binary.BigEndian.PutUint16(b[6:8], csum)
 	return b
-}
-
-func buildTCPShim(port uint16, seq uint32, src, dst net.IP, framed []byte) []byte {
-	return buildTCPShimPorts(port, port, seq, src, dst, framed)
 }
 
 // tcpSpoofFlags is the flag byte every spoofed TCP segment carries: SYN alone.

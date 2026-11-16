@@ -151,3 +151,13 @@ func TestConnTestManagedNamesKeepColumnsAligned(t *testing.T) {
 		}
 	}
 }
+
+// set records one tunnel's state.
+func (b *ctBoard) set(i int, r ConnTestResult) {
+	b.mu.Lock()
+	for len(b.rows) <= i {
+		b.rows = append(b.rows, ConnTestResult{})
+	}
+	b.rows[i] = r
+	b.mu.Unlock()
+}

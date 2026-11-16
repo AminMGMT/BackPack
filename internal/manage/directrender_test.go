@@ -173,11 +173,4 @@ func TestLimitsRoundTrip(t *testing.T) {
 	if strings.Contains(plain, "max_connections") || strings.Contains(plain, "bandwidth_mbps") {
 		t.Fatalf("an uncapped tunnel wrote limit keys:\n%s", plain)
 	}
-
-	if got := limitsLabel(0, 0); got != "unlimited, unlimited" {
-		t.Fatalf("label = %q", got)
-	}
-	if got := limitsLabel(250, 100); got != "250 connections, 100 Mbit/s" {
-		t.Fatalf("label = %q", got)
-	}
 }

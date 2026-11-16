@@ -254,3 +254,12 @@ func TestStaleProxyMappingIsNamed(t *testing.T) {
 		t.Errorf("it should say how to fix it:\n%s", got)
 	}
 }
+
+// navScreens names every read-only screen. It is what the tests check buttons
+// and commands against, in both directions: a button pointing at a screen not
+// listed here is a typo, and a screen listed here that nothing links to is code
+// no user can reach.
+var navScreens = []string{
+	"home", "overview", "tunnels", "system", "alerts",
+	"health", "history", "audit", "tools", "update", "webui", "support",
+}

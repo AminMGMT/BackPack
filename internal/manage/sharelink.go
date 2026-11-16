@@ -150,10 +150,8 @@ type ShareLink struct {
 	Fallbacks []string `json:"ft,omitempty"`
 	Dwell     int      `json:"fw,omitempty"`
 
-	// Edit marks a link that changes a tunnel rather than builds one: the
-	// fingerprint of the token the tunnel has now (editFingerprint), which is
-	// how the other server finds it whatever it is called there — and even
-	// when this very edit changes the token. See editlink.go.
+	// Edit is never written: the edit link it was meant for was not built. It
+	// stays so its id in shareFieldIDs keeps the later ids' numbers.
 	Edit string `json:"ed,omitempty"`
 
 	// Managed HTTPS links carry peer credentials, never executable paths or

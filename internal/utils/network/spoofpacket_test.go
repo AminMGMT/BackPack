@@ -299,3 +299,21 @@ func TestSpoofSrcPortShuffle(t *testing.T) {
 		t.Fatal("shuffle produced no variation")
 	}
 }
+
+// buildSpoofShim wraps framed in the profile's L4 header (UDP or TCP), stamping
+// port as both source and destination and computing the checksum over the given
+// addresses. seq is used only by the tcp profile, as its sequence number.
+func buildSpoofShim(profile SpoofProfile, port uint16, seq uint32, src, dst net.IP, framed []byte) []byte {
+	if profile == SpoofProfileTCP {
+		return buildTCPShim(port, seq, src, dst, framed)
+	}
+	return buildUDPShim(port, src, dst, framed)
+}
+
+func buildUDPShim(port uint16, src, dst net.IP, framed []byte) []byte {
+	return buildUDPShimPorts(port, port, src, dst, framed)
+}
+
+func buildTCPShim(port uint16, seq uint32, src, dst net.IP, framed []byte) []byte {
+	return buildTCPShimPorts(port, port, seq, src, dst, framed)
+}

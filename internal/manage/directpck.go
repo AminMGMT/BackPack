@@ -403,10 +403,6 @@ func pckRunnable(carrier string) error {
 	return nil
 }
 
-// setupPckForTest is setupPck with the libpcap refusal taken out, so the
-// questions can be walked on a machine whose build has none.
-func setupPckForTest(side directSide) { setupPckAsking(side, true) }
-
 // pckParamsOfTable is what the engine runs a file with.
 func pckParamsOfTable(l config.L3Config) paqet.Params { return pckParamsFor(directSpecFrom("", l)) }
 

@@ -335,36 +335,8 @@ body[data-t="light"]{
   .dlg.al2 .daysep{padding:13px 14px 6px}
 }
 .dlg.hc2{width:min(720px,100%);max-height:88vh}
-.dlg.hc2 .grpH{border-top:1px solid var(--ln)}
-.dlg.hc2 .grpH:first-child{border-top:0}
-.dlg.hc2 .gh2{display:flex;align-items:center;gap:9px;padding:13px 17px 8px}
-.dlg.hc2 .gh2 h5{font-size:12px;font-weight:600;letter-spacing:0;color:var(--dim)}
-.dlg.hc2 .gh2 .ln{flex:1;height:1px;background:var(--ln)}
-.dlg.hc2 .gh2 .tally{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
-.dlg.hc2 .ck{display:grid;grid-template-columns:20px 152px 1fr;gap:11px;padding:8px 17px;align-items:baseline}
-.dlg.hc2 .ck:hover{background:var(--sunk)}
-.dlg.hc2 .ck .mk3{width:17px;height:17px;border-radius:50%;display:grid;place-items:center;font-size:10px;
-  font-weight:600;align-self:start;margin-top:1px}
-.dlg.hc2 .ck.ok   .mk3{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
-.dlg.hc2 .ck.warn .mk3{background:color-mix(in srgb,var(--wr) 18%,transparent);color:var(--wr)}
-.dlg.hc2 .ck.fail .mk3{background:color-mix(in srgb,var(--er) 16%,transparent);color:var(--er)}
-.dlg.hc2 .ck.info .mk3{background:var(--sunk);color:var(--dim)}
-.dlg.hc2 .ck .nm3{font-size:12.5px;font-weight:580;color:var(--tx2)}
-.dlg.hc2 .ck .dt{font-size:12px;color:var(--mu);line-height:1.55}
-.dlg.hc2 .ck .fx{display:block;font-size:11.5px;color:var(--tx2);margin-top:6px;padding:8px 10px;
-  background:var(--sunk);border-radius:8px;line-height:1.55}
-.dlg.hc2 .ck .fx b{font-weight:620}
-.dlg.hc2 .running{padding:30px 17px;text-align:center;font-size:12.5px;color:var(--dim)}
 
-/* rows this screen fills from /api/alerts and /api/health */
-.dlg .arow{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--ln);
-  border-radius:12px;background:var(--s2);margin-bottom:7px;font-size:12px}
-
-.dlg .arow.quiet{color:var(--dim);border-style:dashed}
-.dlg .erow{display:flex;gap:11px;padding:9px 2px;border-bottom:1px solid var(--ln);font-size:11.5px}
-.dlg .erow:last-child{border-bottom:0}
-.dlg .erow .et{color:var(--faint);flex:none;min-width:70px;font-variant-numeric:tabular-nums}
-.dlg .erow .em{color:var(--tx2);line-height:1.55}
+/* rows this screen fills from /api/health */
 .dlg .hcsum{display:flex;gap:7px;padding:14px 18px 4px}
 .dlg .hcpill{font-size:11px;font-weight:640;padding:5px 11px;border-radius:9px;background:var(--sunk);color:var(--mu)}
 .dlg .hcpill.ok{color:var(--ok)} .dlg .hcpill.wr{color:var(--wr)} .dlg .hcpill.er{color:var(--er)}

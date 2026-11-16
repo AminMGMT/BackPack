@@ -116,15 +116,6 @@ func TestAnEmptyFleetIsEmptyAndActsOnNothing(t *testing.T) {
 	if len(state.Nodes) != 0 {
 		t.Errorf("a panel that has never used the feature reports %d servers", len(state.Nodes))
 	}
-
-	// And nothing can be pushed to a server that does not exist.
-	body, _ := json.Marshal(map[string]any{"node": "kharej", "kind": "reverse"})
-	rq := httptest.NewRequest("POST", "/api/node/pair", strings.NewReader(string(body)))
-	wr := httptest.NewRecorder()
-	s.handleNodePair(wr, rq)
-	if wr.Code == http.StatusOK {
-		t.Error("a tunnel was paired with a server that is not in the fleet")
-	}
 }
 
 // Turning it on and adding a server issues a usable command on that server's

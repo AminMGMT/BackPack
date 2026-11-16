@@ -744,3 +744,10 @@ func TestStatsAreNeverInternallyImpossible(t *testing.T) {
 	default:
 	}
 }
+
+// openCarrier builds the carrier named in the config. The returned address is
+// the peer to send to, or nil on the listening side of a carrier that learns
+// its peer from the packets that arrive.
+func openCarrier(cfg Config) (DatagramCarrier, net.Addr, error) {
+	return openCarrierContext(context.Background(), cfg)
+}

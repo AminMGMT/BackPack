@@ -75,7 +75,6 @@ var (
 	TunnelDirection = tunnelspec.TunnelDirection
 	TunnelCarrier   = tunnelspec.TunnelCarrier
 	l3EncapLabel    = tunnelspec.L3EncapLabel
-	limitsLabel     = tunnelspec.LimitsLabel
 
 	WaitServiceActive = core.WaitServiceActive
 )

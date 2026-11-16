@@ -1,6 +1,10 @@
 package manage
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/backpack/backpack/internal/manage/host"
+)
 
 // A machine whose ephemeral range reaches past the kernel's default can lose a
 // service's port to an outgoing connection. Health Check is the only thing that
@@ -36,9 +40,9 @@ func TestEphemeralRangeIsWide(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lo, hi, wide := ephemeralRangeIsWide(tt.in)
+			lo, hi, wide := host.EphemeralRangeIsWide(tt.in)
 			if lo != tt.lo || hi != tt.hi || wide != tt.wide {
-				t.Errorf("ephemeralRangeIsWide(%q) = (%d, %d, %v), want (%d, %d, %v)",
+				t.Errorf("EphemeralRangeIsWide(%q) = (%d, %d, %v), want (%d, %d, %v)",
 					tt.in, lo, hi, wide, tt.lo, tt.hi, tt.wide)
 			}
 		})
@@ -53,7 +57,7 @@ func TestThePanelNodePortsAreOutsideTheDefaultRange(t *testing.T) {
 			t.Errorf("%d is inside the default ephemeral range, so restoring the range "+
 				"would not protect it and the reservation is doing all the work", p)
 		}
-		if _, _, wide := ephemeralRangeIsWide("1024 65535"); !wide {
+		if _, _, wide := host.EphemeralRangeIsWide("1024 65535"); !wide {
 			t.Fatal("the range that exposed these ports is not reported as wide")
 		}
 	}

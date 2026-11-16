@@ -575,21 +575,6 @@ func L3EncapLabel(l config.L3Config) string {
 	return label
 }
 
-// LimitsLabel renders the two caps for a summary or a management screen. It
-// says "unlimited" rather than "0", because a zero in a list of numbers reads
-// like a setting of zero.
-func LimitsLabel(maxConns, bandwidthMbps int) string {
-	conns := "unlimited"
-	if maxConns > 0 {
-		conns = fmt.Sprintf("%d connections", maxConns)
-	}
-	bandwidth := "unlimited"
-	if bandwidthMbps > 0 {
-		bandwidth = fmt.Sprintf("%d Mbit/s", bandwidthMbps)
-	}
-	return conns + ", " + bandwidth
-}
-
 // DirectSide is which machine the wizard is being run on.
 type DirectSide int
 

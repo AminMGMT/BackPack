@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -371,7 +372,10 @@ func TestUDPBackendReceivesEveryFramedDatagram(t *testing.T) {
 	defer user.Close()
 	defer stream.Close()
 	done := make(chan struct{})
-	go func() { defer close(done); tunnelToBackend(stream, backend, silentLogger(), nil, 0, false) }()
+	go func() {
+		defer close(done)
+		tunnelToBackend(stream, backend, silentLogger(), nil, 0, false, new(atomic.Int64))
+	}()
 	t.Cleanup(func() {
 		stream.Close()
 		select {

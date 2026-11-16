@@ -561,7 +561,7 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 		return s, fmt.Errorf("invalid name %q — use letters, digits, dots and dashes (max 40)", n.Name)
 	}
 
-	// Accepts "443" and "85.10.11.51:443" alike. See tunnelbind.go: an address
+	// Accepts "443" and "85.10.11.51:443" alike. See internal/manage/spec/bind.go: an address
 	// pins the control channel to one of a multi-homed server's interfaces,
 	// which is what lets it share a port number with a forwarded port.
 	bind, err := parseTunnelBind(n.TunnelPort)

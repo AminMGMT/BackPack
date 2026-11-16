@@ -389,36 +389,6 @@ func TestConnTestCancellationCannotPassAPartialSoak(t *testing.T) {
 	}
 }
 
-func TestConnTestBulkRejectsCorruptionAndStopsOnCancellation(t *testing.T) {
-	t.Run("corruption", func(t *testing.T) {
-		client, peer := net.Pipe()
-		defer peer.Close()
-		go func() {
-			buf := make([]byte, connTestBulk)
-			if _, err := io.ReadFull(peer, buf); err == nil {
-				buf[len(buf)/2] ^= 1
-				_, _ = peer.Write(buf)
-			}
-		}()
-		if speed, err := ctBulkContext(context.Background(), func() (net.Conn, error) { return client, nil }); err == nil || speed != 0 {
-			t.Fatalf("corrupt transfer returned %f, %v", speed, err)
-		}
-	})
-	t.Run("cancelled writer", func(t *testing.T) {
-		client, peer := net.Pipe()
-		defer peer.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		if _, err := ctBulkContext(ctx, func() (net.Conn, error) { return client, nil }); err == nil {
-			t.Fatal("blocked transfer passed")
-		}
-		if time.Since(start) > time.Second {
-			t.Fatal("cancellation waited for the transfer timeout")
-		}
-	})
-}
-
 type ctShortWriter struct{ net.Conn }
 
 func (c ctShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }

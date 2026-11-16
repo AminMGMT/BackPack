@@ -31,8 +31,6 @@ var (
 	ReservedPorts    = host.ReservedPorts
 	portClash        = host.PortClash
 
-	ephemeralRangeIsWide = host.EphemeralRangeIsWide
-
 	CertExpiry           = host.CertExpiry
 	EnsureSelfSignedCert = host.EnsureSelfSignedCert
 	EnsurePanelCert      = host.EnsurePanelCert
