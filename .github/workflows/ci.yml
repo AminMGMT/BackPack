@@ -367,7 +367,7 @@ jobs:
           echo "/opt/zig" >> "$GITHUB_PATH"
 
       - name: Cache the per-architecture libpcap builds
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/backpack-libpcap
           key: libpcap-cross-1.10.6-${{ hashFiles('scripts/build-libpcap.sh', 'scripts/build-linux.sh') }}
