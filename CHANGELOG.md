@@ -384,11 +384,27 @@ All notable changes to Backpack are documented here.
 
 ### Fixed
 
+- **xdi reaches its speed on a long path.** Its raw ICMP socket kept the
+  kernel's default buffer of about 200 KB: the preset's socket buffer never
+  reached it. A loaded tunnel overflowed it, the kernel dropped the echoes, and
+  the TCP inside slowed down. On a 70 ms test path that held xdi to 250 Mbit/s
+  each way; it now carries 680–690. Reverse xdi gets the same buffer.
+
+- **FEC over xdi and pck keeps batched reads and writes.** The FEC layer hid
+  the carrier's batch path, so every packet and every parity packet cost a
+  syscall. It now batches, hands each rebuilt packet up where it was lost, and
+  reuses its buffers: about 40% less CPU on the receiving end.
+
 - **Connection Test measured direct tunnels too low.** Through a TUN the
   test's own TCP crosses the path, and it ran on the system's congestion
   control (often cubic), while every reverse tunnel's sockets ask for BBR. On a
   lossy long path that held a direct tunnel to a fraction of what it carries.
   The test's sockets on both servers now ask for BBR too.
+
+- **Connection Test tests xDi + FEC beside xDi.** On a path that loses
+  packets the two can be an order of magnitude apart: at 1% loss each way on a
+  70 ms test path, xDi carried about 30 Mbit/s and xDi + FEC about 560. When
+  xDi + FEC is the one recommended, its FEC pair is part of the recommendation.
 
 - **Connection Test speeds no longer depend on the order.** The tunnel measured
   first had the path fresh; the last ran after minutes of load. A second pass

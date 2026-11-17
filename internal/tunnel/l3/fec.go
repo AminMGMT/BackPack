@@ -3,6 +3,7 @@ package l3
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -128,8 +129,9 @@ type fecCarrier struct {
 
 	recvMu  sync.Mutex
 	groups  map[uint32]*fecGroup
-	order   []uint32   // group ids in arrival order, for eviction
-	pending []fecReady // rebuilt packets waiting to be read
+	order   []uint32    // group ids in arrival order, for eviction
+	pending []fecReady  // rebuilt packets waiting to be read
+	spare   []*fecGroup // evicted groups, kept with their shard buffers
 }
 
 // fecReady is a rebuilt packet and the address it is attributed to.
@@ -141,6 +143,7 @@ type fecReady struct {
 // fecGroup is the receiver's state for one group.
 type fecGroup struct {
 	shards    [][]byte // nil where not yet received; index by shard number
+	store     [][]byte // the buffers shards are copied into, kept across reuse
 	haveData  int      // how many data shards arrived
 	haveTotal int      // data + parity shards arrived
 	size      int      // the padded shard size, learned from any parity shard
@@ -170,13 +173,22 @@ func newFECCarrier(below DatagramCarrier, cfg FECConfig) (DatagramCarrier, error
 	if _, err := rand.Read(first[:]); err != nil {
 		return nil, fmt.Errorf("l3: choosing the initial FEC group: %w", err)
 	}
-	return &fecCarrier{
+	c := &fecCarrier{
 		sendGrp: binary.BigEndian.Uint32(first[:]),
 		below:   below,
 		cfg:     cfg,
 		enc:     enc,
 		groups:  make(map[uint32]*fecGroup),
-	}, nil
+	}
+	// Over a carrier that reads and writes in batches, so does this layer:
+	// without it the tunnel lost recvmmsg and sendmmsg the moment FEC was on,
+	// and spent a syscall on every datagram and every parity packet.
+	if br, ok := below.(batchReader); ok {
+		if bw, ok := below.(batchWriter); ok {
+			return &fecBatchCarrier{fecCarrier: c, br: br, bw: bw}, nil
+		}
+	}
+	return c, nil
 }
 
 func (c *fecCarrier) Overhead() int { return c.below.Overhead() + fecOverhead }
@@ -203,6 +215,28 @@ func (c *fecCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if len(p) > 65535 {
 		return 0, fmt.Errorf("l3: FEC payload of %d bytes exceeds its length field", len(p))
 	}
+	c.sendFrame = c.stage(c.sendFrame[:0], p, addr)
+	n, err := c.below.WriteTo(c.sendFrame, addr)
+	if err == nil && n != len(c.sendFrame) {
+		err = io.ErrShortWrite
+	}
+	if c.sendIdx == c.cfg.Data {
+		c.parity(func() []byte { return c.sendFrame }, func(frame []byte) {
+			c.sendFrame = frame
+			// Data is already on the wire; parity remains best effort.
+			_, _ = c.below.WriteTo(frame, c.sendPeer)
+		})
+	}
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// stage files p as the next data shard of the group being built and returns
+// its wire frame, written into dst. The caller holds sendMu and sends the
+// parity once the group is full (sendIdx == Data).
+func (c *fecCarrier) stage(dst, p []byte, addr net.Addr) []byte {
 	if c.sendPad == nil {
 		c.sendPad = make([][]byte, c.cfg.Data+c.cfg.Parity)
 	}
@@ -220,36 +254,25 @@ func (c *fecCarrier) WriteTo(p []byte, addr net.Addr) (int, error) {
 	c.sendPad[c.sendIdx] = shard
 	c.sendMax = max(c.sendMax, need)
 	c.sendPeer = addr
-	frame := c.wireFrame(fecHeaderLen + need)
-	putFECHeader(frame, fecKindData, c.sendGrp, byte(c.sendIdx))
-	copy(frame[fecHeaderLen:], shard)
-	n, err := c.below.WriteTo(frame, addr)
-	if err == nil && n != len(frame) {
-		err = io.ErrShortWrite
-	}
+	dst = fecGrow(dst, fecHeaderLen+need)
+	putFECHeader(dst, fecKindData, c.sendGrp, byte(c.sendIdx))
+	copy(dst[fecHeaderLen:], shard)
 	c.sendIdx++
-	if c.sendIdx == c.cfg.Data {
-		c.flushParity()
-	}
-	if err != nil {
-		return 0, err
-	}
-	return len(p), nil
+	return dst
 }
 
-// wireFrame is borrowed until the underlying synchronous write returns.
-// Every caller holds sendMu, including parity generation.
-func (c *fecCarrier) wireFrame(size int) []byte {
-	if cap(c.sendFrame) < size {
-		c.sendFrame = make([]byte, size)
-	} else {
-		c.sendFrame = c.sendFrame[:size]
+// fecGrow is dst resized to n, keeping its capacity when it has enough.
+func fecGrow(dst []byte, n int) []byte {
+	if cap(dst) < n {
+		return make([]byte, n)
 	}
-	return c.sendFrame
+	return dst[:n]
 }
 
-// flushParity sends the group's redundancy without changing the wire format.
-func (c *fecCarrier) flushParity() {
+// parity computes the finished group's redundancy, writes each parity frame
+// into a buffer from buf and hands it to emit, then starts the next group.
+// The caller holds sendMu.
+func (c *fecCarrier) parity(buf func() []byte, emit func(frame []byte)) {
 	defer func() {
 		c.sendGrp++
 		c.sendIdx = 0
@@ -277,12 +300,11 @@ func (c *fecCarrier) flushParity() {
 	if err := c.enc.Encode(c.sendPad); err != nil {
 		return
 	}
-	frame := c.wireFrame(fecHeaderLen + size)
 	for i := c.cfg.Data; i < len(c.sendPad); i++ {
+		frame := fecGrow(buf(), fecHeaderLen+size)
 		putFECHeader(frame, fecKindParity, c.sendGrp, byte(i))
 		copy(frame[fecHeaderLen:], c.sendPad[i])
-		// Data is already on the wire; parity remains best effort.
-		_, _ = c.below.WriteTo(frame, c.sendPeer)
+		emit(frame)
 	}
 }
 
@@ -348,18 +370,17 @@ func (c *fecCarrier) absorb(kind byte, group uint32, index byte, body []byte, ad
 	}
 	g := c.groups[group]
 	if g == nil {
-		g = &fecGroup{
-			shards:    make([][]byte, total),
-			delivered: make([]bool, c.cfg.Data),
-			addr:      addr,
-		}
+		g = c.newGroup(total, addr)
 		c.groups[group] = g
 		c.order = append(c.order, group)
 		c.evict()
 	}
 
 	if g.shards[int(index)] == nil {
-		g.shards[int(index)] = append([]byte(nil), body...)
+		// Into the slot's own buffer: a copy per packet received was an
+		// allocation per packet, and the collector set the pace.
+		g.store[int(index)] = append(g.store[int(index)][:0], body...)
+		g.shards[int(index)] = g.store[int(index)]
 		g.haveTotal++
 		if int(index) < c.cfg.Data {
 			g.haveData++
@@ -423,13 +444,36 @@ func (c *fecCarrier) rebuild(g *fecGroup) {
 	}
 }
 
-// evict drops the oldest groups once the window is full. The caller holds
-// recvMu.
+// evict drops the oldest groups once the window is full, keeping them to be
+// reused. The caller holds recvMu.
 func (c *fecCarrier) evict() {
 	for len(c.order) > fecWindow {
 		oldest := c.order[0]
 		c.order = c.order[1:]
+		if g := c.groups[oldest]; g != nil && len(c.spare) < fecWindow {
+			c.spare = append(c.spare, g)
+		}
 		delete(c.groups, oldest)
+	}
+}
+
+// newGroup is an empty group, a spare one when there is one. Rebuilt packets
+// are copied out of its shards when they are queued, so nothing still points
+// into a group by the time it is evicted. The caller holds recvMu.
+func (c *fecCarrier) newGroup(total int, addr net.Addr) *fecGroup {
+	if k := len(c.spare); k > 0 {
+		g := c.spare[k-1]
+		c.spare = c.spare[:k-1]
+		clear(g.shards)
+		clear(g.delivered)
+		g.haveData, g.haveTotal, g.size, g.done, g.addr = 0, 0, 0, false, addr
+		return g
+	}
+	return &fecGroup{
+		shards:    make([][]byte, total),
+		store:     make([][]byte, total),
+		delivered: make([]bool, c.cfg.Data),
+		addr:      addr,
 	}
 }
 
@@ -467,4 +511,158 @@ func trimShard(shard []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return shard[fecLenPrefix : fecLenPrefix+n], true
+}
+
+// fecBatchCarrier is the scheme over a carrier with batch reads and writes
+// (pck's and xdi's raw sockets): a batch of datagrams goes out as one batch
+// with its groups' parity among it, and a batch read off the wire comes up as
+// one, rebuilt packets included.
+type fecBatchCarrier struct {
+	*fecCarrier
+	br batchReader
+	bw batchWriter
+
+	// Under sendMu: the frames of the batch being sent, and which of them are
+	// data, so a short write can be reported in the caller's packets.
+	wframes [][]byte
+	wdata   []bool
+
+	// Under readMu: the wire frames of a batch being read.
+	rframes [][]byte
+	rsizes  []int
+	rfroms  []net.Addr
+}
+
+// WriteBatch sends bufs to one peer, parity after the data of each group it
+// completes, and reports how many of bufs left.
+func (c *fecBatchCarrier) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	k := 0
+	slot := func() []byte {
+		if k == len(c.wframes) {
+			c.wframes = append(c.wframes, nil)
+			c.wdata = append(c.wdata, false)
+		}
+		return c.wframes[k][:0]
+	}
+	put := func(frame []byte, data bool) {
+		c.wframes[k], c.wdata[k] = frame, data
+		k++
+	}
+	for _, p := range bufs {
+		if len(p) > 65535 {
+			return 0, fmt.Errorf("l3: FEC payload of %d bytes exceeds its length field", len(p))
+		}
+	}
+	for _, p := range bufs {
+		put(c.stage(slot(), p, to), true)
+		if c.sendIdx == c.cfg.Data {
+			c.parity(slot, func(frame []byte) { put(frame, false) })
+		}
+	}
+	sent, err := c.bw.WriteBatch(c.wframes[:k], to)
+	sent = min(max(sent, 0), k)
+	if errors.Is(err, errNoBatch) {
+		// These frames are already in their groups, so they go out as they
+		// are, one at a time, rather than back to the caller to be filed
+		// again.
+		for _, frame := range c.wframes[sent:k] {
+			_, _ = c.below.WriteTo(frame, to)
+		}
+		return len(bufs), nil
+	}
+	data := 0
+	for i := 0; i < sent; i++ {
+		if c.wdata[i] {
+			data++
+		}
+	}
+	if err == nil && sent < k {
+		// The rest of the frames never left. Data the caller sees as sent
+		// stays counted; parity is best effort.
+		for i := sent; i < k; i++ {
+			if c.wdata[i] {
+				return data, nil
+			}
+		}
+		return len(bufs), nil
+	}
+	return data, err
+}
+
+// ReadBatch reads a batch off the wire and hands up its data, and whatever
+// the batch's parity rebuilt, in the order they came. It returns at least
+// one datagram and never waits for a second.
+func (c *fecBatchCarrier) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	n := min(len(bufs), len(sizes), len(froms))
+	if n == 0 {
+		return 0, nil
+	}
+	out := c.drain(bufs[:n], sizes, froms, 0)
+	if out > 0 {
+		return out, nil
+	}
+	if len(c.rframes) < n {
+		c.rframes = make([][]byte, n)
+		c.rsizes = make([]int, n)
+		c.rfroms = make([]net.Addr, n)
+	}
+	for {
+		for i := 0; i < n; i++ {
+			c.rframes[i] = fecGrow(c.rframes[i], len(bufs[i])+fecHeaderLen+fecLenPrefix)
+		}
+		got, err := c.br.ReadBatch(c.rframes[:n], c.rsizes[:n], c.rfroms[:n])
+		if err != nil {
+			return 0, err
+		}
+		for i := 0; i < got; i++ {
+			kind, group, index, body, ok := parseFECHeader(c.rframes[i][:c.rsizes[i]])
+			if !ok {
+				continue
+			}
+			payload, delivered := c.absorb(kind, group, index, body, c.rfroms[i])
+			if delivered {
+				if out == n {
+					// Every slot is full of what arrived before it; this
+					// one waits with the rebuilt ones for the next read.
+					c.queue(payload, c.rfroms[i])
+					continue
+				}
+				sizes[out], froms[out] = copy(bufs[out], payload), c.rfroms[i]
+				out++
+			}
+			// What this frame rebuilt goes up right behind it, where the
+			// lost packets were, not behind the rest of the batch: TCP
+			// reads a packet that turns up a batch late as reordering.
+			out = c.drain(bufs[:n], sizes, froms, out)
+		}
+		if out > 0 {
+			return out, nil
+		}
+	}
+}
+
+// queue holds a packet for the next read, behind any rebuilt ones already
+// waiting.
+func (c *fecBatchCarrier) queue(payload []byte, addr net.Addr) {
+	c.recvMu.Lock()
+	defer c.recvMu.Unlock()
+	c.pending = append(c.pending, fecReady{data: append([]byte(nil), payload...), addr: addr})
+}
+
+// drain moves rebuilt packets into bufs from slot out on, and returns the new
+// count. The caller holds readMu.
+func (c *fecBatchCarrier) drain(bufs [][]byte, sizes []int, froms []net.Addr, out int) int {
+	for out < len(bufs) {
+		n, addr, ok := c.takePending(bufs[out])
+		if !ok {
+			break
+		}
+		sizes[out], froms[out] = n, addr
+		out++
+	}
+	return out
 }

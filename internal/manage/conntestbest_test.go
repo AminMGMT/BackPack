@@ -160,3 +160,32 @@ func TestConnTestIPv4LookupHonorsCancellation(t *testing.T) {
 		t.Fatal("already cancelled lookup succeeded")
 	}
 }
+
+// xDi + FEC repairs the loss its own echoes would have shown, so when it is
+// the one recommended the FEC it ran is recommended with it; plain xDi on a
+// clean path still gets none.
+func TestXdiWithFECIsRecommendedWithItsFEC(t *testing.T) {
+	cases := []*connTestCase{{kind: "direct", tr: "xdi", name: "a"}, {kind: "direct", tr: ctXdiFEC, name: "b"}}
+	for _, c := range cases {
+		for i := 0; i < 60; i++ {
+			c.rtts = append(c.rtts, 70*time.Millisecond)
+		}
+	}
+	rows := []ConnTestResult{
+		{Kind: "direct", Transport: "xdi", Status: ctOK, OK: 60, Tried: 60, Mbps: 30},
+		{Kind: "direct", Transport: ctXdiFEC, Status: ctOK, OK: 60, Tried: 60, Mbps: 560},
+	}
+	b := ctComputeBest(rows, cases, 0, t.TempDir())
+	want := defaultL3FEC()
+	if b.Transport != "direct "+ctXdiFEC || b.FECData != want.Data || b.FECParity != want.Parity {
+		t.Errorf("recommendation: %s with FEC %d:%d, want xdi+fec with %d:%d",
+			b.Transport, b.FECData, b.FECParity, want.Data, want.Parity)
+	}
+	rows[1].Mbps = 10
+	if b := ctComputeBest(rows, cases, 0, t.TempDir()); b.Transport != "direct xdi" || b.FECData != 0 {
+		t.Errorf("plain xdi on a clean path: %s with FEC %d:%d", b.Transport, b.FECData, b.FECParity)
+	}
+	if ctDirectCarrier(ctXdiFEC) != "xdi" || ctName(ctXdiFEC) != "xDi + FEC" {
+		t.Errorf("xdi+fec builds %q and is called %q", ctDirectCarrier(ctXdiFEC), ctName(ctXdiFEC))
+	}
+}

@@ -283,7 +283,7 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 	// meaningless here, and the session tag is what separates tunnels. KCP is
 	// handed that socket and does not know the difference.
 	if s.UseICMP {
-		conn, err := newICMPServerConn(token)
+		conn, err := newICMPServerConn(token, max(s.SO_RCVBUF, s.SO_SNDBUF))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -381,7 +381,7 @@ func KCPDialContext(ctx context.Context, remoteAddr, token string, s KCPSettings
 
 	var session *kcp.UDPSession
 	if s.UseICMP {
-		conn, err := newICMPClientConn(token)
+		conn, err := newICMPClientConn(token, max(s.SO_RCVBUF, s.SO_SNDBUF))
 		if err != nil {
 			return nil, err
 		}

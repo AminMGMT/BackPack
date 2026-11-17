@@ -9,10 +9,12 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/sys/unix"
 )
 
 // A net.PacketConn that carries datagrams inside ICMP echo.
@@ -96,9 +98,14 @@ func (c *icmpConn) noteForeign(data []byte, from net.Addr) {
 // the 8-byte ICMP echo header plus this tunnel's own tag-and-direction prefix.
 const icmpMTUOverhead = 8 + xdiHeaderLen
 
+// xdiSockBuf is the raw ICMP socket's buffers when the configuration names
+// none: what pck's packet socket gets, for the same reason.
+const xdiSockBuf = 8 << 20
+
 // listenICMP opens the raw ICMP socket both ends share. It needs privilege, and
 // says so plainly when it does not have it rather than failing obscurely later.
-func listenICMP() (*icmp.PacketConn, error) {
+// sockBuf sizes its buffers; 0 takes xdiSockBuf.
+func listenICMP(sockBuf int) (*icmp.PacketConn, error) {
 	pc, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
@@ -106,13 +113,46 @@ func listenICMP() (*icmp.PacketConn, error) {
 		}
 		return nil, fmt.Errorf("xdi: could not open the ICMP socket: %w", err)
 	}
+	sizeICMPBuffers(pc, sockBuf)
 	return pc, nil
+}
+
+// sizeICMPBuffers gives the raw socket room for a burst. It used to keep the
+// kernel default (rmem_default, about 200 KB), and the preset's socket buffer
+// never reached it: on a 70 ms path a loaded tunnel overflowed it, the kernel
+// dropped the echoes, and the TCP inside read that as congestion — 250 Mbit/s
+// each way where the same path carried 4.9 Gbit/s over GRE. The FORCE options
+// pass net.core.rmem_max and wmem_max, which the raw socket's privilege
+// allows; where they are refused the plain ones take what the limit permits.
+func sizeICMPBuffers(pc *icmp.PacketConn, sockBuf int) {
+	if sockBuf <= 0 {
+		sockBuf = xdiSockBuf
+	}
+	p4 := pc.IPv4PacketConn()
+	if p4 == nil {
+		return
+	}
+	sc, ok := p4.PacketConn.(syscall.Conn)
+	if !ok {
+		return
+	}
+	raw, err := sc.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = raw.Control(func(fd uintptr) {
+		for _, o := range [][2]int{{unix.SO_RCVBUFFORCE, unix.SO_RCVBUF}, {unix.SO_SNDBUFFORCE, unix.SO_SNDBUF}} {
+			if unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, o[0], sockBuf) != nil {
+				_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, o[1], sockBuf)
+			}
+		}
+	})
 }
 
 // newICMPServerConn opens the server side: it will read echo requests and
 // answer with echo replies.
-func newICMPServerConn(token string) (net.PacketConn, error) {
-	pc, err := listenICMP()
+func newICMPServerConn(token string, sockBuf int) (net.PacketConn, error) {
+	pc, err := listenICMP(sockBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +171,8 @@ func newICMPServerConnWith(pc icmpSocket, token string) net.PacketConn {
 
 // newICMPClientConn opens the client side: it will send echo requests and read
 // the replies.
-func newICMPClientConn(token string) (net.PacketConn, error) {
-	pc, err := listenICMP()
+func newICMPClientConn(token string, sockBuf int) (net.PacketConn, error) {
+	pc, err := listenICMP(sockBuf)
 	if err != nil {
 		return nil, err
 	}

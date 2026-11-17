@@ -78,17 +78,17 @@ func NewPckPacketConn(listening bool, token, addr string, carrier PcapCarrier) (
 //
 // ICMP has no ports, so only the host of addr is used and its port is ignored;
 // tunnels sharing the host's raw ICMP socket are separated by the tag derived
-// from their token.
-func NewXdiPacketConn(listening bool, token, addr string) (net.PacketConn, net.Addr, error) {
+// from their token. sockBuf sizes the socket's buffers; 0 takes the default.
+func NewXdiPacketConn(listening bool, token, addr string, sockBuf int) (net.PacketConn, net.Addr, error) {
 	if listening {
-		conn, err := newICMPServerConn(token)
+		conn, err := newICMPServerConn(token, sockBuf)
 		if err != nil {
 			return nil, nil, err
 		}
 		return conn, nil, nil
 	}
 
-	conn, err := newICMPClientConn(token)
+	conn, err := newICMPClientConn(token, sockBuf)
 	if err != nil {
 		return nil, nil, err
 	}

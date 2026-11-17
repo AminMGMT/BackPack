@@ -51,7 +51,7 @@ fi
 mkdir -p "$W"
 rm -f "$W/link"
 ip netns exec iran env CT_ROLE=iran CT_HOST="$CT_SERVER" CT_W="$W" CT_SOAK="$SOAK" CT_PRESET="${PRESET:-}" CT_ONLY="${ONLY:-}" BIN="$BIN" \
-  "$TESTBIN" -test.run '^TestConnTestIranSide$' -test.v -test.timeout 10m > "$W/iran.out" 2>&1 &
+  "$TESTBIN" -test.run '^TestConnTestIranSide$' -test.v -test.timeout 25m > "$W/iran.out" 2>&1 &
 IP=$!
 for i in $(seq 60); do [ -s "$W/link" ] && break; sleep 1; done
 if [ ! -s "$W/link" ]; then echo "RESULT FAIL the Iran side printed no link"; cat "$W/iran.out"; exit 1; fi

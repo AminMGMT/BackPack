@@ -234,6 +234,12 @@ func ctComputeBest(results []ConnTestResult, cases []*connTestCase, pmtu int, lo
 		f := RecommendFEC(q)
 		b.FECData, b.FECParity = f.Data, f.Parity
 	}
+	// xDi + FEC hides the loss it repairs from its own echoes. When it is the
+	// one recommended, FEC is part of the recommendation: the scheme it ran.
+	if b.Transport == "direct "+ctXdiFEC && b.FECData == 0 {
+		f := defaultL3FEC()
+		b.FECData, b.FECParity = f.Data, f.Parity
+	}
 	return b
 }
 

@@ -29,7 +29,7 @@ const ctBarSegments = 8
 var ctTransportNames = map[string]string{
 	"tcp": "TCP", "tcpmux": "TCP MUX", "stealth": "Stealth", "pck": "PCK",
 	"ws": "WS", "wss": "WSS", "wsmux": "WS MUX", "wssmux": "WSS MUX",
-	"kcp": "KCP FEC", "quic": "QUIC", "udp": "UDP", "xdi": "xDi", "sni": "SNI", "gre": "GRE",
+	"kcp": "KCP FEC", "quic": "QUIC", "udp": "UDP", "xdi": "xDi", ctXdiFEC: "xDi + FEC", "sni": "SNI", "gre": "GRE",
 	"naive": "Naive / HTTP2", "xhttp": "XHTTP / TLS", "reality": "REALITY / Vision",
 	ctSpoofToKharej: "Iran→Kharej", ctSpoofToIran: "Kharej→Iran",
 }

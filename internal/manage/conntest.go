@@ -79,8 +79,22 @@ var (
 	// The direct tunnel's carriers, all raw since v2.0.0 took udp and quic
 	// out, and kernel GRE — over IPv4 or IPv6, whichever the two servers
 	// reach each other on. Spoof joins them as above.
-	connTestDirect = []string{"pck", "xdi", "sni", "gre"}
+	connTestDirect = []string{"pck", "xdi", ctXdiFEC, "sni", "gre"}
 )
+
+// ctXdiFEC is xdi with error correction, tested beside plain xdi: on a path
+// that loses packets the two can be an order of magnitude apart, and which
+// way the path goes is what the test is for. Only the test names it; the
+// tunnel it stands for is an xdi one with FEC on (see ctDirectCarrier).
+const ctXdiFEC = "xdi+fec"
+
+// ctDirectCarrier is the carrier a direct test case builds.
+func ctDirectCarrier(tr string) string {
+	if tr == ctXdiFEC {
+		return l3.CarrierXdi
+	}
+	return tr
+}
 
 // connTestNeedsRoot is a reverse transport that builds its own packets.
 func connTestNeedsRoot(tr string) bool { return tr == "pck" }
@@ -544,11 +558,12 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 		if sni == "" {
 			sni = "www.speedtest.net"
 		}
-		for i, carrier := range connTestDirect {
+		for i, tr := range connTestDirect {
 			if err := ctx.Err(); err != nil {
 				return fail(err)
 			}
-			c := &connTestCase{kind: "direct", tr: carrier, name: fmt.Sprintf("ct-%s-d%s", id, carrier)}
+			carrier := ctDirectCarrier(tr)
+			c := &connTestCase{kind: "direct", tr: tr, name: fmt.Sprintf("ct-%s-d%s", id, strings.ReplaceAll(tr, "+", ""))}
 			if l3.KernelCarrier(carrier) {
 				if !s.root {
 					c.skip = "needs root on both servers"
@@ -578,7 +593,7 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 				// The kharej's address is not known until it joins; the link
 				// carries only the port.
 				Addr:  net.JoinHostPort("0.0.0.0", strconv.Itoa(ctPickPort(used, true))),
-				Token: ctCaseToken(s.link.Tok, "direct", carrier), Iface: fmt.Sprintf("bpt%d", i),
+				Token: ctCaseToken(s.link.Tok, "direct", tr), Iface: fmt.Sprintf("bpt%d", i),
 				LocalIP: block + "1/30", PeerIP: block + "2",
 				// The wizard's defaults, the path MTU measured included: a
 				// tunnel tested with other settings is not the one that
@@ -595,6 +610,11 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 			if carrier == "sni" {
 				c.l3.SNIDomain = sni
 			}
+			if tr == ctXdiFEC {
+				// The scheme the wizard and the panel turn on.
+				plan := defaultL3FEC()
+				c.l3.FECData, c.l3.FECParity = plan.Data, plan.Parity
+			}
 			if carrier == l3.CarrierPck {
 				// PCK is paqet's engine and has no TUN, so there is no tunnel
 				// address to dial the kharej's echo on. The Iran side forwards
@@ -609,7 +629,7 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 			if c.link, err = DecodeShareLink(raw); err != nil {
 				return fail(fmt.Errorf("building the %s test link: %w", carrier, err))
 			}
-			c.link.Name = c.name
+			c.link.Name, c.link.Tr = c.name, tr
 			s.cases = append(s.cases, c)
 		}
 	}
@@ -2206,7 +2226,11 @@ func runConnTestKharejLink(ctx context.Context, link ConnTestLink, out io.Writer
 				local[c.Kind+"/"+c.Tr] = "needs root"
 				continue
 			}
-			form := MirrorForPeer(c)
+			// The tunnel the case stands for: xdi+fec is an xdi link with FEC
+			// in it. Everything else keys on the case's own name.
+			built := c
+			built.Tr = ctDirectCarrier(c.Tr)
+			form := MirrorForPeer(built)
 			form.Name = name
 			if l3.KernelCarrier(c.Tr) && form.ServerAddr == "" {
 				// The kharej's GRE link names the Iran server, which is the

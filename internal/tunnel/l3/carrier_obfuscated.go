@@ -130,7 +130,7 @@ func (c *pckCarrier) ReadBatch(bufs [][]byte, sizes []int, froms []net.Addr) (in
 // openXdi builds the ICMP-echo carrier.
 func openXdi(cfg Config) (DatagramCarrier, net.Addr, error) {
 	conn, peer, err := network.NewXdiPacketConn(
-		cfg.Mode == ModeListen, cfg.Token, cfg.Addr)
+		cfg.Mode == ModeListen, cfg.Token, cfg.Addr, cfg.SockBuf)
 	if err != nil {
 		return nil, nil, err
 	}
