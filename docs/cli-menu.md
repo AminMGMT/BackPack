@@ -147,7 +147,7 @@ above about addresses, MTU, error correction or a token. See
 | **Forwarded Ports** | required — PCK carries ports only. A port something here already listens on is refused |
 | **Carry UDP As Well As TCP On Those Ports** `[y/N]` | |
 | **Tunnel Name** | |
-| **How Should The Tunnel Be Tuned?** | Turbo / Balance / Aggressive, each shown with what it sets in the engine: `2 sessions, fast2, 1024-packet windows, 4 MiB buffers, 8 MiB capture`. [Presets](performance-presets.md) |
+| **How Should The Tunnel Be Tuned?** | Turbo / Balance / Aggressive, each shown with what it sets in the engine: `2 sessions, fast2, 4096-packet windows, 8 MiB buffers, 8 MiB capture`. [Presets](performance-presets.md) |
 | **Fine-Tune The Advanced Settings** `[y/N]` | sessions, KCP speed mode, send and receive window, packet size, cipher, caps — all optional, `0`/Enter keeps the preset's |
 | **Restart This Tunnel On Both Servers Every N Hours (0 = Off)** | as above |
 
@@ -520,7 +520,7 @@ forward، نام، UDP، preset. پورت تونل، توکن و FEC ندارد.
 روی این پورت گوش بدهد)، **پورت‌های forward** (اجباری؛ پورتی که روی این سرور
 قبلاً گرفته شده رد می‌شود)، UDP هم؟، نام تونل، **پریست** (Turbo پیش‌فرض،
 Balance، Aggressive — هرکدام با کاری که در موتور می‌کند، مثلاً
-`2 sessions, fast2, 1024-packet windows, 4 MiB buffers, 8 MiB capture`)، و
+`2 sessions, fast2, 4096-packet windows, 8 MiB buffers, 8 MiB capture`)، و
 **Fine-Tune** اختیاری (تعداد session، حالت KCP، پنجره‌های ارسال و دریافت، اندازهٔ
 بسته، رمز، محدودیت‌ها — `0` یا Enter یعنی همان مقدار پریست)، و ری‌استارت
 زمان‌بندی‌شده. توکن همین‌جا ساخته می‌شود و کلید رمزنگاری است؛ لینک setup آن را

@@ -130,8 +130,12 @@ type Params struct {
 //     p50 550 ms against 900) and no more on a clean one (a little less up),
 //     and a path that flaps can recover slower; it is an opt-in, not Turbo's
 //     default.
-//   - smux buffers. Bound what a stalled reader pins: the stream buffer should
-//     hold a few windows of data, the session buffer a few streams' worth. They
+//   - smux buffers. The stream buffer is one stream's flow-control window,
+//     and so one connection's speed limit: about half of it is in flight, so a
+//     single stream carries at most stream buffer / (2 x RTT) whatever the KCP
+//     window is. Measured at 70 ms, one stream carried 100 Mbit/s with 2 MiB
+//     and 205 with 4 MiB; at 150 ms, 52 and 104. They also bound what a stalled
+//     reader pins: the session buffer should hold a few streams' worth. They
 //     do not need to be sized against the number of streams: the receive
 //     buffer that used to run out under hundreds of short connections and stop
 //     the whole session for up to a minute no longer does, because a reader does
@@ -149,10 +153,10 @@ type Params struct {
 //	              Balance   Turbo    Aggressive
 //	mode          fast      fast2    fast3
 //	conns         1         2        4
-//	sndwnd/rcvwnd 256/512   1024     4096
+//	sndwnd/rcvwnd 256/512   4096     4096
 //	mtu           1350      1350     1350
-//	smux buffer   2 MiB     4 MiB    16 MiB
-//	stream buffer 1 MiB     2 MiB    4 MiB
+//	smux buffer   2 MiB     8 MiB    16 MiB
+//	stream buffer 1 MiB     4 MiB    4 MiB
 //	capture ring  4 MiB     8 MiB    32 MiB
 //
 // The capture ring matches the sockbuf the setup already writes for each
@@ -160,10 +164,10 @@ type Params struct {
 // memory it asked for.
 //
 // Balance is paqet's own default (fast, window 128-512 client, 1024 server)
-// trimmed for memory; Turbo and Aggressive move up one mode and four times the
-// window each. The server's receive window is not smaller than the client's:
-// both directions carry bulk (a download is the kharej sending), so the
-// windows are symmetric.
+// trimmed for memory; Turbo and Aggressive move up one mode each and have a
+// 4096-packet ceiling. The server's receive window is not smaller than the
+// client's: both directions carry bulk (a download is the kharej sending), so
+// the windows are symmetric.
 //
 // # What the presets measured, on the soak path
 //
@@ -176,17 +180,37 @@ type Params struct {
 // under this load it has little left for bulk transfer; it is for a small
 // VPS and a quiet tunnel, not for a saturated link. Aggressive's four sessions
 // and 4096-packet ceiling are for a long, lossy route, where more sessions lose
-// less to a lost packet; on a clean path it is slower than Turbo, since the
-// control keeps its window at the same few hundred packets per session and
-// the four sessions only add overhead and a shorter tick.
+// less to a lost packet; on a clean path with a bottleneck queue it is slower
+// than Turbo, since the control keeps its window at the same few hundred
+// packets per session and the four sessions only add overhead and a shorter
+// tick.
+//
+// # Turbo's ceiling
+//
+// Turbo's ceiling was 1024 packets and its stream buffer 2 MiB, and on a fast
+// path that was all it carried: two sessions of 1024 are 280 Mbit/s at 70 ms
+// and 136 at 150 ms, however fast the link. At 4096 and 4 MiB, through the
+// Connection Test between two namespaces (Mbit/s down / up, the average of a
+// run):
+//
+//	path                         1024, 2 MiB   4096, 4 MiB
+//	70 ms, clean                 278 / 283     594 / 617
+//	150 ms, clean                136 / 134     518 / 379
+//	70 ms, 1% loss               137 / 137     299 / 369
+//	70 ms, 100 Mbit/s, 1000-pkt  92 / 87       89 / 87 (mean of 3-4 runs)
+//
+// Where there is a queue the control holds the window where it was, and the
+// last row is the same link filled either way; the ceiling only lets a path
+// with room for more have it. The cost is memory: up to 5.5 MB a session of
+// receive window and 8 MiB of smux buffer when the reader falls behind.
 func PresetParams(name string) (Params, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case PresetBalance:
 		return Params{Conns: 1, Mode: ModeFast, MTU: 1350, SndWnd: 256, RcvWnd: 512,
 			SmuxBuf: 2 << 20, StreamBuf: 1 << 20, PcapBuf: 4 << 20}, true
 	case PresetTurbo, "":
-		return Params{Conns: 2, Mode: ModeFast2, MTU: 1350, SndWnd: 1024, RcvWnd: 1024,
-			SmuxBuf: 4 << 20, StreamBuf: 2 << 20, PcapBuf: 8 << 20}, true
+		return Params{Conns: 2, Mode: ModeFast2, MTU: 1350, SndWnd: 4096, RcvWnd: 4096,
+			SmuxBuf: 8 << 20, StreamBuf: 4 << 20, PcapBuf: 8 << 20}, true
 	case PresetAggressive:
 		return Params{Conns: 4, Mode: ModeFast3, MTU: 1350, SndWnd: 4096, RcvWnd: 4096,
 			SmuxBuf: 16 << 20, StreamBuf: 4 << 20, PcapBuf: 32 << 20}, true
@@ -244,7 +268,7 @@ func (p Params) Resolve(preset string) Params {
 const DefaultBlock = "aes"
 
 // Summary is the parameters in one line the screens can show next to a preset's
-// name: "2 sessions, fast2, 1024-packet windows, 4 MiB buffers, 8 MiB capture".
+// name: "2 sessions, fast2, 4096-packet windows, 8 MiB buffers, 8 MiB capture".
 func (p Params) Summary() string {
 	plural := "sessions"
 	if p.Conns == 1 {

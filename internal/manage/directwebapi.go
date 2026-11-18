@@ -214,7 +214,7 @@ var pckSuits = map[string]string{
 // DirectPresets is what the panel offers for tuning, in the same order as the
 // CLI. Each carries two descriptions: desc for the carriers that run over a TUN
 // device, and pck for PCK, which is the engine's own parameters in one line
-// ("2 sessions, fast2, 1024-packet windows …"); the pck* entries are the
+// ("2 sessions, fast2, 4096-packet windows …"); the pck* entries are the
 // numbers behind it, which the Fine-Tune section shows as the values a blank
 // field takes.
 func DirectPresets() []map[string]string {

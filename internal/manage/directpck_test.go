@@ -153,7 +153,7 @@ func TestThePresetsDescribeThePckEngine(t *testing.T) {
 		}
 	}
 	opts := pckPresetOptions()
-	if len(opts) != 3 || opts[0].Title != "Turbo" || !strings.Contains(opts[0].Desc, "2 sessions, fast2, 1024-packet windows") {
+	if len(opts) != 3 || opts[0].Title != "Turbo" || !strings.Contains(opts[0].Desc, "2 sessions, fast2, 4096-packet windows") {
 		t.Errorf("the wizard's preset question: %+v", opts)
 	}
 	if got := PckModes(); strings.Join(got, ",") != "normal,fast,fast2,fast3" {
@@ -188,7 +188,7 @@ func TestThePckWizardAsksNothingAboutATun(t *testing.T) {
 			t.Errorf("the PCK wizard asked %q, a question for the TUN carriers:\n%s", never, out)
 		}
 	}
-	if !strings.Contains(out, "2 sessions, fast2, 1024-packet windows") {
+	if !strings.Contains(out, "2 sessions, fast2, 4096-packet windows") {
 		t.Errorf("the presets are not described by what they set:\n%s", out)
 	}
 	if !strings.Contains(out, "backpack://") {

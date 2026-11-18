@@ -67,7 +67,7 @@ All notable changes to Backpack are documented here.
   is no interface, no tunnel address, no MTU and no error correction for it; for
   routed traffic use xDi, SNI Spoofing, IP Spoofing or GRE. The three presets
   map to the engine: Balance is one KCP session in `fast` mode with 256/512
-  windows, Turbo (the default) two in `fast2` with 1024, Aggressive four in
+  windows, Turbo (the default) two in `fast2` with 4096, Aggressive four in
   `fast3` with 4096 — and the wizard shows each with what it sets. Optional
   `pck_conns`, `pck_kcp_mode`, `pck_kcp_mtu`, `pck_kcp_sndwnd`, `pck_kcp_rcvwnd`
   and `pck_kcp_block` override them one by one, under Fine-Tune in the menu and
@@ -401,6 +401,14 @@ All notable changes to Backpack are documented here.
   lossy long path that held a direct tunnel to a fraction of what it carries.
   The test's sockets on both servers now ask for BBR too.
 
+- **PCK's default preset is no longer held to a few hundred Mbit/s.** Turbo's
+  window ceiling was 1024 packets and its stream buffer 2 MiB, which is 280
+  Mbit/s at 70 ms and 136 at 150 ms however fast the link. It is now 4096 and
+  4 MiB (8 MiB session buffer): about 600 Mbit/s at 70 ms, 380–520 at 150 ms
+  and 300–370 at 1% loss, and one connection carries twice what it did. On a
+  link with a queue the window control holds the window where it was, and a
+  100 Mbit/s path carries the same. Tunnels that did not fine-tune the windows
+  get it on update.
 - **Connection Test tests xDi + FEC beside xDi.** On a path that loses
   packets the two can be an order of magnitude apart: at 1% loss each way on a
   70 ms test path, xDi carried about 30 Mbit/s and xDi + FEC about 560. When

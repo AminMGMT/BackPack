@@ -115,17 +115,19 @@ The same three names every carrier has, mapped to the engine's parameters:
 |---|---|---|---|
 | KCP sessions | 1 | 2 | 4 |
 | Speed mode | `fast` | `fast2` | `fast3` |
-| Window ceiling (packets) | 256 / 512 | 1024 / 1024 | 4096 / 4096 |
-| Buffers / capture ring | 2 MiB / 4 MiB | 4 MiB / 8 MiB | 16 MiB / 32 MiB |
+| Window ceiling (packets) | 256 / 512 | 4096 / 4096 | 4096 / 4096 |
+| Buffers / capture ring | 2 MiB / 4 MiB | 8 MiB / 8 MiB | 16 MiB / 32 MiB |
 | Suits | a small VPS, a quiet tunnel | most links | a long, lossy route, RAM to spare |
 
 The window is a **ceiling**. The engine moves each session's window below it by
 what it reads of the path (see *On a busy or lossy link*), so a window larger
 than the path needs costs only the memory the receive side may hold. A window
 too small is still the speed limit: throughput is at most *window × packet size
-÷ round-trip time*. 1024 packets of 1350 bytes at 150 ms is about 74 Mbit/s per
-session; Aggressive's 4096 is about 295. Memory is the same product, which is
-what the presets trade. The modes differ in the KCP tick (30, 20 and 10 ms),
+÷ round-trip time*. 4096 packets of 1350 bytes at 150 ms is about 295 Mbit/s
+per session (the 1024 Turbo had before was 74). One connection is held to
+the smux stream buffer over twice the round trip as well: Turbo's 4 MiB is about
+205 Mbit/s at 70 ms and 104 at 150 ms (2 MiB, before, was half that). Memory
+is the same product, which is what the presets trade. The modes differ in the KCP tick (30, 20 and 10 ms),
 which is how long an acknowledgement or a small write may wait to be batched,
 and in how soon a lost packet is sent again.
 
@@ -134,11 +136,25 @@ everything the tunnel carries: beside a few hundred short connections a second
 it leaves bulk transfers a few Mbit/s, and at 10% loss it carries about 1.1
 Mbit/s each way, less than GRE's 1.5. It is for a small VPS and a quiet
 tunnel. Aggressive is for a long, lossy route and is **slower than Turbo on a
-clean path** (the window control holds it to the same few hundred packets a
+clean path with a bottleneck queue** (the window control holds it to the same few hundred packets a
 session, so four sessions add overhead). On the test path below it carried
 40 / 41 Mbit/s with no loss and 12 / 19 at 10% loss (22 / 21 and 10 / 10 before
 the changes in that section): four sessions lose less to a lost packet than
 two.
+
+Turbo's ceiling was 1024 packets and its stream buffer 2 MiB until v2.0.0,
+which on a fast path was all it carried. Through the Connection Test between
+two namespaces (Mbit/s down / up, average of a run):
+
+| Path | Turbo before (1024, 2 MiB) | Turbo now (4096, 4 MiB) |
+|---|---|---|
+| 70 ms, clean | 278 / 283 | 594 / 617 |
+| 150 ms, clean | 136 / 134 | 518 / 379 |
+| 70 ms, 1% loss | 137 / 137 | 299 / 369 |
+| 70 ms, 100 Mbit/s, 1000-packet queue (mean of 3-4 runs) | 92 / 87 | 89 / 87 |
+
+Where the path has a queue, the window control holds the window where it was,
+so the last row is the same link filled either way.
 
 ### Fine-Tune
 
@@ -431,7 +447,7 @@ under *On a busy or lossy link*.
   ساخته می‌شود و همان کلید رمز است. در خارج: `Setup Kharej → Direct → PCK → Setup
   Link` و لینک را بچسبان.
 - **پریست‌ها** همان سه تا: Balance (۱ نشست، `fast`، پنجره ۲۵۶/۵۱۲)، Turbo
-  (پیش‌فرض: ۲ نشست، `fast2`، پنجره ۱۰۲۴)، Aggressive (۴ نشست، `fast3`، پنجره
+  (پیش‌فرض: ۲ نشست، `fast2`، پنجره ۴۰۹۶)، Aggressive (۴ نشست، `fast3`، پنجره
   ۴۰۹۶؛ برای مسیر طولانی و پرتلفات، و روی مسیر تمیز از Turbo کندتر). Fine-Tune اختیاری است: کلیدهای `pck_*`. `pck_conns = 4` روی Turbo در مسیر پرتلفات
   می‌ارزد (در ۱۰٪ تلفات حدود ۱۳/۱۵ به‌جای ۹/۸ مگابیت بر ثانیه و تأخیر میانه حدود ۵۵۰
   به‌جای ۹۰۰ میلی‌ثانیه)، در مسیر تمیز نه. پنجره حالا **سقف** است، نه

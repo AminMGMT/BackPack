@@ -36,10 +36,20 @@ func TestThePresetsTradeMemoryForSpeedInOrder(t *testing.T) {
 			t.Errorf("%s should rise Balance < Turbo < Aggressive, got %d, %d, %d", name, x, y, z)
 		}
 	}
+	// Turbo and Aggressive share a window ceiling and a stream buffer, which are
+	// one session's and one connection's speed limit (see PresetParams); what
+	// the tunnel holds in all, sessions times window, still rises.
+	notLess := func(name string, x, y, z int) {
+		t.Helper()
+		if !(x < y && y <= z) {
+			t.Errorf("%s should rise Balance < Turbo <= Aggressive, got %d, %d, %d", name, x, y, z)
+		}
+	}
 	less("conns", b.Conns, tu.Conns, ag.Conns)
-	less("sndwnd", b.SndWnd, tu.SndWnd, ag.SndWnd)
+	notLess("sndwnd", b.SndWnd, tu.SndWnd, ag.SndWnd)
+	less("sessions x sndwnd", b.Conns*b.SndWnd, tu.Conns*tu.SndWnd, ag.Conns*ag.SndWnd)
 	less("smux buffer", b.SmuxBuf, tu.SmuxBuf, ag.SmuxBuf)
-	less("stream buffer", b.StreamBuf, tu.StreamBuf, ag.StreamBuf)
+	notLess("stream buffer", b.StreamBuf, tu.StreamBuf, ag.StreamBuf)
 	less("capture ring", b.PcapBuf, tu.PcapBuf, ag.PcapBuf)
 	if b.Mode != ModeFast || tu.Mode != ModeFast2 || ag.Mode != ModeFast3 {
 		t.Errorf("modes = %s, %s, %s", b.Mode, tu.Mode, ag.Mode)
