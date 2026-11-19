@@ -384,6 +384,16 @@ All notable changes to Backpack are documented here.
 
 ### Fixed
 
+- **A udp tunnel's server lets go of its control port before a reload goes
+  on.** Two goroutines closed the control listener. With an Accept still
+  blocked on it, the second Close came back at once while the first was still
+  waiting for that Accept, so the port was reported free while it was still
+  listening. A reload or restart could then fail to bind its own control port
+  and fall into the 2-second bind retry. On a busy machine this happened in
+  about 1 stop in 15. Now one goroutine closes it and the server waits for
+  that close. It turned up as a CI failure in the race step
+  (`TestStartDoesNotReturnUntilThePortsAreFree/udp`).
+
 - **xdi reaches its speed on a long path.** Its raw ICMP socket kept the
   kernel's default buffer of about 200 KB: the preset's socket buffer never
   reached it. A loaded tunnel overflowed it, the kernel dropped the echoes, and

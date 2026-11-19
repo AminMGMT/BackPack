@@ -33,14 +33,25 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 
 	s.logger.Infof("server started successfully, listening on address: %s", listener.Addr().String())
 
-	defer listener.Close()
-
 	// Close the listener when the run ends so the blocked Accept below returns
 	// instead of holding this goroutine open past the restart that replaced it.
+	//
+	// This goroutine is the only one that closes it, and the function does not
+	// return (and so release the port to listeners.wait) until that Close has
+	// finished. There used to be a deferred Close here as well. With Accept
+	// blocked in acceptControlClaims, the first Close only marks the socket
+	// closing and waits for Accept to let go of it; a second Close returns at
+	// once. When the deferred one came second, release ran while the socket
+	// was still in LISTEN, so Start returned with the control port held and the
+	// next generation's bind failed — TestStartDoesNotReturnUntilThePortsAreFree
+	// /udp, about 1 run in 15 on a busy machine.
+	closed := make(chan struct{})
 	go func() {
 		<-g.ctx.Done()
 		listener.Close()
+		close(closed)
 	}()
+	defer func() { <-closed }()
 
 	// This listener keeps accepting for the whole run. The first valid claim
 	// becomes the client and starts the data side; a later one is that client
