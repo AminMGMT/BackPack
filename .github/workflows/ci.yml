@@ -142,7 +142,7 @@ jobs:
   managed:
     name: Managed HTTPS carriers
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -155,13 +155,13 @@ jobs:
       - name: Authenticate REALITY cover fallback and exercise the real reverse carriers
         env:
           BP_CONNTEST_HELPERS: '1'
-        run: go test ./internal/manage -run '^(TestRealityCoverSelectionAuthenticatesWithThePinnedHelper|TestAConnectionTestOverLoopbackPassesEveryReverseTransport)$' -race -count=1 -v -timeout 8m
+        run: go test ./internal/manage -run '^(TestRealityCoverSelectionAuthenticatesWithThePinnedHelper|TestAConnectionTestOverLoopbackPassesEveryReverseTransport)$' -race -count=1 -v -timeout 11m
 
       - name: Authenticate the managed HTTPS carriers over IPv6
         env:
           BP_CONNTEST_HELPERS: '1'
           BP_CONNTEST_HOST: '::1'
-        run: go test ./internal/manage -run '^TestAConnectionTestOverLoopbackPassesEveryReverseTransport$' -race -count=1 -v -timeout 8m
+        run: go test ./internal/manage -run '^TestAConnectionTestOverLoopbackPassesEveryReverseTransport$' -race -count=1 -v -timeout 11m
 
   conntest-ipv6:
     name: Connection Test over an IPv6-only path
@@ -367,7 +367,7 @@ jobs:
           echo "/opt/zig" >> "$GITHUB_PATH"
 
       - name: Cache the per-architecture libpcap builds
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/backpack-libpcap
           key: libpcap-cross-1.10.6-${{ hashFiles('scripts/build-libpcap.sh', 'scripts/build-linux.sh') }}

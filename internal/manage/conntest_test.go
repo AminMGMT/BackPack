@@ -271,12 +271,13 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 	}
 
 	// Thirteen tunnels, each soaked and then measured both ways at two
-	// connection counts, under the race detector: about four minutes on a
-	// GitHub runner (231 to 243 seconds in the last four CI runs). Four
-	// minutes was the budget, so every run sat on its edge, and one of those
-	// four failed with "the verdict never arrived". Six leaves room; the CI
-	// step's -timeout is eight.
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	// connection counts and once more in the second, reverse-order pass,
+	// under the race detector: about six minutes on a GitHub runner (347 to
+	// 357 seconds in the runs after the second pass landed, 231 to 243
+	// before it). Six was the budget, so every run sat on its edge again and
+	// one failed at 362 seconds with "the verdict never arrived". Nine leaves
+	// room; the CI step's -timeout is eleven.
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
 	var kharej []ConnTestResult
 	var kharejErr error

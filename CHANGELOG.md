@@ -529,7 +529,9 @@ All notable changes to Backpack are documented here.
       budgets are now counts of inputs, which set no deadline, sized to what the
       seconds bought on a runner.
     - *Managed HTTPS carriers over IPv6*: the loopback Connection Test takes
-      231–243 s on a runner and had a four-minute budget. It has six now.
+      231–243 s on a runner and had a four-minute budget. It had six then;
+      the second speed pass took it to 347–357 s and one run failed at 362 s,
+      so it has nine now (step `-timeout` 11 m, job 25 m).
     - *Build and test*: the churn test's next client could prove itself ready
       through the previous client's mux session still winding down, then lose
       its transfer when that generation ended. It now waits until the stopped

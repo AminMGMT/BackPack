@@ -30,7 +30,12 @@ updates:
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
-    directory: /
+    # "/" alone reads only .github/workflows; the composite action that
+    # builds libpcap has its own `uses:` lines (actions/cache was left on v5
+    # there when PR #120 moved the workflows to v6).
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     groups:
