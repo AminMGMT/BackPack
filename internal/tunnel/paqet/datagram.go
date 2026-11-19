@@ -175,10 +175,15 @@ func (l *dgLane) send(flow uint32, data []byte) bool {
 	if l == nil || len(data) > l.max {
 		return false
 	}
-	l.sock.WriteTo(l.codec.seal(flow, data), l.remote)
+	// Counted before the write, not after: once it is on the wire the far
+	// end can answer, and a reader of the counters (the lane tests, which
+	// count a round trip's datagrams the moment it completes) must not see
+	// the answer before the count. TestSmallDatagramsTravelTheLaneAndLargeOnesTheStream
+	// failed in CI that way, one short.
 	if l.engine != nil {
 		l.engine.dgOut.Add(1)
 	}
+	l.sock.WriteTo(l.codec.seal(flow, data), l.remote)
 	return true
 }
 
@@ -191,11 +196,14 @@ func (l *dgLane) receive(flow uint32, data []byte) {
 	}
 	d := make([]byte, len(data))
 	copy(d, data)
-	if f.push(d) {
-		if l.engine != nil {
-			l.engine.dgIn.Add(1)
-		}
-	} else if l.engine != nil {
+	// Counted in before the push, for the same reason as dgOut in send: the
+	// flow's reader may forward it and the reply come back before this
+	// goroutine runs again. A push that fails takes the count back.
+	if l.engine != nil {
+		l.engine.dgIn.Add(1)
+	}
+	if !f.push(d) && l.engine != nil {
+		l.engine.dgIn.Add(^uint64(0))
 		l.engine.dgDrop.Add(1)
 	}
 }
