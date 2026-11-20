@@ -38,7 +38,11 @@ func TestThePanelsOwnTests(t *testing.T) {
 		t.Fatal("no panel tests found — this test is looking in the wrong place")
 	}
 
-	out, err := exec.Command(node, append([]string{"--test"}, files...)...).CombinedOutput()
+	// The reporter is named rather than left to node: its default became
+	// "spec" outside a terminal in newer releases, which prints "ℹ fail 0"
+	// where TAP prints "# fail 0". The release job, on a newer node than CI,
+	// failed a run whose 36 tests had all passed.
+	out, err := exec.Command(node, append([]string{"--test", "--test-reporter=tap"}, files...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("the panel's tests failed:\n%s", out)
 	}

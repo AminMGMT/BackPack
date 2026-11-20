@@ -71,6 +71,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The same node as CI, for the panel's own tests (internal/webui runs
+      # them): left to the runner's, a newer node changed their output and
+      # failed a release whose tests had all passed.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
       # PCK is paqet's engine, which captures with libpcap through cgo. Tests
       # run against a libpcap built for the runner; the release binaries are
       # each linked with one built for their own architecture, by Zig's C
