@@ -239,6 +239,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 	// Create an HTTP server
 	server := &http.Server{
 		Addr:              addr,
+		ErrorLog:          httpErrorLog(s.logger),
 		IdleTimeout:       -1,
 		ReadHeaderTimeout: tunnelHeaderTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

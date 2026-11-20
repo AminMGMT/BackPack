@@ -122,6 +122,9 @@ func (c *TcpMuxTransport) channelDialer() {
 		default:
 			tunnelConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
+				if c.state.Ctx().Err() != nil {
+					return
+				}
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.
@@ -232,6 +235,9 @@ func (c *TcpMuxTransport) tunnelDialer() {
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
 	tunnelConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	if err != nil && c.state.Ctx().Err() != nil {
+		return
+	}
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 

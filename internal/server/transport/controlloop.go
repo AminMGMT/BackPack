@@ -83,7 +83,11 @@ func (c controlLoop) run() {
 
 		case <-c.requests:
 			if err := c.link.Send(utils.SG_Chan); err != nil {
-				c.log.Errorf("failed to ask the client for a connection: %v", err)
+				if controlwire.PeerClosed(err) {
+					c.log.Warnf("the client closed the control channel (%v); waiting for it to come back", err)
+				} else {
+					c.log.Errorf("failed to ask the client for a connection: %v", err)
+				}
 				go c.restart()
 				return
 			}
@@ -154,7 +158,11 @@ func (c controlLoop) read(signals chan<- byte, done <-chan struct{}) {
 			default:
 			}
 			if c.ctx.Err() == nil {
-				c.log.Errorf("failed to read from the control channel: %v", err)
+				if controlwire.PeerClosed(err) {
+					c.log.Warnf("the client closed the control channel (%v) — it stopped, restarted or lost its way here; waiting for it to come back", err)
+				} else {
+					c.log.Errorf("failed to read from the control channel: %v", err)
+				}
 				go c.restart()
 			}
 			return

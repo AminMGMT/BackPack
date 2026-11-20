@@ -3,6 +3,8 @@ package transport
 import (
 	"crypto/subtle"
 	"fmt"
+	"github.com/sirupsen/logrus"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -255,4 +257,25 @@ func serverProof(r *http.Request, token string, simpleAuth bool) http.Header {
 		return nil
 	}
 	return http.Header{network.WSSServerProofHeader: {answer}}
+}
+
+// httpErrorLog routes what net/http has to say about a ws or wss listener into
+// the tunnel's own log, at debug.
+//
+// It wrote to standard error on its own otherwise, outside the log's level and
+// format: "http: TLS handshake error from …: EOF" for every scanner that
+// touched a public wss port and every client that went away mid-handshake,
+// and "use of closed network connection" for each one in flight when the
+// listener shut down. Hundreds of them in a Connection Test's log, none of
+// them anything an operator can act on — a real client that cannot connect is
+// reported by the tunnel's own checks with what is wrong.
+func httpErrorLog(l *logrus.Logger) *log.Logger {
+	return log.New(debugWriter{l}, "", 0)
+}
+
+type debugWriter struct{ l *logrus.Logger }
+
+func (w debugWriter) Write(p []byte) (int, error) {
+	w.l.Debug(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
 }

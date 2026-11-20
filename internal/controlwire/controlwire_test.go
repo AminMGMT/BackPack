@@ -2,10 +2,13 @@ package controlwire
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,6 +130,32 @@ func TestAWebsocketSendLeavesNoDeadlineBehind(t *testing.T) {
 	for _, want := range []byte{1, 2} {
 		if _, data, err := srv.ReadMessage(); err != nil || data[0] != want {
 			t.Fatalf("got %v, %v; want %d", data, err, want)
+		}
+	}
+}
+
+// The far end going away is told apart from a channel that failed.
+func TestAPeerClosingIsToldApartFromAFailure(t *testing.T) {
+	for _, err := range []error{
+		io.EOF,
+		fmt.Errorf("failed to read message from net.Conn: %w", io.EOF),
+		io.ErrUnexpectedEOF,
+		&net.OpError{Op: "read", Err: syscall.ECONNRESET},
+		&websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "unexpected EOF"},
+		errors.New("failed to read message from net.Conn: Application error 0x0 (remote): generation ended"),
+	} {
+		if !PeerClosed(err) {
+			t.Errorf("%v was not read as the peer closing", err)
+		}
+	}
+	for _, err := range []error{
+		nil,
+		errors.New("i/o timeout"),
+		&net.OpError{Op: "read", Err: syscall.EHOSTUNREACH},
+		&websocket.CloseError{Code: websocket.CloseProtocolError},
+	} {
+		if PeerClosed(err) {
+			t.Errorf("%v was read as the peer closing", err)
 		}
 	}
 }

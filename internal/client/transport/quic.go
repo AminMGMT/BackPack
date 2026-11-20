@@ -132,6 +132,9 @@ func (c *QuicTransport) channelDialer() {
 		default:
 			conn, err := network.QUICDial(c.state.Ctx(), c.config.Endpoints.Current(), c.quicSettings)
 			if err != nil {
+				if c.state.Ctx().Err() != nil {
+					return
+				}
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.

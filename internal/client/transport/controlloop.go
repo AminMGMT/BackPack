@@ -154,6 +154,8 @@ func (c controlLoop) read(signals chan<- byte, done <-chan struct{}) {
 				// path for it sent people looking at the wrong thing (#45).
 				if hint := beats.explain(err, c.keepAlive); hint != "" {
 					c.log.Warn(hint)
+				} else if controlwire.PeerClosed(err) {
+					c.log.Warnf("the server closed the control channel (%v) — it stopped or restarted; reconnecting", err)
 				} else {
 					c.log.Errorf("failed to read from control channel: %v", err)
 				}

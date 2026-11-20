@@ -124,6 +124,9 @@ func (c *WsMuxTransport) channelDialer() {
 			tunnelWSConn, err := network.WebSocketDialerAuth(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 0, 0, c.config.MSS, auth)
 			if err != nil {
 				wsMissed(c.config.Guard, auth, err, c.logger)
+				if c.state.Ctx().Err() != nil {
+					return
+				}
 				c.logger.Errorf("control channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.
@@ -200,6 +203,9 @@ func (c *WsMuxTransport) tunnelDialer() {
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
 	tunnelWSConn, err := network.WebSocketDialerAuth(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 2*1024*1024, 2*1024*1024, c.config.MSS, wsPoolAuth(c.peer.Get()))
+	if err != nil && c.state.Ctx().Err() != nil {
+		return
+	}
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 

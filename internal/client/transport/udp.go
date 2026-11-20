@@ -2,9 +2,11 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/backpack/backpack/internal/controlwire"
@@ -93,6 +95,9 @@ func (c *UdpTransport) channelDialer() {
 		default:
 			tunnelTCPConn, err := network.TcpDialer(c.state.Ctx(), c.config.Endpoints.Current(), c.config.DialTimeOut, 30, true, 3, 0, 0, 0)
 			if err != nil {
+				if c.state.Ctx().Err() != nil {
+					return
+				}
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.
@@ -243,7 +248,15 @@ func (c *UdpTransport) handleTunnelConnReady(tunConn *net.UDPConn, ready func())
 	for {
 		n, _, err := tunConn.ReadFromUDP(buffer)
 		if err != nil {
-			c.logger.Error("failed to receive response from server:", err)
+			// A pool socket this client closed itself (its run ended), or one
+			// the server answered with port-unreachable because it has gone:
+			// the control channel already says the second, once, rather than
+			// once per pool socket.
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNREFUSED) {
+				c.logger.Debugf("udp pool socket %s: %v", tunConn.LocalAddr(), err)
+			} else {
+				c.logger.Error("failed to receive response from server: ", err)
+			}
 
 			atomic.AddInt32(&c.poolConnections, -1)
 
@@ -355,7 +368,11 @@ func (c *UdpTransport) udpCopy(srcConn, dstConn *net.UDPConn, port int, dstIsTun
 				c.logger.Debug("read from UDP timed out")
 				return // Exit on timeout
 			}
-			c.logger.Errorf("failed to read from UDP: %v", err)
+			if errors.Is(err, net.ErrClosed) {
+				c.logger.Debugf("udp flow ended: %v", err)
+			} else {
+				c.logger.Errorf("failed to read from UDP: %v", err)
+			}
 			return
 		}
 

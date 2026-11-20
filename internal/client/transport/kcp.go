@@ -209,6 +209,9 @@ func (c *KcpTransport) channelDialer() {
 			addr := c.config.Endpoints.Current()
 			tunnelConn, err := c.dial(addr)
 			if err != nil {
+				if c.state.Ctx().Err() != nil {
+					return
+				}
 				c.logger.Errorf("channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.
@@ -350,6 +353,9 @@ func (c *KcpTransport) tunnelDialer() {
 	c.logger.Debugf("initiating new tunnel connection to address %s", addr)
 
 	tunnelConn, err := c.dial(addr)
+	if err != nil && c.state.Ctx().Err() != nil {
+		return
+	}
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 		return

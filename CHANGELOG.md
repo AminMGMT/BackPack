@@ -421,6 +421,16 @@ section of CHANGELOG.md.
 
 ### Fixed
 
+- **Quieter logs for things that are not errors.** The other end closing the
+  control channel — it stopped, restarted or was killed — was an error on
+  both ends ("failed to read from the control channel: EOF"), dozens of them
+  in a soak of a healthy tunnel; it is now a warning that says what happened,
+  and other read failures stay errors. A UDP pool socket or flow this end
+  closed itself, a dial cancelled because the tunnel was stopping, and
+  net/http's own "TLS handshake error" and "use of closed network connection"
+  lines from the ws and wss listeners (one for every scanner that touched a
+  public wss port, written outside the tunnel's log format) go to debug.
+
 - **One busy port no longer takes a direct tunnel's other ports down.** When
   a forwarded port could not be bound (something else on the Iran server held
   it), the whole port forwarder stopped and was rebuilt every 5 s — every

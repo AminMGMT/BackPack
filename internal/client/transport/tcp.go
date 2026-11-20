@@ -139,6 +139,9 @@ func (c *TcpTransport) channelDialer() {
 						c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 				})
 			if err != nil {
+				if c.state.Ctx().Err() != nil {
+					return
+				}
 				c.logger.Errorf("channel dialer: %v", err)
 				// Nothing answered. Rotate anyway so the next attempt prefers a
 				// different address: the race already tried them all, but the
@@ -265,6 +268,9 @@ func (c *TcpTransport) tunnelDialer() {
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
 	rawConn, err := network.TcpDialerVia(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	if err != nil && c.state.Ctx().Err() != nil {
+		return
+	}
 	if err != nil {
 		c.logger.Error("tunnel server dialer: ", err)
 

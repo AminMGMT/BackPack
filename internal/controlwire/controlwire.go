@@ -12,7 +12,10 @@ package controlwire
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
@@ -131,4 +134,29 @@ func (l wsLink) Close() {
 	if l.conn != nil {
 		_ = l.conn.Close()
 	}
+}
+
+// PeerClosed reports whether a failed read means the other end closed the
+// channel — it stopped, restarted or was killed — rather than that something
+// went wrong with it: an EOF, a reset, a websocket closed without its close
+// frame, or a QUIC peer whose generation ended.
+//
+// Both ends logged that at error level, and in a long-running tunnel it is the
+// ordinary way the far end goes away for an update or a reboot: a soak's log
+// was dozens of "failed to read from the control channel: EOF" errors for a
+// tunnel that had nothing wrong with it, which buries the errors that matter.
+// It is still said, as a warning that names what happened; the reconnect that
+// follows is unchanged.
+func PeerClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	if websocket.IsCloseError(err, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return true
+	}
+	return strings.Contains(err.Error(), "generation ended")
 }
