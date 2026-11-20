@@ -41,6 +41,24 @@ const (
 	poolGrowthLimit = 4
 )
 
+// minPoolDialLimit is the least a one-connection-per-user transport (tcp, ws)
+// may hold of idle pool connections and dials in flight together.
+//
+// That bound was the configured pool times poolGrowthLimit alone, 32 for a pool
+// of 8, and on a busy link it was what starved the tunnel: every user takes a
+// pool connection, the replacement is a TCP dial across the path, and when the
+// path's queue drops a SYN that dial takes a second or three. With 32 in flight
+// at most, 200 new connections a second could not be kept up with — 59% got
+// through, at a 3.1 s median first byte (soak, 100 Mbit/s full of bulk), and the
+// pool's target sat at 32 with 15 alive. 64 in flight served them all, which is
+// what a configured pool of 16 had been allowed. A dial in flight costs a
+// socket and a goroutine; the server asks for one per connection it pairs, so
+// this is still bounded by the work there is.
+const minPoolDialLimit = 64
+
+// poolDialLimit is that bound for a one-connection-per-user transport.
+func poolDialLimit(size int) int { return max(size*poolGrowthLimit, minPoolDialLimit) }
+
 // muxPoolLimit bounds automatic growth by the aggregate receive windows. Keep
 // an explicitly configured initial pool even when it exceeds this budget.
 func muxPoolLimit(size, receiveBuffer int) int {

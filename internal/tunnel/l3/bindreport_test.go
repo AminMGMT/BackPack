@@ -3,6 +3,7 @@ package l3
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -91,5 +92,84 @@ func TestAnOrdinaryShutdownIsNotAnError(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run never returned")
+	}
+}
+
+// One forwarded port that something else holds must not take the others down
+// with it, and must come up by itself once it is free.
+//
+// It used to end the forwarder's whole generation, and the supervisor rebuilt
+// every listener five seconds later — every port of the tunnel, TCP and UDP,
+// dropped and reopened every five seconds for as long as one was held. Seen on
+// a real Iran server as UDP at 79% and connection latency past 600 ms.
+func TestAHeldPortDoesNotTakeTheOthersDown(t *testing.T) {
+	old := forwardBindRetry
+	forwardBindRetry = 200 * time.Millisecond
+	t.Cleanup(func() { forwardBindRetry = old })
+
+	heldPort, freeP := freePort(t), freePort(t)
+	held, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", heldPort))
+	if err != nil {
+		t.Fatalf("could not hold the port: %v", err)
+	}
+	backend := echoTCP(t, "E:")
+	log, captured := testLoggerCapturing(t)
+	forwarder, err := NewForwarder(Config{
+		Ports: []string{
+			fmt.Sprintf("127.0.0.1:%d=%s", heldPort, backend),
+			fmt.Sprintf("127.0.0.1:%d=%s", freeP, backend),
+		},
+		PeerIP: "127.0.0.1",
+	}, log)
+	if err != nil {
+		t.Fatalf("NewForwarder: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- forwarder.Run(ctx) }()
+	<-forwarder.Ready()
+
+	// The free port carries a connection that outlives several bind retries of
+	// the held one.
+	conn := dialUntilReady(t, fmt.Sprintf("127.0.0.1:%d", freeP))
+	defer conn.Close()
+	time.Sleep(5 * forwardBindRetry)
+	roundTrip(t, conn, "still here")
+
+	// Free the held port: the forwarder takes it without a restart.
+	held.Close()
+	c2 := dialUntilReady(t, fmt.Sprintf("127.0.0.1:%d", heldPort))
+	roundTrip(t, c2, "came up")
+	c2.Close()
+	roundTrip(t, conn, "never dropped")
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Errorf("a port that came up in the end was still reported at shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned")
+	}
+	if !strings.Contains(captured.String(), fmt.Sprint(heldPort)) {
+		t.Errorf("nothing in the log names the port that could not be bound:\n%s", captured.String())
+	}
+}
+
+// roundTrip writes msg on conn and wants the echo backend's answer.
+func roundTrip(t *testing.T, conn net.Conn, msg string) {
+	t.Helper()
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		t.Fatalf("write %q: %v", msg, err)
+	}
+	want := "E:" + msg
+	buf := make([]byte, len(want))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read after %q: %v", msg, err)
+	}
+	if string(buf) != want {
+		t.Fatalf("read %q, want %q", buf, want)
 	}
 }

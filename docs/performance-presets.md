@@ -9,7 +9,7 @@ limits).
 | Preset | For | Notes |
 |--------|-----|-------|
 | **Balance** | a small or shared VPS | Light on CPU and RAM. |
-| **Turbo** | most people (**recommended**) | **Byte-for-byte identical to the old "Best Performance"**, so upgrading changes nothing about an existing tunnel. |
+| **Turbo** | most people (**recommended**) | What the old "Best Performance" set, and an existing tunnel keeps the values its file has. Since v2.0.0 a new or re-tuned `tcp` / `ws` / `wss` tunnel (no mux) gets a pool of 16 instead of 8 (Aggressive 32 instead of 16): each user connection takes one, and 8 ran dry under a busy link (59% of 200 new connections a second got through, against all of them on 16). |
 | **Aggressive** | maximum gaming headroom | 32 MB socket buffers, 16 MB per mux stream. Noticeably more CPU. The KCP window deliberately stays at 2048 — with congestion control off, a deeper window *is* a deeper queue. |
 | **Throughput** | **bandwidth, not play** | Offered on the plain `kcp` transport only. |
 

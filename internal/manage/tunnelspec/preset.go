@@ -226,6 +226,23 @@ func ApplyPreset(s *Spec, preset string) {
 		s.MuxStreamBuffer = 32 * 1024 * 1024
 	}
 
+	// A tcp or ws tunnel without mux spends one pool connection per user
+	// connection, so Turbo's 8 ran dry under a busy link: 59% of 200 new
+	// connections a second got through, at a 3.1 s median first byte, where 16
+	// served them all at 127 ms (soak, 100 Mbit/s full of bulk; see growStep in
+	// the client transport). On a mux transport the pool is sessions, and 8 of
+	// them already served that load, so it stays as it is there. Aggressive
+	// keeps its step above Turbo with 32, which served the same load (at a
+	// 196 ms median first byte; a larger pool is not a faster one past that).
+	if !isMux(s.Transport) {
+		switch preset {
+		case PresetTurbo:
+			s.ConnectionPool = 16
+		case PresetAggressive:
+			s.ConnectionPool = 32
+		}
+	}
+
 	ApplyKCPPreset(s, preset)
 }
 

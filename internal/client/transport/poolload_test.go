@@ -67,3 +67,14 @@ func TestUnconfiguredPoolDoesNotGrow(t *testing.T) {
 		t.Fatal("an unconfigured pool size must not grow")
 	}
 }
+
+// A small pool still gets enough dials in flight to replace connections as
+// fast as a busy link takes them; a large one keeps its own multiple.
+func TestASmallPoolMayStillDialEnough(t *testing.T) {
+	if got := poolDialLimit(8); got != minPoolDialLimit {
+		t.Errorf("poolDialLimit(8) = %d, want %d", got, minPoolDialLimit)
+	}
+	if got := poolDialLimit(32); got != 32*poolGrowthLimit {
+		t.Errorf("poolDialLimit(32) = %d, want %d", got, 32*poolGrowthLimit)
+	}
+}

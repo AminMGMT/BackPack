@@ -417,6 +417,30 @@ All notable changes to Backpack are documented here.
 
 ### Fixed
 
+- **One busy port no longer takes a direct tunnel's other ports down.** When
+  a forwarded port could not be bound (something else on the Iran server held
+  it), the whole port forwarder stopped and was rebuilt every 5 s — every
+  other port of the tunnel, TCP and UDP, dropped and reopened every 5 s for as
+  long as that one was held. Seen on a real Iran server during a soak: UDP at
+  79% and connection latency past 600 ms on ports that were fine. A port that
+  cannot be bound is now retried on its own every 5 s and logged, the others
+  keep serving, and it comes up by itself once it is free (the same pass on
+  that server: UDP 98.7%, latency 380 ms). The reverse transports already
+  behaved this way.
+
+- **A plain tcp or ws tunnel no longer refuses new connections on a busy
+  link.** Every user connection takes a pool connection, and its replacement
+  is a TCP dial across the path. With the link full of transfers the path's
+  queue drops a SYN now and then and that dial takes a second or three, and
+  the client allowed only 32 idle-or-dialling pool connections in all (8 × 4):
+  on the soak path (100 Mbit/s of bulk, 200 new connections a second) 59%
+  got through, at a 3.1 s median first byte, on v1.9 as on v2. Now at least
+  64 may be in flight, which serves all of them (median first byte 1.3 s on a
+  pool of 8); a starved pool also grows by half its size at a time instead of
+  one connection every ten seconds; and Turbo gives a new tcp / ws / wss
+  tunnel a pool of 16, which serves them at 127 ms (Aggressive 32). Mux transports were not
+  affected (their pool is sessions) and keep 8.
+
 - **Direct PCK works on a server whose network device is smaller than 1402
   bytes.** Every preset sends 1350-byte packets, 1402 on the wire, and the
   kernel refuses to send a frame larger than the device's MTU. On an Iran VPS

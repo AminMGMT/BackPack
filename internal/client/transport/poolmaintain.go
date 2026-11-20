@@ -172,10 +172,13 @@ func (p poolSizer) maintain() {
 			switch {
 			case grow:
 				quietSince = time.Time{}
+				step := growStep(taken, newPoolSize, ceiling)
 				p.log.Debugf("increasing pool size: %d -> %d, avg pool conn: %d, avg load conn: %d, throughput: %d Mbit/s",
-					newPoolSize, newPoolSize+1, openAvg, taken, mbps)
-				newPoolSize++
-				p.launch()
+					newPoolSize, newPoolSize+step, openAvg, taken, mbps)
+				newPoolSize += step
+				for i := 0; i < step; i++ {
+					p.launch()
+				}
 
 			case quiet && time.Since(quietSince) >= 30*time.Second && newPoolSize > p.size:
 				quietSince = time.Now()
@@ -192,4 +195,27 @@ func (p poolSizer) maintain() {
 			}
 		}
 	}
+}
+
+// growStep is how many connections one growth tick adds.
+//
+// It used to be one, every ten seconds, whatever the demand. On a plain tcp or
+// ws tunnel every user connection takes a pool connection and a new one has to
+// be dialled across the path to replace it, so a pool too small for the rate
+// of new connections makes each wait for that dial — and on a busy link, where
+// the path's queue drops a SYN now and then, for the dial's retransmit: a
+// second, then three. Measured on the soak path (100 Mbit/s full of bulk
+// transfers, 200 new connections a second): a pool of 8 served 59% of them,
+// at a median first byte of 3.1 s, and growing by one a tick had got nowhere
+// after three minutes; a pool of 16 served all of them at 127 ms.
+//
+// So a pool asked for at least twice its size in a second (taken is the
+// per-second average over the tick) grows by half its size at once, still never
+// past the ceiling. Anything less keeps the one-at-a-time step.
+func growStep(taken, size, ceiling int) int {
+	step := 1
+	if taken >= 2*size {
+		step = max(1, size/2)
+	}
+	return max(0, min(step, ceiling-size))
 }

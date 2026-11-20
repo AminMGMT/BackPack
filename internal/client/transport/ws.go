@@ -175,7 +175,7 @@ func (c *WsTransport) control() controlLoop {
 }
 
 func (c *WsTransport) tunnelDialer() {
-	ready, ok := c.beginPoolDial(c.config.ConnPoolSize * poolGrowthLimit)
+	ready, ok := c.beginPoolDial(poolDialLimit(c.config.ConnPoolSize))
 	if !ok {
 		return
 	}

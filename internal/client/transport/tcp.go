@@ -251,7 +251,7 @@ func (c *TcpTransport) control() controlLoop {
 
 // Dialing to the tunnel server, chained functions, without retry
 func (c *TcpTransport) tunnelDialer() {
-	ready, ok := c.beginPoolDial(c.config.ConnPoolSize * poolGrowthLimit)
+	ready, ok := c.beginPoolDial(poolDialLimit(c.config.ConnPoolSize))
 	if !ok {
 		return
 	}

@@ -73,3 +73,20 @@ func TestThroughputHasNoOpinionWithoutAPreviousReading(t *testing.T) {
 		t.Errorf("a reading taken in the same instant returned %d", got)
 	}
 }
+
+// A pool asked for far more than it holds grows by half at a time, so it
+// catches up in a few ticks rather than one connection per ten seconds; never
+// past its ceiling.
+func TestAStarvedPoolGrowsByHalfAtATime(t *testing.T) {
+	for _, tc := range []struct{ taken, size, ceiling, want int }{
+		{200, 8, 32, 4},  // starved: half the size
+		{15, 8, 32, 1},   // busy but not starved: one
+		{200, 30, 32, 2}, // never past the ceiling
+		{200, 32, 32, 0}, // at the ceiling
+		{200, 1, 4, 1},   // a pool of one still grows
+	} {
+		if got := growStep(tc.taken, tc.size, tc.ceiling); got != tc.want {
+			t.Errorf("growStep(%d, %d, %d) = %d, want %d", tc.taken, tc.size, tc.ceiling, got, tc.want)
+		}
+	}
+}
