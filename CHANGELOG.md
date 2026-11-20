@@ -2,7 +2,11 @@
 
 All notable changes to Backpack are documented here.
 
-## v2.0.0 — unreleased
+## v2.0.0 — 2026-11-20
+
+v1.9.0 was tagged but never published (its release run failed), so this is
+the first release since v1.8.5 and also carries everything in the v1.9.0
+section of CHANGELOG.md.
 
 ### Security
 
