@@ -115,7 +115,7 @@ The same three names every carrier has, mapped to the engine's parameters:
 |---|---|---|---|
 | KCP sessions | 1 | 2 | 4 |
 | Speed mode | `fast` | `fast2` | `fast3` |
-| Window ceiling (packets) | 256 / 512 | 4096 / 4096 | 4096 / 4096 |
+| Window ceiling (packets) | 256 / 512 | 4096 / 4096 | 8192 / 8192 |
 | Buffers / capture ring | 2 MiB / 4 MiB | 8 MiB / 8 MiB | 16 MiB / 32 MiB |
 | Suits | a small VPS, a quiet tunnel | most links | a long, lossy route, RAM to spare |
 
@@ -126,7 +126,8 @@ too small is still the speed limit: throughput is at most *window × packet size
 ÷ round-trip time*. 4096 packets of 1350 bytes at 150 ms is about 295 Mbit/s
 per session (the 1024 Turbo had before was 74). One connection is held to
 the smux stream buffer over twice the round trip as well: Turbo's 4 MiB is about
-205 Mbit/s at 70 ms and 104 at 150 ms (2 MiB, before, was half that). Memory
+205 Mbit/s at 70 ms and 104 at 150 ms (2 MiB, before, was half that), and
+Aggressive's 8 MiB twice Turbo's. Memory
 is the same product, which is what the presets trade. The modes differ in the KCP tick (30, 20 and 10 ms),
 which is how long an acknowledgement or a small write may wait to be batched,
 and in how soon a lost packet is sent again.
@@ -140,7 +141,10 @@ clean path with a bottleneck queue** (the window control holds it to the same fe
 session, so four sessions add overhead). On the test path below it carried
 40 / 41 Mbit/s with no loss and 12 / 19 at 10% loss (22 / 21 and 10 / 10 before
 the changes in that section): four sessions lose less to a lost packet than
-two.
+two. Its ceiling is twice Turbo's since v2.0.0 (8192 packets, 8 MiB a
+stream): on a clean 150 ms path that took it from about 1050 / 980 to 1470 /
+1330 Mbit/s, and through a 100 Mbit/s policer (drops without a queue) from 84 /
+84 to 103 / 87 — Turbo there carried 64 / 59 and GRE 44 / 50.
 
 Turbo's ceiling was 1024 packets and its stream buffer 2 MiB until v2.0.0,
 which on a fast path was all it carried. Through the Connection Test between
@@ -166,7 +170,7 @@ keys:
 | `pck_conns` | KCP sessions, 1–16. Each is its own TCP flow (its own source port). 4 on Turbo is worth it on a lossy route, not on a clean one (see *On a busy or lossy link*) |
 | `pck_kcp_mode` | `normal`, `fast`, `fast2`, `fast3` — least CPU to lowest latency |
 | `pck_kcp_sndwnd`, `pck_kcp_rcvwnd` | the windows, in packets |
-| `pck_kcp_mtu` | packet size, 576–1450 (default 1350). Not fragmented, so a size the path cannot carry is *lost*, not slow. **Keep it the same on both ends** |
+| `pck_kcp_mtu` | packet size, 576–1450 (default 1350). Not fragmented, so a size the path cannot carry is *lost*, not slow. **Keep it the same on both ends**. A server whose network device is smaller than the packet plus its 52 bytes of headers (a 1400-byte `eth0`, common on VPSs) sends smaller packets by itself and says so in the log; the other end needs no change |
 | `pck_kcp_block` | the cipher: `aes` (default), `aes-128-gcm`, `salsa20`, … or `none`. **Must be the same on both ends** |
 
 Changing the preset in **Edit** sets sessions, mode and windows back to the new

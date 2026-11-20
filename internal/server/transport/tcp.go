@@ -44,10 +44,11 @@ type TcpTransport struct {
 	controlChannel netControl
 	limits         *limiter
 	// poolNonce is what this run's pool connections must present. It is empty
-	// while no control channel is up, and stays empty for a legacy client that
-	// cannot present one — which is what keeps the source-address fallback
-	// reachable. See network.PoolNonce.
+	// while no control channel is up. See network.PoolNonce.
 	poolNonce network.PoolNonce
+	// peer is the seated client's handshake session, which seals every
+	// destination sent to it; nil for a client on the handshake before v2.0.0.
+	peer peerSession
 }
 
 type TcpConfig struct {
@@ -75,9 +76,14 @@ type TcpConfig struct {
 	Stealth bool
 	// ManagedHelper requires explicit directional-EOF framing from the peer.
 	ManagedHelper bool
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	server := &TcpTransport{
 		config: config,
@@ -143,15 +149,13 @@ func (s *TcpTransport) seatClient(g *tcpGen, candidate controlCandidate) {
 			// channel is, or a pool connection racing in behind the handshake
 			// would be checked against a nonce that is not there yet.
 			s.poolNonce.Set(candidate.nonce)
+			s.peer.Set(candidate.session)
 			s.controlChannel.Set(candidate.conn)
 			// The engine says whether it holds a control channel; the watchdog
 			// reads it rather than the socket table, which shows a socket long
 			// after the tunnel behind it has stopped working. See
 			// metrics.Snapshot.Connected.
 			s.seated(candidate.conn.RemoteAddr().String())
-			if candidate.nonce == "" {
-				s.logger.Warn(legacyPoolWarning)
-			}
 			s.status.set("Connected (TCP)")
 			s.logger.Info("control channel successfully established.")
 		},
@@ -170,6 +174,7 @@ func (s *TcpTransport) vacate(g *tcpGen) {
 	s.controlChannel.Close()
 	s.controlChannel.Clear()
 	s.poolNonce.Clear()
+	s.peer.Clear()
 	drainTunnelConns(g.tunnelChannel)
 	s.status.set("Disconnected (TCP)")
 	metrics.ClearPeer()
@@ -180,6 +185,7 @@ func (s *TcpTransport) Restart() {
 		// The next run issues its own nonce, so connections still carrying this
 		// one must stop being accepted the moment the run ends.
 		s.poolNonce.Clear()
+		s.peer.Clear()
 		go s.start(s.newGen(ctx))
 	})
 }
@@ -266,27 +272,6 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 		s.preauth.Prove(raw.RemoteAddr())
 	}
 
-	// A legacy client says nothing on a pool connection — it dials and waits
-	// for the server to name a destination — so there is no announcement to
-	// read and the only thing separating it from a stranger's connection is
-	// the source address. Reading here would deadlock against such a client,
-	// so this branch stays exactly as it was, and is reachable only once a
-	// legacy control channel has been established (which is what leaves the
-	// nonce empty).
-	if s.controlChannel.IsSet() && s.poolNonce.Get() == "" {
-		// Read the peer address once: checking "is it set" and then asking for
-		// the address separately leaves a window where the control channel is
-		// cleared in between and the address comes back nil. Comparing through
-		// sameHost also handles IPv6 peers correctly.
-		if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, conn.RemoteAddr()) {
-			s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", conn.RemoteAddr(), peer)
-			conn.Close()
-			return
-		}
-		s.deliverTunnelConn(g, conn, "")
-		return
-	}
-
 	ann, err := readAnnouncement(conn)
 	if err != nil {
 		s.logger.Debugf("no announcement from %s: %v", conn.RemoteAddr(), err)
@@ -295,7 +280,7 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 	}
 
 	switch {
-	case isControlSignal(ann.signal):
+	case isControlSignal(ann.signal) || ann.signal == utils.SG_ChanAuth:
 		s.admitControlChannel(g, conn, ann)
 
 	case ann.signal == utils.SG_Pool:
@@ -318,24 +303,41 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 // admitControlChannel verifies a peer claiming the control channel, answers it,
 // and offers it as the candidate for channelHandshake to publish.
 func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announcement) {
-	if !tokenMatches(ann.payload, s.config.Token) {
-		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
-			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
-		refuseControl(conn, utils.RefusedBadToken)
-		return
-	}
-	s.preauth.Prove(conn.RemoteAddr())
-	if endedClaim(g.ctx, conn) {
-		return
-	}
-
 	// Plain TCP carries no mux sessions, so there is no version to settle: 0
 	// tells the client there is nothing to apply.
-	ack, nonce, _, err := controlAck(ann.signal, s.config.Token, 0)
-	if err != nil {
-		s.logger.Errorf("could not answer the control handshake: %v", err)
-		conn.Close()
-		return
+	var ack, nonce string
+	var session *network.PeerSession
+	if ann.signal == utils.SG_ChanAuth {
+		sess, ok := admitAuthClaim(conn, s.config.Guard, "tcp", ann.payload, s.logger)
+		if !ok {
+			return
+		}
+		s.preauth.Prove(conn.RemoteAddr())
+		if endedClaim(g.ctx, conn) {
+			return
+		}
+		ack, nonce, session = authAck(0), sess.PoolTag(), sess
+	} else {
+		if refuseLegacyClaim(conn, s.config.Guard, ann.signal == utils.SG_Chan, s.logger) {
+			return
+		}
+		if !tokenMatches(ann.payload, s.config.Token) {
+			s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
+				"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
+			refuseControl(conn, utils.RefusedBadToken)
+			return
+		}
+		s.preauth.Prove(conn.RemoteAddr())
+		if endedClaim(g.ctx, conn) {
+			return
+		}
+		var err error
+		ack, nonce, _, err = controlAck(ann.signal, s.config.Token, 0)
+		if err != nil {
+			s.logger.Errorf("could not answer the control handshake: %v", err)
+			conn.Close()
+			return
+		}
 	}
 	if err := utils.SendBinaryTransportStringWithin(conn, ack, ann.signal, 10*time.Second); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
@@ -368,12 +370,12 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 	// tunnel over from outside.
 	if g.seat.serving() {
 		s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
-		s.seatClient(g, controlCandidate{conn: conn, nonce: nonce})
+		s.seatClient(g, controlCandidate{conn: conn, nonce: nonce, session: session})
 		return
 	}
 
 	select {
-	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce}:
+	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce, session: session}:
 	default:
 		// channelHandshake has not begun reading in this run yet: a genuine
 		// duplicate racing the first claim, rather than a re-dial.
@@ -401,12 +403,11 @@ func (s *TcpTransport) deliverTunnelConn(g *tcpGen, conn net.Conn, nonce string)
 	}
 }
 
-func (s *TcpTransport) validPoolIdentity(conn net.Conn, nonce string) bool {
-	if nonce != "" {
-		return s.controlChannel.IsSet() && s.poolNonce.Verify(nonce)
-	}
-	peer := s.controlChannel.RemoteAddr()
-	return s.poolNonce.Get() == "" && peer != nil && sameHost(peer, conn.RemoteAddr())
+// validPoolIdentity reports whether a pool connection's nonce is this run's.
+// There used to be a second way in, by source address, for clients from
+// before v1.7.0 that presented no nonce; v2 refuses those clients outright.
+func (s *TcpTransport) validPoolIdentity(_ net.Conn, nonce string) bool {
+	return nonce != "" && s.controlChannel.IsSet() && s.poolNonce.Verify(nonce)
 }
 
 func (s *TcpTransport) handleLoop(g *tcpGen) {
@@ -425,7 +426,7 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 				ctx: g.ctx, local: localConn, tunnel: g.tunnelChannel,
 				limits: s.limits, log: s.logger,
 				announce: func(c net.Conn, addr string) error {
-					return utils.SendBinaryTransportStringWithin(c, addr, utils.SG_TCP, pairingWait(localConn.timeCreated))
+					return utils.SendBinaryTransportStringWithin(c, s.peer.Get().SealTarget(addr), utils.SG_TCP, pairingWait(localConn.timeCreated))
 				},
 				request: requestAlways(g.reqNewConnChan, s.logger),
 				discard: func(c net.Conn) { c.Close() },

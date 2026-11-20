@@ -20,6 +20,9 @@ type UdpTransport struct {
 	lifecycle
 
 	config *UdpConfig
+	// peer is the control channel's handshake session; destinations the
+	// server sends must open under it. nil against an older server.
+	peer peerSession
 }
 type UdpConfig struct {
 	RemoteAddr string
@@ -40,9 +43,14 @@ type UdpConfig struct {
 	// the preset's several MB is what carries a speed test without stalling.
 	SO_RCVBUF int
 	SO_SNDBUF int
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewUDPClient(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	client := &UdpTransport{
 		config: config,
@@ -63,7 +71,11 @@ func (c *UdpTransport) Start() {
 }
 
 func (c *UdpTransport) Restart() {
-	c.restart(nil, nil, c.Start)
+	c.restart(nil, func() {
+		// A fresh handshake: see TcpTransport.Restart.
+		c.peer.Clear()
+		c.config.Guard.Rearm()
+	}, c.Start)
 }
 
 func (c *UdpTransport) channelDialer() {
@@ -91,39 +103,35 @@ func (c *UdpTransport) channelDialer() {
 				continue
 			}
 
-			// Sending security token
-			err = utils.SendBinaryTransportStringWithin(tunnelTCPConn, c.config.Token, utils.SG_Chan, 10*time.Second)
+			// The claim: see claimControl. udp's handshake before v2.0.0 is
+			// SG_Chan with the token.
+			reply, err := claimControl(tunnelTCPConn, c.config.Guard, c.config.Token, "udp", utils.SG_Chan, c.logger)
 			if err != nil {
-				c.logger.Errorf("failed to send security token: %v", err)
-				tunnelTCPConn.Close()
-				bo.Wait(c.state.Ctx())
-				continue
-			}
-
-			// Set a read deadline for the token response
-			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(controlAckTimeout)); err != nil {
-				c.logger.Errorf("failed to set read deadline: %v", err)
-				tunnelTCPConn.Close()
-				bo.Wait(c.state.Ctx())
-				continue
-			}
-
-			// Receive response
-			message, _, err := utils.ReceiveBinaryTransportString(tunnelTCPConn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if isTimeout(err) {
 					c.logger.Warn("timeout while waiting for control channel response")
 				} else {
-					c.logger.Errorf("failed to receive control channel response: %v", err)
+					c.logger.Errorf("control channel handshake: %v", err)
 				}
-				tunnelTCPConn.Close() // Close connection on error or timeout
+				tunnelTCPConn.Close()
 				bo.Wait(c.state.Ctx())
 				continue
 			}
-			// Resetting the deadline (removes any existing deadline)
-			tunnelTCPConn.SetReadDeadline(time.Time{})
+			if why, refused := refusalReason(reply.ack, reply.signal); refused {
+				c.logger.Error("the tunnel was refused — " + why)
+				tunnelTCPConn.Close()
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			message := reply.ack
+			if reply.session != nil {
+				message = c.config.Token
+			} else {
+				warnLegacyServer(c.logger)
+			}
 
 			if message == c.config.Token {
+				// Before the pool starts, so its data sockets present the tag.
+				c.peer.Set(reply.session)
 				// See metrics.Snapshot.Connected.
 				metrics.ReportPeer(tunnelTCPConn.RemoteAddr().String())
 				c.state.SetConn(tunnelTCPConn)
@@ -211,8 +219,13 @@ func (c *UdpTransport) tunnelDialer() {
 }
 
 func (c *UdpTransport) handleTunnelConnReady(tunConn *net.UDPConn, ready func()) {
-	// Send token message to the server
-	_, err := tunConn.Write([]byte(c.config.Token))
+	// A data socket proves itself with its first datagram: the session's pool
+	// tag, or the token itself against an older server.
+	first := c.config.Token
+	if sess := c.peer.Get(); sess != nil {
+		first = sess.PoolTag()
+	}
+	_, err := tunConn.Write([]byte(first))
 	if err != nil {
 		c.logger.Error("faliled to send token:", err)
 		return
@@ -223,7 +236,9 @@ func (c *UdpTransport) handleTunnelConnReady(tunConn *net.UDPConn, ready func())
 	ready()
 
 	// Prepare a buffer to receive the server's response
-	buffer := make([]byte, 47) // maximum buffer requried for store in IPv6:Port format
+	// The destination, sealed under the session: an IPv6 address and port
+	// (47 bytes) and its seal, with room to spare for a list of backends.
+	buffer := make([]byte, 1024)
 
 	for {
 		n, _, err := tunConn.ReadFromUDP(buffer)
@@ -241,7 +256,15 @@ func (c *UdpTransport) handleTunnelConnReady(tunConn *net.UDPConn, ready func())
 			continue
 		}
 
-		port, remoteAddr, err := network.ResolveRemoteAddr(string(buffer[:n]))
+		// Only a destination the server sealed is dialled. See
+		// network.PeerSession.
+		target, err := c.peer.Get().OpenTarget(string(buffer[:n]))
+		if err != nil {
+			atomic.AddInt32(&c.poolConnections, -1)
+			c.logger.Warnf("udp tunnel socket %s: %v", tunConn.LocalAddr(), err)
+			return
+		}
+		port, remoteAddr, err := network.ResolveRemoteAddr(target)
 
 		// Decrement active connections after successful or failed connection
 		atomic.AddInt32(&c.poolConnections, -1)

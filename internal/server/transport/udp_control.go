@@ -8,6 +8,7 @@ import (
 	"github.com/backpack/backpack/internal/controlwire"
 	"github.com/backpack/backpack/internal/metrics"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // The udp transport's control port: TCP, even though its data is not. Claims
@@ -64,30 +65,39 @@ func (s *UdpTransport) channelHandshake(g *udpGen) {
 	// order. Judged on the accept loop, one silent connection held every
 	// claim behind it for the whole of its deadline — fifteen seconds of the
 	// genuine client waiting for each connection a stranger cared to open.
-	claims := make(chan net.Conn)
+	claims := make(chan udpClaim)
 	go s.acceptControlClaims(g, listener, claims)
 
 	for {
-		var conn net.Conn
+		var claim udpClaim
 		select {
 		case <-g.ctx.Done():
 			return
-		case conn = <-claims:
+		case claim = <-claims:
 		}
 
 		if g.seat.serving() {
 			s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
-			s.seatClient(g, conn)
+			s.seatClient(g, claim)
 			continue
 		}
-		s.seatClient(g, conn)
+		s.seatClient(g, claim)
 		go s.tunnelListener(g)
 		go s.parsePortMappings(g)
 	}
 }
 
-// seatClient makes conn this generation's client, in place of whoever was.
-func (s *UdpTransport) seatClient(g *udpGen, conn net.Conn) {
+// udpClaim is a control connection that passed the handshake, with its peer
+// session (nil on the handshake before v2.0.0).
+type udpClaim struct {
+	conn    net.Conn
+	session *network.PeerSession
+}
+
+// seatClient makes the claim's connection this generation's client, in place
+// of whoever was.
+func (s *UdpTransport) seatClient(g *udpGen, claim udpClaim) {
+	conn := claim.conn
 	g.seat.sit(g.ctx,
 		func() { s.vacate(g) },
 		func() {
@@ -96,6 +106,7 @@ func (s *UdpTransport) seatClient(g *udpGen, conn net.Conn) {
 			// zombie. Keepalive probes turn that into a read error the control
 			// loop can act on.
 			enableKeepAlive(conn, 30*time.Second)
+			s.peer.Set(claim.session)
 			s.controlChannel.Set(conn)
 			// The engine says whether it holds a control channel; the watchdog
 			// reads it rather than the socket table. See
@@ -118,6 +129,7 @@ func (s *UdpTransport) seatClient(g *udpGen, conn net.Conn) {
 func (s *UdpTransport) vacate(g *udpGen) {
 	s.controlChannel.Close()
 	s.controlChannel.Clear()
+	s.peer.Clear()
 	// Flows on the shared data socket: nothing to close, only to stop handing
 	// out.
 	for drained := false; !drained; {
@@ -133,7 +145,7 @@ func (s *UdpTransport) vacate(g *udpGen) {
 
 // acceptControlClaims accepts on the control port for the whole run and judges
 // each claim in its own goroutine, handing the valid ones to claims.
-func (s *UdpTransport) acceptControlClaims(g *udpGen, listener net.Listener, claims chan<- net.Conn) {
+func (s *UdpTransport) acceptControlClaims(g *udpGen, listener net.Listener, claims chan<- udpClaim) {
 	var backoff acceptBackoff
 	for {
 		conn, err := listener.Accept()
@@ -157,14 +169,14 @@ func (s *UdpTransport) acceptControlClaims(g *udpGen, listener net.Listener, cla
 			continue
 		}
 		go func() {
-			valid := s.validControlClaim(g, conn)
+			session, valid := s.validControlClaim(g, conn)
 			leave()
 			if !valid {
 				conn.Close()
 				return
 			}
 			select {
-			case claims <- conn:
+			case claims <- udpClaim{conn: conn, session: session}:
 			case <-g.ctx.Done():
 				conn.Close()
 			}
@@ -172,14 +184,14 @@ func (s *UdpTransport) acceptControlClaims(g *udpGen, listener net.Listener, cla
 	}
 }
 
-// validControlClaim reads the token handshake a control-channel claimant must
-// pass and answers it. It leaves the connection open on success; the caller
-// closes it when this returns false.
-func (s *UdpTransport) validControlClaim(g *udpGen, conn net.Conn) bool {
+// validControlClaim reads the handshake a control-channel claimant must pass
+// and answers it. It leaves the connection open on success; the caller closes
+// it when this returns false.
+func (s *UdpTransport) validControlClaim(g *udpGen, conn net.Conn) (*network.PeerSession, bool) {
 	// Set a read deadline for the token response
 	if err := conn.SetReadDeadline(time.Now().Add(controlClaimTimeout)); err != nil {
 		s.logger.Errorf("failed to set read deadline: %v", err)
-		return false
+		return nil, false
 	}
 
 	msg, transport, err := utils.ReceiveBinaryTransportString(conn)
@@ -189,34 +201,47 @@ func (s *UdpTransport) validControlClaim(g *udpGen, conn net.Conn) bool {
 		} else {
 			s.logger.Errorf("failed to receive control channel signal: %v", err)
 		}
-		return false
-	}
-
-	if transport != utils.SG_Chan {
-		s.logger.Errorf("invalid signal received for channel, discarding connection")
-		return false
+		return nil, false
 	}
 
 	// Resetting the deadline (removes any existing deadline)
 	conn.SetReadDeadline(time.Time{})
 
-	if !tokenMatches(msg, s.config.Token) {
-		s.logger.Warnf("invalid security token received")
-		return false
+	var session *network.PeerSession
+	ack, signal := s.config.Token, utils.SG_Chan
+	switch transport {
+	case utils.SG_ChanAuth:
+		sess, ok := admitAuthClaim(conn, s.config.Guard, "udp", msg, s.logger)
+		if !ok {
+			return nil, false
+		}
+		session, ack, signal = sess, authAck(0), utils.SG_ChanAuth
+	case utils.SG_Chan:
+		// udp's handshake before v2.0.0. It never had a pre-v1.7 form.
+		if refuseLegacyClaim(conn, s.config.Guard, false, s.logger) {
+			return nil, false
+		}
+		if !tokenMatches(msg, s.config.Token) {
+			s.logger.Warnf("invalid security token received")
+			return nil, false
+		}
+	default:
+		s.logger.Errorf("invalid signal received for channel, discarding connection")
+		return nil, false
 	}
 	s.preauth.Prove(conn.RemoteAddr())
 	// Judged just before the answer: the read above can take the whole claim
 	// timeout, and a run that ended during it must not answer. See endedClaim.
 	if endedClaim(g.ctx, conn) {
-		return false
+		return nil, false
 	}
 
-	if err := utils.SendBinaryTransportStringWithin(conn, s.config.Token, utils.SG_Chan, 10*time.Second); err != nil {
+	if err := utils.SendBinaryTransportStringWithin(conn, ack, signal, 10*time.Second); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
-		return false
+		return nil, false
 	}
 
-	return true
+	return session, true
 }
 
 // control is this generation's control loop, bound to the control channel

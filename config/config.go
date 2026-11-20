@@ -372,6 +372,18 @@ type ServerConfig struct {
 	// it hands the token to whoever terminates the TLS; turn it on only when a
 	// trusted proxy is doing so, and set it on both ends.
 	SimpleAuth bool `toml:"simple_auth"`
+	// PeerAuth is "required" to refuse a peer on the handshake before v2.0.0
+	// on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake
+	// sends the token as it is and lets anything on the path pose as the other
+	// end. Empty still accepts such a peer, so a tunnel keeps working while
+	// its two servers are upgraded one after the other, until the other end
+	// has once proved itself the new way; from then on the old handshake is
+	// refused anyway (remembered beside this file). Setup Links from v2.0.0
+	// write "required".
+	PeerAuth string `toml:"peer_auth"`
+	// PeerPinPath is where the engine remembers that the other end has proved
+	// itself; set from the config file's path at start, never from the file.
+	PeerPinPath string `toml:"-"`
 	// Heartbeat is how often, in seconds, the server sends a liveness byte down
 	// the control channel. It is how a client notices a server that has gone
 	// away without closing the socket. The control channel beats at least every
@@ -553,6 +565,18 @@ type ClientConfig struct {
 	// it hands the token to whoever terminates the TLS; turn it on only when a
 	// trusted proxy is doing so, and set it on both ends.
 	SimpleAuth bool `toml:"simple_auth"`
+	// PeerAuth is "required" to refuse a peer on the handshake before v2.0.0
+	// on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake
+	// sends the token as it is and lets anything on the path pose as the other
+	// end. Empty still accepts such a peer, so a tunnel keeps working while
+	// its two servers are upgraded one after the other, until the other end
+	// has once proved itself the new way; from then on the old handshake is
+	// refused anyway (remembered beside this file). Setup Links from v2.0.0
+	// write "required".
+	PeerAuth string `toml:"peer_auth"`
+	// PeerPinPath is where the engine remembers that the other end has proved
+	// itself; set from the config file's path at start, never from the file.
+	PeerPinPath string `toml:"-"`
 	// SkipOptz stops the engine applying its own socket and sysctl tuning at
 	// start, for a machine whose tuning is managed elsewhere.
 	SkipOptz bool `toml:"skip_optz"`

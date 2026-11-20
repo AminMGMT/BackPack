@@ -21,15 +21,12 @@ type TcpTransport struct {
 	lifecycle
 
 	config *TcpConfig
-	// poolNonce is what the server issued for this run; every pool connection
-	// presents it so the server need not judge them by source address. Empty
-	// against a server too old to issue one.
+	// poolNonce is what every pool connection presents: issued by the server
+	// on the handshake before v2.0.0, derived from the session on the new one.
 	poolNonce network.PoolNonce
-	// legacyServer decides which handshake to ask for, and remembers what this
-	// server has actually proved about itself. It is re-armed on restart: the
-	// fallback is a guess drawn from a closed connection, and a closed
-	// connection is far more often a dead path than an old server.
-	legacyServer legacyProbe
+	// peer is the control channel's handshake session; destinations the
+	// server sends must open under it. nil against an older server.
+	peer peerSession
 }
 type TcpConfig struct {
 	RemoteAddr string
@@ -59,6 +56,8 @@ type TcpConfig struct {
 	Stealth bool
 	// ManagedHelper carries directional EOF as records through an outer proxy.
 	ManagedHelper bool
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 // wrapStealth upgrades a freshly dialled tunnel connection to the Noise record
@@ -76,6 +75,9 @@ func (c *TcpTransport) wrapStealth(conn net.Conn) (net.Conn, error) {
 }
 
 func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	client := &TcpTransport{
 		config: config,
@@ -100,11 +102,11 @@ func (c *TcpTransport) Restart() {
 		// over would have the pool announcing a value the server has already
 		// forgotten.
 		c.poolNonce.Clear()
+		c.peer.Clear()
 		// Ask for the current handshake again. A fallback decided during the
 		// outage that caused this restart was a guess about the server drawn
-		// from a broken path, and carrying it forward costs the nonce for
-		// nothing.
-		c.legacyServer.reset()
+		// from a broken path.
+		c.config.Guard.Rearm()
 	}, c.Start)
 }
 
@@ -162,63 +164,44 @@ func (c *TcpTransport) channelDialer() {
 				continue
 			}
 
-			// Sending security token. The nonce-carrying handshake is asked for
-			// first; a server that predates it closes the connection without
-			// answering, which is what flips the fallback below.
-			signal := c.legacyServer.signal()
-			err = utils.SendBinaryTransportStringWithin(tunnelTCPConn, c.config.Token, signal, 10*time.Second)
+			// The claim: the handshake that proves both ends without sending
+			// the token, or the previous one against an older server. See
+			// claimControl.
+			reply, err := claimControl(tunnelTCPConn, c.config.Guard, c.config.Token, "tcp", utils.SG_ChanV2, c.logger)
 			if err != nil {
-				c.logger.Errorf("failed to send security token: %v", err)
-				tunnelTCPConn.Close()
-				bo.Wait(c.state.Ctx())
-				continue
-			}
-
-			// Set a read deadline for the token response
-			if err := tunnelTCPConn.SetReadDeadline(time.Now().Add(controlAckTimeout)); err != nil {
-				c.logger.Errorf("failed to set read deadline: %v", err)
-				tunnelTCPConn.Close()
-				bo.Wait(c.state.Ctx())
-				continue
-			}
-
-			// Receive response
-			message, ackSignal, err := utils.ReceiveBinaryTransportString(tunnelTCPConn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if isTimeout(err) {
 					c.logger.Warn("timeout while waiting for control channel response")
 				} else {
-					c.logger.Errorf("failed to receive control channel response: %v", err)
-					c.legacyServer.miss(c.logger, signal)
+					c.logger.Errorf("control channel handshake: %v", err)
 				}
-				tunnelTCPConn.Close() // Close connection on error or timeout
+				tunnelTCPConn.Close()
 				bo.Wait(c.state.Ctx())
 				continue
 			}
-			// Resetting the deadline (removes any existing deadline)
-			tunnelTCPConn.SetReadDeadline(time.Time{})
+			message, ackSignal := reply.ack, reply.signal
 
 			// Plain TCP has no mux sessions, so the version the server sends
 			// is not applicable here.
 			// A refusal is an answer, and a far more useful one than the
-			// silence it replaces. It is not a reason to fall back: the server
-			// understood the handshake perfectly and declined it.
+			// silence it replaces.
 			if why, refused := refusalReason(message, ackSignal); refused {
 				c.logger.Error("the tunnel was refused — " + why)
-				c.legacyServer.ack(ackSignal)
 				tunnelTCPConn.Close()
 				bo.Wait(c.state.Ctx())
 				continue
 			}
 			token, nonce, _ := decodeControlAck(message, ackSignal)
+			if reply.session != nil {
+				token, nonce = c.config.Token, reply.session.PoolTag()
+			} else {
+				warnLegacyServer(c.logger)
+			}
 
 			if token == c.config.Token {
-				// The server answered, so whatever it answered with is what it
-				// speaks — proof that outranks any later closed connection.
-				c.legacyServer.ack(ackSignal)
 				// Before the control channel is published, so the pool
-				// connections poolMaintainer starts below already have it.
+				// connections poolMaintainer starts below already have them.
 				c.poolNonce.Set(nonce)
+				c.peer.Set(reply.session)
 				// The engine knows it holds a control channel; the watchdog reads that
 				// rather than the socket table, which shows a socket long after the
 				// tunnel behind it has stopped working. See metrics.Snapshot.Connected.
@@ -312,13 +295,20 @@ func (c *TcpTransport) tunnelDialer() {
 	ready()
 
 	// Attempt to receive the remote address from the tunnel server
-	remoteAddr, transport, err := utils.ReceiveBinaryTransportString(tcpConn)
+	sealed, transport, err := utils.ReceiveBinaryTransportString(tcpConn)
 
 	// Decrement active connections after successful or failed connection
 	atomic.AddInt32(&c.poolConnections, -1)
 
 	if err != nil {
 		c.logger.Debugf("failed to receive port from tunnel connection %s: %v", tcpConn.RemoteAddr().String(), err)
+		tcpConn.Close()
+		return
+	}
+	// Only a destination the server sealed is dialled. See network.PeerSession.
+	remoteAddr, err := c.peer.Get().OpenTarget(sealed)
+	if err != nil {
+		c.logger.Warnf("tunnel connection %s: %v", tcpConn.RemoteAddr(), err)
 		tcpConn.Close()
 		return
 	}

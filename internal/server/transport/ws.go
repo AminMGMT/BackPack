@@ -49,6 +49,10 @@ type WsTransport struct {
 	// made it. See Start.
 	controlChannel wsControl
 	limits         *limiter
+	// peer is the seated client's handshake session, which seals every
+	// destination sent to it; nil for a client on the handshake before v2.0.0
+	// (and always over wss, whose TLS-bound proofs do this job).
+	peer peerSession
 }
 
 type WsConfig struct {
@@ -79,9 +83,14 @@ type WsConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewWSServer(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	server := &WsTransport{
 		config: config,
@@ -134,6 +143,7 @@ func (s *WsTransport) start(g *wsGen) {
 func (s *WsTransport) Restart() {
 	s.restart(s.controlChannel.Close, func(ctx context.Context) {
 		s.controlChannel.Clear()
+		s.peer.Clear()
 		go s.start(s.newGen(ctx))
 	})
 }
@@ -163,10 +173,11 @@ func (s *WsTransport) control(g *wsGen, ctx context.Context, lost func()) contro
 }
 
 // seatClient makes conn this generation's client, in place of whoever was.
-func (s *WsTransport) seatClient(g *wsGen, conn *websocket.Conn) {
+func (s *WsTransport) seatClient(g *wsGen, conn *websocket.Conn, session *network.PeerSession) {
 	g.seat.sit(g.ctx,
 		func() { s.vacate(g) },
 		func() {
+			s.peer.Set(session)
 			s.controlChannel.Set(conn)
 			// See metrics.Snapshot.Connected: the watchdog asks the engine, not
 			// the socket table.
@@ -188,6 +199,7 @@ func (s *WsTransport) seatClient(g *wsGen, conn *websocket.Conn) {
 func (s *WsTransport) vacate(g *wsGen) {
 	s.controlChannel.Close()
 	s.controlChannel.Clear()
+	s.peer.Clear()
 	for drained := false; !drained; {
 		select {
 		case c := <-g.tunnelChannel:
@@ -237,18 +249,22 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 			// browser, a scanner, a probe with the wrong token — gets the decoy
 			// website, so on 443 this looks like an ordinary HTTPS site rather
 			// than a tunnel that answers with 401.
-			if !isTunnelRequest(r, s.config.Token, s.config.SimpleAuth) {
+			adm, ok := s.peerAuth().admit(r)
+			if !ok {
 				decoy.serve(w, r)
 				return
 			}
 
-			conn, err := upgrader.Upgrade(w, r, serverProof(r, s.config.Token, s.config.SimpleAuth))
+			conn, err := upgrader.Upgrade(w, r, adm.header)
 			if err != nil {
 				s.logger.Errorf("failed to upgrade connection from %s: %v", r.RemoteAddr, err)
 				return
 			}
 
 			if r.URL.Path == "/channel" {
+				if !s.peerAuth().confirm(conn, adm.session) {
+					return
+				}
 				if endedClaim(g.ctx, conn) {
 					return
 				}
@@ -260,7 +276,7 @@ func (s *WsTransport) tunnelListener(g *wsGen) {
 				if g.seat.serving() {
 					s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
 				}
-				s.seatClient(g, conn)
+				s.seatClient(g, conn, adm.session)
 				g.serving.Do(func() { s.serveGeneration(s.forwarder(g), func() { s.handleLoop(g) }) })
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
@@ -383,7 +399,7 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 						return err
 					}
 					defer c.conn.SetWriteDeadline(time.Time{})
-					return c.conn.WriteMessage(websocket.TextMessage, []byte(addr))
+					return c.conn.WriteMessage(websocket.TextMessage, []byte(s.peer.Get().SealTarget(addr)))
 				},
 				discard: func(c TunnelChannel) { c.conn.Close() },
 				relay: func(c TunnelChannel, local LocalTCPConn) {
@@ -465,4 +481,10 @@ func (s *WsTransport) forwarder(g *wsGen) portForwarder {
 // connection: nodelay as configured, and TCP keepalive with the tunnel's period.
 func (s *WsTransport) tuneUserConn(c *net.TCPConn) {
 	wsTune(c, s.config.Nodelay, s.config.KeepAlive, s.logger)
+}
+
+// peerAuth is this transport's side of the plain ws peer handshake.
+func (s *WsTransport) peerAuth() wsPeerAuth {
+	return wsPeerAuth{guard: s.config.Guard, token: s.config.Token, simpleAuth: s.config.SimpleAuth,
+		label: "ws", peer: &s.peer, log: s.logger}
 }

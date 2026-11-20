@@ -28,6 +28,9 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	logger *logrus.Logger
+	// guard is the plain transports' peer handshake policy, one per process
+	// so what it remembers is shared by every transport a chain tries.
+	guard *network.PeerGuard
 }
 
 func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
@@ -43,6 +46,7 @@ func NewServer(cfg *config.ServerConfig, parentCtx context.Context) *Server {
 		ctx:    ctx,
 		cancel: cancel,
 		logger: utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
+		guard:  network.NewPeerGuard(cfg.Token, cfg.PeerAuth, cfg.PeerPinPath),
 	}
 }
 
@@ -156,6 +160,9 @@ type runner interface {
 // a chain run several of these one after another without them fighting over
 // the same ports.
 func (s *Server) startTransport(ctx context.Context, tr config.TransportType) runner {
+	if s.guard == nil {
+		s.guard = network.NewPeerGuard(s.config.Token, s.config.PeerAuth, s.config.PeerPinPath)
+	}
 	switch tr {
 	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
@@ -180,6 +187,7 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 			// tunnel connection; everything else about it is identical.
 			Stealth:       tr == config.STEALTH,
 			ManagedHelper: s.config.Naive.Enabled() || s.config.Xray.Enabled(),
+			Guard:         s.guard,
 		}
 
 		tcpServer := transport.NewTCPServer(ctx, tcpConfig, s.logger)
@@ -277,6 +285,7 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 			ProxyProtocol:    s.config.ProxyProtocol,
 			MaxConnections:   s.config.MaxConnections,
 			BandwidthMbps:    s.config.BandwidthMbps,
+			Guard:            s.guard,
 		}
 
 		tcpMuxServer := transport.NewTcpMuxServer(ctx, tcpMuxConfig, s.logger)
@@ -307,6 +316,7 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 
 			MaxConnections: s.config.MaxConnections,
 			BandwidthMbps:  s.config.BandwidthMbps,
+			Guard:          s.guard,
 		}
 
 		wsServer := transport.NewWSServer(ctx, wsConfig, s.logger)
@@ -342,6 +352,7 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 			ProxyProtocol:    s.config.ProxyProtocol,
 			MaxConnections:   s.config.MaxConnections,
 			BandwidthMbps:    s.config.BandwidthMbps,
+			Guard:            s.guard,
 		}
 
 		wsMuxServer := transport.NewWSMuxServer(ctx, wsMuxConfig, s.logger)
@@ -365,6 +376,7 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 			// the TOML, show it in the panel and never apply it.
 			MaxConnections: s.config.MaxConnections,
 			BandwidthMbps:  s.config.BandwidthMbps,
+			Guard:          s.guard,
 		}
 
 		udpServer := transport.NewUDPServer(ctx, udpConfig, s.logger)

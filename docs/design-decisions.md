@@ -235,7 +235,8 @@ records, in [adr/](adr/): how a reverse transport's generation is shared code
 asks the engine ([0002](adr/0002-one-answer-to-would-this-start.md)), how
 `internal/manage` is layered behind one name ([0003](adr/0003-manage-is-layered-behind-one-name.md)),
 what an unproven peer may hold ([0004](adr/0004-what-an-unproven-peer-may-hold.md)),
-and why a generation outlives its clients ([0005](adr/0005-a-generation-outlives-its-clients.md)).
+why a generation outlives its clients ([0005](adr/0005-a-generation-outlives-its-clients.md)),
+and how the plain transports prove both ends ([0006](adr/0006-plain-transports-prove-both-ends.md)).
 
 ---
 

@@ -117,7 +117,7 @@ func TestTcpAdoptsANewControlClaimInPlace(t *testing.T) {
 	drain(cli)
 	done := make(chan struct{})
 	go func() {
-		s.admitControlChannel(g, srv, announcement{signal: utils.SG_Chan, payload: token})
+		s.admitControlChannel(g, srv, announcement{signal: utils.SG_ChanV2, payload: token})
 		close(done)
 	}()
 	select {
@@ -173,7 +173,7 @@ func TestALostControlChannelKeepsTheGenerationAndSeatsTheNextClient(t *testing.T
 
 	srv, cli := pipePair(t)
 	drain(cli)
-	s.admitControlChannel(g, srv, announcement{signal: utils.SG_Chan, payload: token})
+	s.admitControlChannel(g, srv, announcement{signal: utils.SG_ChanV2, payload: token})
 	if s.controlChannel.Get() != srv {
 		t.Fatal("the next claim after a lost channel was not seated")
 	}
@@ -201,7 +201,7 @@ func TestAClaimWithTheWrongTokenCannotDisturbTheTunnel(t *testing.T) {
 		got <- string(buf[:n])
 	}()
 
-	s.admitControlChannel(g, srv, announcement{signal: utils.SG_Chan, payload: "the-wrong-token"})
+	s.admitControlChannel(g, srv, announcement{signal: utils.SG_ChanV2, payload: "the-wrong-token"})
 
 	select {
 	case answer := <-got:
@@ -305,7 +305,7 @@ func TestAClaimThatReachesAnEndedGenerationIsClosedNotAnswered(t *testing.T) {
 		"tcp": func(t *testing.T, c net.Conn, ctx context.Context) {
 			s, _, _ := adoptTestTransport(token)
 			g := &tcpGen{ctx: ctx, handshakeChannel: make(chan controlCandidate, 1)}
-			s.admitControlChannel(g, c, announcement{signal: utils.SG_Chan, payload: token})
+			s.admitControlChannel(g, c, announcement{signal: utils.SG_ChanV2, payload: token})
 			if len(g.handshakeChannel) != 0 {
 				t.Error("tcp: the claim was filed in an ended generation")
 			}
@@ -317,7 +317,7 @@ func TestAClaimThatReachesAnEndedGenerationIsClosedNotAnswered(t *testing.T) {
 			}
 			s.run.set(ctx, func() {})
 			g := &tcpMuxGen{ctx: ctx, handshakeChannel: make(chan controlCandidate, 1)}
-			s.admitControlChannel(g, c, announcement{signal: utils.SG_Chan, payload: token})
+			s.admitControlChannel(g, c, announcement{signal: utils.SG_ChanV2, payload: token})
 			if len(g.handshakeChannel) != 0 {
 				t.Error("tcpmux: the claim was filed in an ended generation")
 			}

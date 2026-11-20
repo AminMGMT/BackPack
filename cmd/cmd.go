@@ -232,6 +232,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 		stopMetrics := startMetrics(ctx, configPath, string(cfg.Server.Transport), "server")
 		defer stopMetrics()
 
+		cfg.Server.PeerPinPath = network.PeerPinPath(configPath)
 		srv := server.NewServer(&cfg.Server, ctx) // server
 		reportZeroCopy(ctx)
 		// Start blocks until its own context ends and everything it owns has
@@ -252,6 +253,7 @@ func runEngine(cfg *config.Config, ctx context.Context, configPath string, apply
 		stopMetrics := startMetrics(ctx, configPath, string(cfg.Client.Transport), "client")
 		defer stopMetrics()
 
+		cfg.Client.PeerPinPath = network.PeerPinPath(configPath)
 		clnt := client.NewClient(&cfg.Client, ctx) // client
 		reportZeroCopy(ctx)
 		// Blocks until the generation is over; see the server case above.

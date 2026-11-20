@@ -96,6 +96,7 @@ them both ends have to agree on. This says what exists.
 | `mux_version` | `int` | MuxVersion is the smux protocol version. Negotiated with the peer, so the two ends may differ and the lower wins. |
 | `naive` | `NaiveClientConfig` | Naive optionally reaches the loopback reverse target through a tunnel-owned official Chromium Naive helper; experimental and disabled when empty. |
 | `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and a bulk transfer does not notice. |
+| `peer_auth` | `string` | PeerAuth is "required" to refuse a peer on the handshake before v2.0.0 on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake sends the token as it is and lets anything on the path pose as the other end. Empty still accepts such a peer, so a tunnel keeps working while its two servers are upgraded one after the other, until the other end has once proved itself the new way; from then on the old handshake is refused anyway (remembered beside this file). Setup Links from v2.0.0 write "required". |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on loopback. Off by default, and loopback-only on purpose: its heap dump contains this tunnel's token. |
 | `preset` | `string` | Preset records which performance profile the tuning values came from — balance, turbo or aggressive. A label: the engine reads the values, never this. |
 | `proxy` | `string` | Proxy routes the connection to the tunnel server through a local or nearby proxy, for a client that cannot open an arbitrary outbound connection itself. One URL: "socks5://127.0.0.1:1080" or "http://user:pass@10.0.0.1:8080". Empty means dial the server directly. |
@@ -240,6 +241,7 @@ them both ends have to agree on. This says what exists.
 | `mux_version` | `int` | MuxVersion is the smux protocol version. Negotiated with the peer, so the two ends may differ and the lower wins. |
 | `naive` | `NaiveServerConfig` | Naive optionally wraps the loopback TCP reverse listener in HTTP/2 with a tunnel-owned sing-box helper; experimental and disabled when empty. |
 | `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and what a bulk transfer does not notice. |
+| `peer_auth` | `string` | PeerAuth is "required" to refuse a peer on the handshake before v2.0.0 on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake sends the token as it is and lets anything on the path pose as the other end. Empty still accepts such a peer, so a tunnel keeps working while its two servers are upgraded one after the other, until the other end has once proved itself the new way; from then on the old handshake is refused anyway (remembered beside this file). Setup Links from v2.0.0 write "required". |
 | `ports` | `[]string` | Ports are the forwarded ports this server exposes, as "443", "8080=127.0.0.1:80", "443-450" or "10.0.0.5:443". See docs/port-mappings.md for every form. |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on 127.0.0.1:6060. Off by default and loopback-only: its heap dump contains this tunnel's token. |
 | `preset` | `string` | Preset records which performance profile the tuning values came from — balance, turbo or aggressive. A label: the engine reads the values, never this. Set by hand only if you want the menu to stop offering to change them. |
@@ -283,4 +285,4 @@ them both ends have to agree on. This says what exists.
 
 ---
 
-*Generated from `config/` on 2026-11-15. Last verified against Backpack v2.0.0.*
+*Generated from `config/` on 2026-11-20. Last verified against Backpack v2.0.0.*

@@ -69,6 +69,10 @@ type UdpTransport struct {
 	activeMu          sync.Mutex
 	controlChannel    netControl
 	limits            *limiter
+	// peer is the seated client's handshake session: its data sockets
+	// present the session's pool tag, and every destination sent to it is
+	// sealed. nil for a client on the handshake before v2.0.0.
+	peer peerSession
 }
 
 type UdpConfig struct {
@@ -99,9 +103,14 @@ type UdpConfig struct {
 	// thing: one peer's flow through the tunnel.
 	MaxConnections int
 	BandwidthMbps  int
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewUDPServer(parentCtx context.Context, config *UdpConfig, logger *logrus.Logger) *UdpTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	server := &UdpTransport{
 		config: config,
@@ -153,6 +162,7 @@ func (s *UdpTransport) start(g *udpGen) {
 func (s *UdpTransport) Restart() {
 	s.restart(s.controlChannel.Close, func(ctx context.Context) {
 		s.controlChannel.Clear()
+		s.peer.Clear()
 		// Replaced under its lock, and the lock itself is never replaced. It used
 		// to be reassigned here while the previous generation's copy loops were
 		// still finishing and locking it: overwriting a mutex another goroutine
@@ -265,7 +275,7 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 
 			s.activeMu.Unlock()
 
-			if !tokenMatches(string(buf[:n]), s.config.Token) { // For new connections, validate the token
+			if !s.validDataSocket(string(buf[:n])) { // A new data socket proves itself first
 				// Debug, not error: this port is public, and anything at all
 				// sent to it lands here. At error level every junk datagram
 				// was a journal line, so anyone could fill the disk and bury
@@ -318,4 +328,14 @@ func (s *UdpTransport) acceptTunnelConn(g *udpGen, listener *net.UDPConn) {
 // see network.SizeUDPBuffers.
 func (s *UdpTransport) applyBuffers(conn *net.UDPConn) {
 	network.SizeUDPBuffers(conn, s.config.SO_RCVBUF, s.config.SO_SNDBUF, s.logger.Warnf)
+}
+
+// validDataSocket judges a new data socket's first datagram: the session's
+// pool tag under the peer handshake, the token itself for a client on the
+// handshake before v2.0.0.
+func (s *UdpTransport) validDataSocket(first string) bool {
+	if sess := s.peer.Get(); sess != nil {
+		return tokenMatches(first, sess.PoolTag())
+	}
+	return !s.config.Guard.Strict() && tokenMatches(first, s.config.Token)
 }

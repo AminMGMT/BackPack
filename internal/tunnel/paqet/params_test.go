@@ -36,9 +36,9 @@ func TestThePresetsTradeMemoryForSpeedInOrder(t *testing.T) {
 			t.Errorf("%s should rise Balance < Turbo < Aggressive, got %d, %d, %d", name, x, y, z)
 		}
 	}
-	// Turbo and Aggressive share a window ceiling and a stream buffer, which are
-	// one session's and one connection's speed limit (see PresetParams); what
-	// the tunnel holds in all, sessions times window, still rises.
+	// Each step up raises a session's window ceiling and a connection's stream
+	// buffer (one session's and one connection's speed limit, see
+	// PresetParams), or at least does not lower them.
 	notLess := func(name string, x, y, z int) {
 		t.Helper()
 		if !(x < y && y <= z) {
@@ -87,7 +87,7 @@ func TestExplicitValuesWinOverThePreset(t *testing.T) {
 	if got.Conns != 7 || got.Mode != ModeNormal || got.SndWnd != 99 {
 		t.Fatalf("explicit values were overwritten: %+v", got)
 	}
-	if got.RcvWnd != 4096 || got.Block != DefaultBlock || got.KeepAlive != 2*time.Second || got.KeepAliveTimeout != 8*time.Second {
+	if got.RcvWnd != 8192 || got.Block != DefaultBlock || got.KeepAlive != 2*time.Second || got.KeepAliveTimeout != 8*time.Second {
 		t.Fatalf("the rest should come from the preset and the fixed defaults: %+v", got)
 	}
 }
@@ -227,7 +227,26 @@ func TestAPresetDescribesItselfInOneLine(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 	a, _ := PresetParams(PresetAggressive)
-	if got := a.Resolve("").Summary(); !strings.HasPrefix(got, "4 sessions, fast3, 4096-packet windows") {
+	if got := a.Resolve("").Summary(); !strings.HasPrefix(got, "4 sessions, fast3, 8192-packet windows") {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestPacketsShrinkToFitTheDevice(t *testing.T) {
+	for _, tc := range []struct {
+		mtu, dev, want int
+		shrunk         bool
+	}{
+		{1350, 1500, 1350, false}, // the ordinary case: 1402 on the wire
+		{1350, 1402, 1350, false}, // exactly fits
+		{1350, 1400, 1348, true},  // the Iran VPS that found this
+		{1350, 1280, 1228, true},
+		{1350, 600, MinMTU, true}, // never below the floor
+		{1350, 0, 1350, false},    // unknown device MTU: leave it
+	} {
+		got, shrunk := fitMTU(tc.mtu, tc.dev)
+		if got != tc.want || shrunk != tc.shrunk {
+			t.Errorf("fitMTU(%d, %d) = %d, %v; want %d, %v", tc.mtu, tc.dev, got, shrunk, tc.want, tc.shrunk)
+		}
 	}
 }

@@ -230,6 +230,7 @@ func validateConfig(cfg *config.Config) error {
 		checkPck,
 		checkGRE,
 		checkFallbackChain,
+		checkPeerAuth,
 		// Last: the specific checks above explain a refusal better than the
 		// engine's own validation of the same field would.
 		checkEngine,
@@ -263,6 +264,17 @@ func checkXray(cfg *config.Config) error {
 	}
 	if err := naive.ValidateXray(cfg); err != nil {
 		return fmt.Errorf("Xray configuration: %w", err)
+	}
+	return nil
+}
+
+// checkPeerAuth refuses a peer_auth this engine does not know. A typo would
+// otherwise read as "accept the old handshake" — the weaker of the two.
+func checkPeerAuth(cfg *config.Config) error {
+	for _, side := range []struct{ name, v string }{{"server", cfg.Server.PeerAuth}, {"client", cfg.Client.PeerAuth}} {
+		if side.v != "" && side.v != network.PeerAuthRequired {
+			return fmt.Errorf("[%s] peer_auth = %q: the only value is %q (or leave it out)", side.name, side.v, network.PeerAuthRequired)
+		}
 	}
 	return nil
 }

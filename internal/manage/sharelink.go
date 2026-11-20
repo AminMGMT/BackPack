@@ -178,6 +178,14 @@ type ShareLink struct {
 	PckKCPSndWnd int    `json:"ps,omitempty"`
 	PckKCPRcvWnd int    `json:"pw,omitempty"`
 	PckKCPBlock  string `json:"pb,omitempty"`
+
+	// PeerAuth says the side that made the link (the Iran server, on a
+	// reverse tunnel) is on v2.0.0 or later and proves itself on the plain
+	// transports. The side that applies it then refuses the older handshake
+	// from the start (peer_auth = "required"), rather than only after the
+	// first connection: nothing on the path can make the new pair fall back.
+	// A build older than v2.0.0 cannot read a link with it and says so.
+	PeerAuth bool `json:"pv,omitempty"`
 }
 
 // Encode renders a link as the string an operator copies.
@@ -712,6 +720,7 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		l.MSS = cfg.Server.MSS
 		l.SimpleAuth = cfg.Server.SimpleAuth
 		l.MuxVer = cfg.Server.MuxVersion
+		l.PeerAuth = true
 		for _, t := range cfg.Server.FallbackTransports {
 			l.Fallbacks = append(l.Fallbacks, string(t))
 		}

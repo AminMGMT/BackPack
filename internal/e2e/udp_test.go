@@ -12,6 +12,7 @@ import (
 	"github.com/backpack/backpack/internal/client"
 	"github.com/backpack/backpack/internal/server"
 	"github.com/backpack/backpack/internal/utils"
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // The raw UDP transport was the one protocol with no end-to-end coverage: the
@@ -151,16 +152,44 @@ func TestUDPServerReadoptsControlChannel(t *testing.T) {
 	if err := claim.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatalf("cannot set deadline: %v", err)
 	}
-	if err := utils.SendBinaryTransportString(claim, token, utils.SG_Chan); err != nil {
-		t.Fatalf("cannot send the control claim: %v", err)
-	}
-	msg, signal, err := utils.ReceiveBinaryTransportString(claim)
+	// v2.0.0's handshake, as the re-dialing client makes it (the old one is
+	// refused once a client has proved itself; see peerauth_test.go).
+	msg, signal, err := authClaim(claim, token, "udp")
 	if err != nil {
 		t.Fatalf("server never answered a second control channel claim (re-adopt broken): %v", err)
 	}
-	if signal != utils.SG_Chan || msg != token {
+	if signal != utils.SG_ChanAuth {
 		t.Fatalf("unexpected control handshake answer: signal=%d msg=%q", signal, msg)
 	}
+}
+
+// authClaim makes a control claim on conn with the v2.0.0 handshake, by hand,
+// and returns the server's last answer.
+func authClaim(conn net.Conn, token, label string) (string, byte, error) {
+	k := network.PeerKeyFrom(token)
+	h, err := k.NewPeerHello(label)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := utils.SendBinaryTransportString(conn, h.Encode(), utils.SG_ChanAuth); err != nil {
+		return "", 0, err
+	}
+	msg, sig, err := utils.ReceiveBinaryTransportString(conn)
+	if err != nil || sig != utils.SG_ChanAuth {
+		return msg, sig, err
+	}
+	r, ok := network.DecodePeerReply(msg)
+	if !ok {
+		return msg, sig, fmt.Errorf("an unreadable reply %q", msg)
+	}
+	sess, ok := k.CheckReply(h, r, label)
+	if !ok {
+		return msg, sig, fmt.Errorf("the server did not prove the token")
+	}
+	if err := utils.SendBinaryTransportString(conn, sess.Confirm(), utils.SG_ChanAuth); err != nil {
+		return "", 0, err
+	}
+	return utils.ReceiveBinaryTransportString(conn)
 }
 
 func udpRoundTrip(entry string, payload []byte) error {

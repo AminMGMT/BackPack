@@ -47,10 +47,11 @@ type TcpMuxTransport struct {
 	sessionCounter int32
 	limits         *limiter
 	// poolNonce is what this run's pool connections must present. It is empty
-	// while no control channel is up, and stays empty for a legacy client that
-	// cannot present one — which is what keeps the source-address fallback
-	// reachable. See network.PoolNonce.
+	// while no control channel is up. See network.PoolNonce.
 	poolNonce network.PoolNonce
+	// peer is the seated client's handshake session, which seals every
+	// destination sent to it; nil for a client on the handshake before v2.0.0.
+	peer peerSession
 }
 
 type TcpMuxConfig struct {
@@ -78,6 +79,8 @@ type TcpMuxConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 // setMuxVersion records the version this run agreed on. A legacy client cannot
@@ -105,6 +108,9 @@ func (s *TcpMuxTransport) smuxCfg() *smux.Config {
 }
 
 func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	muxSettings := network.MuxSettings{
 		MaxFrameSize:     config.MaxFrameSize,
 		MaxReceiveBuffer: config.MaxReceiveBuffer,
@@ -175,15 +181,13 @@ func (s *TcpMuxTransport) seatClient(g *tcpMuxGen, candidate controlCandidate) {
 			// channel is, or a pool connection racing in behind the handshake
 			// would be checked against a nonce that is not there yet.
 			s.poolNonce.Set(candidate.nonce)
+			s.peer.Set(candidate.session)
 			s.setMuxVersion(candidate.muxVersion)
 			s.controlChannel.Set(candidate.conn)
 			// The engine says whether it holds a control channel; the watchdog
 			// reads it rather than the socket table. See
 			// metrics.Snapshot.Connected.
 			s.seated(candidate.conn.RemoteAddr().String())
-			if candidate.nonce == "" {
-				s.logger.Warn(legacyPoolWarning)
-			}
 			s.status.set("Connected (TCPMux)")
 			s.logger.Infof("control channel successfully established (mux version %d).", s.muxVersion.Load())
 		},
@@ -202,6 +206,7 @@ func (s *TcpMuxTransport) vacate(g *tcpMuxGen) {
 	s.controlChannel.Close()
 	s.controlChannel.Clear()
 	s.poolNonce.Clear()
+	s.peer.Clear()
 	drainTunnelConns(g.tunnelChannel)
 	s.status.set("Disconnected (TCPMux)")
 	metrics.ClearPeer()
@@ -211,6 +216,7 @@ func (s *TcpMuxTransport) Restart() {
 		s.controlChannel.Clear()
 		// The next run issues its own nonce and settles its own mux version.
 		s.poolNonce.Clear()
+		s.peer.Clear()
 		s.muxVersion.Store(0)
 		s.counterMutex.Lock()
 		atomic.StoreInt32(&s.streamCounter, 0)
@@ -280,27 +286,6 @@ func (s *TcpMuxTransport) tunnelPort(g *tcpMuxGen) tcpTunnelPort {
 // before it can be used, and files it as a control channel or a mux session for
 // the pool.
 func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
-	// A legacy client says nothing on a pool connection — it dials and opens
-	// mux streams when the server asks — so there is no announcement to read
-	// and the only thing separating it from a stranger's connection is the
-	// source address. Reading here would deadlock against such a client, so
-	// this branch stays exactly as it was, and is reachable only once a legacy
-	// control channel has been established (which is what leaves the nonce
-	// empty).
-	if s.controlChannel.IsSet() && s.poolNonce.Get() == "" {
-		// Read the peer address once: checking "is it set" and then asking for
-		// the address separately leaves a window where the control channel is
-		// cleared in between and the address comes back nil. Comparing through
-		// sameHost also handles IPv6 peers correctly.
-		if peer := s.controlChannel.RemoteAddr(); peer != nil && !sameHost(peer, conn.RemoteAddr()) {
-			s.logger.Debugf("suspicious packet from %v. expected address: %v. discarding packet...", conn.RemoteAddr(), peer)
-			conn.Close()
-			return
-		}
-		s.deliverTunnelConn(g, conn, "")
-		return
-	}
-
 	ann, err := readAnnouncement(conn)
 	if err != nil {
 		s.logger.Debugf("no announcement from %s: %v", conn.RemoteAddr(), err)
@@ -309,7 +294,7 @@ func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
 	}
 
 	switch {
-	case isControlSignal(ann.signal):
+	case isControlSignal(ann.signal) || ann.signal == utils.SG_ChanAuth:
 		s.admitControlChannel(g, conn, ann)
 
 	case ann.signal == utils.SG_Pool:
@@ -332,22 +317,41 @@ func (s *TcpMuxTransport) admitTunnelConn(g *tcpMuxGen, conn net.Conn) {
 // admitControlChannel verifies a peer claiming the control channel, answers it,
 // and offers it as the candidate for channelHandshake to publish.
 func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann announcement) {
-	if !tokenMatches(ann.payload, s.config.Token) {
-		s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
-			"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
-		refuseControl(conn, utils.RefusedBadToken)
-		return
-	}
-	s.preauth.Prove(conn.RemoteAddr())
-	if endedClaim(g.ctx, conn) {
-		return
-	}
-
-	ack, nonce, muxVersion, err := controlAck(ann.signal, s.config.Token, network.ResolveMuxVersion(s.config.MuxVersion))
-	if err != nil {
-		s.logger.Errorf("could not answer the control handshake: %v", err)
-		conn.Close()
-		return
+	var ack, nonce string
+	var muxVersion int
+	var session *network.PeerSession
+	if ann.signal == utils.SG_ChanAuth {
+		sess, ok := admitAuthClaim(conn, s.config.Guard, "tcpmux", ann.payload, s.logger)
+		if !ok {
+			return
+		}
+		s.preauth.Prove(conn.RemoteAddr())
+		if endedClaim(g.ctx, conn) {
+			return
+		}
+		muxVersion = network.ResolveMuxVersion(s.config.MuxVersion)
+		ack, nonce, session = authAck(muxVersion), sess.PoolTag(), sess
+	} else {
+		if refuseLegacyClaim(conn, s.config.Guard, ann.signal == utils.SG_Chan, s.logger) {
+			return
+		}
+		if !tokenMatches(ann.payload, s.config.Token) {
+			s.logger.Warnf("invalid security token received from %s — telling it so, rather than "+
+				"closing without a word, which reads to the client exactly like an old server", conn.RemoteAddr())
+			refuseControl(conn, utils.RefusedBadToken)
+			return
+		}
+		s.preauth.Prove(conn.RemoteAddr())
+		if endedClaim(g.ctx, conn) {
+			return
+		}
+		var err error
+		ack, nonce, muxVersion, err = controlAck(ann.signal, s.config.Token, network.ResolveMuxVersion(s.config.MuxVersion))
+		if err != nil {
+			s.logger.Errorf("could not answer the control handshake: %v", err)
+			conn.Close()
+			return
+		}
 	}
 	if err := utils.SendBinaryTransportStringWithin(conn, ack, ann.signal, 10*time.Second); err != nil {
 		s.logger.Errorf("failed to send security token: %v", err)
@@ -360,13 +364,13 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 	// ports and their users stay up. See the same passage in tcp.go.
 	if g.seat.serving() {
 		s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
-		s.seatClient(g, controlCandidate{conn: conn, nonce: nonce, muxVersion: muxVersion})
+		s.seatClient(g, controlCandidate{conn: conn, nonce: nonce, muxVersion: muxVersion, session: session})
 		return
 	}
 
 	s.logger.Info("control channel not found, attempting to establish a new session")
 	select {
-	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce, muxVersion: muxVersion}:
+	case g.handshakeChannel <- controlCandidate{conn: conn, nonce: nonce, muxVersion: muxVersion, session: session}:
 	default:
 		s.logger.Warnf("control channel handshake in progress...")
 		conn.Close()
@@ -377,15 +381,10 @@ func (s *TcpMuxTransport) admitControlChannel(g *tcpMuxGen, conn net.Conn, ann a
 // to the pool, dropping it if the pool is full.
 func (s *TcpMuxTransport) deliverTunnelConn(g *tcpMuxGen, conn net.Conn, nonce string) {
 	accepted := g.seat.admit(g.ctx, func(ctx context.Context) bool {
-		if nonce != "" {
-			if !s.controlChannel.IsSet() || !s.poolNonce.Verify(nonce) {
-				return false
-			}
-		} else {
-			peer := s.controlChannel.RemoteAddr()
-			if s.poolNonce.Get() != "" || peer == nil || !sameHost(peer, conn.RemoteAddr()) {
-				return false
-			}
+		// Only a nonce admits a session: the source-address way in, for
+		// clients from before v1.7.0, is gone with those clients.
+		if nonce == "" || !s.controlChannel.IsSet() || !s.poolNonce.Verify(nonce) {
+			return false
 		}
 		session, err := smux.Client(conn, s.smuxCfg())
 		if err != nil {
@@ -445,6 +444,7 @@ func (s *TcpMuxTransport) session(g *tcpMuxGen) muxSession {
 		muxCon:        s.config.MuxCon,
 		proxyProtocol: s.config.ProxyProtocol,
 		sniffer:       s.config.Sniffer,
+		seal:          s.peer.Get().SealTarget,
 		limits:        s.limits,
 		log:           s.logger,
 		streams:       &s.streamCounter,

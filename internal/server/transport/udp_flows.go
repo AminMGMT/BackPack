@@ -238,7 +238,7 @@ func (s *UdpTransport) handleLoop(g *udpGen, udpChan chan *LocalUDPConn, activeC
 					tunnelConn.mu.Lock()
 
 					// Send the target addr over the connection
-					if _, err := tunnelConn.listener.WriteTo([]byte(localConn.remoteAddr), tunnelConn.addr); err != nil {
+					if _, err := tunnelConn.listener.WriteTo([]byte(s.peer.Get().SealTarget(localConn.remoteAddr)), tunnelConn.addr); err != nil {
 						s.logger.Errorf("%v", err)
 						// Release the lock and drop the connection whole before
 						// reaching for the next one. Leaving with neither done

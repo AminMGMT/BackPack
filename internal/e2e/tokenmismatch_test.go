@@ -74,13 +74,23 @@ func TestTheServerSaysWhyItRefusedAHandshake(t *testing.T) {
 		}
 	})
 
-	// The legacy handshake must be refused just as clearly. A client that has
-	// fallen back is exactly the one most in need of being told.
-	t.Run("the older handshake is refused just as clearly", func(t *testing.T) {
+	// The handshake from before v1.7.0 is refused, and told why.
+	t.Run("a client from before v1.7.0 is told it is too old", func(t *testing.T) {
 		msg, sig := answer(t, "not-the-real-token", utils.SG_Chan)
-		if sig != utils.SG_Refused || msg != utils.RefusedBadToken {
-			t.Errorf("a legacy handshake with a wrong token answered (%q, %d), want (%q, SG_Refused)",
-				msg, sig, utils.RefusedBadToken)
+		if sig != utils.SG_Refused || msg != utils.RefusedTooOld {
+			t.Errorf("a pre-1.7 handshake answered (%q, %d), want (%q, SG_Refused)",
+				msg, sig, utils.RefusedTooOld)
+		}
+	})
+
+	// And v2.0.0's handshake under the wrong token is refused as a failed
+	// proof — the token itself never crossed the wire to be compared.
+	t.Run("a wrong token on the v2.0.0 handshake is named", func(t *testing.T) {
+		h, _ := network.PeerKeyFrom("not-the-real-token").NewPeerHello("tcp")
+		msg, sig := answer(t, h.Encode(), utils.SG_ChanAuth)
+		if sig != utils.SG_Refused || msg != utils.RefusedAuth {
+			t.Errorf("a v2.0.0 claim under the wrong token answered (%q, %d), want (%q, SG_Refused)",
+				msg, sig, utils.RefusedAuth)
 		}
 	})
 

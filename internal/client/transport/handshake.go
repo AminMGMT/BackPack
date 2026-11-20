@@ -4,13 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
-
-	"github.com/sirupsen/logrus"
 )
 
 // The client half of the control handshake.
@@ -76,104 +73,6 @@ func controlDeadline(keepAlive time.Duration) time.Duration {
 	return controlIdleFloor
 }
 
-// legacyMissThreshold is how many unanswered v2 handshakes it takes to conclude
-// the server does not speak one.
-//
-// One is not enough, and assuming it was is what made a healthy tunnel worse: a
-// server that had already answered a v2 handshake minutes earlier was declared
-// old on a single EOF, when all the EOF meant was that the path was still down
-// from the disconnect being reconnected after. An old server refuses every
-// time, so asking twice separates the two at the cost of one extra attempt in
-// the case that is going away.
-const legacyMissThreshold = 2
-
-// legacyProbe decides which handshake to ask for, and keeps what the server has
-// actually proved about itself separate from what a failure might suggest.
-type legacyProbe struct {
-	// legacy is set once the server is believed not to understand SG_ChanV2.
-	legacy atomic.Bool
-	// answered records that this server has completed a v2 handshake at least
-	// once. It is proof, and it outranks any later failure: a server does not
-	// become old.
-	answered atomic.Bool
-	// misses counts consecutive unanswered v2 attempts.
-	misses atomic.Int32
-	// warned keeps the explanation to once per process however often the
-	// probe is re-armed.
-	warned atomic.Bool
-}
-
-// signal picks which handshake to ask for.
-func (p *legacyProbe) signal() byte {
-	if p.legacy.Load() {
-		return utils.SG_Chan
-	}
-	return utils.SG_ChanV2
-}
-
-// ack records the server's answer to a handshake that succeeded.
-//
-// A v2 answer clears the fallback as well as arming the proof, so a client that
-// guessed wrong — or that has been moved to a server which has since been
-// upgraded — goes back to the nonce instead of staying degraded for the life of
-// the process.
-func (p *legacyProbe) ack(ackSignal byte) {
-	p.misses.Store(0)
-	if ackSignal == utils.SG_ChanV2 {
-		p.answered.Store(true)
-		p.legacy.Store(false)
-	}
-}
-
-// miss records a v2 handshake that went unanswered, and falls back once there
-// is enough of them to mean something.
-//
-// It is called only for a non-timeout failure. An older server rejects the
-// signal it does not know by closing the connection, which surfaces as a read
-// error immediately; a filtered or broken path times out instead. Treating a
-// timeout as evidence of an old server would give up the nonce over a momentary
-// outage. A close is not proof on its own either, which is what the threshold
-// and the proof below are for.
-func (p *legacyProbe) miss(logger *logrus.Logger, sent byte) {
-	if sent != utils.SG_ChanV2 {
-		return
-	}
-	// This server has answered a v2 handshake before. Whatever just closed the
-	// connection, it was not a server that does not know the signal.
-	if p.answered.Load() {
-		return
-	}
-	if p.misses.Add(1) < legacyMissThreshold {
-		return
-	}
-	if p.legacy.Swap(true) || p.warned.Swap(true) {
-		return
-	}
-	// What was seen, then what it most likely means, then what to check. The
-	// previous wording stated the conclusion as fact — "so it is running an older
-	// version" — and a user acted on it, upgrading a server that was fine while
-	// the real fault was the path. A message is allowed to draw a conclusion; it
-	// is not allowed to hide that it drew one.
-	logger.Warnf("the server closed %d handshake attempts without answering the current one. "+
-		"That is what an older server does, so this client is falling back to the previous "+
-		"handshake, in which the server identifies pool connections by their source address — "+
-		"which fails if this machine dials out from more than one address. If the server is "+
-		"in fact up to date, look at the path instead: a connection closed in transit looks "+
-		"the same from here.", legacyMissThreshold)
-}
-
-// reset re-arms the probe for a fresh run of the tunnel.
-//
-// The fallback used to be a one-way latch that nothing cleared, so a single
-// dropped connection cost the nonce until the process was restarted — on a
-// server that spoke v2 perfectly well. A run that is starting over has no
-// reason to carry that verdict, and re-asking costs at most a couple of
-// attempts against a server that really is old.
-func (p *legacyProbe) reset() {
-	p.legacy.Store(false)
-	p.misses.Store(0)
-}
-
 // refusalReason reads a server's explanation for turning a handshake down, if
 // that is what the answer is.
 //
@@ -189,6 +88,14 @@ func refusalReason(ack string, signal byte) (string, bool) {
 	switch ack {
 	case utils.RefusedBadToken:
 		return "the server rejected the token — the two ends do not have the same one", true
+	case utils.RefusedAuth:
+		return "the server could not check this client's proof of the token — the two ends do not have the same one", true
+	case utils.RefusedPeerAuth:
+		return "the server requires v2.0.0 at this end and this client offered the older handshake. " +
+			"It does so only when the server never answered the new one, so look at the path, or at " +
+			"whether something in between is interfering with the handshake", true
+	case utils.RefusedTooOld:
+		return "the server no longer speaks this client's handshake (older than v1.7.0) — upgrade this client", true
 	case utils.RefusedInUse:
 		return "the server already has a control channel from somebody else. Two clients " +
 			"dialling one server with the same token do this, and so does an old service " +

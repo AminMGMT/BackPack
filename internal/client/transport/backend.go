@@ -35,6 +35,10 @@ type backendOpts struct {
 	sniffer bool
 	// udpPriority sends the frames of forwarded-UDP streams ahead of bulk data.
 	udpPriority bool
+	// session is the control channel's peer handshake session, under which
+	// every destination must open; nil takes them as they come (an older
+	// server, or a transport whose own handshake already proves the server).
+	session *network.PeerSession
 }
 
 // loopbackBuffer is the socket buffer for a backend on this machine, where a
@@ -127,9 +131,15 @@ func (l *lifecycle) serveSession(session *smux.Session, from net.Addr, o backend
 		}
 		l.state.Go(func() {
 			_ = stream.SetReadDeadline(time.Now().Add(controlAckTimeout))
-			target, err := utils.ReceiveBinaryString(stream)
+			sealed, err := utils.ReceiveBinaryString(stream)
 			if err != nil {
 				l.logger.Errorf("unable to get port from stream connection %s: %v", from, err)
+				stream.Close()
+				return
+			}
+			target, err := o.session.OpenTarget(sealed)
+			if err != nil {
+				l.logger.Warnf("stream from %s: %v", from, err)
 				stream.Close()
 				return
 			}

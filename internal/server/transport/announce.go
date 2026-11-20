@@ -139,13 +139,10 @@ type controlCandidate struct {
 	// muxVersion is the version imposed on this run, or 0 when the client
 	// spoke the legacy handshake and cannot be told one.
 	muxVersion int
+	// session is the peer handshake's, or nil for a client on the handshake
+	// before v2.0.0.
+	session *network.PeerSession
 }
-
-// legacyPoolWarning is logged once per control channel established by a client
-// too old to authorise its pool connections, because the resulting failure —
-// a tunnel that connects and then carries nothing — says nothing about its own
-// cause anywhere else.
-const legacyPoolWarning = "control channel established by a legacy client: its pool connections are authorised by source address, which fails when the client dials out from more than one address (carrier-grade NAT, a multi-homed host, a SNAT pool). Upgrade the client to authorise them by token instead."
 
 // certHost is the name to put in a certificate generated for a listener that
 // was not given one: the bind address's host, or "localhost" when it binds

@@ -194,6 +194,7 @@ func updateReverseFromLink(link ShareLink, o LinkApplyOptions, existing string) 
 	s.Transport, s.RemoteAddr, s.Token = paired.Transport, paired.RemoteAddr, paired.Token
 	s.FallbackAddrs, s.FallbackTransports, s.FallbackDwell = paired.FallbackAddrs, paired.FallbackTransports, paired.FallbackDwell
 	s.MSS, s.SimpleAuth = paired.MSS, paired.SimpleAuth
+	s.PeerAuth = paired.PeerAuth
 	s.MuxVersion = paired.MuxVersion
 	s.KCPDataShards, s.KCPParityShards = paired.KCPDataShards, paired.KCPParityShards
 	clearManagedTransport(&s)

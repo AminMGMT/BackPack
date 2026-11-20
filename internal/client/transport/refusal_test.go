@@ -52,37 +52,4 @@ func TestAnOrdinaryAnswerIsNotARefusal(t *testing.T) {
 	}
 }
 
-// A refusal is proof the server understood the handshake and declined it, so it
-// must not count towards deciding the server is old — which would drop the
-// client to the legacy handshake for a fault the handshake has nothing to do
-// with.
-func TestARefusalDoesNotMakeTheServerLookOld(t *testing.T) {
-	var p legacyProbe
-
-	for i := 0; i < legacyMissThreshold*3; i++ {
-		// What the dial loop does on a refusal.
-		p.ack(utils.SG_Refused)
-	}
-	if p.legacy.Load() {
-		t.Fatal("a refused handshake flipped the fallback; the server answered, it " +
-			"simply said no")
-	}
-	if got := p.signal(); got != utils.SG_ChanV2 {
-		t.Errorf("after refusals the client asks for signal %d, want SG_ChanV2", got)
-	}
-}
-
-// And the reverse: a refusal must not be taken as proof the server speaks v2
-// either, because it says nothing about that.
-func TestARefusalIsNotProofOfV2(t *testing.T) {
-	var p legacyProbe
-	p.ack(utils.SG_Refused)
-
-	for i := 0; i < legacyMissThreshold; i++ {
-		p.miss(silentLogger(), utils.SG_ChanV2)
-	}
-	if !p.legacy.Load() {
-		t.Error("a refusal was treated as proof the server understands v2, so a " +
-			"genuinely old server can no longer be detected")
-	}
-}
+// Refusals and the fallback: see peerauth_test.go.

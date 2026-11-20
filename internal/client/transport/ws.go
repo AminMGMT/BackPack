@@ -24,6 +24,9 @@ type WsTransport struct {
 	lifecycle
 
 	config *WsConfig
+	// peer is the control channel's handshake session; destinations the
+	// server sends must open under it. nil against an older server.
+	peer peerSession
 }
 type WsConfig struct {
 	RemoteAddr string
@@ -52,9 +55,14 @@ type WsConfig struct {
 	// interface, under a routing mark. Nil dials directly. None of it is ever
 	// applied to the dial to the local backend — see network/outbound.go.
 	Outbound *network.Outbound
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	client := &WsTransport{
 		config: config,
@@ -76,7 +84,11 @@ func (c *WsTransport) Start() {
 
 }
 func (c *WsTransport) Restart() {
-	c.restart(nil, nil, c.Start)
+	c.restart(nil, func() {
+		// A fresh handshake: see TcpTransport.Restart.
+		c.peer.Clear()
+		c.config.Guard.Rearm()
+	}, c.Start)
 }
 
 func (c *WsTransport) channelDialer() {
@@ -92,8 +104,15 @@ func (c *WsTransport) channelDialer() {
 		case <-c.state.Ctx().Done():
 			return
 		default:
-			tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 0, 0, c.config.MSS)
+			auth, hello, err := wsClaim(c.config.Guard, c.config.Mode, c.config.SimpleAuth, "ws")
 			if err != nil {
+				c.logger.Errorf("control channel dialer: %v", err)
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			tunnelWSConn, err := network.WebSocketDialerAuth(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 0, 0, c.config.MSS, auth)
+			if err != nil {
+				wsMissed(c.config.Guard, auth, err, c.logger)
 				c.logger.Errorf("control channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.
@@ -103,6 +122,15 @@ func (c *WsTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			// The server's half of the handshake, and this client's confirm.
+			session, err := wsFinish(tunnelWSConn, c.config.Guard, auth, hello, c.config.Mode, "ws", c.logger)
+			if err != nil {
+				c.logger.Errorf("control channel handshake: %v", err)
+				tunnelWSConn.Close()
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			c.peer.Set(session)
 			// See metrics.Snapshot.Connected: the watchdog asks the engine, not the
 			// socket table.
 			metrics.ReportPeer(tunnelWSConn.RemoteAddr().String())
@@ -160,7 +188,7 @@ func (c *WsTransport) tunnelDialer() {
 	// Next() rather than Current(): with load balancing enabled the pool
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
-	tunnelConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 1024*1024, 1024*1024, c.config.MSS)
+	tunnelConn, err := network.WebSocketDialerAuth(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 1024*1024, 1024*1024, c.config.MSS, wsPoolAuth(c.peer.Get()))
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
@@ -197,7 +225,14 @@ func (c *WsTransport) tunnelDialer() {
 			// Decrement active connections
 			atomic.AddInt32(&c.poolConnections, -1)
 
-			remoteAddr := string(remoteAddrBytes)
+			// Only a destination the server sealed is dialled. See
+			// network.PeerSession.
+			remoteAddr, err := c.peer.Get().OpenTarget(string(remoteAddrBytes))
+			if err != nil {
+				c.logger.Warnf("websocket tunnel connection %s: %v", tunnelConn.RemoteAddr(), err)
+				tunnelConn.Close()
+				return
+			}
 
 			// A UDP flow is carried as framed datagrams over this same
 			// websocket, read back as one stream: the relay on the other end

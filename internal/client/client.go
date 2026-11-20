@@ -25,6 +25,9 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	logger *logrus.Logger
+	// guard is the plain transports' peer handshake policy, one per process
+	// so what it remembers is shared by every transport a chain tries.
+	guard *network.PeerGuard
 }
 
 func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
@@ -40,6 +43,7 @@ func NewClient(cfg *config.ClientConfig, parentCtx context.Context) *Client {
 		ctx:    ctx,
 		cancel: cancel,
 		logger: utils.NewLoggerWithFormat(cfg.LogLevel, cfg.LogFormat),
+		guard:  network.NewPeerGuard(cfg.Token, cfg.PeerAuth, cfg.PeerPinPath),
 	}
 }
 
@@ -182,6 +186,9 @@ type runner interface{ Running() bool }
 // ctx tears it down; nothing else here reaches for c.ctx, so a chain can run
 // several of these one after another in the same process.
 func (c *Client) startTransport(ctx context.Context, tr config.TransportType, endpoints *network.Endpoints, outbound *network.Outbound) runner {
+	if c.guard == nil {
+		c.guard = network.NewPeerGuard(c.config.Token, c.config.PeerAuth, c.config.PeerPinPath)
+	}
 	// Steering asks the tunnel port itself where it can, not only ping; which
 	// way depends on the transport running now. See SetReachProbe.
 	if tcpPortTransport(tr) {
@@ -212,6 +219,7 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			// tunnel connection; everything else about it is identical.
 			Stealth:       tr == config.STEALTH,
 			ManagedHelper: c.config.Naive.Enabled() || c.config.Xray.Enabled(),
+			Guard:         c.guard,
 		}
 		tcpClient := transport.NewTCPClient(ctx, tcpConfig, c.logger)
 		go tcpClient.Start()
@@ -239,6 +247,7 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			SO_RCVBUF:        c.config.SO_RCVBUF,
 			SO_SNDBUF:        c.config.SO_SNDBUF,
 			Outbound:         outbound,
+			Guard:            c.guard,
 		}
 		tcpMuxClient := transport.NewMuxClient(ctx, tcpMuxConfig, c.logger)
 		go tcpMuxClient.Start()
@@ -324,6 +333,7 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			EdgeIP:         c.config.EdgeIP,
 			MSS:            c.config.MSS,
 			Outbound:       outbound,
+			Guard:          c.guard,
 		}
 		WsClient := transport.NewWSClient(ctx, WsConfig, c.logger)
 		go WsClient.Start()
@@ -352,6 +362,7 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			EdgeIP:           c.config.EdgeIP,
 			MSS:              c.config.MSS,
 			Outbound:         outbound,
+			Guard:            c.guard,
 		}
 		wsMuxClient := transport.NewWSMuxClient(ctx, wsMuxConfig, c.logger)
 		go wsMuxClient.Start()
@@ -371,6 +382,7 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 			AggressivePool: c.config.AggressivePool,
 			SO_RCVBUF:      c.config.SO_RCVBUF,
 			SO_SNDBUF:      c.config.SO_SNDBUF,
+			Guard:          c.guard,
 		}
 		udpClient := transport.NewUDPClient(ctx, udpConfig, c.logger)
 		go udpClient.Start()

@@ -30,11 +30,9 @@ type TcpMuxTransport struct {
 	// presents it so the server need not judge them by source address. Empty
 	// against a server too old to issue one.
 	poolNonce network.PoolNonce
-	// legacyServer decides which handshake to ask for, and remembers what this
-	// server has actually proved about itself. It is re-armed on restart: the
-	// fallback is a guess drawn from a closed connection, and a closed
-	// connection is far more often a dead path than an old server.
-	legacyServer legacyProbe
+	// peer is the control channel's handshake session; destinations the
+	// server sends must open under it. nil against an older server.
+	peer peerSession
 }
 
 type TcpMuxConfig struct {
@@ -64,9 +62,14 @@ type TcpMuxConfig struct {
 	// interface, under a routing mark. Nil dials directly. None of it is ever
 	// applied to the dial to the local backend — see network/outbound.go.
 	Outbound *network.Outbound
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	muxSettings := network.MuxSettings{
 		MaxFrameSize:     config.MaxFrameSize,
@@ -98,7 +101,8 @@ func (c *TcpMuxTransport) Restart() {
 		// See TcpTransport.Restart: a fresh nonce and a fresh handshake, and
 		// the mux version is negotiated again with it.
 		c.poolNonce.Clear()
-		c.legacyServer.reset()
+		c.peer.Clear()
+		c.config.Guard.Rearm()
 		c.muxVersion.Store(0)
 	}, c.Start)
 }
@@ -128,60 +132,40 @@ func (c *TcpMuxTransport) channelDialer() {
 				continue
 			}
 
-			// Sending security token. The nonce-carrying handshake is asked
-			// for first; a server that predates it closes the connection
-			// without answering, which is what flips the fallback below.
-			signal := c.legacyServer.signal()
-			err = utils.SendBinaryTransportStringWithin(tunnelConn, c.config.Token, signal, 10*time.Second)
+			// The claim: see claimControl, and the same passage in tcp.go.
+			reply, err := claimControl(tunnelConn, c.config.Guard, c.config.Token, "tcpmux", utils.SG_ChanV2, c.logger)
 			if err != nil {
-				c.logger.Errorf("failed to send security token: %v", err)
-				tunnelConn.Close()
-				bo.Wait(c.state.Ctx())
-				continue
-			}
-
-			// Set a read deadline for the token response
-			if err := tunnelConn.SetReadDeadline(time.Now().Add(controlAckTimeout)); err != nil {
-				c.logger.Errorf("failed to set read deadline: %v", err)
-				tunnelConn.Close()
-				bo.Wait(c.state.Ctx())
-				continue
-			}
-			// Receive response
-			message, ackSignal, err := utils.ReceiveBinaryTransportString(tunnelConn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if isTimeout(err) {
 					c.logger.Warn("timeout while waiting for control channel response")
 				} else {
-					c.logger.Errorf("failed to receive control channel response: %v", err)
-					c.legacyServer.miss(c.logger, signal)
+					c.logger.Errorf("control channel handshake: %v", err)
 				}
-				tunnelConn.Close() // Close connection on error or timeout
+				tunnelConn.Close()
 				bo.Wait(c.state.Ctx())
 				continue
 			}
-			// Resetting the deadline (removes any existing deadline)
-			tunnelConn.SetReadDeadline(time.Time{})
+			message, ackSignal := reply.ack, reply.signal
 
 			// A refusal is an answer, and a far more useful one than the
-			// silence it replaces. It is not a reason to fall back: the server
-			// understood the handshake perfectly and declined it.
+			// silence it replaces.
 			if why, refused := refusalReason(message, ackSignal); refused {
 				c.logger.Error("the tunnel was refused — " + why)
-				c.legacyServer.ack(ackSignal)
 				tunnelConn.Close()
 				bo.Wait(c.state.Ctx())
 				continue
 			}
 			token, nonce, muxVersion := decodeControlAck(message, ackSignal)
+			if reply.session != nil {
+				token, nonce, muxVersion = c.config.Token, reply.session.PoolTag(), authMuxVersion(message)
+			} else {
+				warnLegacyServer(c.logger)
+			}
 
 			if token == c.config.Token {
-				// The server answered, so whatever it answered with is what it
-				// speaks — proof that outranks any later closed connection.
-				c.legacyServer.ack(ackSignal)
 				// Before the control channel is published, so the pool
-				// connections poolMaintainer starts below already have it.
+				// connections poolMaintainer starts below already have them.
 				c.poolNonce.Set(nonce)
+				c.peer.Set(reply.session)
 				// Settled before the pool starts, so no session is ever built
 				// on a version the server has not confirmed.
 				c.setMuxVersion(muxVersion)
@@ -319,5 +303,6 @@ func (c *TcpMuxTransport) backend() backendOpts {
 		sndBuf:      c.config.SO_SNDBUF,
 		mss:         c.config.MSS,
 		sniffer:     c.config.Sniffer,
+		session:     c.peer.Get(),
 	}
 }

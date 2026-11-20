@@ -244,31 +244,41 @@ given at the bottom of this page.
 
 | Transport | Family | Encrypted handshake | PROXY protocol | Needs | Setup guide |
 |-----------|--------|:--:|:--:|-------|---|
-| TCP | TCP | — | ✅ | — | [→](../tutorial/tcp.md) |
-| TCP Mux | TCP | — | ✅ | — | [→](../tutorial/tcp-mux.md) |
+| TCP | TCP | proof only¹ | ✅ | — | [→](../tutorial/tcp.md) |
+| TCP Mux | TCP | proof only¹ | ✅ | — | [→](../tutorial/tcp-mux.md) |
 | **TCP + Stealth** | TCP | ✅ (Noise) | ✅ | — | [→](../tutorial/tcp-stealth.md) |
 | **TCP + PCK** | TCP | ✅ (token key) | ✅ | Linux, root | [→](../tutorial/tcp-pck.md) |
-| UDP | UDP | — | — | UDP open | [→](../tutorial/udp.md) |
+| UDP | UDP | proof only¹ | — | UDP open | [→](../tutorial/udp.md) |
 | **UDP + KCP + FEC** | UDP | ✅ (token key) | ✅ | UDP open | [→](../tutorial/udp-kcp-fec.md) |
 | UDP + QUIC | UDP | ✅ (TLS 1.3, session-bound) | ✅ | UDP open | [→](../tutorial/udp-quic.md) |
-| WS | WebSocket | — | — | — | [→](../tutorial/websocket.md) |
-| WS Mux | WebSocket | — | ✅ | — | [→](../tutorial/websocket.md) |
+| WS | WebSocket | proof only¹ | — | — | [→](../tutorial/websocket.md) |
+| WS Mux | WebSocket | proof only¹ | ✅ | — | [→](../tutorial/websocket.md) |
 | WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
 | WSS Mux | WebSocket | ✅ (TLS) | ✅ | certificate | [→](../tutorial/websocket-tls.md) |
 | **xDi (ICMP)** | Experimental | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
 
 "Encrypted handshake" means the tunnel's own credential is protected on the
-wire. On the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) the token is sent
-as-is, so use one of the encrypted transports on an untrusted path. It is not
-only the token: something on such a path can also stand in for the Iran server,
-and the Iran server is what tells the kharej side which address to dial for each
-connection — so the kharej machine would dial wherever it was told. TCP +
-Stealth, QUIC and the token-keyed transports (UDP + KCP + FEC, TCP + PCK, xDi)
-authenticate the server as well as the client: nothing without the token can
-complete their handshake or produce a packet the client accepts. WSS does too
-once the Iran server is up to date (see WSS below), except with Simple Token
-Auth, where a trusted TLS-terminating proxy in front (NGINX, usually) stands in
-for the server and neither end's proof is used.
+wire. ¹ Since v2.0.0 the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) do not
+send the token either: both ends prove they hold it with a challenge and
+response, and every address the Iran server tells the kharej to dial is sealed
+with the session's key, so something on the path can neither learn the token,
+pose as either server, nor make the kharej dial somewhere the Iran server never
+named. What they still do not do is encrypt: the traffic itself is as readable
+on the path as before, so use one of the encrypted transports where that
+matters. TCP + Stealth, QUIC and the token-keyed transports (UDP + KCP + FEC,
+TCP + PCK, xDi) encrypt as well; WSS does too, except with Simple Token Auth,
+where a trusted TLS-terminating proxy in front (NGINX, usually) stands in for
+the server and neither end's proof is used.
+
+**Mixed versions.** A v2.0.0 end still makes a tunnel with a v1.9 end on the
+plain transports, using the old handshake (the log says so): upgrade the other
+server when you can. A new client against an old server takes two failed
+attempts, 8–16 seconds, to fall back. Once the two ends have connected the new
+way, the old handshake is refused for that tunnel from then on — remembered in
+`.<name>.peer` beside its config — so nothing on the path can push it back. A
+kharej made from a v2.0.0 Setup Link refuses it from the start
+(`peer_auth = "required"`). Clients older than v1.7.0 are no longer accepted.
+See [ADR 0006](adr/0006-plain-transports-prove-both-ends.md).
 
 QUIC binds the credential to its TLS session, as WSS does. The client does
 not verify the server's certificate — the tunnel trusts its token — so it does

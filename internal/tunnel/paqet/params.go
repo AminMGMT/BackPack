@@ -149,14 +149,16 @@ type Params struct {
 // of the places that are smaller. The segments carry the don't-fragment bit, so
 // a figure that is too large is not slow, it is lost without a message, and
 // the extra 50 bytes a larger MTU buys are not worth that risk for any preset.
+// A device smaller than 1402 (a VPS with a 1400-byte eth0 is common) gets
+// smaller packets from its own end; see fitMTU.
 //
 //	              Balance   Turbo    Aggressive
 //	mode          fast      fast2    fast3
 //	conns         1         2        4
-//	sndwnd/rcvwnd 256/512   4096     4096
+//	sndwnd/rcvwnd 256/512   4096     8192
 //	mtu           1350      1350     1350
 //	smux buffer   2 MiB     8 MiB    16 MiB
-//	stream buffer 1 MiB     4 MiB    4 MiB
+//	stream buffer 1 MiB     4 MiB    8 MiB
 //	capture ring  4 MiB     8 MiB    32 MiB
 //
 // The capture ring matches the sockbuf the setup already writes for each
@@ -164,8 +166,8 @@ type Params struct {
 // memory it asked for.
 //
 // Balance is paqet's own default (fast, window 128-512 client, 1024 server)
-// trimmed for memory; Turbo and Aggressive move up one mode each and have a
-// 4096-packet ceiling. The server's receive window is not smaller than the
+// trimmed for memory; Turbo and Aggressive move up one mode each, with a
+// 4096- and an 8192-packet ceiling. The server's receive window is not smaller than the
 // client's: both directions carry bulk (a download is the kharej sending), so
 // the windows are symmetric.
 //
@@ -203,6 +205,22 @@ type Params struct {
 // last row is the same link filled either way; the ceiling only lets a path
 // with room for more have it. The cost is memory: up to 5.5 MB a session of
 // receive window and 8 MiB of smux buffer when the reader falls behind.
+//
+// # Aggressive's ceiling
+//
+// Aggressive had Turbo's 4096 packets and 4 MiB until v2.0.0's release. At
+// 8192 and 8 MiB, the same Connection Test (one run each unless noted):
+//
+//	path                         4096, 4 MiB         8192, 8 MiB
+//	70 ms, clean (2 runs)        1481/1460 1410/1363  1482/1287 1638/1375
+//	150 ms, clean                1051 / 983          1470 / 1331
+//	70 ms, 1% loss               594 / 715           611 / 816
+//	70 ms, 100 Mbit/s policer    84 / 84             103 / 87
+//
+// The same on a clean 70 ms path, where four sessions of 4096 already had
+// room; more on the long path, where they did not. A session's memory doubles
+// (11 MB of receive window), still under the 16 MiB smux buffer that caps
+// what the reader may fall behind by.
 func PresetParams(name string) (Params, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case PresetBalance:
@@ -212,8 +230,8 @@ func PresetParams(name string) (Params, bool) {
 		return Params{Conns: 2, Mode: ModeFast2, MTU: 1350, SndWnd: 4096, RcvWnd: 4096,
 			SmuxBuf: 8 << 20, StreamBuf: 4 << 20, PcapBuf: 8 << 20}, true
 	case PresetAggressive:
-		return Params{Conns: 4, Mode: ModeFast3, MTU: 1350, SndWnd: 4096, RcvWnd: 4096,
-			SmuxBuf: 16 << 20, StreamBuf: 4 << 20, PcapBuf: 32 << 20}, true
+		return Params{Conns: 4, Mode: ModeFast3, MTU: 1350, SndWnd: 8192, RcvWnd: 8192,
+			SmuxBuf: 16 << 20, StreamBuf: 8 << 20, PcapBuf: 32 << 20}, true
 	}
 	return Params{}, false
 }
@@ -456,4 +474,26 @@ func splitHostPort(addr string) (string, int, error) {
 		}
 	}
 	return host, port, nil
+}
+
+// wireOverhead is what a data segment adds to a KCP packet on the wire: the
+// IPv4 header (20), the TCP header (20) and its options (NOP, NOP, Timestamps:
+// 12). See the encoder in pcap_linux.go.
+const wireOverhead = 52
+
+// fitMTU is the KCP packet size that fits a device whose MTU is devMTU, and
+// whether mtu had to shrink to get there.
+//
+// The kernel refuses to send a frame larger than the device's MTU ("message
+// too large"), and libpcap's send goes through that check. Every preset's 1350
+// is 1402 bytes on the wire, which a 1500-byte device takes and a 1400-byte one
+// does not: measured on an Iran VPS whose eth0 is 1400, every full segment was
+// refused and the sessions were lost one after another. The other end needs no
+// change — a larger segment arriving from it is still read (measured on the same
+// pair: the Iran side sending 1340, the kharej 1350, both ways at full speed).
+func fitMTU(mtu, devMTU int) (int, bool) {
+	if devMTU <= 0 || mtu+wireOverhead <= devMTU {
+		return mtu, false
+	}
+	return max(devMTU-wireOverhead, MinMTU), true
 }

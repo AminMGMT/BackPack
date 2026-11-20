@@ -427,6 +427,9 @@ func reverseClientFromLink(link ShareLink, host string) TunnelSpec {
 	// than as this side's preset would have it.
 	s.MSS = link.MSS
 	s.SimpleAuth = link.SimpleAuth
+	if link.PeerAuth {
+		s.PeerAuth = network.PeerAuthRequired
+	}
 	if link.MuxVer > 0 {
 		s.MuxVersion = link.MuxVer
 	}

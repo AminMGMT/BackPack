@@ -38,6 +38,13 @@ const (
 	// invalid token — which is wrong in wording but points at the right half of
 	// the configuration, where EOF pointed at nothing.
 	SG_Refused
+
+	// SG_ChanAuth opens a control channel on the handshake that proves both
+	// ends without sending the token (v2.0.0; see network/peerauth.go). Every
+	// message of that handshake, and the server's answer at the end of it,
+	// travels under this signal. A server older than v2.0.0 does not know it
+	// and closes the connection, which is how the client tells it apart.
+	SG_ChanAuth
 )
 
 // Why a control handshake was refused. Short, because it crosses the wire on
@@ -62,6 +69,19 @@ const (
 	// is silence, so a client that had crashed and come back believed it was
 	// connected and sat out its full control deadline — 116 seconds, measured.
 	RefusedRestarting = "restarting"
+
+	// RefusedAuth is a v2.0.0 handshake whose proof did not check out: the
+	// token differs between the two ends.
+	RefusedAuth = "auth"
+
+	// RefusedPeerAuth is a client on the handshake before v2.0.0, refused
+	// because this end requires the new one (peer_auth = "required", or the
+	// client has proved itself the new way before).
+	RefusedPeerAuth = "peer-auth"
+
+	// RefusedTooOld is a client on the handshake from before v1.7.0, which v2
+	// no longer speaks.
+	RefusedTooOld = "too-old"
 )
 
 // WebSocketSignal reads one control-channel signal out of a WebSocket frame.

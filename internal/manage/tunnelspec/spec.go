@@ -144,6 +144,9 @@ type Spec struct {
 	// SimpleAuth authorises a wss tunnel by the raw token, for a server behind
 	// a TLS-terminating proxy like NGINX. Off by default. See config.SimpleAuth.
 	SimpleAuth bool
+	// PeerAuth is "required" to refuse the other end on the handshake before
+	// v2.0.0, on the plain transports. See config.PeerAuth.
+	PeerAuth string
 	// Proxy is the optional socks5:// or http:// URL the client reaches the
 	// tunnel server through. Empty means dial it directly.
 	Proxy string
@@ -272,6 +275,9 @@ func (s Spec) Render() string {
 			p("preset = %q\n", s.Preset)
 		}
 		p("token = %q\n", s.Token)
+		if s.PeerAuth != "" {
+			p("peer_auth = %q\n", s.PeerAuth)
+		}
 		p("channel_size = %d\n", s.ChannelSize)
 		p("keepalive_period = %d\n", s.KeepAlive)
 		p("nodelay = %t\n", s.Nodelay)
@@ -356,6 +362,9 @@ func (s Spec) Render() string {
 		p("preset = %q\n", s.Preset)
 	}
 	p("token = %q\n", s.Token)
+	if s.PeerAuth != "" {
+		p("peer_auth = %q\n", s.PeerAuth)
+	}
 	p("connection_pool = %d\n", s.ConnectionPool)
 	p("aggressive_pool = %t\n", s.AggressivePool)
 	p("keepalive_period = %d\n", s.KeepAlive)

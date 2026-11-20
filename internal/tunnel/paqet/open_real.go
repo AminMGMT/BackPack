@@ -25,6 +25,16 @@ func (e *Engine) openReal(ctx context.Context) (*wireSet, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Packets the device would refuse are made smaller here, before any
+	// session exists to read the size. See fitMTU.
+	if ifc, err := net.InterfaceByName(path.Iface); err == nil {
+		if m, shrunk := fitMTU(e.p.MTU, ifc.MTU); shrunk {
+			e.log.Warnf("pck: %s has an MTU of %d, too small for %d-byte packets with their %d bytes of TCP and IP "+
+				"headers; sending %d-byte packets instead. The other server needs no change.",
+				path.Iface, ifc.MTU, e.p.MTU, wireOverhead, m)
+			e.p.MTU = m
+		}
+	}
 	lease, err := network.LeasePckPorts(e.cfg.Token, e.cfg.Server, port, path, peerIP)
 	if err != nil {
 		return nil, err

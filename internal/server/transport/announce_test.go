@@ -220,10 +220,10 @@ func TestControlHandshakeV2IssuesANonce(t *testing.T) {
 	}
 }
 
-// A legacy control handshake is answered exactly as before — the bare token,
-// under the old signal — and issues no nonce, which is what leaves the
-// source-address fallback in place for a client that cannot present one.
-func TestControlHandshakeLegacyIssuesNoNonce(t *testing.T) {
+// A client from before v1.7.0 (SG_Chan on tcp) is refused and told why: v2
+// no longer speaks its handshake, nor the source-address pool admission that
+// came with it.
+func TestAClientFromBeforeV17IsRefused(t *testing.T) {
 	s, g := newTestTransport("a-token")
 
 	clientSide, serverSide := connPair(t, "127.0.0.1")
@@ -236,24 +236,17 @@ func TestControlHandshakeLegacyIssuesNoNonce(t *testing.T) {
 	if err := clientSide.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
 	}
-	ack, signal, err := utils.ReceiveBinaryTransportString(clientSide)
+	reason, signal, err := utils.ReceiveBinaryTransportString(clientSide)
 	if err != nil {
-		t.Fatalf("no answer to the legacy handshake: %v", err)
+		t.Fatalf("no answer to the old handshake: %v", err)
 	}
-	if signal != utils.SG_Chan {
-		t.Fatalf("answer came back as signal %d, want SG_Chan", signal)
+	if signal != utils.SG_Refused || reason != utils.RefusedTooOld {
+		t.Fatalf("answered %q on signal %d, want a %q refusal", reason, signal, utils.RefusedTooOld)
 	}
-	if ack != "a-token" {
-		t.Fatalf("answer carried %q, want the bare token", ack)
-	}
-
 	select {
-	case candidate := <-g.handshakeChannel:
-		if candidate.nonce != "" {
-			t.Fatalf("a legacy handshake issued nonce %q", candidate.nonce)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the control channel candidate never reached channelHandshake")
+	case <-g.handshakeChannel:
+		t.Fatal("a refused client became a control channel candidate")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

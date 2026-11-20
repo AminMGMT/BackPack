@@ -66,6 +66,10 @@ type muxSession struct {
 	sniffer       bool
 	// udpPriority sends the frames of forwarded-UDP streams ahead of bulk data.
 	udpPriority bool
+	// seal is the destination as the client is to receive it: sealed under
+	// the seated client's peer session on the plain transports (see
+	// network/peerauth.go), as it is everywhere else. nil means as it is.
+	seal func(addr string) string
 
 	limits   *limiter
 	log      *logrus.Logger
@@ -165,7 +169,11 @@ func (m muxSession) run(session *smux.Session) {
 					stream.SetPriority(true)
 				}
 				_ = stream.SetWriteDeadline(time.Now().Add(pairingWait(incomingConn.timeCreated)))
-				if err := utils.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
+				addr := incomingConn.remoteAddr
+				if m.seal != nil {
+					addr = m.seal(addr)
+				}
+				if err := utils.SendBinaryString(stream, addr); err != nil {
 					m.log.Tracef("failed to send address over stream: %v", err)
 					// The stream is unusable and nothing else will close it.
 					stream.Close()

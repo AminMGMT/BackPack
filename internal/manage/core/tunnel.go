@@ -148,6 +148,9 @@ func Delete(name string) error {
 	// Its traffic limit goes with it: a new tunnel given the same name starts
 	// with no limit and a count of zero, not with the old one's.
 	_ = quota.Remove(app.ConfigDir, name)
+	// And what it remembered about its peer: a new tunnel of the same name may
+	// meet an older one. See network.PeerGuard.
+	_ = os.Remove(network.PeerPinPath(app.ConfigPath(name)))
 	deleteTunnelMeta(name)
 	// The other end, if it was on a managed server, is left running there —
 	// there is deliberately no operation that removes a tunnel on a node, and a

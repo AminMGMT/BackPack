@@ -4,6 +4,25 @@ All notable changes to Backpack are documented here.
 
 ## v2.0.0 — unreleased
 
+### Security
+
+- **The plain transports prove both ends and no longer send the token.**
+  `tcp`, `tcpmux`, `ws`, `wsmux` and `udp` used to send the tunnel token as
+  it is and take the server's echo of it as proof. Something on the path
+  could read the token, then pose as the Iran server — and the Iran server is
+  what tells the kharej which address to dial for every connection, so the
+  kharej dialled wherever it was told. Both ends now prove the token with a
+  challenge and response, and every address the server sends is sealed with
+  the session's key; the kharej dials no address that does not carry it.
+  Traffic on these transports is still not encrypted. A v2.0.0 end still
+  makes a tunnel with a v1.9 end on the old handshake, with a warning in the
+  log; once the two ends have connected the new way, the old handshake is
+  refused for that tunnel from then on (remembered in `.<name>.peer` beside
+  its config, so a restart does not forget it), and a kharej made from a
+  v2.0.0 Setup Link refuses it from the start (`peer_auth = "required"`).
+  A new kharej against an old Iran server takes 8–16 s more to come up while
+  it finds out. See ADR 0006.
+
 ### Added
 
 - **Sponsored box on the panel's Overview.** A square image with a link, beside
@@ -55,6 +74,14 @@ All notable changes to Backpack are documented here.
   fixes it. Needs root.
 
 ### Changed
+
+- **PCK Aggressive doubles its ceiling: 8192-packet windows and 8 MiB a
+  stream** (Turbo's 4096 and 4 MiB before). Through the Connection Test
+  between two namespaces: the same on a clean 70 ms path, 1050/980 → 1470/1330
+  Mbit/s on a clean 150 ms one, 594/715 → 611/816 at 1% loss, and 84/84 →
+  103/87 through a 100 Mbit/s policer, where Turbo carries 64/59 and GRE
+  44/50. A session may hold twice the receive window (11 MB), still capped by
+  its 16 MiB smux buffer.
 
 - **PCK is a new engine: port forwarding over KCP, on paqet.** The `pck`
   carrier no longer carries IP packets over a TUN device. It is a port of
@@ -341,6 +368,12 @@ All notable changes to Backpack are documented here.
 
 ### Removed
 
+- **Clients older than v1.7.0 on `tcp` and `tcpmux`.** Their handshake had no
+  pool nonce, so the server admitted their pool connections by source address,
+  and the newer client fell back to it after two closed attempts — a way for
+  something on the path to make two current ends use it. Such a client is now
+  refused, and told it is too old.
+
 - **The udp and quic carriers of the direct tunnel.** A direct tunnel now
   travels over pck, sni (pck with a TLS ClientHello), xdi or spoof — all raw
   sockets, Linux only, root on both servers. There is no migration: an `[l3]`
@@ -383,6 +416,14 @@ All notable changes to Backpack are documented here.
   linked and a stray error log are removed from the repository.
 
 ### Fixed
+
+- **Direct PCK works on a server whose network device is smaller than 1402
+  bytes.** Every preset sends 1350-byte packets, 1402 on the wire, and the
+  kernel refuses to send a frame larger than the device's MTU. On an Iran VPS
+  whose `eth0` is 1400 every full segment was refused ("message too large")
+  and the sessions were lost one after another. Each end now fits its packets
+  to its own device and logs it once; the other end needs no change (measured
+  between that server and a kharej at 1500: all three presets, both ways).
 
 - **A udp tunnel's server lets go of its control port before a reload goes
   on.** Two goroutines closed the control listener. With an Accept still

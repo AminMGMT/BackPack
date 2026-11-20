@@ -16,6 +16,24 @@ import (
 )
 
 func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, retry int, SO_RCVBUF int, SO_SNDBUF int, mss int) (*websocket.Conn, error) {
+	return WebSocketDialerAuth(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, simpleAuth, retry, SO_RCVBUF, SO_SNDBUF, mss, nil)
+}
+
+// WSPeerAuth carries the peer handshake (peerauth.go) through a plain ws
+// upgrade: Bearer is sent in place of the token, and Reply is filled with the
+// server's answer header, empty when it sent none.
+type WSPeerAuth struct {
+	Bearer string
+	Reply  string
+}
+
+// PeerAuthHeader is the upgrade response header carrying the server's half of
+// the peer handshake on plain ws.
+const PeerAuthHeader = "X-Backpack-Auth"
+
+// WebSocketDialerAuth is WebSocketDialer with the peer handshake's bearer in
+// place of the token on plain ws. auth may be nil.
+func WebSocketDialerAuth(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, retry int, SO_RCVBUF int, SO_SNDBUF int, mss int, auth *WSPeerAuth) (*websocket.Conn, error) {
 	var tunnelWSConn *websocket.Conn
 	var err error
 
@@ -24,7 +42,7 @@ func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP str
 
 	for i := 0; i < retries; i++ {
 		// Attempt to dial the WebSocket
-		tunnelWSConn, err = attemptDialWebSocket(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, simpleAuth, SO_RCVBUF, SO_SNDBUF, mss)
+		tunnelWSConn, err = attemptDialWebSocket(ctx, out, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, simpleAuth, SO_RCVBUF, SO_SNDBUF, mss, auth)
 		if err == nil {
 			// If successful, return the connection
 			if ctx.Err() != nil {
@@ -53,7 +71,7 @@ func WebSocketDialer(ctx context.Context, out *Outbound, addr string, edgeIP str
 	return nil, err
 }
 
-func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, SO_RCVBUF int, SO_SNDBUF int, mss int) (result *websocket.Conn, resultErr error) {
+func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, simpleAuth bool, SO_RCVBUF int, SO_SNDBUF int, mss int, auth *WSPeerAuth) (result *websocket.Conn, resultErr error) {
 	// Socket setup, both possible TLS handshakes and HTTP Upgrade share one
 	// budget. gorilla applies a deadline to Upgrade I/O but does not interrupt
 	// that I/O when a context without a deadline is cancelled.
@@ -187,8 +205,14 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 	case config.WS, config.WSMUX:
 		wsURL = fmt.Sprintf("ws://%s%s", addr, path)
 
-		// Plain ws has no session to bind to, so the token is the credential.
-		headers.Set("Authorization", fmt.Sprintf("Bearer %v", token))
+		// Plain ws has no session to bind to. The peer handshake's bearer
+		// proves the token without sending it; without one (an older server)
+		// the token itself is the credential.
+		if auth != nil && auth.Bearer != "" {
+			headers.Set("Authorization", "Bearer "+auth.Bearer)
+		} else {
+			headers.Set("Authorization", fmt.Sprintf("Bearer %v", token))
+		}
 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
@@ -296,6 +320,9 @@ func attemptDialWebSocket(ctx context.Context, out *Outbound, addr string, edgeI
 			tunnelWSConn.Close()
 			return nil, err
 		}
+	}
+	if auth != nil {
+		auth.Reply = resp.Header.Get(PeerAuthHeader)
 	}
 	return tunnelWSConn, nil
 }

@@ -23,6 +23,9 @@ type WsMuxTransport struct {
 
 	config     *WsMuxConfig
 	smuxConfig *smux.Config
+	// peer is the control channel's handshake session; destinations the
+	// server sends must open under it. nil against an older server.
+	peer peerSession
 }
 type WsMuxConfig struct {
 	RemoteAddr string
@@ -55,9 +58,14 @@ type WsMuxConfig struct {
 	// interface, under a routing mark. Nil dials directly. None of it is ever
 	// applied to the dial to the local backend — see network/outbound.go.
 	Outbound *network.Outbound
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logrus.Logger) *WsMuxTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	client := &WsMuxTransport{
 		smuxConfig: &smux.Config{
@@ -86,7 +94,11 @@ func (c *WsMuxTransport) Start() {
 }
 
 func (c *WsMuxTransport) Restart() {
-	c.restart(nil, nil, c.Start)
+	c.restart(nil, func() {
+		// A fresh handshake: see TcpTransport.Restart.
+		c.peer.Clear()
+		c.config.Guard.Rearm()
+	}, c.Start)
 }
 
 func (c *WsMuxTransport) channelDialer() {
@@ -103,8 +115,15 @@ func (c *WsMuxTransport) channelDialer() {
 			return
 		default:
 
-			tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 0, 0, c.config.MSS)
+			auth, hello, err := wsClaim(c.config.Guard, c.config.Mode, c.config.SimpleAuth, "wsmux")
 			if err != nil {
+				c.logger.Errorf("control channel dialer: %v", err)
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			tunnelWSConn, err := network.WebSocketDialerAuth(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Current(), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 0, 0, c.config.MSS, auth)
+			if err != nil {
+				wsMissed(c.config.Guard, auth, err, c.logger)
 				c.logger.Errorf("control channel dialer: %v", err)
 				// The current endpoint did not answer — move to the next one so a
 				// filtered IP or blocked port cannot stall the tunnel forever.
@@ -114,6 +133,15 @@ func (c *WsMuxTransport) channelDialer() {
 				bo.Wait(c.state.Ctx())
 				continue
 			}
+			// The server's half of the handshake, and this client's confirm.
+			session, err := wsFinish(tunnelWSConn, c.config.Guard, auth, hello, c.config.Mode, "wsmux", c.logger)
+			if err != nil {
+				c.logger.Errorf("control channel handshake: %v", err)
+				tunnelWSConn.Close()
+				bo.Wait(c.state.Ctx())
+				continue
+			}
+			c.peer.Set(session)
 			// See metrics.Snapshot.Connected: the watchdog asks the engine, not the
 			// socket table.
 			metrics.ReportPeer(tunnelWSConn.RemoteAddr().String())
@@ -171,7 +199,7 @@ func (c *WsMuxTransport) tunnelDialer() {
 	// Next() rather than Current(): with load balancing enabled the pool
 	// spreads its connections over every configured endpoint, so one
 	// congested route only slows its own share of the traffic.
-	tunnelWSConn, err := network.WebSocketDialer(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 2*1024*1024, 2*1024*1024, c.config.MSS)
+	tunnelWSConn, err := network.WebSocketDialerAuth(c.state.Ctx(), c.config.Outbound, c.config.Endpoints.Next(), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, c.config.SimpleAuth, 3, 2*1024*1024, 2*1024*1024, c.config.MSS, wsPoolAuth(c.peer.Get()))
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 
@@ -212,5 +240,6 @@ func (c *WsMuxTransport) backend() backendOpts {
 		sndBuf:      0,
 		mss:         0,
 		sniffer:     c.config.Sniffer,
+		session:     c.peer.Get(),
 	}
 }

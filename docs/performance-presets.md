@@ -41,7 +41,7 @@ message saying so**, rather than written to the config and quietly ignored.
 The same three names set the PCK engine's own parameters — KCP sessions, speed
 mode, windows, buffers and capture ring — instead of a queue and a socket
 buffer: Balance is 1 session, `fast`, 256/512-packet windows; Turbo 2, `fast2`,
-4096; Aggressive 4, `fast3`, 4096. The wizard and the panel show each with what
+4096; Aggressive 4, `fast3`, 8192. The wizard and the panel show each with what
 it sets, and Edit moves a tunnel from one to another. Aggressive is for long,
 lossy routes and is slower than Turbo on a clean path. Turbo with `pck_conns = 4`
 carries more at 1-10% loss (about 13/15 Mbit/s against 9/8 at 10%, probe median

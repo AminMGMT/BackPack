@@ -49,6 +49,10 @@ type WsMuxTransport struct {
 	streamCounter  int32
 	sessionCounter int32
 	limits         *limiter
+	// peer is the seated client's handshake session, which seals every
+	// destination sent to it; nil for a client on the handshake before v2.0.0
+	// (and always over wss, whose TLS-bound proofs do this job).
+	peer peerSession
 }
 
 type WsMuxConfig struct {
@@ -84,9 +88,14 @@ type WsMuxConfig struct {
 	MaxConnections int
 	// BandwidthMbps caps total tunnel throughput (0 = unlimited).
 	BandwidthMbps int
+	// Guard is the peer handshake's policy and key; see network.PeerGuard.
+	Guard *network.PeerGuard
 }
 
 func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logrus.Logger) *WsMuxTransport {
+	if config.Guard == nil {
+		config.Guard = network.NewPeerGuard(config.Token, "", "")
+	}
 	// Initialize the TcpTransport struct
 	server := &WsMuxTransport{
 		smuxConfig: &smux.Config{
@@ -141,6 +150,7 @@ func (s *WsMuxTransport) start(g *wsMuxGen) {
 func (s *WsMuxTransport) Restart() {
 	s.restart(s.controlChannel.Close, func(ctx context.Context) {
 		s.controlChannel.Clear()
+		s.peer.Clear()
 		s.counterMutex.Lock()
 		atomic.StoreInt32(&s.streamCounter, 0)
 		atomic.StoreInt32(&s.sessionCounter, 0)
@@ -174,10 +184,11 @@ func (s *WsMuxTransport) control(g *wsMuxGen, ctx context.Context, lost func()) 
 }
 
 // seatClient makes conn this generation's client, in place of whoever was.
-func (s *WsMuxTransport) seatClient(g *wsMuxGen, conn *websocket.Conn) {
+func (s *WsMuxTransport) seatClient(g *wsMuxGen, conn *websocket.Conn, session *network.PeerSession) {
 	g.seat.sit(g.ctx,
 		func() { s.vacate(g) },
 		func() {
+			s.peer.Set(session)
 			s.controlChannel.Set(conn)
 			// See metrics.Snapshot.Connected: the watchdog asks the engine, not
 			// the socket table.
@@ -199,6 +210,7 @@ func (s *WsMuxTransport) seatClient(g *wsMuxGen, conn *websocket.Conn) {
 func (s *WsMuxTransport) vacate(g *wsMuxGen) {
 	s.controlChannel.Close()
 	s.controlChannel.Clear()
+	s.peer.Clear()
 	drainTunnelConns(g.tunnelChannel)
 	s.status.set(fmt.Sprintf("Disconnected (%s)", s.config.Mode))
 	metrics.ClearPeer()
@@ -239,18 +251,22 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			// browser, a scanner, a probe with the wrong token — gets the decoy
 			// website, so on 443 this looks like an ordinary HTTPS site rather
 			// than a tunnel that answers with 401.
-			if !isTunnelRequest(r, s.config.Token, s.config.SimpleAuth) {
+			adm, ok := s.peerAuth().admit(r)
+			if !ok {
 				decoy.serve(w, r)
 				return
 			}
 
-			conn, err := upgrader.Upgrade(w, r, serverProof(r, s.config.Token, s.config.SimpleAuth))
+			conn, err := upgrader.Upgrade(w, r, adm.header)
 			if err != nil {
 				s.logger.Errorf("failed to upgrade connection from %s: %v", r.RemoteAddr, err)
 				return
 			}
 
 			if r.URL.Path == "/channel" {
+				if !s.peerAuth().confirm(conn, adm.session) {
+					return
+				}
 				if endedClaim(g.ctx, conn) {
 					return
 				}
@@ -261,7 +277,7 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 				if g.seat.serving() {
 					s.logger.Warn("a new control channel claim arrived; adopting the new client in place")
 				}
-				s.seatClient(g, conn)
+				s.seatClient(g, conn, adm.session)
 				g.serving.Do(func() { s.serveGeneration(s.forwarder(g), func() { s.handleLoop(g) }) })
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
@@ -397,6 +413,7 @@ func (s *WsMuxTransport) session(g *wsMuxGen) muxSession {
 		muxCon:        s.config.MuxCon,
 		proxyProtocol: s.config.ProxyProtocol,
 		sniffer:       s.config.Sniffer,
+		seal:          s.peer.Get().SealTarget,
 		limits:        s.limits,
 		log:           s.logger,
 		streams:       &s.streamCounter,
@@ -420,4 +437,10 @@ func (s *WsMuxTransport) forwarder(g *wsMuxGen) portForwarder {
 // tuneUserConn is the same as the ws transport's; see wsTune.
 func (s *WsMuxTransport) tuneUserConn(c *net.TCPConn) {
 	wsTune(c, s.config.Nodelay, s.config.KeepAlive, s.logger)
+}
+
+// peerAuth is this transport's side of the plain ws peer handshake.
+func (s *WsMuxTransport) peerAuth() wsPeerAuth {
+	return wsPeerAuth{guard: s.config.Guard, token: s.config.Token, simpleAuth: s.config.SimpleAuth,
+		label: "wsmux", peer: &s.peer, log: s.logger}
 }
