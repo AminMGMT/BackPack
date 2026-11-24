@@ -243,6 +243,10 @@ func ApplyPreset(s *Spec, preset string) {
 		}
 	}
 
+	if preset == PresetTurbo && onPlainEngine(s.Transport) {
+		applyBackhaulDefaults(s)
+	}
+
 	ApplyKCPPreset(s, preset)
 }
 
@@ -378,3 +382,35 @@ func PresetLabel(name string) string {
 // ("turbo" → "Turbo", "" → "Custom"), for callers that already hold the
 // decoded config and should not re-read it from disk.
 func PresetValueLabel(value string) string { return presetLabel(value) }
+
+// onPlainEngine reports whether a transport runs on the plain engine,
+// Backhaul's (internal/plain).
+func onPlainEngine(transport string) bool {
+	switch transport {
+	case "tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux":
+		return true
+	}
+	return false
+}
+
+// applyBackhaulDefaults is Turbo on the plain engine: Backhaul's own defaults
+// (its cmd/defaults.go), which are what that engine is tuned around. Socket
+// buffers and MSS stay the kernel's, as Backhaul leaves them unless asked.
+func applyBackhaulDefaults(s *Spec) {
+	s.Nodelay = false
+	s.KeepAlive = 75
+	s.Heartbeat = 40
+	s.ChannelSize = 2048
+	s.ConnectionPool = 8
+	s.AggressivePool = false
+	s.DialTimeout = 10
+	s.RetryInterval = 3
+	s.SoRcvBuf = 0
+	s.SoSndBuf = 0
+	s.MSS = 0
+	s.MuxCon = 8
+	s.MuxVersion = 1
+	s.MuxFrameSize = 32768
+	s.MuxRecvBuffer = 4194304
+	s.MuxStreamBuffer = 65536
+}

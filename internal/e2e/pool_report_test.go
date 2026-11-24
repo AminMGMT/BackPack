@@ -26,8 +26,8 @@ func TestPoolStateReachesTheSnapshotOnARealTunnel(t *testing.T) {
 	entryPort := freePort(t)
 	const token = "poolreport-token-0123456789abc"
 
-	srvCfg := baseServerConfig("tcp", tunnelPort, entryPort, backend.addr, token)
-	cliCfg := baseClientConfig("tcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
+	cliCfg := baseClientConfig("kcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
 	if err := tun.waitReady(tunnelReadyTimeout); err != nil {

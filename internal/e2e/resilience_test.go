@@ -14,7 +14,8 @@ import (
 // a server IP gets filtered: the client is given a primary address that answers
 // nothing and a backup that works, and must find its own way to the backup.
 func TestFailoverToBackupAddress(t *testing.T) {
-	for _, transport := range []string{"tcp", "tcpmux", "kcp", "quic"} {
+	// The plain engine (tcp, tcpmux) dials one address, as Backhaul does.
+	for _, transport := range []string{"kcp", "quic"} {
 		t.Run(transport, func(t *testing.T) {
 			t.Parallel()
 			backend := startEchoBackend(t)

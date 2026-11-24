@@ -86,7 +86,9 @@ func startForwardingTunnel(t *testing.T, transport, backendAddr string) string {
 // forwardedUDPTransports are the stream transports, all of which now carry
 // datagrams on a forwarded port. The raw udp transport is not here: it forwards
 // only UDP and has its own test.
-var forwardedUDPTransports = []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic"}
+// tcpmux, ws and wsmux run on the plain engine, Backhaul's, which forwards
+// UDP on tcp only.
+var forwardedUDPTransports = []string{"tcp", "kcp", "quic"}
 
 func TestForwardedUDPWorksOnEveryTransport(t *testing.T) {
 	for _, transport := range forwardedUDPTransports {
@@ -116,7 +118,7 @@ func TestForwardedUDPWorksOnEveryTransport(t *testing.T) {
 // split across several reads on the tunnel and has to be put back together.
 func TestForwardedUDPPreservesDatagramBoundaries(t *testing.T) {
 	backend := startUDPEcho(t)
-	entry := startForwardingTunnel(t, "tcpmux", backend)
+	entry := startForwardingTunnel(t, "kcp", backend)
 
 	// 8 KB is the largest that can be sent as one datagram everywhere the tests
 	// run — macOS caps a UDP send at net.inet.udp.maxdgram, 9216 by default,
@@ -188,7 +190,7 @@ func TestForwardedUDPKeepsSourcesApart(t *testing.T) {
 		}
 	}()
 
-	entry := startForwardingTunnel(t, "tcpmux", pc.LocalAddr().String())
+	entry := startForwardingTunnel(t, "kcp", pc.LocalAddr().String())
 	deadline := time.Now().Add(tunnelReadyTimeout)
 	for time.Now().Before(deadline) {
 		if err := udpRoundTrip(entry, []byte("ready")); err == nil {

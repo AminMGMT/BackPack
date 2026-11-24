@@ -28,11 +28,11 @@ func TestABadFirstAddressDoesNotStopTheTunnel(t *testing.T) {
 	entryPort := freePort(t)
 	token := "race-token-0123456789abcdefghi"
 
-	srvCfg := baseServerConfig("tcp", tunnelPort, entryPort, backend.addr, token)
+	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
 
 	// A loopback port with nothing on it: refused immediately, every time.
 	dead := fmt.Sprintf("127.0.0.1:%d", freePort(t))
-	cliCfg := baseClientConfig("tcp",
+	cliCfg := baseClientConfig("kcp",
 		dead, token, []string{fmt.Sprintf("127.0.0.1:%d", tunnelPort)})
 
 	start := time.Now()

@@ -163,6 +163,9 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 	if s.guard == nil {
 		s.guard = network.NewPeerGuard(s.config.Token, s.config.PeerAuth, s.config.PeerPinPath)
 	}
+	if usesPlainEngine(tr, s.config.Naive.Enabled() || s.config.Xray.Enabled()) {
+		return s.startPlain(ctx, tr)
+	}
 	switch tr {
 	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
@@ -260,104 +263,6 @@ func (s *Server) startTransport(ctx context.Context, tr config.TransportType) ru
 		quicServer := transport.NewQuicServer(ctx, quicConfig, s.logger)
 		go quicServer.Start()
 		return quicServer
-
-	case config.TCPMUX:
-		tcpMuxConfig := &transport.TcpMuxConfig{
-			AcceptUDP:        s.config.ForwardsUDP(),
-			BindAddr:         s.config.BindAddr,
-			Nodelay:          s.config.Nodelay,
-			KeepAlive:        time.Duration(s.config.Keepalive) * time.Second,
-			Heartbeat:        time.Duration(s.config.Heartbeat) * time.Second,
-			Token:            s.config.Token,
-			ChannelSize:      s.config.ChannelSize,
-			Ports:            s.config.Ports,
-			MuxCon:           s.config.MuxCon,
-			MuxVersion:       s.config.MuxVersion,
-			MaxFrameSize:     s.config.MaxFrameSize,
-			MaxReceiveBuffer: s.config.MaxReceiveBuffer,
-			MaxStreamBuffer:  s.config.MaxStreamBuffer,
-			Sniffer:          s.config.Sniffer,
-			WebPort:          s.config.WebPort,
-			SnifferLog:       s.config.SnifferLog,
-			MSS:              s.config.MSS,
-			SO_RCVBUF:        s.config.SO_RCVBUF,
-			SO_SNDBUF:        s.config.SO_SNDBUF,
-			ProxyProtocol:    s.config.ProxyProtocol,
-			MaxConnections:   s.config.MaxConnections,
-			BandwidthMbps:    s.config.BandwidthMbps,
-			Guard:            s.guard,
-		}
-
-		tcpMuxServer := transport.NewTcpMuxServer(ctx, tcpMuxConfig, s.logger)
-		go tcpMuxServer.Start()
-		return tcpMuxServer
-
-	case config.WS, config.WSS:
-		wsConfig := &transport.WsConfig{
-			AcceptUDP:    s.config.ForwardsUDP(),
-			BindAddr:     s.config.BindAddr,
-			Nodelay:      s.config.Nodelay,
-			KeepAlive:    time.Duration(s.config.Keepalive) * time.Second,
-			Heartbeat:    time.Duration(s.config.Heartbeat) * time.Second,
-			Token:        s.config.Token,
-			ChannelSize:  s.config.ChannelSize,
-			Ports:        s.config.Ports,
-			Sniffer:      s.config.Sniffer,
-			WebPort:      s.config.WebPort,
-			SnifferLog:   s.config.SnifferLog,
-			Mode:         tr,
-			SimpleAuth:   s.config.SimpleAuth,
-			TLSCertFile:  s.config.TLSCertFile,
-			ACMEDomain:   s.config.ACMEDomain,
-			ACMEEmail:    s.config.ACMEEmail,
-			ACMECacheDir: acmeCacheDir,
-			TLSKeyFile:   s.config.TLSKeyFile,
-			MSS:          s.config.MSS,
-
-			MaxConnections: s.config.MaxConnections,
-			BandwidthMbps:  s.config.BandwidthMbps,
-			Guard:          s.guard,
-		}
-
-		wsServer := transport.NewWSServer(ctx, wsConfig, s.logger)
-		go wsServer.Start()
-		return wsServer
-
-	case config.WSMUX, config.WSSMUX:
-		wsMuxConfig := &transport.WsMuxConfig{
-			AcceptUDP:        s.config.ForwardsUDP(),
-			BindAddr:         s.config.BindAddr,
-			Nodelay:          s.config.Nodelay,
-			KeepAlive:        time.Duration(s.config.Keepalive) * time.Second,
-			Heartbeat:        time.Duration(s.config.Heartbeat) * time.Second,
-			Token:            s.config.Token,
-			ChannelSize:      s.config.ChannelSize,
-			Ports:            s.config.Ports,
-			MuxCon:           s.config.MuxCon,
-			MuxVersion:       s.config.MuxVersion,
-			MaxFrameSize:     s.config.MaxFrameSize,
-			MaxReceiveBuffer: s.config.MaxReceiveBuffer,
-			MaxStreamBuffer:  s.config.MaxStreamBuffer,
-			Sniffer:          s.config.Sniffer,
-			WebPort:          s.config.WebPort,
-			SnifferLog:       s.config.SnifferLog,
-			Mode:             tr,
-			SimpleAuth:       s.config.SimpleAuth,
-			TLSCertFile:      s.config.TLSCertFile,
-			ACMEDomain:       s.config.ACMEDomain,
-			ACMEEmail:        s.config.ACMEEmail,
-			ACMECacheDir:     acmeCacheDir,
-			TLSKeyFile:       s.config.TLSKeyFile,
-			MSS:              s.config.MSS,
-			ProxyProtocol:    s.config.ProxyProtocol,
-			MaxConnections:   s.config.MaxConnections,
-			BandwidthMbps:    s.config.BandwidthMbps,
-			Guard:            s.guard,
-		}
-
-		wsMuxServer := transport.NewWSMuxServer(ctx, wsMuxConfig, s.logger)
-		go wsMuxServer.Start()
-		return wsMuxServer
 
 	case config.UDP:
 		udpConfig := &transport.UdpConfig{

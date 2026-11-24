@@ -217,18 +217,10 @@ func TestTheRoundTripProbeIsAnswered(t *testing.T) {
 	}
 }
 
-// Only the websocket servers listen for an answered heartbeat. The stream
-// servers of earlier releases read one byte from the client and stop, so an
-// answer sent to one would be the only thing it ever heard — the goodbye after
-// it would go unread.
-func TestAHeartbeatIsAnsweredOnlyWhereTheServerListensForIt(t *testing.T) {
-	wsServer, wsClient := wsPair(t)
-	ws := startClientLoopOver(t, context.Background(), controlwire.WS(wsClient), controlwire.WS(wsServer), true)
-	ws.send(t, utils.SG_HB)
-	if got := ws.next(t); got != utils.SG_HB {
-		t.Fatalf("answered %d, want a heartbeat", got)
-	}
-
+// A stream server reads one byte from the client and stops, so a heartbeat is
+// not answered there — an answer would be the only thing it ever heard, and
+// the goodbye after it would go unread.
+func TestAHeartbeatIsNotAnsweredOnAStream(t *testing.T) {
 	stream := startClientLoop(t, context.Background(), false)
 	stream.send(t, utils.SG_HB)
 	stream.silent(t)

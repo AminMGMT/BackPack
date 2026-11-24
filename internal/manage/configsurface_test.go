@@ -54,6 +54,9 @@ var configSurfaceExceptions = map[string]string{
 	// A label, by design: the engine reads the values a preset expanded into,
 	// never the name it came from. config/l3.go says so on the field.
 	"preset": "a label recording which profile the values came from; the engine reads the values",
+	// wss and wssmux run on the plain engine, Backhaul's, whose wss always
+	// sends the raw token; the key stays so files that set it still load.
+	"simple_auth": "wss on the plain engine (Backhaul's) always authorises by the raw token",
 }
 
 var tomlTagRe = regexp.MustCompile(`^\s*([A-Z][A-Za-z0-9_]*)\s+[^\x60]+\x60toml:"([a-z_0-9]+)"`)

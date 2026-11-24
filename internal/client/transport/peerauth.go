@@ -4,14 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 	"sync/atomic"
 	"time"
 
-	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
-	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -116,15 +113,6 @@ func readControl(conn net.Conn) (string, byte, error) {
 	return msg, sig, nil
 }
 
-// authMuxVersion reads the mux version out of a completed SG_ChanAuth answer.
-func authMuxVersion(ack string) int {
-	v, err := strconv.Atoi(ack)
-	if err != nil {
-		return 0
-	}
-	return v
-}
-
 // peerSession is the current control channel's handshake session, which
 // every destination the server sends must open under. nil means the server is
 // on the handshake before v2.0.0, whose destinations come as they are.
@@ -152,68 +140,3 @@ func warnLegacyServer(log *logrus.Logger) {
 // The plain ws transports carry the handshake in the upgrade; see the server's
 // wsPeerAuth. Over wss, and with simple_auth, the TLS-bound proofs (or the
 // trusted proxy) do this job and the claim goes as it always has.
-
-// wsClaim is the bearer for a plain ws /channel claim, or nil when the claim
-// goes on the token: wss, simple_auth, or a server found to be older.
-func wsClaim(guard *network.PeerGuard, mode config.TransportType, simpleAuth bool, label string) (*network.WSPeerAuth, network.PeerHello, error) {
-	if (mode != config.WS && mode != config.WSMUX) || simpleAuth || guard.UseLegacy() {
-		return nil, network.PeerHello{}, nil
-	}
-	hello, err := guard.Key().NewPeerHello(label)
-	if err != nil {
-		return nil, hello, err
-	}
-	return &network.WSPeerAuth{Bearer: network.PeerAuthWire + "." + hello.Encode()}, hello, nil
-}
-
-// wsMissed counts a failed plain ws claim made with the new handshake. An
-// older server answers a bearer it does not recognise with its decoy page,
-// which reaches the client as a bad handshake.
-func wsMissed(guard *network.PeerGuard, auth *network.WSPeerAuth, err error, log *logrus.Logger) {
-	if auth == nil || !errors.Is(err, websocket.ErrBadHandshake) {
-		return
-	}
-	if guard.Missed() {
-		log.Warnf("the server turned down %d upgrades made with the handshake v2.0.0 uses. That is what a "+
-			"server on an older version does, so this client falls back to the previous handshake, in which "+
-			"the tunnel token crosses the wire as it is. Upgrade the Iran server: once it has answered the new "+
-			"way, this tunnel stops offering the old one.", network.PeerAuthMissThreshold)
-	}
-}
-
-// wsFinish completes a /channel claim: it checks the server's answer and
-// sends the confirm. A nil auth (the claim went on the token) has nothing to
-// finish and no session.
-func wsFinish(conn *websocket.Conn, guard *network.PeerGuard, auth *network.WSPeerAuth, hello network.PeerHello, mode config.TransportType, label string, log *logrus.Logger) (*network.PeerSession, error) {
-	if auth == nil {
-		if mode == config.WS || mode == config.WSMUX {
-			warnLegacyServer(log)
-		}
-		return nil, nil
-	}
-	reply, ok := network.DecodePeerReply(auth.Reply)
-	if !ok {
-		return nil, errServerUnproven
-	}
-	sess, ok := guard.Key().CheckReply(hello, reply, label)
-	if !ok {
-		return nil, errServerUnproven
-	}
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	err := conn.WriteMessage(websocket.TextMessage, []byte(sess.Confirm()))
-	_ = conn.SetWriteDeadline(time.Time{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to finish the handshake: %w", err)
-	}
-	guard.Proved()
-	return sess, nil
-}
-
-// wsPoolAuth is what a /tunnel connection presents under sess: the pool tag,
-// or the token (nil) under the previous handshake.
-func wsPoolAuth(sess *network.PeerSession) *network.WSPeerAuth {
-	if sess == nil {
-		return nil
-	}
-	return &network.WSPeerAuth{Bearer: network.PeerAuthWire + "p." + sess.PoolTag()}
-}

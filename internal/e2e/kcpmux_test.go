@@ -24,7 +24,7 @@ func TestKCPComesUpWithNoMuxVersionConfigured(t *testing.T) {
 	// Every mux transport that cannot negotiate — KCP over UDP, and the
 	// websocket-mux transports — has to resolve the auto value itself. xdi is
 	// the same code as kcp but needs a raw socket, so kcp stands in for it here.
-	for _, transport := range []string{"kcp", "wsmux"} {
+	for _, transport := range []string{"kcp"} {
 		t.Run(transport, func(t *testing.T) {
 			backend := startEchoBackend(t)
 			tunnelPort := freePort(t)

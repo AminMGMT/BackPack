@@ -1,11 +1,5 @@
 package network
 
-import (
-	"time"
-
-	"github.com/xtaci/smux"
-)
-
 // Agreeing on a mux version, because smux will not agree on one itself.
 //
 // smux has no version negotiation whatsoever. Each end is configured with a
@@ -34,16 +28,6 @@ import (
 // MuxVersionAuto is the configured value that means "negotiate it". It is the
 // zero value, so a config that never mentions mux_version negotiates.
 const MuxVersionAuto = 0
-
-// ResolveMuxVersion turns a configured value into the version the server will
-// impose. Auto becomes 2: the question is only ever asked on a handshake the
-// client had to be new to speak, and a new client uses what it is told.
-func ResolveMuxVersion(configured int) int {
-	if configured == 1 || configured == 2 {
-		return configured
-	}
-	return 2
-}
 
 // ResolveStaticMuxVersion is the choice for every mux transport that cannot
 // negotiate — KCP and xDi (whose control channel is itself a smux session, so
@@ -76,16 +60,4 @@ type MuxSettings struct {
 	MaxFrameSize     int
 	MaxReceiveBuffer int
 	MaxStreamBuffer  int
-}
-
-// SmuxConfig builds a session configuration for a settled version.
-func SmuxConfig(version int, s MuxSettings) *smux.Config {
-	return &smux.Config{
-		Version:           version,
-		KeepAliveInterval: 20 * time.Second,
-		KeepAliveTimeout:  40 * time.Second,
-		MaxFrameSize:      s.MaxFrameSize,
-		MaxReceiveBuffer:  s.MaxReceiveBuffer,
-		MaxStreamBuffer:   s.MaxStreamBuffer,
-	}
 }

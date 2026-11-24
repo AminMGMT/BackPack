@@ -20,9 +20,9 @@ func TestConnectionLimitIsEnforced(t *testing.T) {
 	const token = "limits-token-0123456789abcdefgh"
 	const cap = 3
 
-	srvCfg := baseServerConfig("tcpmux", tunnelPort, entryPort, backend.addr, token)
+	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
 	srvCfg.MaxConnections = cap
-	cliCfg := baseClientConfig("tcpmux", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	cliCfg := baseClientConfig("kcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
 	if err := tun.waitReady(tunnelReadyTimeout); err != nil {
@@ -114,9 +114,9 @@ func TestBandwidthLimitSlowsTransfer(t *testing.T) {
 	const token = "bwlimit-token-0123456789abcdefg"
 	const mbps = 8 // 1 MB/s
 
-	srvCfg := baseServerConfig("tcpmux", tunnelPort, entryPort, backend.addr, token)
+	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
 	srvCfg.BandwidthMbps = mbps
-	cliCfg := baseClientConfig("tcpmux", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	cliCfg := baseClientConfig("kcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
 	if err := tun.waitReady(tunnelReadyTimeout); err != nil {

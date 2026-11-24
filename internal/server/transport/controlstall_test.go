@@ -120,17 +120,11 @@ func TestAHealthyControlWriteIsNotDisturbed(t *testing.T) {
 // The bound is applied by every transport that holds a control channel, not
 // just the one the report came in on.
 func TestEveryTransportBoundsItsControlWrites(t *testing.T) {
-	for _, f := range []string{"tcp.go", "tcpmux.go", "quic.go", "kcp.go", "udp.go", "udp_control.go", "udp_flows.go", "controlloop.go"} {
+	for _, f := range []string{"tcp.go", "quic.go", "kcp.go", "udp.go", "udp_control.go", "udp_flows.go", "controlloop.go"} {
 		src := readTransportSource(t, f)
 		if strings.Contains(src, "utils.SendBinaryByte(s.controlChannel.Get()") {
 			t.Errorf("%s still writes to its control channel with no bound — the "+
 				"tunnel it carries can be held down by a peer that stopped reading", f)
-		}
-	}
-	for _, f := range []string{"ws.go", "wsmux.go"} {
-		src := readTransportSource(t, f)
-		if strings.Contains(src, "s.controlChannel.Get().WriteMessage(") {
-			t.Errorf("%s still writes to its control channel with no bound", f)
 		}
 	}
 }

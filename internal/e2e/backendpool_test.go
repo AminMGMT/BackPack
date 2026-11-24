@@ -28,10 +28,10 @@ func TestBackendPoolCarriesTrafficAcrossBackends(t *testing.T) {
 	entryPort := freePort(t)
 	token := "pool-token-0123456789abcdefghi"
 
-	srvCfg := baseServerConfig("tcp", tunnelPort, entryPort, b1.addr, token)
+	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, b1.addr, token)
 	// Two backends behind the one forwarded port.
 	srvCfg.Ports = []string{fmt.Sprintf("%d=%s|%s", entryPort, b1.addr, b2.addr)}
-	cliCfg := baseClientConfig("tcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	cliCfg := baseClientConfig("kcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup

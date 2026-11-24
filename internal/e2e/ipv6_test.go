@@ -86,10 +86,10 @@ func TestIPv6FailoverAddress(t *testing.T) {
 	deadPort := freePort(t)
 	const token = "ipv6-failover-token-0123456789ab"
 
-	srvCfg := baseServerConfig("tcp", tunnelPort, entryPort, backend.addr, token)
+	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
 	srvCfg.BindAddr = net.JoinHostPort("::", fmt.Sprint(tunnelPort))
 
-	cliCfg := baseClientConfig("tcp",
+	cliCfg := baseClientConfig("kcp",
 		net.JoinHostPort("::1", fmt.Sprint(deadPort)), // primary: nothing there
 		token,
 		[]string{net.JoinHostPort("::1", fmt.Sprint(tunnelPort))}, // backup: alive

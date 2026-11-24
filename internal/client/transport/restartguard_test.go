@@ -99,7 +99,7 @@ func TestEveryClientEngineBoundsItsControlWrites(t *testing.T) {
 // along, and it was the single transport that never reported its pool — so the
 // one exclusion in the list was the one case the test was written to catch.
 func TestEveryPooledClientEngineReportsItsPool(t *testing.T) {
-	for _, engine := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic", "udp"} {
+	for _, engine := range []string{"tcp", "kcp", "quic", "udp"} {
 		src := readEngine(t, "client", engine)
 		if !strings.Contains(src, "poolMaintainer") {
 			t.Errorf("%s no longer maintains a pool; take it out of this list", engine)

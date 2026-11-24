@@ -254,14 +254,3 @@ func alwaysNodelay(log *logrus.Logger) func(*net.TCPConn) {
 		}
 	}
 }
-
-// wsTune is the websocket transports' socket options for a user's connection.
-func wsTune(c *net.TCPConn, nodelay bool, keepAlive time.Duration, log *logrus.Logger) {
-	nodelayTune(nodelay, log)(c)
-	if err := c.SetKeepAlive(true); err != nil {
-		log.Warnf("failed to enable TCP keep-alive for %s: %v", c.RemoteAddr().String(), err)
-	}
-	if err := c.SetKeepAlivePeriod(keepAlive); err != nil {
-		log.Warnf("failed to set TCP keep-alive period for %s: %v", c.RemoteAddr().String(), err)
-	}
-}

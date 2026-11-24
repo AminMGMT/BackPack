@@ -3,7 +3,6 @@ package e2e
 import (
 	"fmt"
 	"testing"
-	"time"
 )
 
 // With simple auth on both ends, a wss tunnel carries traffic over a real TLS
@@ -39,33 +38,5 @@ func TestWSSSimpleAuthCarriesTraffic(t *testing.T) {
 				t.Fatalf("%s with simple auth failed to move data: %v", transport, err)
 			}
 		})
-	}
-}
-
-// The two ends must agree. This is the security boundary that keeps simple auth
-// opt-in: a bound server (simple auth off) must reject a client that offers the
-// raw token, or the binding would protect nothing. Because both ends run over a
-// real TLS session, this exercises the actual proof path a unit test cannot.
-func TestWSSSimpleAuthMustAgree(t *testing.T) {
-	certPath, keyPath := testCert(t)
-	backend := startEchoBackend(t)
-
-	tunnelPort := freePort(t)
-	entryPort := freePort(t)
-	token := "simpleauth-token-0123456789abcd"
-
-	// Server keeps the bound proof (default); client tries the raw token.
-	srvCfg := baseServerConfig("wss", tunnelPort, entryPort, backend.addr, token)
-	srvCfg.TLSCertFile = certPath
-	srvCfg.TLSKeyFile = keyPath
-	srvCfg.SimpleAuth = false
-
-	cliCfg := baseClientConfig("wss",
-		fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
-	cliCfg.SimpleAuth = true
-
-	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
-	if err := tun.waitReady(12 * time.Second); err == nil {
-		t.Fatal("a bound server accepted a client sending the raw token — the binding is not enforced")
 	}
 }
