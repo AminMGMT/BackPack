@@ -54,8 +54,15 @@ func ConnTestSpeedLeft(phases []string) time.Duration {
 // pass.
 func ConnTestSpeedPhase(phase string) bool { return phase == "speed" || phase == ctPhaseSecond }
 
+// ctSpeedFirstPass and ctSpeedSecondPass are what one healthy tunnel's two
+// speed passes take.
+//
+// The first pass is counted at one stage past the ones that always run: a
+// healthy tunnel climbs past sixteen connections on a fast path and stops
+// there or at the next. Counting all of ctSpeedStages would put most tests
+// minutes behind their countdown.
 func ctSpeedFirstPass() time.Duration {
-	return time.Duration(2*len(ctSpeedStages))*(ctSpeedWarmup+ctSpeedMaximum) + time.Second
+	return time.Duration(2*(ctSpeedAlways+1))*(ctSpeedWarmup+ctSpeedMaximum) + time.Second
 }
 
 func ctSpeedSecondPass() time.Duration { return 2*(ctSpeedWarmup+ctSpeedMaximum) + time.Second }
@@ -63,3 +70,7 @@ func ctSpeedSecondPass() time.Duration { return 2*(ctSpeedWarmup+ctSpeedMaximum)
 // ConnTestName is a tested transport's name as the menus print it: "TCP MUX",
 // "KCP FEC", "Iran→Kharej".
 func ConnTestName(tr string) string { return ctName(tr) }
+
+// ConnTestNameOf is ConnTestName for a row of the given kind: "xDiRvs" for
+// the reverse xdi, "xDi" for the direct one.
+func ConnTestNameOf(kind, tr string) string { return ctNameOf(kind, tr) }

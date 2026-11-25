@@ -34,6 +34,15 @@ var ctTransportNames = map[string]string{
 	ctSpoofToKharej: "Iran→Kharej", ctSpoofToIran: "Kharej→Iran",
 }
 
+// ctNameOf is ctName for a row of the given kind: the reverse xdi is xDiRvs,
+// as the setup menu calls it, and the direct carrier stays xDi.
+func ctNameOf(kind, tr string) string {
+	if kind == "reverse" && tr == "xdi" {
+		return "xDiRvs"
+	}
+	return ctName(tr)
+}
+
 func ctName(tr string) string {
 	if n, ok := ctTransportNames[tr]; ok {
 		return n
@@ -85,7 +94,7 @@ func ctRow(r ConnTestResult) string {
 	if r.Status == ctTesting {
 		done = r.Tried
 	}
-	return fmt.Sprintf(ctRowFormat, ctEmoji(r.Status), ctKind(r.Kind), ctName(r.Transport),
+	return fmt.Sprintf(ctRowFormat, ctEmoji(r.Status), ctKind(r.Kind), ctNameOf(r.Kind, r.Transport),
 		ctStatusLabel(r), fmt.Sprintf("%d/%d", done, total), ctBar(float64(done)/float64(total)))
 }
 
@@ -138,7 +147,7 @@ func ConnTestTable(results []ConnTestResult) string {
 						max(r.PeakMbps, r.Mbps), max(r.UploadPeakMbps, r.UploadMbps), r.Mbps, r.UploadMbps)
 				}
 			}
-			fmt.Fprintf(&b, "%s %-26s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctName(r.Transport), rtt, speed)
+			fmt.Fprintf(&b, "%s %-26s %-7s %s\n", ctEmoji(ctOK), ctKind(r.Kind)+" "+ctNameOf(r.Kind, r.Transport), rtt, speed)
 		}
 	}
 	if steady == 0 {
@@ -150,7 +159,7 @@ func ConnTestTable(results []ConnTestResult) string {
 	var notes []string
 	for _, r := range results {
 		if r.Detail != "" && r.Status != ctOK {
-			notes = append(notes, fmt.Sprintf("%s %s %s: %s", ctEmoji(r.Status), ctKind(r.Kind), ctName(r.Transport), r.Detail))
+			notes = append(notes, fmt.Sprintf("%s %s %s: %s", ctEmoji(r.Status), ctKind(r.Kind), ctNameOf(r.Kind, r.Transport), r.Detail))
 		}
 	}
 	if len(notes) > 0 {

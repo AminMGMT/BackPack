@@ -60,7 +60,7 @@ func ctMenuStartup(out io.Writer, s *ConnTestIran) {
 	for _, c := range s.cases {
 		if c.skip != "" && managedTransport(c.tr) {
 			coverSkipped = coverSkipped || c.tr == "reality"
-			row(checkMark(CheckWarn), ctName(c.tr), "Skipped")
+			row(checkMark(CheckWarn), ctNameOf(c.kind, c.tr), "Skipped")
 			fmt.Fprintln(out, tui.Color(tui.Gray, "    "+c.skip))
 		}
 	}

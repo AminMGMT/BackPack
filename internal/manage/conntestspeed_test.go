@@ -6,6 +6,8 @@ import (
 	"io"
 	"math"
 	"net"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,9 +59,10 @@ func TestSpeedRunsEveryStageAndReportsAMaximum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two directions, each at four and then sixteen connections.
-	if got, want := conns.Load(), int32(2*(4+16)); got != want {
-		t.Errorf("%d connections opened, want %d — a stage was skipped", got, want)
+	// Two directions, each at four and then sixteen connections at least,
+	// and a stage past those only where the one before it paid.
+	if got, least := conns.Load(), int32(2*(4+16)); got < least || got > int32(2*(4+16+32+64)) {
+		t.Errorf("%d connections opened, want %d to %d — a stage was skipped", got, least, 2*(4+16+32+64))
 	}
 	if r.download <= 0 || r.upload <= 0 {
 		t.Fatalf("download %.1f, upload %.1f", r.download, r.upload)
@@ -68,9 +71,81 @@ func TestSpeedRunsEveryStageAndReportsAMaximum(t *testing.T) {
 		t.Errorf("max ↓ %.1f / ↑ %.1f is below the sustained ↓ %.1f / ↑ %.1f",
 			r.downloadPeak, r.uploadPeak, r.download, r.upload)
 	}
-	if r.streams != 4 && r.streams != 16 {
+	if !slices.Contains(ctSpeedStages, r.streams) {
 		t.Errorf("streams = %d", r.streams)
 	}
+}
+
+// The climb: four and sixteen connections always, then on while a stage is a
+// tenth faster than the best before it, so the figure kept is where more
+// connections stopped helping.
+func TestTheSpeedTestClimbsUntilMoreConnectionsStopHelping(t *testing.T) {
+	for _, c := range []struct {
+		stage      int
+		last, best float64
+		want       bool
+	}{
+		{0, 10, 0, true},     // after four: sixteen always runs
+		{0, 0, 0, true},      // even when four carried nothing
+		{1, 200, 100, true},  // sixteen doubled four: try thirty-two
+		{1, 105, 100, false}, // sixteen barely beat four: the tunnel is full
+		{1, 80, 100, false},  // sixteen was slower: stop
+		{2, 330, 300, true},  // thirty-two a tenth faster: try sixty-four
+		{2, 320, 300, false},
+	} {
+		if got := ctSpeedClimbs(c.stage, c.last, c.best); got != c.want {
+			t.Errorf("after stage %d at %.0f with %.0f before: climb %v, want %v", c.stage, c.last, c.best, got, c.want)
+		}
+	}
+	if ctSpeedStages[0] != 4 || ctSpeedStages[1] != 16 || ctSpeedStages[len(ctSpeedStages)-1] != 64 {
+		t.Fatalf("stages %v, want 4 and 16 first and up to 64", ctSpeedStages)
+	}
+}
+
+// A path that keeps getting faster with more connections is measured at all
+// of them, and the figure kept is the loaded one; one that is full at sixteen
+// stops there.
+func TestTheSpeedTestMeasuresTheConnectionCountThePathWants(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the real speed test")
+	}
+	for _, c := range []struct {
+		name    string
+		perConn float64 // bytes per second each connection may carry
+		total   float64 // what the path carries in all, 0 for no cap
+		want    []int   // the connection counts the figure may come from
+		opened  int32   // the connections every stage run opens between them
+	}{
+		// Each stage twice the one before: the climb goes to the last.
+		{"wants more connections", 1 << 20, 0, []int{64}, 4 + 16 + 32 + 64},
+		// Thirty-two carries what sixteen did, so sixty-four never runs; the
+		// two are level, and either may be the one kept.
+		{"full at sixteen", 1 << 20, 16 << 20, []int{16, 32}, 4 + 16 + 32},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dial, conns := speedServer(t)
+			shaped := shapedDialer(dial, c.perConn, c.total)
+			run, err := ctSpeedStaged(context.Background(), shaped, 'D')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(c.want, run.streams) {
+				t.Errorf("the figure came from %d connections, want one of %v (%.1f Mb/s)", run.streams, c.want, run.avg)
+			}
+			if got := conns.Load(); got != c.opened {
+				t.Errorf("%d connections opened, want %d — the climb ran the wrong stages", got, c.opened)
+			}
+		})
+	}
+}
+
+// speedStagesUpTo16 runs the speed test at the two stages that always run, for
+// a test about something else on a fast path where the climb would run to the
+// last stage on every tunnel.
+func speedStagesUpTo16(t *testing.T) {
+	previous := ctSpeedStages
+	ctSpeedStages = ctSpeedStages[:ctSpeedAlways]
+	t.Cleanup(func() { ctSpeedStages = previous })
 }
 
 // A carrier that will not open sixteen connections still has a speed: the
@@ -229,4 +304,54 @@ func TestTheSpeedPhaseCountdown(t *testing.T) {
 			t.Errorf("%q: %v left, want %v", c.phases, got, c.want)
 		}
 	}
+}
+
+// shapedDialer is dial with each connection's reads held to perConn bytes a
+// second, and all of them together to total (0 for no cap): a path whose
+// speed depends on how many connections share it, as a long fat one's does.
+func shapedDialer(dial func() (net.Conn, error), perConn, total float64) func() (net.Conn, error) {
+	shared := &rateLimit{rate: total}
+	return func() (net.Conn, error) {
+		c, err := dial()
+		if err != nil {
+			return nil, err
+		}
+		return &shapedConn{Conn: c, own: &rateLimit{rate: perConn}, shared: shared}, nil
+	}
+}
+
+type shapedConn struct {
+	net.Conn
+	own, shared *rateLimit
+}
+
+func (c *shapedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	// Held until both limits allow it, not one after the other: the two
+	// waits overlap, as a slow connection on a full path's do.
+	time.Sleep(max(c.own.reserve(n), c.shared.reserve(n)))
+	return n, err
+}
+
+// rateLimit paces bytes at rate a second; a zero rate is no limit.
+type rateLimit struct {
+	mu   sync.Mutex
+	rate float64
+	next time.Time
+}
+
+// reserve books n bytes and returns how long to wait before they are taken.
+func (l *rateLimit) reserve(n int) time.Duration {
+	if l.rate == 0 || n <= 0 {
+		return 0
+	}
+	l.mu.Lock()
+	now := time.Now()
+	if l.next.Before(now) {
+		l.next = now
+	}
+	l.next = l.next.Add(time.Duration(float64(n) / l.rate * float64(time.Second)))
+	d := l.next.Sub(now)
+	l.mu.Unlock()
+	return d
 }

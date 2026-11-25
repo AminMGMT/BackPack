@@ -73,9 +73,10 @@ const connTestKind = "test"
 
 // Which transports a test covers: every one the wizards offer. Spoof joins
 // the direct ones when the operator names a source to forge (see
-// ConnTestOptions.SpoofSrc); pck, on either side, needs root on both servers.
+// ConnTestOptions.SpoofSrc); pck, on either side, and the reverse xdi
+// (xDiRvs) need root on both servers.
 var (
-	connTestReverse = []string{"tcp", "tcpmux", "stealth", "pck", "ws", "wss", "wsmux", "wssmux", "kcp", "quic", "udp", "naive", "xhttp", "reality"}
+	connTestReverse = []string{"tcp", "tcpmux", "stealth", "pck", "ws", "wss", "wsmux", "wssmux", "kcp", "quic", "udp", "xdi", "naive", "xhttp", "reality"}
 	// The direct tunnel's carriers, all raw since v2.0.0 took udp and quic
 	// out, and kernel GRE — over IPv4 or IPv6, whichever the two servers
 	// reach each other on. Spoof joins them as above.
@@ -96,8 +97,9 @@ func ctDirectCarrier(tr string) string {
 	return tr
 }
 
-// connTestNeedsRoot is a reverse transport that builds its own packets.
-func connTestNeedsRoot(tr string) bool { return tr == "pck" }
+// connTestNeedsRoot is a reverse transport that builds its own packets: pck,
+// and xdi on its raw ICMP socket.
+func connTestNeedsRoot(tr string) bool { return tr == "pck" || tr == "xdi" }
 
 // Variables rather than constants so a test can run the whole thing in
 // seconds.
@@ -344,8 +346,8 @@ type ConnTestResult struct {
 	Mbps       float64 `json:"m,omitempty"`
 	UploadMbps float64 `json:"upload_mbps,omitempty"`
 	// PeakMbps and UploadPeakMbps are the most the tunnel carried over any
-	// one second of the speed test, with up to sixteen connections loading
-	// it: the maximum it can be got to move. Mbps and UploadMbps are the
+	// one second of the speed test, with up to sixty-four connections
+	// loading it (ctSpeedStages): the maximum it can be got to move. Mbps and UploadMbps are the
 	// sustained rate of the better stage.
 	PeakMbps       float64 `json:"peak_mbps,omitempty"`
 	UploadPeakMbps float64 `json:"upload_peak_mbps,omitempty"`
@@ -514,8 +516,8 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 			s.cases = append(s.cases, c)
 			continue
 		}
-		if ctFamily(host) == "IPv6" && tr == "pck" {
-			c.skip = "PCK uses raw IPv4 packets; IPv6 is not supported"
+		if ctFamily(host) == "IPv6" && (tr == "pck" || tr == "xdi") {
+			c.skip = ctNameOf("reverse", tr) + " uses raw IPv4 packets; IPv6 is not supported"
 			s.cases = append(s.cases, c)
 			continue
 		}
@@ -2313,7 +2315,7 @@ func runConnTestKharejLink(ctx context.Context, link ConnTestLink, out io.Writer
 		ctKharejSpoof(ctx, link, root)
 	}
 	go ctKharejPMTU(ctx, link)
-	fmt.Fprintln(out, "The Iran server has started the test: five minutes of stability, then download/upload for each healthy tunnel (about 16–25 seconds each).")
+	fmt.Fprintln(out, "The Iran server has started the test: five minutes of stability, then download/upload for each healthy tunnel, 4 up to 64 connections (about 25–60 seconds each).")
 
 	// The verdict, and the rows as they fill until it comes.
 	for {

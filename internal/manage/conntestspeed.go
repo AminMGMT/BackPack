@@ -27,9 +27,9 @@ const (
 	// long a stretch the tunnel carried. Shorter would report a socket buffer
 	// draining at once, not a rate the path holds.
 	ctSpeedPeakWindow = time.Second
-	// Includes concurrent connection setup, both stages of both directions
-	// and cleanup.
-	ctSpeedBudget = 40 * time.Second
+	// Includes concurrent connection setup, every stage of both directions
+	// and cleanup: four stages of six seconds each way at most.
+	ctSpeedBudget = 70 * time.Second
 
 	// ctSpeedAckEvery is how often the receiving end of an upload reports its
 	// running count. It used to answer every read with eight bytes — a write
@@ -45,13 +45,33 @@ const (
 )
 
 // ctSpeedStages are the connection counts each direction is measured with,
-// in order. Four is what one user's few connections look like; sixteen loads
-// the tunnel until the path, not the number of connections, is what limits
-// it — on a long round trip a handful of TCP windows cannot fill a fast link,
-// and the figure that answers "how much can this tunnel carry" is the loaded
-// one. Both are run and the better kept: some carriers do worse with more
-// connections, and that should not be read as their limit.
-var ctSpeedStages = []int{4, 16}
+// in order, climbing until the tunnel stops getting faster. Four is what one
+// user's few connections look like; sixteen loads the tunnel until the path,
+// not the number of connections, is what limits it on most routes — on a long
+// round trip a handful of TCP windows cannot fill a fast link. Both of those
+// always run. Past them a stage runs only while the one before it still paid
+// (ctSpeedClimbs): a fast, distant path can want thirty-two or sixty-four
+// connections before it is full, and the figure that answers "how much can
+// this tunnel carry" is the one where more connections stop helping. The best
+// stage is kept: some carriers do worse with more connections, and that
+// should not be read as their limit.
+var ctSpeedStages = []int{4, 16, 32, 64}
+
+// ctSpeedAlways is how many of ctSpeedStages run whatever they measure.
+const ctSpeedAlways = 2
+
+// ctSpeedGain is how much faster a stage has to be than the best before it
+// for the climb to go on: below it the tunnel is full, and the rest is noise.
+const ctSpeedGain = 1.10
+
+// ctSpeedClimbs reports whether the stage after one that measured last, with
+// best the best of those before it, is worth running.
+func ctSpeedClimbs(stage int, last, best float64) bool {
+	if stage+1 < ctSpeedAlways {
+		return true
+	}
+	return last >= best*ctSpeedGain
+}
 
 type ctSpeedResult struct {
 	download, upload float64
@@ -117,7 +137,8 @@ type ctSpeedRun struct {
 	stable    bool
 }
 
-// ctSpeedStaged measures one direction at every stage and keeps the best.
+// ctSpeedStaged measures one direction at each stage it climbs to and keeps
+// the best.
 //
 // The first stage has to succeed: it is the measurement the test has always
 // made, and a tunnel that cannot carry it has failed the speed test. A later
@@ -136,12 +157,16 @@ func ctSpeedStaged(ctx context.Context, dial func() (net.Conn, error), direction
 			}
 			break
 		}
+		before := best.avg
 		if run.avg > best.avg {
 			peak := max(best.peak, run.peak)
 			best = run
 			best.peak = peak
 		} else {
 			best.peak = max(best.peak, run.peak)
+		}
+		if !ctSpeedClimbs(i, run.avg, before) {
+			break
 		}
 	}
 	return best, nil

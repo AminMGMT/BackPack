@@ -313,14 +313,14 @@ func ConnTestBestTable(b ConnTestBest) string {
 	link := fmt.Sprintf("%dms ±%dms, %.1f%% loss", b.RTTms, b.JitterMs, b.LossPct)
 	if b.Transport != "" {
 		kind, tr, _ := strings.Cut(b.Transport, " ")
-		row("Transport", ctKind(kind)+" "+ctName(tr), fmt.Sprintf("%.1f Mbps, %s", b.Mbps, link))
+		row("Transport", ctKind(kind)+" "+ctNameOf(kind, tr), fmt.Sprintf("%.1f Mbps, %s", b.Mbps, link))
 		if b.UploadMbps > 0 {
 			row("Download", fmt.Sprintf("%.1f Mbps", b.Mbps), "sustained, verified receiver bytes")
 			row("Upload", fmt.Sprintf("%.1f Mbps", b.UploadMbps), "sustained, verified receiver bytes")
 		}
 		if b.PeakMbps > 0 {
-			row("Max download", fmt.Sprintf("%.1f Mbps", b.PeakMbps), "best second of both passes, up to 16 connections")
-			row("Max upload", fmt.Sprintf("%.1f Mbps", b.UploadPeakMbps), "best second of both passes, up to 16 connections")
+			row("Max download", fmt.Sprintf("%.1f Mbps", b.PeakMbps), "best second of both passes, up to 64 connections")
+			row("Max upload", fmt.Sprintf("%.1f Mbps", b.UploadPeakMbps), "best second of both passes, up to 64 connections")
 		}
 	} else {
 		row("Transport", "-", "nothing carried traffic steadily")
@@ -345,7 +345,7 @@ func ConnTestBestTable(b ConnTestBest) string {
 	}
 	if b.DirectMTU > 0 {
 		kind, tr, _ := strings.Cut(b.DirectBy, " ")
-		row("Direct MTU", strconv.Itoa(b.DirectMTU), "measured by "+ctKind(kind)+" "+ctName(tr)+" (Auto MTU does this)")
+		row("Direct MTU", strconv.Itoa(b.DirectMTU), "measured by "+ctKind(kind)+" "+ctNameOf(kind, tr)+" (Auto MTU does this)")
 	}
 	row("Keepalive", fmt.Sprintf("%ds", b.KeepAlive), fmt.Sprintf("worst round trip %dms ±%dms", b.WorstMs, b.JitterMs))
 	row("Heartbeat", fmt.Sprintf("%ds", b.Heartbeat), fmt.Sprintf("%.1f%% loss", b.LossPct))

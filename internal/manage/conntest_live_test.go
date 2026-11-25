@@ -66,7 +66,7 @@ func TestTheConnectionTestAcrossARealPath(t *testing.T) {
 			}
 			// Every reverse transport, every direct carrier, and IP spoofing
 			// both ways.
-			// ONLY narrows the run to one tunnel (see conntestlive.sh).
+			// ONLY narrows the run to one tunnel or a few (see conntestlive.sh).
 			if os.Getenv("ONLY") == "" && len(results) != len(connTestReverse)+len(connTestDirect)+2 {
 				t.Fatalf("%d results\n%s", len(results), out)
 			}
@@ -81,11 +81,12 @@ func TestTheConnectionTestAcrossARealPath(t *testing.T) {
 					t.Logf("optional %s skipped: %s", r.Transport, r.Detail)
 					continue
 				}
-				// pck, sni, xdi and the spoofing probes write below netfilter, where
-				// the filter here cannot always reach them; every other carrier
-				// is an ordinary socket the filter sees.
-				raw := r.Transport == "pck" || r.Kind == "spoof" ||
-					(r.Kind == "direct" && (r.Transport == "sni" || ctDirectCarrier(r.Transport) == "xdi"))
+				// pck, sni, xdi — direct or reverse (xDiRvs) — and the spoofing
+				// probes write below netfilter, where the filter here cannot
+				// always reach them; every other carrier is an ordinary socket
+				// the filter sees.
+				raw := r.Transport == "pck" || r.Kind == "spoof" || ctDirectCarrier(r.Transport) == "xdi" ||
+					(r.Kind == "direct" && r.Transport == "sni")
 				switch {
 				case path.filter == "" && r.Status != ctOK:
 					t.Errorf("clean path: %s %s is %s (%s) — %d/%d", r.Kind, r.Transport, r.Status, r.Detail, r.OK, r.Tried)
@@ -109,14 +110,17 @@ func TestConnTestIranSide(t *testing.T) {
 	if n, err := strconv.Atoi(os.Getenv("CT_SOAK")); err == nil {
 		connTestSoak = n
 	}
-	// CT_ONLY=reverse/pck narrows the test to one tunnel, for debugging it.
+	// CT_ONLY=reverse/pck narrows the test to one tunnel, for debugging it,
+	// or to several: CT_ONLY=reverse/tcp,reverse/xdi.
 	if only := os.Getenv("CT_ONLY"); only != "" {
-		kind, tr, _ := strings.Cut(only, "/")
 		connTestReverse, connTestDirect = nil, nil
-		if kind == "reverse" {
-			connTestReverse = []string{tr}
-		} else {
-			connTestDirect = []string{tr}
+		for _, one := range strings.Split(only, ",") {
+			kind, tr, _ := strings.Cut(strings.TrimSpace(one), "/")
+			if kind == "reverse" {
+				connTestReverse = append(connTestReverse, tr)
+			} else {
+				connTestDirect = append(connTestDirect, tr)
+			}
 		}
 	}
 	// CT_REALITY=host:port names the REALITY cover, for a namespace with no

@@ -190,6 +190,7 @@ func TestBothFamiliesCarryRealTrafficThroughOneLinkInSequence(t *testing.T) {
 		t.Skip("builds the real tunnel engine")
 	}
 	ctRequireIPv6(t)
+	speedStagesUpTo16(t) // as in the loopback test: the climb is not what this is about
 	bin := filepath.Join(t.TempDir(), "backpack")
 	build := exec.Command("go", "build", "-o", bin, "../..")
 	build.Stderr = os.Stderr

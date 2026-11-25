@@ -142,7 +142,7 @@ func (c *conntestRunner) stop() {
 
 func rowOf(r manage.ConnTestResult) conntestRow {
 	return conntestRow{
-		Kind: r.Kind, Tr: r.Transport, Name: manage.ConnTestName(r.Transport),
+		Kind: r.Kind, Tr: r.Transport, Name: manage.ConnTestNameOf(r.Kind, r.Transport),
 		Status: r.Status, Detail: r.Detail, OK: r.OK, Tried: r.Tried, Total: r.Total,
 		RTTms: r.RTTms, Mbps: r.Mbps, Connect: r.Connect,
 		UploadMbps: r.UploadMbps, Phase: r.Phase,

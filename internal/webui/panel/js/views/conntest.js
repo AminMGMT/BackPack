@@ -106,9 +106,9 @@ function startPane(v) {
   return `<div class="ct-l-in fade">
     <span class="ct-kick">New test</span>
     <div class="tl-lede"><b>Every transport, tried for real between this server and one kharej.</b>
-      <span>Five minutes of stability checks, then about 16–25 seconds of speed testing per healthy tunnel.
-        Download and upload are measured with four connections and again with sixteen, one tunnel at a time;
-        the max is the best second the tunnel carried. The test tunnels run on free ports and are
+      <span>Five minutes of stability checks, then about 25–60 seconds of speed testing per healthy tunnel.
+        Download and upload start at 4 connections and climb to 64 while the tunnel gets faster, one tunnel at a time;
+        the max is the best second it carried. The test tunnels run on free ports and are
         removed when it ends — nothing is left behind on either server.</span></div>
     <div class="tl-f ct-field"><span>IP paths to test</span>
       <div class="tl-seg" id="ctPathMode">${[['both','Both, sequentially'],['ipv4','IPv4'],['ipv6','IPv6'],['manual','One address']].map(([value,label]) =>

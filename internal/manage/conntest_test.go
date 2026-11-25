@@ -184,6 +184,11 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		}
 	}
 	defer func() { connTestReverse = previousReverse }()
+	// Every transport has to pass, which the two stages that always run
+	// show; on loopback the climb past them would run to sixty-four
+	// connections on every tunnel and add minutes this test's budget has not
+	// got. The climb has tests of its own in conntestspeed_test.go.
+	speedStagesUpTo16(t)
 	host := os.Getenv("BP_CONNTEST_HOST")
 	if host == "" {
 		host = "127.0.0.1"
