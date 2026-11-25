@@ -135,9 +135,8 @@ export function addView(ctx) {
         const set = (sel, yes) => { const r = row(sel); if (r) r.hidden = !yes; };
         const proxyOK = ['tcp', 'tcpmux', 'kcp', 'wsmux', 'wssmux', 'stealth', 'quic', 'pck'].includes(t);
         set('[data-name="proxyProtocol"]', iran && proxyOK);
-        // udp forwards UDP ports by nature; the HTTPS helpers and the plain
-        // engine's mux and websocket transports carry TCP only.
-        set('#ft-portProtocol', iran && !['udp', 'tcpmux', 'ws', 'wss', 'wsmux', 'wssmux'].includes(t) && !isHTTPS(t));
+        // udp forwards UDP ports by nature; the HTTPS helpers carry TCP only.
+        set('#ft-portProtocol', iran && t !== 'udp' && !isHTTPS(t));
         set('#ft-zeroCopy', t === 'tcp');
         // Encryption: offered where the transport carries more than none, with
         // only the modes it carries; a mode it does not falls back to none.

@@ -40,11 +40,6 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 		muxVersion = 1
 	}
 
-	if c.ForwardsUDP() && tr != config.TCP {
-		s.logger.Warnf("UDP is not forwarded: the %s transport carries TCP only. "+
-			"For UDP use transport \"tcp\" (or kcp, quic); to silence this, set port_protocol = \"tcp\".", tr)
-	}
-
 	// Backpack: the tunnel's encryption; nil (none) leaves the plain wire.
 	layer := core.NewLayer(c.EncryptionConfig, c.Token)
 
@@ -94,6 +89,8 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			SO_RCVBUF:        c.SO_RCVBUF,
 			SO_SNDBUF:        c.SO_SNDBUF,
 			ProxyProtocol:    c.ProxyProtocol,
+			AcceptUDP:        c.ForwardsUDP(),
+			UDPOnly:          !c.ForwardsTCP(),
 			OnLegacyClaim:    onLegacy,
 			Layer:            layer,
 		}, s.logger)
@@ -118,6 +115,8 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			ACMEDomain:    c.ACMEDomain,
 			ACMEEmail:     c.ACMEEmail,
 			ACMECacheDir:  acmeCacheDir,
+			AcceptUDP:     c.ForwardsUDP(),
+			UDPOnly:       !c.ForwardsTCP(),
 			OnLegacyClaim: onLegacy,
 			Layer:         layer,
 		}, s.logger)
@@ -148,6 +147,8 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			ACMEEmail:        c.ACMEEmail,
 			ACMECacheDir:     acmeCacheDir,
 			ProxyProtocol:    c.ProxyProtocol,
+			AcceptUDP:        c.ForwardsUDP(),
+			UDPOnly:          !c.ForwardsTCP(),
 			OnLegacyClaim:    onLegacy,
 			Layer:            layer,
 		}, s.logger)

@@ -5,26 +5,28 @@ import (
 	"testing"
 )
 
-// What the ports carry is written to the file, and a UDP-only choice never
-// lands on a transport that forwards TCP only.
+// What the ports carry is written to the file, on every transport that
+// forwards ports over a stream — the plain engine's mux and websocket ones
+// included — and the udp transport offers UDP alone.
 func TestThePortProtocolIsRenderedAndNormalised(t *testing.T) {
-	s := Spec{Role: "server", Transport: "tcp", Ports: []string{"443"}}
-	for _, proto := range []string{"tcp", "udp", "both"} {
-		s.SetPortProtocol(proto)
-		if got := s.PortProtocol(); got != proto {
-			t.Fatalf("set %q, read %q", proto, got)
+	for _, tr := range []string{"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux", "kcp", "quic"} {
+		s := Spec{Role: "server", Transport: tr, Ports: []string{"443"}}
+		if got := s.PortProtocols(); len(got) != 3 {
+			t.Fatalf("%s offers %v, want tcp, udp and both", tr, got)
 		}
-		if out := s.Render(); !strings.Contains(out, `port_protocol = "`+proto+`"`) {
-			t.Fatalf("%q not written:\n%s", proto, out)
+		for _, proto := range []string{"tcp", "udp", "both"} {
+			s.SetPortProtocol(proto)
+			if got := s.PortProtocol(); got != proto {
+				t.Fatalf("%s: set %q, read %q", tr, proto, got)
+			}
+			if out := s.Render(); !strings.Contains(out, `port_protocol = "`+proto+`"`) {
+				t.Fatalf("%s: %q not written:\n%s", tr, proto, out)
+			}
 		}
 	}
 
-	s.SetPortProtocol("udp")
-	s.Transport = "tcpmux"
-	if got := s.PortProtocol(); got != "tcp" {
-		t.Fatalf("UDP alone on tcpmux reads %q, want tcp", got)
-	}
-	if got := s.PortProtocols(); len(got) != 1 || got[0] != "tcp" {
-		t.Fatalf("tcpmux offers %v, want [tcp]", got)
+	s := Spec{Role: "server", Transport: "udp", Ports: []string{"443"}}
+	if got := s.PortProtocols(); len(got) != 1 || got[0] != "udp" {
+		t.Fatalf("udp offers %v, want [udp]", got)
 	}
 }

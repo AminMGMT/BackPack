@@ -269,12 +269,16 @@ func (c *WsTransport) tunnelDialer(g *clientGen) {
 
 			atomic.AddInt32(&g.poolConnections, -1)
 
-			remoteAddr := string(remoteAddrBytes)
+			remoteAddr, udp := core.SplitTarget(string(remoteAddrBytes))
 
 			port, resolvedAddr, err := core.ResolveRemoteAddr(remoteAddr)
 			if err != nil {
 				c.logger.Infof("failed to resolve remote port: %v", err)
 				tunnelConn.Close()
+				return
+			}
+			if udp {
+				UDPDialer(core.Counted(core.WSStream(tunnelConn)), resolvedAddr, c.logger, g.usageMonitor, port, c.config.Sniffer)
 				return
 			}
 

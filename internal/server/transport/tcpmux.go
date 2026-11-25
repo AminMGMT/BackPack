@@ -55,11 +55,13 @@ type TcpMuxTransport struct {
 }
 
 type TcpMuxConfig struct {
-	BindAddr         string
-	SnifferLog       string
-	Token            string
-	Ports            []string
-	AcceptUDP        bool
+	BindAddr   string
+	SnifferLog string
+	Token      string
+	Ports      []string
+	AcceptUDP  bool
+	// UDPOnly opens no TCP listener on the forwarded ports (port_protocol = "udp").
+	UDPOnly          bool
 	Nodelay          bool
 	Sniffer          bool
 	ChannelSize      int
@@ -468,7 +470,7 @@ func (s *TcpMuxTransport) session(g *tcpMuxGen) muxSession {
 // forwarder is this transport's forwarded ports for one generation.
 func (s *TcpMuxTransport) forwarder(g *tcpMuxGen) portForwarder {
 	return portForwarder{
-		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP, udpOnly: s.config.UDPOnly,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   nodelayTune(s.config.Nodelay, s.logger),
 		queued: muxRequestForGeneration(g.ctx, &s.counterMutex, &s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),

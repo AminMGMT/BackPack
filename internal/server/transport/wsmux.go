@@ -56,17 +56,19 @@ type WsMuxTransport struct {
 }
 
 type WsMuxConfig struct {
-	BindAddr         string
-	Token            string
-	SimpleAuth       bool
-	SnifferLog       string
-	TLSCertFile      string // Path to the TLS certificate file
-	TLSKeyFile       string // Path to the TLS key file
-	ACMEDomain       string // non-empty switches to Let's Encrypt for this domain
-	ACMEEmail        string
-	ACMECacheDir     string
-	Ports            []string
-	AcceptUDP        bool
+	BindAddr     string
+	Token        string
+	SimpleAuth   bool
+	SnifferLog   string
+	TLSCertFile  string // Path to the TLS certificate file
+	TLSKeyFile   string // Path to the TLS key file
+	ACMEDomain   string // non-empty switches to Let's Encrypt for this domain
+	ACMEEmail    string
+	ACMECacheDir string
+	Ports        []string
+	AcceptUDP    bool
+	// UDPOnly opens no TCP listener on the forwarded ports (port_protocol = "udp").
+	UDPOnly          bool
 	Nodelay          bool
 	Sniffer          bool
 	KeepAlive        time.Duration
@@ -430,7 +432,7 @@ func (s *WsMuxTransport) session(g *wsMuxGen) muxSession {
 // forwarder is this transport's forwarded ports for one generation.
 func (s *WsMuxTransport) forwarder(g *wsMuxGen) portForwarder {
 	return portForwarder{
-		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP, udpOnly: s.config.UDPOnly,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   s.tuneUserConn,
 		queued: muxRequestForGeneration(g.ctx, &s.counterMutex, &s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),

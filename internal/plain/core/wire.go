@@ -91,3 +91,22 @@ func ReceiveBinaryByte(conn net.Conn) (byte, error) {
 	}
 	return messageBuf[0], nil
 }
+
+// udpTargetPrefix marks the address sent down a mux stream or a ws tunnel as
+// a UDP flow's (Backpack). Over tcp the transport byte says it; those
+// transports send the address alone, so the mark goes on the address. A
+// kharej from before this reads the marked address as a malformed port and
+// closes the stream, so nothing is dialled by mistake.
+const udpTargetPrefix = "udp://"
+
+// UDPTarget is addr marked as a UDP flow's.
+func UDPTarget(addr string) string { return udpTargetPrefix + addr }
+
+// SplitTarget reads an address the server sent: the address, and whether it
+// is a UDP flow's.
+func SplitTarget(msg string) (addr string, udp bool) {
+	if len(msg) > len(udpTargetPrefix) && msg[:len(udpTargetPrefix)] == udpTargetPrefix {
+		return msg[len(udpTargetPrefix):], true
+	}
+	return msg, false
+}

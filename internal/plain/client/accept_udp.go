@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"time"
@@ -13,28 +14,40 @@ import (
 
 const BufferSize = 16 * 1024
 
+// UDPDialer carries one UDP flow from tcp, a tunnel connection or stream, to
+// remoteAddr, until either side ends. tcp is closed when it returns.
 func UDPDialer(tcp net.Conn, remoteAddr string, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
+	defer tcp.Close()
+
+	// Backpack: a target that cannot be reached ends this flow, not the
+	// kharej (the plain engine exited on it).
 	remoteUDPAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
-		logger.Fatalf("failed to resolve remote address: %v", err)
+		logger.Errorf("failed to resolve remote address: %v", err)
+		return
 	}
 
 	// Dial the remote UDP server
 	remoteConn, err := net.DialUDP("udp", nil, remoteUDPAddr)
 	if err != nil {
-		logger.Fatalf("failed to dial remote UDP address: %v", err)
+		logger.Errorf("failed to dial remote UDP address: %v", err)
+		return
 	}
-
-	defer remoteConn.Close()
 
 	done := make(chan struct{})
 
 	go func() {
-		go tcpToUDP(tcp, remoteConn, logger, usage, remotePort, sniffer)
-		done <- struct{}{}
+		defer close(done)
+		tcpToUDP(tcp, remoteConn, logger, usage, remotePort, sniffer)
+		// Backpack: the tunnel side ending stops the read from the target,
+		// which otherwise waited for a reply that might never come and kept
+		// the socket for good.
+		remoteConn.Close()
 	}()
 
 	udpToTCP(tcp, remoteConn, logger, usage, remotePort, sniffer)
+	tcp.Close()
+	remoteConn.Close()
 
 	<-done
 }
@@ -100,7 +113,11 @@ func udpToTCP(tcp net.Conn, udp *net.UDPConn, logger *logrus.Logger, usage *web.
 	for {
 		r, err := udp.Read(buf)
 		if err != nil {
-			logger.Errorf("failed to read from UDP connection: %v", err)
+			if errors.Is(err, net.ErrClosed) {
+				logger.Debug("UDP flow closed.")
+			} else {
+				logger.Errorf("failed to read from UDP connection: %v", err)
+			}
 			return
 		}
 

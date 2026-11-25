@@ -67,13 +67,15 @@ type WsConfig struct {
 	SimpleAuth   bool
 	Ports        []string
 	AcceptUDP    bool
-	Nodelay      bool
-	Sniffer      bool
-	KeepAlive    time.Duration
-	Heartbeat    time.Duration // in seconds
-	ChannelSize  int
-	WebPort      int
-	Mode         config.TransportType // ws or wss
+	// UDPOnly opens no TCP listener on the forwarded ports (port_protocol = "udp").
+	UDPOnly     bool
+	Nodelay     bool
+	Sniffer     bool
+	KeepAlive   time.Duration
+	Heartbeat   time.Duration // in seconds
+	ChannelSize int
+	WebPort     int
+	Mode        config.TransportType // ws or wss
 
 	// MSS caps the largest TCP segment the accepted tunnel connections send.
 	// Zero leaves it to the kernel, which is the default; it is set where the
@@ -473,7 +475,7 @@ func (s *WsTransport) tlsSettings() network.TLSSettings {
 // forwarder is this transport's forwarded ports for one generation.
 func (s *WsTransport) forwarder(g *wsGen) portForwarder {
 	return portForwarder{
-		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP, udpOnly: s.config.UDPOnly,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   s.tuneUserConn,
 		queued: requestAlways(g.reqNewConnChan, s.logger),

@@ -68,6 +68,9 @@ type WsMuxConfig struct {
 	MaxReceiveBuffer int
 	MaxStreamBuffer  int
 	ProxyProtocol    bool
+	// AcceptUDP and UDPOnly: see TcpConfig. A flow is a stream of its own.
+	AcceptUDP bool
+	UDPOnly   bool
 
 	// Backpack: where a wss certificate comes from when no files are given
 	// (Let's Encrypt, or one generated for the run). See network.TLSSettings.
@@ -402,8 +405,37 @@ func (s *WsMuxTransport) tlsSettings() network.TLSSettings {
 
 func (s *WsMuxTransport) parsePortMappings(g *wsMuxGen) {
 	core.ParsePortMappings(s.config.Ports, s.logger, func(localAddr, remoteAddr string) {
-		s.localListener(g, localAddr, remoteAddr)
+		if s.config.AcceptUDP {
+			go listenUDP(g.ctx, &s.holds, s.logger, localAddr, remoteAddr, func(flow *LocalAcceptUDPConn) bool {
+				return s.queue(g, LocalTCPConn{udp: flow, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()})
+			})
+		}
+		if !s.config.UDPOnly {
+			s.localListener(g, localAddr, remoteAddr)
+		}
 	})
+}
+
+// queue hands c to the sessions, asking the kharej for another session when
+// the ones open are full. It reports false when the queue itself is full.
+func (s *WsMuxTransport) queue(g *wsMuxGen, c LocalTCPConn) bool {
+	select {
+	case g.localChannel <- c:
+	default:
+		return false
+	}
+	// +1 for stream counter
+	atomic.AddInt32(&g.streamCounter, 1)
+
+	if atomic.LoadInt32(&g.streamCounter) >= atomic.LoadInt32(&g.sessionCounter)*int32(s.config.MuxCon) {
+		s.logger.Tracef("stream counter: %v, session counter: %v", atomic.LoadInt32(&g.streamCounter), atomic.LoadInt32(&g.sessionCounter))
+		select {
+		case g.reqNewConnChan <- struct{}{}:
+		default:
+			s.logger.Warn("failed to request new connection. channel is full")
+		}
+	}
+	return true
 }
 
 func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr string) {
@@ -460,23 +492,9 @@ func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, rem
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
-			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
+			if s.queue(g, LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}) {
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
-
-				// +1 for stream counter
-				atomic.AddInt32(&g.streamCounter, 1)
-
-				if atomic.LoadInt32(&g.streamCounter) >= atomic.LoadInt32(&g.sessionCounter)*int32(s.config.MuxCon) {
-					s.logger.Tracef("stream counter: %v, session counter: %v", atomic.LoadInt32(&g.streamCounter), atomic.LoadInt32(&g.sessionCounter))
-					select {
-					case g.reqNewConnChan <- struct{}{}:
-					default:
-						s.logger.Warn("failed to request new connection. channel is full")
-					}
-				}
-
-			default: // channel is full, discard the connection
+			} else { // channel is full, discard the connection
 				s.logger.Warnf("local listener channel is full, discarding TCP connection from %s", tcpConn.LocalAddr().String())
 				conn.Close()
 			}
@@ -515,7 +533,7 @@ func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
 		case incomingConn := <-g.localChannel:
 			if time.Now().UnixMilli()-incomingConn.timeCreated > 3000 { // 3000ms
 				s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-incomingConn.timeCreated)
-				incomingConn.conn.Close()
+				incomingConn.drop()
 
 				atomic.AddInt32(&g.streamCounter, -1)
 				<-counter
@@ -528,14 +546,14 @@ func (s *WsMuxTransport) handleSession(g *wsMuxGen, session *smux.Session) {
 				return
 			}
 
-			if err := core.SendBinaryString(stream, incomingConn.remoteAddr); err != nil {
+			if err := core.SendBinaryString(stream, incomingConn.target()); err != nil {
 				s.logger.Tracef("failed to send address over stream: %v", err)
 				g.localChannel <- incomingConn
 				continue
 			}
 
 			go func() {
-				core.TCPConnectionHandler(g.ctx, s.config.ProxyProtocol, incomingConn.conn, core.Counted(stream), s.logger, g.usageMonitor, incomingConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
+				incomingConn.relay(g.ctx, s.config.ProxyProtocol, stream, s.logger, g.usageMonitor, s.config.Sniffer)
 				atomic.AddInt32(&g.streamCounter, -1)
 				<-counter // read signal from the channel
 			}()

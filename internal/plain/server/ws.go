@@ -56,6 +56,10 @@ type WsConfig struct {
 	ChannelSize int
 	WebPort     int
 	Mode        config.TransportType // ws or wss
+	// AcceptUDP and UDPOnly: see TcpConfig. A flow is a /tunnel websocket
+	// of its own, as a TCP connection is.
+	AcceptUDP bool
+	UDPOnly   bool
 
 	// Backpack: where a wss certificate comes from when no files are given
 	// (Let's Encrypt, or one generated for the run). See network.TLSSettings.
@@ -377,8 +381,31 @@ func (s *WsTransport) tlsSettings() network.TLSSettings {
 
 func (s *WsTransport) parsePortMappings(g *wsGen) {
 	core.ParsePortMappings(s.config.Ports, s.logger, func(localAddr, remoteAddr string) {
-		s.localListener(g, localAddr, remoteAddr)
+		if s.config.AcceptUDP {
+			go listenUDP(g.ctx, &s.holds, s.logger, localAddr, remoteAddr, func(flow *LocalAcceptUDPConn) bool {
+				return s.queue(g, LocalTCPConn{udp: flow, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()})
+			})
+		}
+		if !s.config.UDPOnly {
+			s.localListener(g, localAddr, remoteAddr)
+		}
 	})
+}
+
+// queue hands c to the handle loops and asks the kharej for another tunnel
+// connection. It reports false when the queue is full.
+func (s *WsTransport) queue(g *wsGen, c LocalTCPConn) bool {
+	select {
+	case g.localChannel <- c:
+	default:
+		return false
+	}
+	select {
+	case g.reqNewConnChan <- struct{}{}:
+	default:
+		s.logger.Warn("channel is full, cannot request a new connection")
+	}
+	return true
 }
 
 func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr string) {
@@ -436,18 +463,9 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
 
-			select {
-			case g.localChannel <- LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}:
-
-				select {
-				case g.reqNewConnChan <- struct{}{}:
-				default:
-					s.logger.Warn("channel is full, cannot request a new connection")
-				}
-
+			if s.queue(g, LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}) {
 				s.logger.Debugf("accepted incoming TCP connection from %s", tcpConn.RemoteAddr().String())
-
-			default: // channel is full, discard the connection
+			} else { // channel is full, discard the connection
 				s.logger.Warnf("channel with listener %s is full, discarding TCP connection from %s", listener.Addr().String(), tcpConn.LocalAddr().String())
 				conn.Close()
 			}
@@ -465,7 +483,7 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 			for {
 				if time.Now().UnixMilli()-localConn.timeCreated > 3000 { // 3000ms
 					s.logger.Debugf("timeouted local connection: %d ms", time.Now().UnixMilli()-localConn.timeCreated)
-					localConn.conn.Close()
+					localConn.drop()
 					break loop
 				}
 
@@ -475,10 +493,14 @@ func (s *WsTransport) handleLoop(g *wsGen) {
 				case tunnelConnection := <-g.tunnelChannel:
 					close(tunnelConnection.ping)
 					tunnelConnection.mu.Lock()
-					if err := tunnelConnection.conn.WriteMessage(websocket.TextMessage, []byte(localConn.remoteAddr)); err != nil {
+					if err := tunnelConnection.conn.WriteMessage(websocket.TextMessage, []byte(localConn.target())); err != nil {
 						s.logger.Debugf("%v", err) // failed to send port number
 						tunnelConnection.conn.Close()
 						continue loop
+					}
+					if localConn.udp != nil {
+						go UDPConnectionHandler(g.ctx, localConn.udp, core.Counted(core.WSStream(tunnelConnection.conn)), s.logger, g.usageMonitor, localConn.udp.port(), s.config.Sniffer, noCongestion)
+						break loop
 					}
 					go core.WSConnectionHandler(g.ctx, tunnelConnection.conn, localConn.conn, s.logger, g.usageMonitor, localConn.conn.LocalAddr().(*net.TCPAddr).Port, s.config.Sniffer)
 					break loop

@@ -279,6 +279,7 @@ func (s *Server) startEngine(ctx context.Context, tr config.TransportType, onPla
 	case config.TCPMUX:
 		tcpMuxConfig := &transport.TcpMuxConfig{
 			AcceptUDP:        s.config.ForwardsUDP(),
+			UDPOnly:          !s.config.ForwardsTCP(),
 			BindAddr:         s.config.BindAddr,
 			Nodelay:          s.config.Nodelay,
 			KeepAlive:        time.Duration(s.config.Keepalive) * time.Second,
@@ -311,6 +312,7 @@ func (s *Server) startEngine(ctx context.Context, tr config.TransportType, onPla
 	case config.WS, config.WSS:
 		wsConfig := &transport.WsConfig{
 			AcceptUDP:    s.config.ForwardsUDP(),
+			UDPOnly:      !s.config.ForwardsTCP(),
 			BindAddr:     s.config.BindAddr,
 			Nodelay:      s.config.Nodelay,
 			KeepAlive:    time.Duration(s.config.Keepalive) * time.Second,
@@ -343,6 +345,7 @@ func (s *Server) startEngine(ctx context.Context, tr config.TransportType, onPla
 	case config.WSMUX, config.WSSMUX:
 		wsMuxConfig := &transport.WsMuxConfig{
 			AcceptUDP:        s.config.ForwardsUDP(),
+			UDPOnly:          !s.config.ForwardsTCP(),
 			BindAddr:         s.config.BindAddr,
 			Nodelay:          s.config.Nodelay,
 			KeepAlive:        time.Duration(s.config.Keepalive) * time.Second,

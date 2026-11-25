@@ -610,11 +610,9 @@ func (s *Spec) SetEncryption(mode string) {
 }
 
 // PortProtocols is what this spec's transport can forward, for a setup form:
-// the plain engine's mux and websocket transports carry TCP only.
+// the udp transport forwards UDP alone, every other one all three.
 func (s Spec) PortProtocols() []string {
 	switch s.Transport {
-	case "tcpmux", "ws", "wss", "wsmux", "wssmux":
-		return []string{config.PortsTCP}
 	case "udp":
 		return []string{config.PortsUDP}
 	}

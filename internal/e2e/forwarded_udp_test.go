@@ -83,12 +83,10 @@ func startForwardingTunnel(t *testing.T, transport, backendAddr string) string {
 	return fmt.Sprintf("127.0.0.1:%d", entryPort)
 }
 
-// forwardedUDPTransports are the stream transports, all of which now carry
+// forwardedUDPTransports are the stream transports, all of which carry
 // datagrams on a forwarded port. The raw udp transport is not here: it forwards
 // only UDP and has its own test.
-// tcpmux, ws and wsmux run on the plain engine, which forwards
-// UDP on tcp only.
-var forwardedUDPTransports = []string{"tcp", "kcp", "quic"}
+var forwardedUDPTransports = []string{"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux", "kcp", "quic"}
 
 func TestForwardedUDPWorksOnEveryTransport(t *testing.T) {
 	for _, transport := range forwardedUDPTransports {
@@ -117,8 +115,16 @@ func TestForwardedUDPWorksOnEveryTransport(t *testing.T) {
 // a large payload is where a framing mistake shows — it is the one that gets
 // split across several reads on the tunnel and has to be put back together.
 func TestForwardedUDPPreservesDatagramBoundaries(t *testing.T) {
+	// kcp, and the stream transports a flow rides as a stream or a websocket
+	// of its own, where the framing is what keeps each datagram whole.
+	for _, transport := range []string{"kcp", "tcpmux", "ws", "wsmux"} {
+		t.Run(transport, func(t *testing.T) { datagramBoundaries(t, transport) })
+	}
+}
+
+func datagramBoundaries(t *testing.T, transport string) {
 	backend := startUDPEcho(t)
-	entry := startForwardingTunnel(t, "kcp", backend)
+	entry := startForwardingTunnel(t, transport, backend)
 
 	// 8 KB is the largest that can be sent as one datagram everywhere the tests
 	// run — macOS caps a UDP send at net.inet.udp.maxdgram, 9216 by default,
@@ -172,6 +178,12 @@ func TestForwardedUDPPreservesDatagramBoundaries(t *testing.T) {
 // has to go back to the socket that sent it — a NAT table keyed wrongly, or
 // shared, would cross the wires and each peer would see the other's traffic.
 func TestForwardedUDPKeepsSourcesApart(t *testing.T) {
+	for _, transport := range []string{"kcp", "tcpmux", "ws", "wsmux"} {
+		t.Run(transport, func(t *testing.T) { sourcesApart(t, transport) })
+	}
+}
+
+func sourcesApart(t *testing.T, transport string) {
 	// A backend that answers with the sender's own port, so a crossed reply is
 	// not merely wrong data but provably the other peer's.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -190,7 +202,7 @@ func TestForwardedUDPKeepsSourcesApart(t *testing.T) {
 		}
 	}()
 
-	entry := startForwardingTunnel(t, "kcp", pc.LocalAddr().String())
+	entry := startForwardingTunnel(t, transport, pc.LocalAddr().String())
 	deadline := time.Now().Add(tunnelReadyTimeout)
 	for time.Now().Before(deadline) {
 		if err := udpRoundTrip(entry, []byte("ready")); err == nil {
@@ -323,4 +335,85 @@ func TestForwardedUDPIsOffByDefault(t *testing.T) {
 		t.Fatalf("the default forwarded UDP even though no accept_udp was set: %v", err)
 	}
 	pc.Close()
+}
+
+// On the plain engine's mux and websocket transports a forwarded port carries
+// what port_protocol says, as on tcp: "both" is TCP and UDP on the one port,
+// to a backend that answers both, and "udp" is UDP with no TCP listener at
+// all.
+func TestPortProtocolOnTheMuxAndWebsocketTransports(t *testing.T) {
+	for _, transport := range []string{"tcpmux", "ws", "wss", "wsmux", "wssmux"} {
+		t.Run(transport, func(t *testing.T) {
+			t.Parallel()
+			// One backend address answering TCP and UDP both.
+			tcpBackend := startEchoBackend(t)
+			udpBackend, err := net.ListenPacket("udp", tcpBackend.addr)
+			if err != nil {
+				t.Fatalf("cannot open the UDP side of the backend: %v", err)
+			}
+			t.Cleanup(func() { udpBackend.Close() })
+			go func() {
+				buf := make([]byte, 64*1024)
+				for {
+					n, addr, err := udpBackend.ReadFrom(buf)
+					if err != nil {
+						return
+					}
+					_, _ = udpBackend.WriteTo(buf[:n], addr)
+				}
+			}()
+
+			both := startTunnelCarrying(t, transport, tcpBackend.addr, "both")
+			if err := awaitUDP(both, []byte("both, the udp side")); err != nil {
+				t.Fatalf("port_protocol = both carried no datagram: %v", err)
+			}
+			if err := awaitEcho(both, tunnelReadyTimeout); err != nil {
+				t.Fatalf("port_protocol = both carried no TCP: %v", err)
+			}
+
+			udpOnly := startTunnelCarrying(t, transport, tcpBackend.addr, "udp")
+			if err := awaitUDP(udpOnly, []byte("udp alone")); err != nil {
+				t.Fatalf("port_protocol = udp carried no datagram: %v", err)
+			}
+			if c, err := net.DialTimeout("tcp", udpOnly, time.Second); err == nil {
+				c.Close()
+				t.Fatal("port_protocol = udp still opened a TCP listener on the forwarded port")
+			}
+		})
+	}
+}
+
+// startTunnelCarrying is startForwardingTunnel with port_protocol = proto.
+func startTunnelCarrying(t *testing.T, transport, backendAddr, proto string) string {
+	t.Helper()
+	tunnelPort, entryPort := freePort(t), freePort(t)
+	token := "port-protocol-token-0123456789ab"
+	srvCfg := baseServerConfig(transport, tunnelPort, entryPort, backendAddr, token)
+	srvCfg.PortProtocol = proto
+	cliCfg := baseClientConfig(transport, fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	srv := server.NewServer(srvCfg, ctx)
+	wg.Add(1)
+	go func() { defer wg.Done(); srv.Start() }()
+	time.Sleep(300 * time.Millisecond)
+	cli := client.NewClient(cliCfg, ctx)
+	wg.Add(1)
+	go func() { defer wg.Done(); cli.Start() }()
+	return fmt.Sprintf("127.0.0.1:%d", entryPort)
+}
+
+// awaitUDP retries one datagram round trip until the tunnel is up.
+func awaitUDP(entry string, payload []byte) error {
+	deadline := time.Now().Add(tunnelReadyTimeout)
+	var last error
+	for time.Now().Before(deadline) {
+		if last = udpRoundTrip(entry, payload); last == nil {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return last
 }

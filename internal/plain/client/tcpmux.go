@@ -314,10 +314,15 @@ func (c *TcpMuxTransport) handleSession(g *clientGen, tunnelConn net.Conn) {
 }
 
 func (c *TcpMuxTransport) localDialer(g *clientGen, stream *smux.Stream, remoteAddr string) {
+	remoteAddr, udp := core.SplitTarget(remoteAddr)
 	port, resolvedAddr, err := core.ResolveRemoteAddr(remoteAddr)
 	if err != nil {
 		c.logger.Infof("failed to resolve remote port: %v", err)
 		stream.Close()
+		return
+	}
+	if udp {
+		UDPDialer(core.Counted(stream), resolvedAddr, c.logger, g.usageMonitor, port, c.config.Sniffer)
 		return
 	}
 

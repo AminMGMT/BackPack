@@ -182,9 +182,9 @@ function shapeForTransport(root, settings, tunnel) {
   // Which half of the tunnel this is decides the rest.
   show(byName('serverAddr'), !server);
   show(byName('ports'), server);
-  // The plain engine's mux and websocket transports, the HTTPS helpers and
-  // udp offer one kind only, so there is nothing to choose there.
-  show(byName('tune.portProtocol'), server && !['udp', 'tcpmux', 'ws', 'wss', 'wsmux', 'wssmux'].includes(t) &&
+  // The HTTPS helpers and udp offer one kind only, so there is nothing to
+  // choose there.
+  show(byName('tune.portProtocol'), server && t !== 'udp' &&
     !['naive', 'xhttp', 'reality'].includes(t));
   show(byName('tune.channelSize'), server);
   // Encryption: where the transport carries more than none, offering only the

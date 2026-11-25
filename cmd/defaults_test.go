@@ -7,23 +7,18 @@ import (
 	"github.com/backpack/backpack/config"
 )
 
-// UDP alone on a transport that forwards TCP only would open ports that
-// listen for nothing, so it is refused with what to do instead. "both" there
-// still starts — the ports carry TCP and the engine says UDP is not forwarded
-// — so a tunnel an older file describes keeps working.
-func TestPortProtocolIsCheckedAgainstTheTransport(t *testing.T) {
+// Every reverse transport forwards tcp, udp and both — the plain engine's mux
+// and websocket ones too, since UDP was added to them — so only a value that
+// is not one of the three is refused.
+func TestPortProtocolIsChecked(t *testing.T) {
 	cfg := func(tr config.TransportType, proto string) *config.Config {
 		return &config.Config{Server: config.ServerConfig{Transport: tr, PortProtocol: proto}}
 	}
-	if err := checkPortProtocol(cfg(config.TCPMUX, "udp")); err == nil || !strings.Contains(err.Error(), "TCP only") {
-		t.Fatalf("udp on tcpmux: %v, want a refusal that says TCP only", err)
-	}
-	for _, c := range []struct {
-		tr    config.TransportType
-		proto string
-	}{{config.TCPMUX, "both"}, {config.TCP, "udp"}, {config.KCP, "udp"}, {config.WS, "tcp"}, {config.WS, ""}} {
-		if err := checkPortProtocol(cfg(c.tr, c.proto)); err != nil {
-			t.Errorf("%s with %q refused: %v", c.tr, c.proto, err)
+	for _, tr := range []config.TransportType{config.TCP, config.TCPMUX, config.WS, config.WSS, config.WSMUX, config.WSSMUX, config.KCP, config.QUIC} {
+		for _, proto := range []string{"", "tcp", "udp", "both"} {
+			if err := checkPortProtocol(cfg(tr, proto)); err != nil {
+				t.Errorf("%s with %q refused: %v", tr, proto, err)
+			}
 		}
 	}
 	if err := checkPortProtocol(cfg(config.TCP, "tcp+udp")); err == nil {

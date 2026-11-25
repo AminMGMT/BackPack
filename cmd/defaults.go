@@ -277,37 +277,15 @@ func checkEncryption(cfg *config.Config) error {
 	return nil
 }
 
-// checkPortProtocol refuses a port_protocol the tunnel cannot carry, rather
-// than starting a tunnel whose ports listen for nothing.
+// checkPortProtocol refuses a port_protocol that is not one. Every reverse
+// transport forwards all three: the plain engine's mux and websocket ones carry
+// UDP too since it was added to them.
 func checkPortProtocol(cfg *config.Config) error {
 	s := cfg.Server
 	if !config.ValidPortProtocol(s.PortProtocol) {
 		return fmt.Errorf("port_protocol = %q: use \"tcp\", \"udp\" or \"both\"", s.PortProtocol)
 	}
-	// Only UDP alone is refused: with "both" (or an older file's
-	// accept_udp = true) the ports still carry TCP, and the engine says that
-	// UDP is not forwarded — a tunnel that worked keeps working.
-	if s.ForwardsTCP() {
-		return nil
-	}
-	switch s.Transport {
-	case config.TCPMUX, config.WS, config.WSS, config.WSMUX, config.WSSMUX:
-		return fmt.Errorf("port_protocol = %q: the %s transport forwards TCP only — "+
-			"use transport = \"tcp\" (or kcp, quic) for UDP, or set port_protocol = \"tcp\"",
-			portProtocolOf(s), s.Transport)
-	}
 	return nil
-}
-
-// portProtocolOf names what a server's ports carry, for messages.
-func portProtocolOf(s config.ServerConfig) string {
-	switch {
-	case !s.ForwardsUDP():
-		return config.PortsTCP
-	case !s.ForwardsTCP():
-		return config.PortsUDP
-	}
-	return config.PortsBoth
 }
 
 func checkNaive(cfg *config.Config) error {
