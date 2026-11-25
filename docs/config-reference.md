@@ -21,6 +21,14 @@ them both ends have to agree on. This says what exists.
 | `l3` | `L3Config` | L3 is a direct layer-3 tunnel, and is present only in a configuration that asks for one. It shares nothing with Server and Client: a file without an [l3] table leaves this zero, L3.Enabled() reads false, and the reverse tunnel runs exactly as it always has. See config/l3.go. |
 | `server` | `ServerConfig` | Server is the reverse tunnel's Iran end: it listens for the client and exposes the forwarded ports. Present only in a configuration that asks for one; the three engines are mutually exclusive. |
 
+## EncryptionConfig
+
+| Key | Type | Description |
+|---|---|---|
+| `encryption` | `string` | Encryption is "none" (or empty), "stealth", "stealth+", "shadow" or "scrap". See EncryptionModes for which transport carries which. |
+| `shadow_sni` | `string` | ShadowSNI is the real site whose TLS handshake "shadow" borrows: the kharej names it in its ClientHello, the Iran server relays the handshake to it, so a probe sees that site's own certificate. |
+| `splash` | `bool` | Splash pads the first records of every connection to random sizes, so the handshake of whatever runs inside the tunnel cannot be read off the record lengths. Needs encrypted traffic: wss, wssmux, or an encryption. |
+
 ## KCP tuning
 
 | Key | Type | Description |
@@ -154,6 +162,7 @@ them both ends have to agree on. This says what exists.
 | `pck_kcp_sndwnd` | `int` | PckKCPSndWnd is the ceiling of KCP's send window in packets. The engine moves the window below it by what it reads of the path's delay, so a larger figure does not queue more on a path that is full, but one that is too small is the speed limit: throughput is at most window x mtu / round-trip time. Zero takes the preset's. |
 | `pck_remote_targets` | `bool` | PckRemoteTargets, on the kharej side, lets the tunnel reach machines other than the kharej server itself. Off (the default), a forwarded port reaches only this server's own services — 127.0.0.1 and its own addresses — which is what the previous PCK's TUN device reached too. Turn it on only for a mapping that names another host ("443=10.0.0.5:443"). |
 | `peer_ip` | `string` | PeerIP is the other end's address on the tunnel. |
+| `port_protocol` | `string` | PortProtocol is what the mapped ports carry: "tcp", "udp" or "both". Empty falls back to accept_udp, as in files written before it. |
 | `ports` | `[]string` | Ports are forwarded port mappings served over the tunnel, in the same syntax as the reverse tunnel's: "443", "443=8443", "10000-10009", and "443=10.0.0.1:80\|10.0.0.2:80" for several backends. A target with no host of its own means PeerIP, which is what almost every mapping wants. |
 | `preset` | `string` | Preset is the name of the tuning profile the two keys below came from. It is a label: the engine reads the values, not this. |
 | `qdisc` | `string` | Qdisc is the queueing discipline on the interface, and is the setting that actually decides jitter. Empty takes fq_codel, which drops when packets start waiting instead of letting the queue grow into delay. |
@@ -242,6 +251,7 @@ them both ends have to agree on. This says what exists.
 | `naive` | `NaiveServerConfig` | Naive optionally wraps the loopback TCP reverse listener in HTTP/2 with a tunnel-owned sing-box helper; experimental and disabled when empty. |
 | `nodelay` | `bool` | Nodelay disables Nagle's algorithm on the tunnel's sockets. Off unless set; every preset sets it. It trades a little bandwidth for latency, which is what an interactive session wants and what a bulk transfer does not notice. |
 | `peer_auth` | `string` | PeerAuth is "required" to refuse a peer on the handshake before v2.0.0 on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake sends the token as it is and lets anything on the path pose as the other end. Empty still accepts such a peer, so a tunnel keeps working while its two servers are upgraded one after the other, until the other end has once proved itself the new way; from then on the old handshake is refused anyway (remembered beside this file). Setup Links from v2.0.0 write "required". |
+| `port_protocol` | `string` | PortProtocol is what the forwarded ports carry: "tcp", "udp" or "both". Empty falls back to accept_udp (true = both, otherwise tcp), which is how every file written before this key reads. See ForwardsUDP and ForwardsTCP. |
 | `ports` | `[]string` | Ports are the forwarded ports this server exposes, as "443", "8080=127.0.0.1:80", "443-450" or "10.0.0.5:443". See docs/port-mappings.md for every form. |
 | `pprof` | `bool` | PPROF exposes Go's profiling endpoint on 127.0.0.1:6060. Off by default and loopback-only: its heap dump contains this tunnel's token. |
 | `preset` | `string` | Preset records which performance profile the tuning values came from — balance, turbo or aggressive. A label: the engine reads the values, never this. Set by hand only if you want the menu to stop offering to change them. |
@@ -285,4 +295,4 @@ them both ends have to agree on. This says what exists.
 
 ---
 
-*Generated from `config/` on 2026-11-20. Last verified against Backpack v2.0.0.*
+*Generated from `config/` on 2026-11-24. Last verified against Backpack v2.0.0.*

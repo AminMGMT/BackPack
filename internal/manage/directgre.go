@@ -96,7 +96,11 @@ func setupGRE(side directSide) {
 	cfg.Name = uniqueName(tui.PromptDefault("Tunnel Name", freeName(cfg.DefaultName())))
 
 	if side == sideIran && len(cfg.Ports) > 0 {
-		cfg.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP On Those Ports", false)
+		proto, ok := askPortProtocol(allPortProtocols, config.PortsTCP)
+		if !ok {
+			return
+		}
+		cfg.SetPortProtocol(proto)
 		cfg.Ports = offerL3Sharing(cfg)
 		if busy := busyForwardPorts(cfg.Ports, cfg.PeerIP); len(busy) > 0 {
 			tui.Error("Already in use on this server: " + strings.Join(busy, ", ") +

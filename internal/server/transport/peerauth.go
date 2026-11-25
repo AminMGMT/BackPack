@@ -1,13 +1,17 @@
 package transport
 
 import (
+	"crypto/subtle"
 	"net"
+	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
 	"github.com/backpack/backpack/internal/utils/network"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -102,3 +106,110 @@ type peerSession struct {
 func (s *peerSession) Set(v *network.PeerSession) { s.p.Store(v) }
 func (s *peerSession) Get() *network.PeerSession  { return s.p.Load() }
 func (s *peerSession) Clear()                     { s.p.Store(nil) }
+
+// The plain ws transports carry the handshake in the upgrade: the client's
+// hello as its bearer on /channel, the server's reply as a response header,
+// and the client's confirm as the first message on the new websocket. Pool
+// connections (/tunnel) present the session's pool tag as their bearer. Over
+// wss the TLS-bound proofs already do this job (see network.WSSServerAnswer)
+// and nothing here applies.
+const (
+	wsBearerHello = network.PeerAuthWire + "."
+	wsBearerPool  = network.PeerAuthWire + "p."
+)
+
+// wsPeerAuth is a ws transport's side of it.
+type wsPeerAuth struct {
+	guard      *network.PeerGuard
+	token      string
+	simpleAuth bool
+	label      string
+	peer       *peerSession
+	log        *logrus.Logger
+	// onPlain is called for a /channel claim made the plain engine's way —
+	// the raw token as the bearer, over ws or wss — so the tunnel can move to
+	// that engine. Not with simple_auth, where a v2.0.0 client sends the raw
+	// token too.
+	onPlain func()
+}
+
+// wsAdmission is what an upgrade request proved.
+type wsAdmission struct {
+	// session is set on a /channel claim made with the new handshake, before
+	// the confirm; nil for every other request.
+	session *network.PeerSession
+	// header is what the upgrade answers with.
+	header map[string][]string
+}
+
+// admit judges an upgrade request. ok false means the request gets the decoy.
+func (a wsPeerAuth) admit(r *http.Request) (adm wsAdmission, ok bool) {
+	if a.onPlain != nil && !a.simpleAuth && r.URL.Path == "/channel" &&
+		subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+a.token)) == 1 {
+		a.log.Info("the kharej now runs the plain engine: moving this tunnel to it")
+		a.onPlain()
+		return adm, false
+	}
+	// wss proves both ends through its TLS session already, and with
+	// simple_auth a trusted proxy in front stands in for this server.
+	if r.TLS != nil || a.simpleAuth || !websocket.IsWebSocketUpgrade(r) {
+		if !isTunnelRequest(r, a.token, a.simpleAuth) {
+			return adm, false
+		}
+		return wsAdmission{header: serverProof(r, a.token, a.simpleAuth)}, true
+	}
+	bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	switch {
+	case r.URL.Path == "/channel" && strings.HasPrefix(bearer, wsBearerHello):
+		h, good := network.DecodePeerHello(strings.TrimPrefix(bearer, wsBearerHello))
+		if !good || !a.guard.Key().VerifyHello(h, a.label) {
+			return adm, false
+		}
+		reply, sess, err := a.guard.Key().Reply(h, a.label)
+		if err != nil {
+			return adm, false
+		}
+		return wsAdmission{session: sess, header: map[string][]string{network.PeerAuthHeader: {reply.Encode()}}}, true
+	case strings.HasPrefix(r.URL.Path, "/tunnel") && strings.HasPrefix(bearer, wsBearerPool):
+		sess := a.peer.Get()
+		if sess == nil {
+			return adm, false
+		}
+		tag := strings.TrimPrefix(bearer, wsBearerPool)
+		return adm, subtle.ConstantTimeCompare([]byte(tag), []byte(sess.PoolTag())) == 1
+	}
+	// The token itself: a client on the handshake before v2.0.0.
+	if !isTunnelRequest(r, a.token, a.simpleAuth) {
+		return adm, false
+	}
+	if r.URL.Path == "/channel" {
+		if a.guard.Strict() {
+			a.log.Warnf("a client at %s offered the handshake from before v2.0.0 and was refused: %s",
+				r.RemoteAddr, strictWhy(a.guard))
+			return adm, false
+		}
+		warnLegacyPeer(a.log, "client")
+		return adm, true
+	}
+	// A pool connection on the token is a legacy client's, and only while one
+	// is seated.
+	return adm, a.peer.Get() == nil && !a.guard.Strict()
+}
+
+// confirm reads the client's confirm off a new /channel websocket made with
+// the new handshake. A nil session (the old handshake) has nothing to read.
+func (a wsPeerAuth) confirm(conn *websocket.Conn, sess *network.PeerSession) bool {
+	if sess == nil {
+		return true
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(announceTimeout))
+	_, msg, err := conn.ReadMessage()
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil || !sess.CheckConfirm(string(msg)) {
+		a.log.Warnf("a control channel claim from %s did not finish the handshake", conn.RemoteAddr())
+		conn.Close()
+		return false
+	}
+	a.guard.Proved()
+	return true
+}

@@ -11,8 +11,7 @@ import (
 
 // ParsePortMappings reads the server's ports list and calls start for every
 // listener it names, with the local address to bind and the remote address to
-// send. It is Backhaul's parsePortMappings, which each of its server
-// transports carried a copy of:
+// send. Every plain server transport uses it:
 //
 //	"443"                   listen :443, send "443"
 //	"443-600"               each port in the range, sending its own number
@@ -20,7 +19,7 @@ import (
 //	"443-600=1.1.1.1:5201"  each port in the range, sending "1.1.1.1:5201"
 //	"127.0.0.2:443=5201"    listen 127.0.0.2:443, send "5201"
 //
-// A malformed entry is fatal, as it is in Backhaul.
+// A malformed entry is fatal.
 func ParsePortMappings(ports []string, logger *logrus.Logger, start func(localAddr, remoteAddr string)) {
 	for _, portMapping := range ports {
 		parts := strings.Split(portMapping, "=")

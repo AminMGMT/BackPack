@@ -35,22 +35,24 @@ type L3Spec struct {
 	Addr      string
 	// GRELocal is this server's own address for a kernel GRE link. Empty, the
 	// usual case, lets the engine take the source of the route to Addr.
-	GRELocal       string
-	Token          string
-	Iface          string
-	LocalIP        string
-	PeerIP         string
-	MTU            int
-	AutoMTU        *bool
-	SockBuf        int
-	FECData        int
-	FECParity      int
-	MSSClamp       int
-	Preset         string
-	TxQueueLen     int
-	Qdisc          string
-	Ports          []string
-	AcceptUDP      bool
+	GRELocal   string
+	Token      string
+	Iface      string
+	LocalIP    string
+	PeerIP     string
+	MTU        int
+	AutoMTU    *bool
+	SockBuf    int
+	FECData    int
+	FECParity  int
+	MSSClamp   int
+	Preset     string
+	TxQueueLen int
+	Qdisc      string
+	Ports      []string
+	AcceptUDP  bool
+	// UDPOnly forwards the ports over UDP alone; see PortProtocol.
+	UDPOnly        bool
 	MaxConnections int
 	BandwidthMbps  int
 
@@ -190,6 +192,7 @@ func (s L3Spec) Render() string {
 		b.WriteString("# simply carries whatever is routed into the interface.\n")
 		writeKV(&b, "ports", tomlList(s.Ports))
 		writeKV(&b, "accept_udp", fmt.Sprint(s.AcceptUDP))
+		writeKV(&b, "port_protocol", quote(s.PortProtocol()))
 		if s.MaxConnections > 0 || s.BandwidthMbps > 0 {
 			b.WriteString("\n# Caps on the forwarded ports only. Zero means unlimited.\n")
 			writeKV(&b, "max_connections", fmt.Sprint(s.MaxConnections))
@@ -287,6 +290,7 @@ func (s L3Spec) renderPck() string {
 		b.WriteString("# names the target it wants.\n")
 		writeKV(&b, "ports", tomlList(s.Ports))
 		writeKV(&b, "accept_udp", fmt.Sprint(s.AcceptUDP))
+		writeKV(&b, "port_protocol", quote(s.PortProtocol()))
 		if s.MaxConnections > 0 || s.BandwidthMbps > 0 {
 			b.WriteString("\n# Caps on the forwarded ports only. Zero means unlimited.\n")
 			writeKV(&b, "max_connections", fmt.Sprint(s.MaxConnections))
@@ -371,6 +375,7 @@ func (s L3Spec) renderGRE() string {
 		b.WriteString("# simply carries whatever is routed into the interface.\n")
 		writeKV(&b, "ports", tomlList(s.Ports))
 		writeKV(&b, "accept_udp", fmt.Sprint(s.AcceptUDP))
+		writeKV(&b, "port_protocol", quote(s.PortProtocol()))
 		if s.MaxConnections > 0 || s.BandwidthMbps > 0 {
 			b.WriteString("\n# Caps on the forwarded ports only. Zero means unlimited.\n")
 			writeKV(&b, "max_connections", fmt.Sprint(s.MaxConnections))
@@ -588,4 +593,22 @@ func (s DirectSide) String() string {
 		return "iran"
 	}
 	return "kharej"
+}
+
+// PortProtocol is what the mapped ports carry: "tcp", "udp" or "both".
+func (s L3Spec) PortProtocol() string {
+	switch {
+	case !s.AcceptUDP:
+		return config.PortsTCP
+	case s.UDPOnly:
+		return config.PortsUDP
+	}
+	return config.PortsBoth
+}
+
+// SetPortProtocol sets what the mapped ports carry; anything but "udp" or
+// "both" is TCP.
+func (s *L3Spec) SetPortProtocol(v string) {
+	s.AcceptUDP = v == config.PortsUDP || v == config.PortsBoth
+	s.UDPOnly = v == config.PortsUDP
 }

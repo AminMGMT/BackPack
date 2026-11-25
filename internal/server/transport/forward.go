@@ -27,6 +27,8 @@ type portForwarder struct {
 	ctx       context.Context
 	ports     []string
 	acceptUDP bool
+	// udpOnly opens no TCP listener on the ports (port_protocol = "udp").
+	udpOnly   bool
 	queue     chan LocalTCPConn
 	limits    *limiter
 	listeners *listenerSet
@@ -93,6 +95,14 @@ func (f portForwarder) listen(localAddr, remoteAddr string) {
 	// Counted so a restart can wait for the port to be free again.
 	f.listeners.hold()
 	defer f.listeners.release()
+
+	if f.udpOnly {
+		if f.acceptUDP {
+			go startUDPForward(f.ctx, f.log, localAddr, remoteAddr, f.admitUDP)
+		}
+		<-f.ctx.Done()
+		return
+	}
 
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
@@ -252,5 +262,16 @@ func alwaysNodelay(log *logrus.Logger) func(*net.TCPConn) {
 		if err := c.SetNoDelay(true); err != nil {
 			log.Warnf("failed to set TCP_NODELAY for %s: %v", c.RemoteAddr().String(), err)
 		}
+	}
+}
+
+// wsTune is the websocket transports' socket options for a user's connection.
+func wsTune(c *net.TCPConn, nodelay bool, keepAlive time.Duration, log *logrus.Logger) {
+	nodelayTune(nodelay, log)(c)
+	if err := c.SetKeepAlive(true); err != nil {
+		log.Warnf("failed to enable TCP keep-alive for %s: %v", c.RemoteAddr().String(), err)
+	}
+	if err := c.SetKeepAlivePeriod(keepAlive); err != nil {
+		log.Warnf("failed to set TCP keep-alive period for %s: %v", c.RemoteAddr().String(), err)
 	}
 }

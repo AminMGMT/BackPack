@@ -160,7 +160,7 @@ func UDPConnectionHandler(udp *LocalAcceptUDPConn, tcp net.Conn, logger *logrus.
 	done := make(chan struct{})
 
 	if rtt == 0 {
-		// RTT of 0 indicates that either the backhaul is running in a local environment
+		// RTT of 0 indicates that either the tunnel is running in a local environment
 		// (with negligible latency), or RTT measurement failed.
 		// Set a default RTT of 100ms to ensure proper functioning of TCP congestion control.
 		rtt = 100

@@ -10,8 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// muxSession.failed, on the transport that multiplexes here (kcp; tcpmux and
-// wsmux run on the plain engine now).
+// muxSession.failed, on the three transports that multiplex.
 //
 // It runs on a session goroutine that has just failed and is about to return,
 // and it has three jobs: give back the session count, put the connection it was
@@ -25,7 +24,7 @@ import (
 // stream count that drifts the other way lets a session take more streams than
 // MuxCon allows.
 
-// sessionErrorSubject is the shape a multiplexing transport has here.
+// sessionErrorSubject is the shape the three transports share here.
 type sessionErrorSubject struct {
 	name string
 	// fail invokes muxSession.failed with a local connection, through the
@@ -50,6 +49,46 @@ func muxSubjects(t *testing.T, queueSize int) []sessionErrorSubject {
 
 	var subs []sessionErrorSubject
 
+	{
+		lim := newLimiter(Limits{MaxConnections: 8})
+		g := &tcpMuxGen{
+			localChannel:   make(chan LocalTCPConn, queueSize),
+			reqNewConnChan: make(chan struct{}, 1),
+		}
+		s := &TcpMuxTransport{lifecycle: lifecycle{logger: log}, limits: lim, config: &TcpMuxConfig{MuxCon: 8}}
+		subs = append(subs, sessionErrorSubject{
+			name: "tcpmux",
+			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
+			counters: func() (int32, int32) {
+				return atomic.LoadInt32(&s.sessionCounter), atomic.LoadInt32(&s.streamCounter)
+			},
+			setCounters: func(sc, st int32) {
+				atomic.StoreInt32(&s.sessionCounter, sc)
+				atomic.StoreInt32(&s.streamCounter, st)
+			},
+			queue: g.localChannel, requests: g.reqNewConnChan, limits: lim,
+		})
+	}
+	{
+		lim := newLimiter(Limits{MaxConnections: 8})
+		g := &wsMuxGen{
+			localChannel:   make(chan LocalTCPConn, queueSize),
+			reqNewConnChan: make(chan struct{}, 1),
+		}
+		s := &WsMuxTransport{lifecycle: lifecycle{logger: log}, limits: lim, config: &WsMuxConfig{MuxCon: 8}}
+		subs = append(subs, sessionErrorSubject{
+			name: "wsmux",
+			fail: func(c *LocalTCPConn, err error) { s.session(g).failed(c, err) },
+			counters: func() (int32, int32) {
+				return atomic.LoadInt32(&s.sessionCounter), atomic.LoadInt32(&s.streamCounter)
+			},
+			setCounters: func(sc, st int32) {
+				atomic.StoreInt32(&s.sessionCounter, sc)
+				atomic.StoreInt32(&s.streamCounter, st)
+			},
+			queue: g.localChannel, requests: g.reqNewConnChan, limits: lim,
+		})
+	}
 	{
 		lim := newLimiter(Limits{MaxConnections: 8})
 		g := &kcpGen{

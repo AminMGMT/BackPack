@@ -67,6 +67,21 @@ func eachTransport(t *testing.T, parent context.Context) map[string]restartable 
 			BindAddr: addr, Token: "t", ChannelSize: 8, Ports: ports,
 			Heartbeat: time.Second, KeepAlive: time.Second,
 		}, log),
+		"tcpmux": NewTcpMuxServer(parent, &TcpMuxConfig{
+			BindAddr: addr, Token: "t", ChannelSize: 8, Ports: ports,
+			Heartbeat: time.Second, MuxCon: 2, MuxVersion: 2,
+			MaxFrameSize: 4096, MaxReceiveBuffer: 1 << 16, MaxStreamBuffer: 4096,
+		}, log),
+		"ws": NewWSServer(parent, &WsConfig{
+			BindAddr: addr, Token: "t", ChannelSize: 8, Ports: ports,
+			Heartbeat: time.Second, KeepAlive: time.Second, Mode: "ws",
+		}, log),
+		"wsmux": NewWSMuxServer(parent, &WsMuxConfig{
+			BindAddr: addr, Token: "t", ChannelSize: 8, Ports: ports,
+			Heartbeat: time.Second, KeepAlive: time.Second, Mode: "wsmux",
+			MuxCon: 2, MuxVersion: 2, MaxFrameSize: 4096,
+			MaxReceiveBuffer: 1 << 16, MaxStreamBuffer: 4096,
+		}, log),
 		"kcp": NewKcpServer(parent, &KcpConfig{
 			BindAddr: addr, Token: "t", ChannelSize: 8, Ports: ports,
 			Heartbeat: time.Second, MuxCon: 2, MuxVersion: 2,
@@ -158,6 +173,12 @@ func TestARestartLeavesTheStatusClear(t *testing.T) {
 			switch v := tr.(type) {
 			case *TcpTransport:
 				v.status.set("Connected (TCP)")
+			case *TcpMuxTransport:
+				v.status.set("Connected (TCPMux)")
+			case *WsTransport:
+				v.status.set("Connected (ws)")
+			case *WsMuxTransport:
+				v.status.set("Connected (wsmux)")
 			case *KcpTransport:
 				v.status.set("Connected (KCP)")
 			case *QuicTransport:
@@ -187,10 +208,10 @@ func TestEveryTransportIsCoveredByTheRestartTable(t *testing.T) {
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 	got := eachTransport(t, dead)
-	if len(got) != 4 {
-		t.Fatalf("the restart table holds %d transports; this package has 4", len(got))
+	if len(got) != 7 {
+		t.Fatalf("the restart table holds %d transports; this package has 7", len(got))
 	}
-	for _, want := range []string{"tcp", "kcp", "quic", "udp"} {
+	for _, want := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic", "udp"} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("%s is missing from the restart table", want)
 		}

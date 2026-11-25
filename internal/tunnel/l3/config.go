@@ -150,6 +150,8 @@ type Config struct {
 	// asked for: a forwarded port carries TCP until an operator says
 	// otherwise, for the same reason it does on the reverse tunnel.
 	AcceptUDP bool
+	// UDPOnly opens no TCP listener on the mapped ports (port_protocol = "udp").
+	UDPOnly bool
 
 	// MaxConnections caps simultaneous forwarded connections (0 = unlimited).
 	// It applies to the forwarder only: the tunnel itself carries whatever the
@@ -407,7 +409,8 @@ func ConfigFromTable(table config.L3Config) (Config, error) {
 		MSSClamp:       table.MSSClamp,
 		AutoMTU:        table.AutoMTUEnabled(),
 		Ports:          table.Ports,
-		AcceptUDP:      table.AcceptUDP,
+		AcceptUDP:      table.ForwardsUDP(),
+		UDPOnly:        !table.ForwardsTCP(),
 		MaxConnections: table.MaxConnections,
 		BandwidthMbps:  table.BandwidthMbps,
 		// Read only by the carrier they belong to; ignored otherwise.

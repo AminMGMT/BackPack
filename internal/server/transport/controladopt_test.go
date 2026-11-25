@@ -221,7 +221,7 @@ func TestAClaimWithTheWrongTokenCannotDisturbTheTunnel(t *testing.T) {
 // The order is the whole security property: the token is checked before
 // anything about the established channel is touched.
 func TestTheTokenIsCheckedBeforeTheTunnelIsDisturbed(t *testing.T) {
-	for _, f := range []string{"tcp.go"} {
+	for _, f := range []string{"tcp.go", "tcpmux.go"} {
 		t.Run(f, func(t *testing.T) {
 			body := withoutComments(funcSourceOf(t, readTransportSource(t, f), ") admitControlChannel("))
 
@@ -308,6 +308,18 @@ func TestAClaimThatReachesAnEndedGenerationIsClosedNotAnswered(t *testing.T) {
 			s.admitControlChannel(g, c, announcement{signal: utils.SG_ChanV2, payload: token})
 			if len(g.handshakeChannel) != 0 {
 				t.Error("tcp: the claim was filed in an ended generation")
+			}
+		},
+		"tcpmux": func(t *testing.T, c net.Conn, ctx context.Context) {
+			s := &TcpMuxTransport{
+				config:    &TcpMuxConfig{Token: token, ChannelSize: 1},
+				lifecycle: lifecycle{parentctx: ctx, logger: quietLogger()},
+			}
+			s.run.set(ctx, func() {})
+			g := &tcpMuxGen{ctx: ctx, handshakeChannel: make(chan controlCandidate, 1)}
+			s.admitControlChannel(g, c, announcement{signal: utils.SG_ChanV2, payload: token})
+			if len(g.handshakeChannel) != 0 {
+				t.Error("tcpmux: the claim was filed in an ended generation")
 			}
 		},
 	} {

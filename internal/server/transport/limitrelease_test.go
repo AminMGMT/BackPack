@@ -35,7 +35,7 @@ func TestEveryPairingTimeoutFreesItsConnectionSlot(t *testing.T) {
 	// flow and releases it on each of the three ways out. The limiter itself is
 	// covered directly in limits_behaviour_test.go rather than by reading the
 	// source of its callers.
-	for _, name := range []string{"tcp", "kcp", "quic"} {
+	for _, name := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic"} {
 		t.Run(name, func(t *testing.T) {
 			src, err := os.ReadFile(name + ".go")
 			if err != nil {
@@ -101,7 +101,7 @@ func TestTheForwarderTakesASlotOnAccept(t *testing.T) {
 
 // Every stream transport serves its forwarded ports through that forwarder.
 func TestEveryStreamTransportUsesTheSharedForwarder(t *testing.T) {
-	for _, name := range []string{"tcp", "kcp", "quic"} {
+	for _, name := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic"} {
 		src, err := os.ReadFile(name + ".go")
 		if err != nil {
 			t.Fatalf("%s.go: %v", name, err)

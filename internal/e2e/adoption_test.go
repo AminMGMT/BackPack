@@ -25,7 +25,7 @@ import (
 // again once the new kharej is in.
 func TestAKharejReconnectingDoesNotRestartTheIranSide(t *testing.T) {
 	bin := currentBinary(t)
-	// tcp, tcpmux, ws and wsmux run on the plain engine (Backhaul's), which
+	// tcp, tcpmux, ws and wsmux run on the plain engine, which
 	// does not have this; see internal/plain.
 	for _, transport := range []string{"kcp", "quic", "udp"} {
 		t.Run(transport, func(t *testing.T) {

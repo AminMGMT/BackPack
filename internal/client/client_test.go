@@ -39,17 +39,17 @@ func baseConfig(tr config.TransportType) *config.ClientConfig {
 // it is a tunnel that will not start.
 func TestEveryTransportStarts(t *testing.T) {
 	want := map[config.TransportType]string{
-		config.TCP:     "*client.TcpTransport",
+		config.TCP:     "*client.compatRunner",
 		config.STEALTH: "*transport.TcpTransport",
-		config.TCPMUX:  "*client.TcpMuxTransport",
+		config.TCPMUX:  "*client.compatRunner",
 		config.KCP:     "*transport.KcpTransport",
 		config.XDI:     "*transport.KcpTransport",
 		config.PCK:     "*transport.KcpTransport",
 		config.QUIC:    "*transport.QuicTransport",
-		config.WS:      "*client.WsTransport",
-		config.WSS:     "*client.WsTransport",
-		config.WSMUX:   "*client.WsMuxTransport",
-		config.WSSMUX:  "*client.WsMuxTransport",
+		config.WS:      "*client.compatRunner",
+		config.WSS:     "*client.compatRunner",
+		config.WSMUX:   "*client.compatRunner",
+		config.WSSMUX:  "*client.compatRunner",
 		config.UDP:     "*transport.UdpTransport",
 	}
 	for tr, typeName := range want {

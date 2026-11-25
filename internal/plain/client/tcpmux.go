@@ -14,7 +14,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// TcpMuxTransport is Backhaul's tcpmux client: its pool connections are smux
+// TcpMuxTransport is the plain tcpmux client: its pool connections are smux
 // sessions the server opens streams on, one per user connection.
 type TcpMuxTransport struct {
 	config       *TcpMuxConfig
@@ -45,6 +45,10 @@ type TcpMuxConfig struct {
 	MSS              int
 	SO_RCVBUF        int
 	SO_SNDBUF        int
+	// OnLegacyServer: see TcpConfig.OnLegacyServer.
+	OnLegacyServer func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewMuxClient(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
@@ -125,9 +129,15 @@ func (c *TcpMuxTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			tunnelConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
+				time.Sleep(c.config.RetryInterval)
+				continue
+			}
+			tunnelConn, err := c.config.Layer.Client(rawConn)
+			if err != nil {
+				c.logger.Errorf("channel dialer: %s handshake: %v", c.config.Layer.Mode(), err)
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
@@ -144,7 +154,15 @@ func (c *TcpMuxTransport) channelDialer(g *clientGen) {
 				tunnelConn.Close()
 				continue
 			}
-			message, _, err := core.ReceiveBinaryTransportString(tunnelConn)
+			message, answer, err := core.ReceiveBinaryTransportString(tunnelConn)
+			// Backpack: a v2.0.0 Iran server refuses this handshake as too old;
+			// the tunnel then runs on that engine until the server is updated.
+			if err == nil && answer == core.SG_Refused && message == core.RefusedTooOld && c.config.OnLegacyServer != nil {
+				c.logger.Info("the Iran server runs Backpack v2.0.0: using its engine until it is updated")
+				tunnelConn.Close()
+				c.config.OnLegacyServer()
+				return
+			}
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					c.logger.Warn("timeout while waiting for control channel response")
@@ -242,9 +260,16 @@ func (c *TcpMuxTransport) channelHandler(g *clientGen) {
 func (c *TcpMuxTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new tunnel connection to address %s", c.config.RemoteAddr)
 
-	tunnelConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
+		return
+	}
+	// Speed edit: see core.MuxSocket.
+	core.MuxSocket(rawConn)
+	tunnelConn, err := c.config.Layer.Client(rawConn)
+	if err != nil {
+		c.logger.Errorf("tunnel server dialer: %s handshake: %v", c.config.Layer.Mode(), err)
 		return
 	}
 

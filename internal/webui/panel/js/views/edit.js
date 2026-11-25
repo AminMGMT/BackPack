@@ -182,8 +182,21 @@ function shapeForTransport(root, settings, tunnel) {
   // Which half of the tunnel this is decides the rest.
   show(byName('serverAddr'), !server);
   show(byName('ports'), server);
-  show(byName('tune.acceptUDP'), server);
+  // The plain engine's mux and websocket transports, the HTTPS helpers and
+  // udp offer one kind only, so there is nothing to choose there.
+  show(byName('tune.portProtocol'), server && !['udp', 'tcpmux', 'ws', 'wss', 'wsmux', 'wssmux'].includes(t) &&
+    !['naive', 'xhttp', 'reality'].includes(t));
   show(byName('tune.channelSize'), server);
+  // Encryption: where the transport carries more than none, offering only the
+  // modes it carries (config.EncryptionModes, as the server sends it).
+  const encModes = ((wireControls.opts || {}).encryption || {})[t] || [];
+  show(byName('tune.encryption'), !direct && encModes.length > 1);
+  // Splash needs encrypted traffic (config.SplashAllowed): wss, wssmux, or
+  // any of the others with an encryption; the server drops it elsewhere.
+  show(byName('tune.splash'), !direct && encModes.length > 1);
+  root.querySelectorAll('.sel[data-name="tune.encryption"] .selopt').forEach(b => {
+    b.hidden = !encModes.includes(b.dataset.value);
+  });
   show(byName('tune.connectionPool'), !server);
   show(byName('tune.aggressivePool'), !server);
 
@@ -225,6 +238,12 @@ async function choicesFor(name, opts, family) {
         ...(opts.pckBlocks || []).filter(v => v !== 'aes').map(v => ({ value: v, label: v }))];
     case 'tune.logLevel':
       return ['debug', 'info', 'warn', 'error'].map(v => ({ value: v, label: v }));
+    case 'tune.encryption':
+      return (opts.encryptionChoices || []).map(c => ({ value: c.value, label: c.label }));
+    case 'tune.portProtocol':
+    case 'portProtocol':
+      return [{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' },
+        { value: 'both', label: 'TCP + UDP' }];
     default:
       return [];
   }
@@ -436,7 +455,9 @@ function pckMarkup(set) {
     `<div class="hint">PCK has no TUN device, so it can't become a routing carrier — add a new tunnel on both servers.</div></div>` +
     ((set.pckNotes || []).length ? `<div class="hint pcknote">${esc(set.pckNotes.join(' · '))}</div>` : '') +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. PCK carries ports only, so at least one is needed.') +
-      sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
+      `<div class="f"><label>Forwarded ports carry</label><div class="sel" data-name="portProtocol">TCP` +
+      `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>` +
+      `<div class="hint">TCP for web and proxies, UDP for WireGuard and games, or both.</div></div>` : '') +
     `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo<span class="sp"></span>${chev}</div>` +
     `<div class="tdesc" id="pckEffective">${set.pckEffective ? 'Runs with ' + esc(set.pckEffective) : ''}</div></div>` +
     `<div class="drawer"><button class="dhh" data-fn="dr" data-args="this">PCK fine-tune<span class="note">optional</span>` +
@@ -464,7 +485,9 @@ function directMarkup(set) {
       `the same on both servers.</div>`
       : `<div class="hint">Both ends must match — change the other server too.</div>`) + `</div>` +
     (ports ? field('ports', 'Forwarded ports', 'Comma separated. Blank leaves a plain TUN tunnel.') +
-      sw('acceptUdp', 'Accept UDP', 'Carry UDP over the forwarded ports.') : '') +
+      `<div class="f"><label>Forwarded ports carry</label><div class="sel" data-name="portProtocol">TCP` +
+      `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>` +
+      `<div class="hint">TCP for web and proxies, UDP for WireGuard and games, or both.</div></div>` : '') +
     `<div class="f"><label>Performance preset</label><div class="sel" data-name="preset">Turbo` +
     `<span class="sp"></span><svg class="x" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div></div>` +
     `<div class="two">${field('mtu', 'MTU', gre ? '0 takes the interface’s MTU less GRE’s own.' : undefined)}<div></div></div>` +

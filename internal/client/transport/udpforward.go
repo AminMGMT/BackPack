@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -178,6 +180,57 @@ func backendToTunnel(stream net.Conn, backend *net.UDPConn, logger *logrus.Logge
 		}
 	}
 }
+
+// wsStream presents a websocket connection as a net.Conn.
+//
+// The plain websocket transport is the one that does not already hand its
+// forwarded connections over as a stream: it speaks in messages. Datagram
+// framing has to survive that anyway — the server writes frames into a relay
+// that chops them into messages wherever it likes — so the messages are read
+// back as one continuous stream and the frames are found in it, rather than
+// each message being trusted to hold exactly one datagram.
+type wsStream struct {
+	conn *websocket.Conn
+	r    io.Reader
+}
+
+func (w *wsStream) Read(p []byte) (int, error) {
+	for {
+		if w.r == nil {
+			typ, r, err := w.conn.NextReader()
+			if err != nil {
+				return 0, err
+			}
+			if typ != websocket.BinaryMessage && typ != websocket.TextMessage {
+				continue // a control frame carries no payload of ours
+			}
+			w.r = r
+		}
+		n, err := w.r.Read(p)
+		if err == io.EOF {
+			w.r = nil
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
+	}
+}
+
+func (w *wsStream) Write(p []byte) (int, error) {
+	if err := w.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (w *wsStream) Close() error                       { return w.conn.Close() }
+func (w *wsStream) LocalAddr() net.Addr                { return w.conn.LocalAddr() }
+func (w *wsStream) RemoteAddr() net.Addr               { return w.conn.RemoteAddr() }
+func (w *wsStream) SetDeadline(t time.Time) error      { return w.conn.SetReadDeadline(t) }
+func (w *wsStream) SetReadDeadline(t time.Time) error  { return w.conn.SetReadDeadline(t) }
+func (w *wsStream) SetWriteDeadline(t time.Time) error { return w.conn.SetWriteDeadline(t) }
 
 // firstUDPBackend takes the first entry of a "a|b" backend list.
 func firstUDPBackend(addr string) string {

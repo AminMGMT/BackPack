@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/backpack/backpack/config"
 )
 
 // Every field a link carries has a number in format 2, or a link would lose it
@@ -95,5 +97,34 @@ func TestAFormat2LinkWithAChangedCharacterIsRefused(t *testing.T) {
 	raw[len(raw)/2] ^= 0x01
 	if _, err := DecodeShareLink("backpack://2." + base64.RawURLEncoding.EncodeToString(raw)); err == nil {
 		t.Error("a link with a flipped bit was accepted")
+	}
+}
+
+// The encryption travels on the link, so the kharej built from it meets the
+// server; a tunnel without one adds nothing to the link.
+func TestTheEncryptionTravelsOnTheLink(t *testing.T) {
+	iran := TunnelSpec{Role: "server", Transport: "wsmux", Name: "server-443", BindAddr: "0.0.0.0:443",
+		Ports: []string{"3030"}, Token: randomToken(64)}
+	ApplyPreset(&iran, PresetTurbo)
+	plain := pendingReverseLink(iran, "192.0.2.7", linkExtras{})
+	iran.SetEncryption(config.EncStealth)
+	raw := pendingReverseLink(iran, "192.0.2.7", linkExtras{})
+	link, err := DecodeShareLink(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.Enc != config.EncStealth {
+		t.Fatalf("the link carries encryption %q", link.Enc)
+	}
+	if k := reverseClientFromLink(link, link.Host); k.Encryption.EncryptionMode() != config.EncStealth {
+		t.Fatalf("the kharej built from the link has encryption %q", k.Encryption.EncryptionMode())
+	}
+	f := MirrorForPeer(link)
+	if f.Encryption != config.EncStealth {
+		t.Fatalf("the panel form has encryption %q", f.Encryption)
+	}
+	back, _ := DecodeShareLink(plain)
+	if back.Enc != "" {
+		t.Fatalf("a tunnel without encryption put %q on its link", back.Enc)
 	}
 }

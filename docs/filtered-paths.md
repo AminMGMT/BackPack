@@ -13,7 +13,7 @@ automatic MTU and MSS clamp. ICMP has no TCP/UDP carrier port to open.
 Both machines need Linux, root/CAP_NET_RAW and a working TUN device.
 
 An independent two-server check on 2026-10-09 carried encrypted xDi traffic
-while a separate Backhaul tunnel kept running. A five-minute check with a
+while a separate tunnel kept running. A five-minute check with a
 1280-byte tunnel MTU returned 297/300 and 298/300 pings, with average RTTs of
 80 and 83 ms. Six 8 MiB random-file round trips completed with matching SHA-256
 hashes. The ordinary Iran-dials/Kharej-listens setup also connected and its

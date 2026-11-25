@@ -15,7 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// TcpTransport is Backhaul's tcp client: a control channel to the server,
+// TcpTransport is the plain tcp client: a control channel to the server,
 // and a pool of tunnel connections it keeps dialled, each of which carries one
 // user connection once the server names its destination.
 type TcpTransport struct {
@@ -42,6 +42,11 @@ type TcpConfig struct {
 	MSS            int
 	SO_RCVBUF      int
 	SO_SNDBUF      int
+	// OnLegacyServer is called when the Iran server answers as Backpack v2.0.0
+	// does, so the tunnel can run on that engine.
+	OnLegacyServer func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -114,9 +119,15 @@ func (c *TcpTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			tunnelTCPConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
 				c.logger.Errorf("channel dialer: %v", err)
+				time.Sleep(c.config.RetryInterval)
+				continue
+			}
+			tunnelTCPConn, err := c.config.Layer.Client(rawConn)
+			if err != nil {
+				c.logger.Errorf("channel dialer: %s handshake: %v", c.config.Layer.Mode(), err)
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
@@ -134,7 +145,15 @@ func (c *TcpTransport) channelDialer(g *clientGen) {
 				continue
 			}
 
-			message, _, err := core.ReceiveBinaryTransportString(tunnelTCPConn)
+			message, answer, err := core.ReceiveBinaryTransportString(tunnelTCPConn)
+			// Backpack: a v2.0.0 Iran server refuses this handshake as too old;
+			// the tunnel then runs on that engine until the server is updated.
+			if err == nil && answer == core.SG_Refused && message == core.RefusedTooOld && c.config.OnLegacyServer != nil {
+				c.logger.Info("the Iran server runs Backpack v2.0.0: using its engine until it is updated")
+				tunnelTCPConn.Close()
+				c.config.OnLegacyServer()
+				return
+			}
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					c.logger.Warn("timeout while waiting for control channel response")
@@ -240,9 +259,14 @@ func (c *TcpTransport) channelHandler(g *clientGen) {
 func (c *TcpTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
-	tcpConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Error("tunnel server dialer: ", err)
+		return
+	}
+	tcpConn, err := c.config.Layer.Client(rawConn)
+	if err != nil {
+		c.logger.Errorf("tunnel server dialer: %s handshake: %v", c.config.Layer.Mode(), err)
 		return
 	}
 
@@ -305,8 +329,8 @@ func (c *TcpTransport) localDialer(g *clientGen, tcpConn net.Conn, resolvedAddr 
 	core.TCPConnectionHandler(g.ctx, false, core.Counted(tcpConn), localConnection, c.logger, g.usageMonitor, port, c.config.Sniffer)
 }
 
-// clientGen is one run of a client transport: what Backhaul's Restart
-// re-initialised.
+// clientGen is one run of a client transport: what a Restart
+// re-initialises.
 type clientGen struct {
 	ctx             context.Context
 	cancel          context.CancelFunc

@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/backpack/backpack/internal/utils"
@@ -135,7 +136,21 @@ type controlCandidate struct {
 	// nonce is what this run's pool connections must present, or "" when the
 	// client spoke the legacy handshake and there is none.
 	nonce string
+	// muxVersion is the version imposed on this run, or 0 when the client
+	// spoke the legacy handshake and cannot be told one.
+	muxVersion int
 	// session is the peer handshake's, or nil for a client on the handshake
 	// before v2.0.0.
 	session *network.PeerSession
+}
+
+// certHost is the name to put in a certificate generated for a listener that
+// was not given one: the bind address's host, or "localhost" when it binds
+// every interface and so has no particular name of its own.
+func certHost(bindAddr string) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return "localhost"
+	}
+	return host
 }

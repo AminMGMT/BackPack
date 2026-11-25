@@ -203,6 +203,10 @@ type L3Config struct {
 	// tunnel should not silently start carrying every QUIC flow on port 443.
 	AcceptUDP bool `toml:"accept_udp"`
 
+	// PortProtocol is what the mapped ports carry: "tcp", "udp" or "both".
+	// Empty falls back to accept_udp, as in files written before it.
+	PortProtocol string `toml:"port_protocol"`
+
 	// MaxConnections and BandwidthMbps cap the forwarded ports above
 	// (0 = unlimited each). They do not apply to routed traffic: the tunnel
 	// carries whatever the kernel puts into the interface, which has no
@@ -280,3 +284,18 @@ func (l L3Config) Enabled() bool {
 func (l L3Config) AutoMTUEnabled() bool {
 	return l.AutoMTU == nil || *l.AutoMTU
 }
+
+// ForwardsUDP reports whether the mapped ports carry UDP.
+func (c L3Config) ForwardsUDP() bool {
+	switch c.PortProtocol {
+	case PortsUDP, PortsBoth:
+		return true
+	case PortsTCP:
+		return false
+	}
+	return c.AcceptUDP
+}
+
+// ForwardsTCP reports whether the mapped ports listen for TCP: always,
+// unless the tunnel was set up to carry UDP only.
+func (c L3Config) ForwardsTCP() bool { return c.PortProtocol != PortsUDP }

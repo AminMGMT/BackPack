@@ -52,17 +52,19 @@ type TcpTransport struct {
 }
 
 type TcpConfig struct {
-	BindAddr      string
-	Token         string
-	SnifferLog    string
-	Ports         []string
-	Nodelay       bool
-	Sniffer       bool
-	KeepAlive     time.Duration
-	Heartbeat     time.Duration // in seconds
-	ChannelSize   int
-	WebPort       int
-	AcceptUDP     bool
+	BindAddr    string
+	Token       string
+	SnifferLog  string
+	Ports       []string
+	Nodelay     bool
+	Sniffer     bool
+	KeepAlive   time.Duration
+	Heartbeat   time.Duration // in seconds
+	ChannelSize int
+	WebPort     int
+	AcceptUDP   bool
+	// UDPOnly opens no TCP listener on the forwarded ports (port_protocol = "udp").
+	UDPOnly       bool
 	MSS           int
 	SO_RCVBUF     int
 	SO_SNDBUF     int
@@ -78,6 +80,10 @@ type TcpConfig struct {
 	ManagedHelper bool
 	// Guard is the peer handshake's policy and key; see network.PeerGuard.
 	Guard *network.PeerGuard
+	// OnPlainClaim is called when a client claims the control channel with
+	// the plain engine's handshake (SG_Chan) — a kharej that has
+	// been updated past v2.0.0 — so the tunnel can move to that engine.
+	OnPlainClaim func()
 }
 
 func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -318,6 +324,12 @@ func (s *TcpTransport) admitControlChannel(g *tcpGen, conn net.Conn, ann announc
 		}
 		ack, nonce, session = authAck(0), sess.PoolTag(), sess
 	} else {
+		if ann.signal == utils.SG_Chan && s.config.OnPlainClaim != nil {
+			s.logger.Info("the kharej now runs the plain engine: moving this tunnel to it")
+			conn.Close()
+			s.config.OnPlainClaim()
+			return
+		}
 		if refuseLegacyClaim(conn, s.config.Guard, ann.signal == utils.SG_Chan, s.logger) {
 			return
 		}
@@ -449,7 +461,7 @@ func (s *TcpTransport) handleLoop(g *tcpGen) {
 // forwarder is this transport's forwarded ports for one generation.
 func (s *TcpTransport) forwarder(g *tcpGen) portForwarder {
 	return portForwarder{
-		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP, udpOnly: s.config.UDPOnly,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   nodelayTune(s.config.Nodelay, s.logger),
 		queued: requestAlways(g.reqNewConnChan, s.logger),

@@ -37,8 +37,8 @@ func Seated(addr string) { metrics.ReportPeer(addr) }
 // Unseated forgets it.
 func Unseated() { metrics.ClearPeer() }
 
-// Status is a transport's status line, which Backhaul kept in an unguarded
-// string written from several goroutines.
+// Status is a transport's status line, guarded: several goroutines write
+// it.
 type Status struct{ v atomic.Value }
 
 func (s *Status) Set(v string) { s.v.Store(v) }

@@ -60,11 +60,13 @@ type KcpTransport struct {
 }
 
 type KcpConfig struct {
-	BindAddr         string
-	SnifferLog       string
-	Token            string
-	Ports            []string
-	AcceptUDP        bool
+	BindAddr   string
+	SnifferLog string
+	Token      string
+	Ports      []string
+	AcceptUDP  bool
+	// UDPOnly opens no TCP listener on the forwarded ports (port_protocol = "udp").
+	UDPOnly          bool
 	Sniffer          bool
 	ChannelSize      int
 	MuxCon           int
@@ -525,7 +527,7 @@ func (s *KcpTransport) session(g *kcpGen) muxSession {
 // forwarder is this transport's forwarded ports for one generation.
 func (s *KcpTransport) forwarder(g *kcpGen) portForwarder {
 	return portForwarder{
-		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP, udpOnly: s.config.UDPOnly,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   alwaysNodelay(s.logger),
 		queued: muxRequestForGeneration(g.ctx, &s.counterMutex, &s.streamCounter, &s.sessionCounter, s.config.MuxCon, g.reqNewConnChan, s.logger),

@@ -3,6 +3,7 @@ package manage
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/backpack/backpack/internal/utils/network"
@@ -191,6 +192,8 @@ func switchTransport(s *TunnelSpec, transport string) error {
 		return fmt.Errorf("unknown transport %q", transport)
 	}
 	s.Transport = transport
+	// An encryption the new transport does not carry falls back to none.
+	s.SetEncryption(s.Encryption.EncryptionMode())
 
 	// Mux transports need their SMUX knobs populated; a tunnel created as plain
 	// TCP has them at zero, which the engine would reject or run badly.
@@ -293,21 +296,45 @@ func mssLabel(mss int) string {
 	return fmt.Sprintf("%d bytes", mss)
 }
 
-// SetAcceptUDP turns UDP forwarding on the exposed ports on or off. It is a
-// server-side setting — the forwarded ports live there — and off is the default
-// a plain web or proxy tunnel should keep. See config.ServerConfig.ForwardsUDP.
-func SetAcceptUDP(name string, on bool) error {
+// SetPortProtocol sets what the tunnel's forwarded ports carry: "tcp", "udp"
+// or "both", among what its transport can forward.
+func SetPortProtocol(name, proto string) error {
 	s, err := LoadSpec(name)
 	if err != nil {
 		return err
 	}
 	if s.Role != "server" {
-		return fmt.Errorf("UDP forwarding is a server-side setting — the exposed ports live there")
+		return fmt.Errorf("the forwarded ports are a server-side setting — they live on the Iran server")
 	}
-	if s.AcceptUDP == on {
-		return fmt.Errorf("UDP forwarding is already %s", map[bool]string{true: "on", false: "off"}[on])
+	if !slices.Contains(s.PortProtocols(), proto) {
+		return fmt.Errorf("the %s transport cannot forward %s — it carries %v",
+			s.Transport, portProtocolLabel(proto), s.PortProtocols())
 	}
-	s.AcceptUDP = on
+	if s.PortProtocol() == proto {
+		return fmt.Errorf("the forwarded ports already carry %s", portProtocolLabel(proto))
+	}
+	s.SetPortProtocol(proto)
+	return applySpec(s)
+}
+
+// SetEncryption sets the tunnel's encryption mode, among what its transport
+// carries. Both ends must carry the same; this changes one.
+func SetEncryption(name, mode string) error {
+	s, err := LoadSpec(name)
+	if err != nil {
+		return err
+	}
+	modes := s.EncryptionModes()
+	if modes == nil {
+		return fmt.Errorf("the %s transport takes no encryption", s.Transport)
+	}
+	if !slices.Contains(modes, mode) {
+		return fmt.Errorf("the %s transport carries %v, not %q", s.Transport, modes, mode)
+	}
+	if s.Encryption.EncryptionMode() == mode {
+		return fmt.Errorf("the encryption is already %s", encryptionLabel(mode))
+	}
+	s.SetEncryption(mode)
 	return applySpec(s)
 }
 

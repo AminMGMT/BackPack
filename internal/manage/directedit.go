@@ -92,7 +92,7 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 	tui.Info("Tuning       : " + presetLabel(l.Preset) + ", " + orDefault(l.Qdisc, "fq_codel"))
 	if len(l.Ports) > 0 {
 		tui.Info("Ports        : " + strings.Join(l.Ports, ", "))
-		tui.Info("UDP          : " + onOff(l.AcceptUDP))
+		tui.Info("Carries      : " + portProtocolLabel(l3PortProtocol(l)))
 	}
 	fmt.Println()
 	// A tunnel on a carrier v2.0.0 took out cannot start, and every other edit
@@ -135,7 +135,7 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 	if iran {
 		options = append([]tui.Option{
 			{Title: "Forwarded Ports", Desc: ""},
-			{Title: "UDP Forwarding", Desc: "now " + onOff(l.AcceptUDP)},
+			{Title: "Forwarded Ports Carry", Desc: "now " + portProtocolLabel(l3PortProtocol(l))},
 		}, options...)
 	}
 	// Where the other machine is, when this side has to be told: the Iran side
@@ -229,8 +229,10 @@ func editL3Ports(t Tunnel, cfg config.Config) bool {
 		}
 		saveL3(t, l)
 	case 1:
-		l.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP", l.AcceptUDP)
-		saveL3(t, l)
+		if proto, ok := askPortProtocol(allPortProtocols, l3PortProtocol(l)); ok {
+			setL3PortProtocol(&l, proto)
+			saveL3(t, l)
+		}
 	case 2:
 		fmt.Println()
 		label := "Tunnel MTU (Lower It If Downloads Stall)"

@@ -120,10 +120,17 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 		dialer = websocket.Dialer{
 			EnableCompression: true,
 			HandshakeTimeout:  45 * time.Second, // default handshake timeout
+			// Speed edit: see wsWriteBufferSize.
+			ReadBufferSize:  wsReadBufferSize,
+			WriteBufferSize: wsWriteBufferSize,
+			WriteBufferPool: WSWriteBuffers,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
 					return nil, err
+				}
+				if mode == config.WSMUX || mode == config.WSSMUX {
+					MuxSocket(conn) // speed edit: see MuxSocket
 				}
 				return conn, nil
 			},
@@ -140,10 +147,17 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 			EnableCompression: true,
 			TLSClientConfig:   tlsConfig,        // Pass the insecure TLS config here
 			HandshakeTimeout:  45 * time.Second, // default handshake timeout
+			// Speed edit: see wsWriteBufferSize.
+			ReadBufferSize:  wsReadBufferSize,
+			WriteBufferSize: wsWriteBufferSize,
+			WriteBufferPool: WSWriteBuffers,
 			NetDial: func(_, addr string) (net.Conn, error) {
 				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
 					return nil, err
+				}
+				if mode == config.WSMUX || mode == config.WSSMUX {
+					MuxSocket(conn) // speed edit: see MuxSocket
 				}
 				return conn, nil
 			},
@@ -151,8 +165,13 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 	}
 
 	// Dial to the WebSocket server
-	tunnelWSConn, _, err := dialer.Dial(wsURL, headers)
+	tunnelWSConn, resp, err := dialer.Dial(wsURL, headers)
 	if err != nil {
+		// Backpack: say what the server answered, so a v2.0.0 server can be
+		// told from a wrong token (see HandshakeError).
+		if resp != nil {
+			return nil, &HandshakeError{Status: resp.StatusCode, Err: err}
+		}
 		return nil, err
 	}
 	return tunnelWSConn, nil

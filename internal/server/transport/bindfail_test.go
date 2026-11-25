@@ -15,7 +15,7 @@ import (
 
 // transportSources is every transport whose listeners this guards.
 var transportSources = []string{
-	"tcp.go", "kcp.go", "quic.go", "udp.go",
+	"tcp.go", "tcpmux.go", "ws.go", "wsmux.go", "kcp.go", "quic.go", "udp.go",
 }
 
 // A port that cannot be bound must not end the process.

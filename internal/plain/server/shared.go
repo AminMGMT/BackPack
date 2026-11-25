@@ -5,12 +5,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/gorilla/websocket"
+	"github.com/backpack/backpack/internal/plain/core"
 )
 
 // TunnelChannel is a pooled websocket tunnel connection.
 type TunnelChannel struct {
-	conn *websocket.Conn
+	conn *core.WSConn
 	ping chan struct{}
 	mu   *sync.Mutex
 }
@@ -30,7 +30,7 @@ type LocalAcceptUDPConn struct {
 	listener    *net.UDPConn
 	clientAddr  *net.UDPAddr
 	// IsCongested is set from the flow's reader and read by the listener;
-	// atomic for that, which Backhaul's plain bool was not.
+	// atomic for that, not a plain bool.
 	IsCongested atomic.Bool
 }
 
@@ -49,8 +49,8 @@ func (c *netControl) Get() net.Conn {
 
 // wsControl is the same for a websocket control channel.
 type wsControl struct {
-	p atomic.Pointer[websocket.Conn]
+	p atomic.Pointer[core.WSConn]
 }
 
-func (c *wsControl) Set(conn *websocket.Conn) { c.p.Store(conn) }
-func (c *wsControl) Get() *websocket.Conn     { return c.p.Load() }
+func (c *wsControl) Set(conn *core.WSConn) { c.p.Store(conn) }
+func (c *wsControl) Get() *core.WSConn     { return c.p.Load() }

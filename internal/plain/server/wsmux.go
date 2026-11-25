@@ -21,7 +21,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// WsMuxTransport is Backhaul's wsmux and wssmux server: /channel is the
+// WsMuxTransport is the plain wsmux and wssmux server: /channel is the
 // control channel, and each /tunnel websocket is an smux session carrying at
 // most MuxCon user connections.
 type WsMuxTransport struct {
@@ -74,6 +74,11 @@ type WsMuxConfig struct {
 	ACMEDomain   string
 	ACMEEmail    string
 	ACMECacheDir string
+
+	// OnLegacyClaim: see WsConfig.OnLegacyClaim.
+	OnLegacyClaim func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewWSMuxServer(parentCtx context.Context, config *WsMuxConfig, logger *logrus.Logger) *WsMuxTransport {
@@ -235,8 +240,10 @@ func (s *WsMuxTransport) channelHandler(g *wsMuxGen) {
 func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 	addr := s.config.BindAddr
 	upgrader := websocket.Upgrader{
+		// Speed edit: 64 KiB pooled write buffers (see core.WSWriteBuffers).
 		ReadBufferSize:   16 * 1024,
-		WriteBufferSize:  16 * 1024,
+		WriteBufferSize:  64 * 1024,
+		WriteBufferPool:  core.WSWriteBuffers,
 		HandshakeTimeout: 45 * time.Second,
 		CheckOrigin: func(r *http.Request) bool {
 			return true
@@ -250,19 +257,31 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			s.logger.Tracef("received http request from %s", r.RemoteAddr)
 
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != fmt.Sprintf("Bearer %v", s.config.Token) {
+			if r.URL.Path == "/channel" && s.config.OnLegacyClaim != nil && legacyWSClaim(r, authHeader, s.config.Token) {
+				s.logger.Info("the kharej runs Backpack v2.0.0: serving this tunnel on its engine until it is updated")
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				s.config.OnLegacyClaim()
+				return
+			}
+			if !s.config.Layer.BearerOK(authHeader, s.config.Token) {
 				s.logger.Warnf("unauthorized request from %s, closing connection", r.RemoteAddr)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			conn, err := upgrader.Upgrade(w, r, nil)
+			raw, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				s.logger.Errorf("failed to upgrade connection from %s: %v", r.RemoteAddr, err)
 				return
 			}
 
 			if r.URL.Path == "/channel" {
+				// Backpack: the tunnel's encryption on the control messages.
+				conn, err := s.config.Layer.WSServer(raw)
+				if err != nil {
+					s.logger.Debugf("%s handshake failed from %s: %v", s.config.Layer.Mode(), r.RemoteAddr, err)
+					return
+				}
 				if control := g.controlChannel.Get(); control != nil {
 					s.logger.Warn("new control channel requested.")
 					control.Close()
@@ -292,7 +311,14 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 				s.status.Set(fmt.Sprintf("Connected (%s)", s.config.Mode))
 
 			} else if strings.HasPrefix(r.URL.Path, "/tunnel") {
-				session, err := smux.Client(conn.NetConn(), s.smuxConfig)
+				// Backpack: the tunnel's encryption on the raw stream smux runs on.
+				stream, err := s.config.Layer.Server(raw.NetConn())
+				if err != nil {
+					s.logger.Debugf("%s handshake failed from %s: %v", s.config.Layer.Mode(), r.RemoteAddr, err)
+					return
+				}
+				conn := raw
+				session, err := smux.Client(stream, s.smuxConfig)
 				if err != nil {
 					s.logger.Errorf("failed to create MUX session for connection %s: %v", conn.RemoteAddr().String(), err)
 					conn.Close()
@@ -318,12 +344,19 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			if g.controlChannel.Get() == nil {
 				s.logger.Infof("waiting for %s control channel connection", s.config.Mode)
 			}
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			// Speed edit: the listener carries the tunnel's socket bound
+			// (core.Listen) where net/http opened a plain one.
+			ln, err := core.Listen(addr, true)
+			if err != nil {
+				s.logger.Errorf("failed to listen on %s: %v", addr, err)
+				return
+			}
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				s.logger.Errorf("failed to listen on %s: %v", addr, err)
 			}
 		}()
 	} else {
-		// Backpack: the certificate files when given, as in Backhaul;
+		// Backpack: the certificate files when given;
 		// otherwise Let's Encrypt or a generated one (see network.TLSSettings).
 		tlsCfg, err := network.ServerTLSConfig(s.tlsSettings(), s.logger.Warnf)
 		if err != nil {
@@ -336,7 +369,12 @@ func (s *WsMuxTransport) tunnelListener(g *wsMuxGen) {
 			if g.controlChannel.Get() == nil {
 				s.logger.Infof("waiting for %s control channel connection", s.config.Mode)
 			}
-			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			ln, err := core.Listen(addr, true)
+			if err != nil {
+				s.logger.Errorf("failed to listen on %s: %v", addr, err)
+				return
+			}
+			if err := server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				s.logger.Errorf("failed to listen on %s: %v", addr, err)
 			}
 		}()

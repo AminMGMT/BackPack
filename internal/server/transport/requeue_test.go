@@ -95,7 +95,7 @@ func TestRequeueingWorksWithNoLimitsConfigured(t *testing.T) {
 // it correctly — which is the stronger statement of the two, and the one that
 // stops a fourth copy appearing.
 func TestNoMuxTransportBlocksPuttingAConnectionBack(t *testing.T) {
-	for _, name := range []string{"kcp"} {
+	for _, name := range []string{"tcpmux", "wsmux", "kcp"} {
 		t.Run(name+" delegates", func(t *testing.T) {
 			src := readTransportSource(t, name+".go")
 			if !strings.Contains(src, ".run(session)") {

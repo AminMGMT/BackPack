@@ -15,7 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// TcpTransport is Backhaul's tcp server: one control channel, and one tunnel
+// TcpTransport is the plain tcp server: one control channel, and one tunnel
 // connection per user connection, taken from the pool the client keeps
 // dialled.
 type TcpTransport struct {
@@ -28,7 +28,7 @@ type TcpTransport struct {
 	holds        core.Holds
 }
 
-// tcpGen is one run: what Backhaul's Restart re-initialised.
+// tcpGen is one run: what a Restart re-initialises.
 type tcpGen struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -41,21 +41,29 @@ type tcpGen struct {
 }
 
 type TcpConfig struct {
-	BindAddr      string
-	Token         string
-	SnifferLog    string
-	Ports         []string
-	Nodelay       bool
-	Sniffer       bool
-	KeepAlive     time.Duration
-	Heartbeat     time.Duration // in seconds
-	ChannelSize   int
-	WebPort       int
-	AcceptUDP     bool
+	BindAddr    string
+	Token       string
+	SnifferLog  string
+	Ports       []string
+	Nodelay     bool
+	Sniffer     bool
+	KeepAlive   time.Duration
+	Heartbeat   time.Duration // in seconds
+	ChannelSize int
+	WebPort     int
+	AcceptUDP   bool
+	// UDPOnly forwards the ports over UDP alone (port_protocol = "udp"): no
+	// TCP listener is opened on them.
+	UDPOnly       bool
 	MSS           int
 	SO_RCVBUF     int
 	SO_SNDBUF     int
 	ProxyProtocol bool
+	// OnLegacyClaim is called when a client claims the control channel the
+	// Backpack v2.0.0 way, so the tunnel can serve it on that engine.
+	OnLegacyClaim func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewTCPServer(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {
@@ -172,6 +180,12 @@ func (s *TcpTransport) channelHandshake(g *tcpGen) {
 			}
 
 			msg, transport, err := core.ReceiveBinaryTransportString(conn)
+			if core.LegacyClaim(transport) && err == nil && s.config.OnLegacyClaim != nil {
+				s.logger.Info("the kharej runs Backpack v2.0.0: serving this tunnel on its engine until it is updated")
+				conn.Close()
+				s.config.OnLegacyClaim()
+				continue
+			}
 			if transport != core.SG_Chan {
 				s.logger.Errorf("invalid signal received for channel, Discarding connection")
 				conn.Close()
@@ -301,6 +315,9 @@ func (s *TcpTransport) tunnelListener(g *tcpGen) {
 		return
 	}
 
+	// Backpack: the tunnel's encryption, run on every connection accepted.
+	listener = s.config.Layer.Listener(listener, s.logger)
+
 	defer s.holds.Hold()()
 	defer listener.Close()
 
@@ -325,7 +342,7 @@ func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
 			}
 
 			//discard any non tcp connection
-			tcpConn, ok := conn.(*net.TCPConn)
+			tcpConn, ok := core.TCPOf(conn)
 			if !ok {
 				s.logger.Warnf("disarded non-TCP tunnel connection from %s", conn.RemoteAddr().String())
 				conn.Close()
@@ -375,7 +392,9 @@ func (s *TcpTransport) parsePortMappings(g *tcpGen) {
 }
 
 func (s *TcpTransport) startListeners(g *tcpGen, localAddr, remoteAddr string) {
-	go s.localListener(g, localAddr, remoteAddr)
+	if !s.config.UDPOnly {
+		go s.localListener(g, localAddr, remoteAddr)
+	}
 
 	if s.config.AcceptUDP {
 		go s.udpListener(g, localAddr, remoteAddr)

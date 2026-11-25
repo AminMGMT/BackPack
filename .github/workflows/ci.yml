@@ -337,7 +337,7 @@ jobs:
         if: steps.prev.outputs.binary != ''
         env:
           BACKPACK_PREV_BINARY: ${{ steps.prev.outputs.binary }}
-        run: go test ./internal/e2e/ -run '^(TestThePreviousReleaseStillTalksToThisOne|TestAProvedTunnelRefusesTheOlderHandshake)$' -count=1 -v
+        run: go test ./internal/e2e/ -run '^(TestThePreviousReleaseStillTalksToThisOne|TestAnUpdatedPairLeavesTheV2Engine|TestAnUpdatedIranServerRemembersAV2Kharej)$' -count=1 -v
 
   build:
     name: Cross-build

@@ -9,9 +9,27 @@ limits).
 | Preset | For | Notes |
 |--------|-----|-------|
 | **Balance** | a small or shared VPS | Light on CPU and RAM. |
-| **Turbo** | most people (**recommended**) | What the old "Best Performance" set, and an existing tunnel keeps the values its file has. Since v2.0.0 a new or re-tuned `tcp` / `ws` / `wss` tunnel (no mux) gets a pool of 16 instead of 8 (Aggressive 32 instead of 16): each user connection takes one, and 8 ran dry under a busy link (59% of 200 new connections a second got through, against all of them on 16). |
+| **Turbo** | most people (**recommended**) | What the old "Best Performance" set, and an existing tunnel keeps the values its file has. On the six plain transports it is the plain engine's default config — see below. |
 | **Aggressive** | maximum gaming headroom | 32 MB socket buffers, 16 MB per mux stream. Noticeably more CPU. The KCP window deliberately stays at 2048 — with congestion control off, a deeper window *is* a deeper queue. |
 | **Throughput** | **bandwidth, not play** | Offered on the plain `kcp` transport only. |
+
+## tcp, tcpmux, ws, wss, wsmux, wssmux
+
+These run the plain engine, and **Turbo is its default config**: pool 8,
+`nodelay = true`, keepalive 75 s, heartbeat 40 s, channel 2048, `mux_con` 8,
+mux v1 with 32 KiB frames, 4 MiB session and 64 KiB stream windows, no socket
+buffer override. The other two move from there:
+
+| | Balance — least CPU and RAM | Turbo | Aggressive — most speed, lowest ping |
+|---|---|---|---|
+| connection pool | 4 (non-mux) | 8 | 32, refilled ahead of demand (`aggressive_pool`) |
+| heartbeat | 40 s | 40 s | 20 s |
+| channel size | 1024 | 2048 | 4096 |
+| `mux_con` | 8 | 8 | 4 (fewer streams per session, less head-of-line wait) |
+
+Measured on the soak harness, idle cost is the same for all three (about 22 MB
+and 1% CPU); Aggressive halves the first-byte time of a new tcp connection
+under load.
 
 ## About Throughput
 
@@ -81,6 +99,8 @@ the tunnel is being pushed.
 هر تونل یک **پریست** می‌گیرد که **همهٔ** مقادیر تنظیم را یک‌جا پر می‌کند — اندازهٔ
 pool، بافر سوکت، پنجره‌های دریافت و mux، و روی KCP تنظیمات ارسال مجدد و تصحیح
 خطا — و تنظیمات کرنل (BBR + fq و سقف بافرها) را هم اعمال می‌کند.
+
+روی tcp، tcpmux، ws، wss، wsmux و wssmux، پریست Turbo دقیقاً کانفیگ پیش‌فرض موتور plain است؛ Balance کمترین مصرف و Aggressive بیشترین سرعت و کمترین پینگ را می‌دهد.
 
 **Balance** برای VPS کوچک یا اشتراکی · **Turbo** پیشنهادی برای اکثر آدم‌ها (دقیقاً
 همان چیزی که قبلاً «Best Performance» بود) · **Aggressive** حداکثر فضای تنفس برای

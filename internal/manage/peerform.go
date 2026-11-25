@@ -39,16 +39,23 @@ func (f PeerForm) ToNewTunnel() NewTunnel {
 	// answered, so its zeros replaced the preset's: heartbeat off, Nagle back
 	// on, kcp's error correction off — a kharej that could not keep a session
 	// with its server.
-	tune := FineTune{AcceptUDP: f.AcceptUDP, MSS: f.MSS, MuxVersion: f.MuxVersion,
+	tune := FineTune{AcceptUDP: f.AcceptUDP, PortProtocol: f.PortProtocol, MSS: f.MSS, MuxVersion: f.MuxVersion,
 		KCPDataShards: f.FECData, KCPParityShards: f.FECParity, sent: map[string]bool{}}
 	if f.AcceptUDP {
 		tune.sent["acceptUDP"] = true
+	}
+	if f.PortProtocol != "" {
+		tune.sent["portProtocol"] = true
 	}
 	if f.MSS > 0 {
 		tune.sent["mss"] = true
 	}
 	if f.MuxVersion > 0 {
 		tune.sent["muxVersion"] = true
+	}
+	if f.Encryption != "" || f.Splash {
+		tune.Encryption, tune.Splash, tune.ShadowSNI = f.Encryption, f.Splash, f.ShadowSNI
+		tune.sent["encryption"], tune.sent["splash"], tune.sent["shadowSni"] = true, true, true
 	}
 	if f.Transport == "kcp" {
 		// Zero on both is "off", and has to be carried as an answer.
@@ -70,28 +77,29 @@ func (f PeerForm) ToNewDirectTunnel() NewDirectTunnel {
 		side = "kharej"
 	}
 	return NewDirectTunnel{
-		Side:        side,
-		Carrier:     f.Carrier,
-		Name:        f.Name,
-		Token:       f.Token,
-		PeerAddr:    f.ServerAddr,
-		TunnelPort:  f.TunnelPort,
-		Ports:       f.Ports,
-		AcceptUDP:   f.AcceptUDP,
-		LocalIP:     f.LocalIP,
-		PeerIP:      f.PeerIP,
-		Preset:      f.Preset,
-		Spoof:       f.Spoof,
-		Stealth:     f.Stealth,
-		FEC:         f.FEC,
-		FECData:     f.FECData,
-		FECParity:   f.FECParity,
-		SpoofPeerIP: f.SpoofPeerIP,
-		SNIDomain:   f.SNIDomain,
-		GREKey:      f.GREKey,
-		MTU:         f.MTU,
-		MSSClamp:    f.MSSClamp,
-		AutoMTU:     f.AutoMTU,
+		Side:         side,
+		Carrier:      f.Carrier,
+		Name:         f.Name,
+		Token:        f.Token,
+		PeerAddr:     f.ServerAddr,
+		TunnelPort:   f.TunnelPort,
+		Ports:        f.Ports,
+		AcceptUDP:    f.AcceptUDP,
+		PortProtocol: f.PortProtocol,
+		LocalIP:      f.LocalIP,
+		PeerIP:       f.PeerIP,
+		Preset:       f.Preset,
+		Spoof:        f.Spoof,
+		Stealth:      f.Stealth,
+		FEC:          f.FEC,
+		FECData:      f.FECData,
+		FECParity:    f.FECParity,
+		SpoofPeerIP:  f.SpoofPeerIP,
+		SNIDomain:    f.SNIDomain,
+		GREKey:       f.GREKey,
+		MTU:          f.MTU,
+		MSSClamp:     f.MSSClamp,
+		AutoMTU:      f.AutoMTU,
 
 		PckConns: f.PckConns, PckKCPMode: f.PckKCPMode, PckKCPMTU: f.PckKCPMTU,
 		PckKCPSndWnd: f.PckKCPSndWnd, PckKCPRcvWnd: f.PckKCPRcvWnd, PckKCPBlock: f.PckKCPBlock,

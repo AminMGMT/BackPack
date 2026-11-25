@@ -5,12 +5,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/backpack/backpack/internal/plain/core"
 	"github.com/sirupsen/logrus"
 )
 
-// maintainPool is Backhaul's poolMaintainer, which each of its client
-// transports carried a copy of: fill the pool, then every ten seconds compare
+// maintainPool is the pool maintainer every plain client transport shares: fill the pool, then every ten seconds compare
 // how many connections the server asked for with how many sat idle, grow by
 // one when it asked for more, and shrink by one (by skipping the next
 // request's dial) when it asked for far fewer.
@@ -86,8 +85,8 @@ func (c *netControl) Get() net.Conn {
 
 // wsControl is the same for a websocket control channel.
 type wsControl struct {
-	p atomic.Pointer[websocket.Conn]
+	p atomic.Pointer[core.WSConn]
 }
 
-func (c *wsControl) Set(conn *websocket.Conn) { c.p.Store(conn) }
-func (c *wsControl) Get() *websocket.Conn     { return c.p.Load() }
+func (c *wsControl) Set(conn *core.WSConn) { c.p.Store(conn) }
+func (c *wsControl) Get() *core.WSConn     { return c.p.Load() }

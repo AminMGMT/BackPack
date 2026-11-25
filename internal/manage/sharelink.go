@@ -84,8 +84,11 @@ type ShareLink struct {
 	Preset    string `json:"pr,omitempty"`
 	Ports     string `json:"po,omitempty"` // forwarded ports, as the Iran side has them
 	AcceptUDP bool   `json:"u,omitempty"`
-	MSS       int    `json:"m,omitempty"`
-	MTU       int    `json:"mt,omitempty"`
+	// UDPOnly: the ports carry UDP alone (AcceptUDP is set too, so an older
+	// reader gets UDP and TCP rather than nothing).
+	UDPOnly bool `json:"uo,omitempty"`
+	MSS     int  `json:"m,omitempty"`
+	MTU     int  `json:"mt,omitempty"`
 
 	// The layer-3 pair of addresses, as the producer sees them. The receiver
 	// swaps them, which is the whole of the inversion at this layer.
@@ -128,6 +131,12 @@ type ShareLink struct {
 	// zero on both meaning off.
 	SimpleAuth bool `json:"sa,omitempty"`
 	MuxVer     int  `json:"mv,omitempty"`
+	// Enc, Splash and ShadowSNI are the stream transports' encryption
+	// (config.EncryptionConfig): a kharej without the same cannot meet the
+	// server. Empty Enc is none.
+	Enc       string `json:"en,omitempty"`
+	Splash    bool   `json:"spl,omitempty"`
+	ShadowSNI string `json:"ssn,omitempty"`
 
 	// Hosts are the producing side's other addresses — a second IP, a domain,
 	// a CDN edge — each a host alone (the tunnel port is Port) or host:port.
@@ -340,9 +349,12 @@ type PeerForm struct {
 	Token      string `json:"token,omitempty"`
 	Ports      string `json:"ports,omitempty"`
 	AcceptUDP  bool   `json:"acceptUdp,omitempty"`
-	Preset     string `json:"preset,omitempty"`
-	MSS        int    `json:"mss,omitempty"`
-	MTU        int    `json:"mtu,omitempty"`
+	// PortProtocol is what the forwarded ports carry when the link names it:
+	// "udp" for UDP alone; empty leaves AcceptUDP to decide.
+	PortProtocol string `json:"portProtocol,omitempty"`
+	Preset       string `json:"preset,omitempty"`
+	MSS          int    `json:"mss,omitempty"`
+	MTU          int    `json:"mtu,omitempty"`
 
 	LocalIP string `json:"localIp,omitempty"`
 	PeerIP  string `json:"peerIp,omitempty"`
@@ -374,6 +386,10 @@ type PeerForm struct {
 	// Both must match the server's.
 	SimpleAuth bool `json:"simpleAuth,omitempty"`
 	MuxVersion int  `json:"muxVersion,omitempty"`
+	// The encryption the link names; see ShareLink.Enc.
+	Encryption string `json:"encryption,omitempty"`
+	Splash     bool   `json:"splash,omitempty"`
+	ShadowSNI  string `json:"shadowSni,omitempty"`
 
 	// Paired names the form fields that came from the link. Changing one of
 	// them breaks the tunnel unless the other end is changed to match, which is
@@ -454,6 +470,16 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		if l.MuxVer > 0 {
 			paired = append(paired, "muxVersion")
 		}
+		f.Encryption, f.Splash, f.ShadowSNI = l.Enc, l.Splash, l.ShadowSNI
+		if l.Enc != "" {
+			paired = append(paired, "encryption")
+		}
+		if l.Splash {
+			paired = append(paired, "splash")
+		}
+		if l.ShadowSNI != "" {
+			paired = append(paired, "shadowSni")
+		}
 		// The kharej side dials Iran; the ports it forwards are Iran's business
 		// and it is not asked for them.
 		if f.Side == "kharej" {
@@ -462,6 +488,9 @@ func MirrorForPeer(l ShareLink) PeerForm {
 		} else {
 			f.Ports = l.Ports
 			f.AcceptUDP = l.AcceptUDP
+			if l.UDPOnly {
+				f.PortProtocol = config.PortsUDP
+			}
 		}
 	} else {
 		f.Carrier = l.Tr
@@ -505,6 +534,9 @@ func MirrorForPeer(l ShareLink) PeerForm {
 			paired = append(paired, "serverAddr")
 			f.Ports = l.Ports
 			f.AcceptUDP = l.AcceptUDP
+			if l.UDPOnly {
+				f.PortProtocol = config.PortsUDP
+			}
 		}
 	}
 
@@ -689,7 +721,8 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		l.Port = addrPort(cfg.L3.Addr)
 		l.Preset = cfg.L3.Preset
 		l.Ports = strings.Join(cfg.L3.Ports, ", ")
-		l.AcceptUDP = cfg.L3.AcceptUDP
+		l.AcceptUDP = cfg.L3.ForwardsUDP()
+		l.UDPOnly = !cfg.L3.ForwardsTCP()
 		if l.Tr == l3.CarrierPck {
 			// What the PCK engine reads and the other end must be told: the
 			// port and the token above, the preset, and the tuning set over it.
@@ -717,9 +750,11 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		l.Preset = cfg.Server.Preset
 		l.Ports = strings.Join(cfg.Server.Ports, ", ")
 		l.AcceptUDP = cfg.Server.ForwardsUDP()
+		l.UDPOnly = !cfg.Server.ForwardsTCP()
 		l.MSS = cfg.Server.MSS
 		l.SimpleAuth = cfg.Server.SimpleAuth
 		l.MuxVer = cfg.Server.MuxVersion
+		l.setEncryption(cfg.Server.EncryptionConfig)
 		l.PeerAuth = true
 		for _, t := range cfg.Server.FallbackTransports {
 			l.Fallbacks = append(l.Fallbacks, string(t))
@@ -736,6 +771,7 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 		l.Port = addrPort(cfg.Client.RemoteAddr)
 		l.Preset = cfg.Client.Preset
 		l.MSS = cfg.Client.MSS
+		l.setEncryption(cfg.Client.EncryptionConfig)
 
 	default:
 		return "", fmt.Errorf("%q is not a tunnel this version can hand over", name)
@@ -942,4 +978,20 @@ func fieldName(goName string, spoken map[string]string) string {
 		return s
 	}
 	return goName
+}
+
+// setEncryption puts a tunnel's encryption on the link; none leaves it out.
+func (l *ShareLink) setEncryption(e config.EncryptionConfig) {
+	if e.Encrypted() {
+		l.Enc = e.EncryptionMode()
+	}
+	l.Splash = e.Splash
+	if e.EncryptionMode() == config.EncShadow {
+		l.ShadowSNI = e.ShadowSNI
+	}
+}
+
+// encryptionOf is the link's encryption as a config value.
+func (l ShareLink) encryptionOf() config.EncryptionConfig {
+	return config.EncryptionConfig{Encryption: l.Enc, Splash: l.Splash, ShadowSNI: l.ShadowSNI}
 }

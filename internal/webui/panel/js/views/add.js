@@ -135,9 +135,28 @@ export function addView(ctx) {
         const set = (sel, yes) => { const r = row(sel); if (r) r.hidden = !yes; };
         const proxyOK = ['tcp', 'tcpmux', 'kcp', 'wsmux', 'wssmux', 'stealth', 'quic', 'pck'].includes(t);
         set('[data-name="proxyProtocol"]', iran && proxyOK);
-        // udp forwards UDP ports by nature; the HTTPS helpers carry TCP only.
-        set('#ft-acceptUDP', t !== 'udp' && !isHTTPS(t));
+        // udp forwards UDP ports by nature; the HTTPS helpers and the plain
+        // engine's mux and websocket transports carry TCP only.
+        set('#ft-portProtocol', iran && !['udp', 'tcpmux', 'ws', 'wss', 'wsmux', 'wssmux'].includes(t) && !isHTTPS(t));
         set('#ft-zeroCopy', t === 'tcp');
+        // Encryption: offered where the transport carries more than none, with
+        // only the modes it carries; a mode it does not falls back to none.
+        const modes = (opts.encryption || {})[t] || [];
+        set('#ft-encryption', modes.length > 1 && !isHTTPS(t));
+        // Splash needs encrypted traffic: wss, wssmux, or an encryption
+        // (config.SplashAllowed); the switch shows where it can be on.
+        const encOn = (root.querySelector('input[name="tune.encryption"]')?.value || 'none') !== 'none';
+        set('#ft-splash', !isHTTPS(t) && (['wss', 'wssmux'].includes(t) || (modes.length > 1 && encOn)));
+        const enc = root.querySelector('#ft-encryption');
+        if (enc) {
+          enc.querySelectorAll('.sel4opt').forEach(b => { b.hidden = !modes.includes(b.dataset.value); });
+          const inp = enc.nextElementSibling;
+          if (inp && inp.name === 'tune.encryption' && !modes.includes(inp.value)) {
+            inp.value = 'none';
+            inp.dataset.drawn = '1';
+            if (enc.childNodes[0]) enc.childNodes[0].textContent = 'None';
+          }
+        }
         set('#ft-mss', !isDatagram(t));
         // The pool is the dialling side's; Iran never opens one.
         set('#ft-connectionPool', !iran);
@@ -270,6 +289,12 @@ export function addView(ctx) {
         switch (id) {
           case 'ft-logLevel':
             return ['debug', 'info', 'warn', 'error'].map(v => ({ value: v, label: v }));
+          case 'ft-encryption':
+            return (opts.encryptionChoices || []).map(c => ({ value: c.value, label: c.label }));
+          case 'ft-portProtocol':
+          case 'dt-portProtocol':
+            return [{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' },
+              { value: 'both', label: 'TCP + UDP' }];
           case 'sp-profile':
             return (opts.spoofProfiles || []).map(v => ({ value: v, label: v }));
           case 'sp-uplink':
@@ -342,12 +367,15 @@ export function addView(ctx) {
           const menu = el('div', { class: 'sel4menu', hidden: true });
           choices.forEach(c => {
             const opt = el('button', { type: 'button', class: 'sel4opt', text: c.label });
+            opt.dataset.value = c.value;
             opt.addEventListener('click', ev => {
               ev.stopPropagation();
               input.value = c.value;
               delete input.dataset.drawn;
               sel.childNodes[0].textContent = c.label;
               close4();
+              // Splash is offered with an encryption; see transportRows.
+              if (sel.id === 'ft-encryption') transportRows();
             });
             menu.append(opt);
           });

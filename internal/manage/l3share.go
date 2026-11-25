@@ -195,9 +195,9 @@ func offerL3Sharing(cfg l3Spec) []string {
 		l.Ports = g.ports
 		// A shared port carries whatever the tunnel holding it carries. Asked
 		// for UDP here, the new kharej would otherwise get TCP only on it.
-		if cfg.AcceptUDP && !l.AcceptUDP {
-			l.AcceptUDP = true
-			tui.Info("UDP Forwarding On For " + name + ".")
+		if u := unionPortProtocol(l3PortProtocol(l), cfg.PortProtocol()); u != l3PortProtocol(l) {
+			setL3PortProtocol(&l, u)
+			tui.Info("Forwarded Ports Now Carry " + portProtocolLabel(u) + " On " + name + ".")
 		}
 		if err := writeL3AndRestart(g.tunnel.T, l); err != nil {
 			tui.Error("Could not update " + name + ": " + err.Error())
@@ -237,8 +237,8 @@ func shareL3PortsQuietly(cfg l3Spec) ([]string, error) {
 	for _, t := range groupShares(shares) {
 		l := t.tunnel.L
 		l.Ports = t.ports
-		if cfg.AcceptUDP {
-			l.AcceptUDP = true
+		if u := unionPortProtocol(l3PortProtocol(l), cfg.PortProtocol()); u != l3PortProtocol(l) {
+			setL3PortProtocol(&l, u)
 		}
 		if err := writeL3AndRestart(t.tunnel.T, l); err != nil {
 			return nil, fmt.Errorf("could not share ports with tunnel %s: %w", t.tunnel.T.Name, err)

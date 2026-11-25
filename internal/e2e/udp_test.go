@@ -153,7 +153,7 @@ func TestUDPServerReadoptsControlChannel(t *testing.T) {
 		t.Fatalf("cannot set deadline: %v", err)
 	}
 	// v2.0.0's handshake, as the re-dialing client makes it (the old one is
-	// refused once a client has proved itself; see peerauth_test.go).
+	// refused once a client has proved itself; see ADR 0006).
 	msg, signal, err := authClaim(claim, token, "udp")
 	if err != nil {
 		t.Fatalf("server never answered a second control channel claim (re-adopt broken): %v", err)

@@ -105,6 +105,16 @@ var fromTheOtherSide = map[string]bool{
 	"fecData": true, "fecParity": true, "mtu": true, "mssClamp": true, "autoMtu": true,
 }
 
+// superseded are keys the server still accepts for older callers while the
+// form posts what replaced them: acceptUDP is the on/off that portProtocol
+// (tcp, udp or both) took over, on reverse and direct tunnels alike.
+var superseded = map[string]bool{"tune.acceptUDP": true, "acceptUdp": true}
+
+// notYetBuilt are keys the server accepts for a mode that is not built yet:
+// shadow_sni belongs to the shadow encryption (plan.md Phase 5.6), and the
+// form offers it when the mode is.
+var notYetBuilt = map[string]bool{"tune.shadowSni": true}
+
 func TestTheSetupFormMatchesWhatTheServerAccepts(t *testing.T) {
 	names := formNames(t)
 
@@ -133,7 +143,7 @@ func TestTheSetupFormMatchesWhatTheServerAccepts(t *testing.T) {
 		}
 	}
 	for n, owner := range accepts {
-		if !names[n] && !chosenInJS[n] && !fromTheOtherSide[n] {
+		if !names[n] && !chosenInJS[n] && !fromTheOtherSide[n] && !superseded[n] && !notYetBuilt[n] {
 			missing = append(missing, n+" ("+owner+")")
 		}
 	}

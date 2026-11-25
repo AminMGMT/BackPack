@@ -144,7 +144,7 @@ func TestWizardOrderMatchesReverse(t *testing.T) {
 				`tui.Prompt("Forwarded Ports (Blank For TUN): ")`,
 				`uniqueName(tui.PromptDefault("Tunnel Name"`,
 				"askL3Token(&cfg)",
-				`tui.Confirm("Carry UDP As Well As TCP On Those Ports"`,
+				"askPortProtocol(allPortProtocols, config.PortsTCP)",
 				// The carrier's own questions — the forged-source carrier's
 				// screen, which the reverse transport used to own, and the SNI
 				// domain — gathered in one place so the paste-a-code path asks

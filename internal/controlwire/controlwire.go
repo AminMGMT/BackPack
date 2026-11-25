@@ -11,6 +11,7 @@ package controlwire
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -60,6 +61,10 @@ var (
 // Net is a control channel on a stream: signals travel as single bytes.
 func Net(conn net.Conn) Link { return netLink{conn} }
 
+// WS is a control channel on a websocket: signals travel as one-byte binary
+// messages.
+func WS(conn *websocket.Conn) Link { return wsLink{conn} }
+
 type netLink struct{ conn net.Conn }
 
 func (l netLink) Send(signal byte) error {
@@ -84,6 +89,48 @@ func (l netLink) SetReadDeadline(t time.Time) error {
 }
 
 func (l netLink) Close() {
+	if l.conn != nil {
+		_ = l.conn.Close()
+	}
+}
+
+type wsLink struct{ conn *websocket.Conn }
+
+// Send goes through gorilla's WriteMessage, which takes its deadline from the
+// connection and would otherwise have none.
+func (l wsLink) Send(signal byte) error {
+	if l.conn == nil {
+		return ErrNoChannel
+	}
+	if err := l.conn.SetWriteDeadline(time.Now().Add(WriteTimeout)); err == nil {
+		defer func() { _ = l.conn.SetWriteDeadline(time.Time{}) }()
+	}
+	return l.conn.WriteMessage(websocket.BinaryMessage, []byte{signal})
+}
+
+func (l wsLink) Receive() (byte, error) {
+	if l.conn == nil {
+		return 0, ErrNoChannel
+	}
+	messageType, msg, err := l.conn.ReadMessage()
+	if err != nil {
+		return 0, err
+	}
+	signal, ok := utils.WebSocketSignal(messageType, msg)
+	if !ok {
+		return 0, fmt.Errorf("%w: frame type %d, %d bytes", ErrNoSignal, messageType, len(msg))
+	}
+	return signal, nil
+}
+
+func (l wsLink) SetReadDeadline(t time.Time) error {
+	if l.conn == nil {
+		return ErrNoChannel
+	}
+	return l.conn.SetReadDeadline(t)
+}
+
+func (l wsLink) Close() {
 	if l.conn != nil {
 		_ = l.conn.Close()
 	}

@@ -31,11 +31,7 @@ import (
 // engineFile maps an engine to the file that implements it. Several transports
 // share one engine: stealth is tcp with a Noise layer under it, wss is ws with
 // TLS, and xdi, spoof and pck are all KCP over a different carrier.
-//
-// tcpmux, ws, wss, wsmux and wssmux — and tcp unless a managed HTTPS carrier
-// rides on it — run on the plain engine (internal/plain), Backhaul's, which
-// these checks do not cover by design: it does what Backhaul does.
-var clientEngines = []string{"tcp", "udp", "kcp", "quic"}
+var clientEngines = []string{"tcp", "tcpmux", "ws", "wsmux", "udp", "kcp", "quic"}
 
 func readEngine(t *testing.T, side, name string) string {
 	t.Helper()
@@ -79,6 +75,8 @@ func TestEveryClientEngineIsCovered(t *testing.T) {
 	for _, m := range regexp.MustCompile(`transport\.New([A-Za-z]+)Client`).FindAllStringSubmatch(string(b), -1) {
 		name := strings.ToLower(m[1])
 		switch name {
+		case "mux": // NewMuxClient is the tcpmux engine
+			name = "tcpmux"
 		case "spoofpipe": // the WireGuard relay, not a tunnel transport
 			continue
 		}

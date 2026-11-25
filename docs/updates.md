@@ -23,6 +23,16 @@ back up. You can also roll back on demand from **Update → Restore points**.
 
 Follow **stable** (default) or **beta** under **Update → Release channel**.
 
+## Updating the two ends of a tunnel one at a time
+
+After v2.0.0, `tcp`, `tcpmux`, `ws`, `wss`, `wsmux` and `wssmux` run a new engine
+with a different handshake. Update either server first: the updated one sees
+that its peer still runs v2.0.0 and serves the tunnel on v2.0.0's engine. When
+the other end is updated too, both move to the new engine by themselves. Each
+move is a restart of a few seconds. The Iran server remembers which engine it
+is using in `.<name>.compat` beside the config, so a restart picks the right
+one first.
+
 ## Upgrading a very old install
 
 From a clone-based install (≤ v1.2.0): run Update once; after that it is
@@ -40,6 +50,8 @@ release-based.
 سرور به گیت‌هاب دسترسی ندارد. هر دو مسیر TLS را در گیت‌هاب terminate می‌کنند، پس
 دانلود با **SHA-256** منتشرشدهٔ ریلیز تأیید می‌شود.
 **آرشیوی که تأیید نشود نصب نمی‌شود، رد می‌شود.**
+
+**آپدیت دو سر تونل یکی‌یکی:** بعد از v2.0.0، روی tcp/tcpmux/ws/wss/wsmux/wssmux هر سری که اول آپدیت شود تونل را با موتور v2.0.0 نگه می‌دارد؛ وقتی سر دیگر هم آپدیت شد، هر دو خودشان به موتور جدید می‌روند (هر جابه‌جایی چند ثانیه قطعی).
 
 **تور ایمنی:** قبل از دست زدن به چیزی یک **restore point** ذخیره می‌کند، بعد از
 نصب نتیجه را health-check می‌کند و **اگر چیزی بالا نیامد خودش برمی‌گردد عقب**.

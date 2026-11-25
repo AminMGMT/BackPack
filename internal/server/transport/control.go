@@ -5,6 +5,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // enableKeepAlive turns on TCP keepalive on a control connection so a peer that
@@ -102,6 +104,35 @@ func (c *netControl) RemoteAddr() net.Addr {
 		return conn.RemoteAddr()
 	}
 	return nil
+}
+
+// wsControl is the same holder for the websocket transports, which work with a
+// websocket connection rather than a net.Conn.
+type wsControl struct {
+	mu   sync.RWMutex
+	conn *websocket.Conn
+}
+
+func (c *wsControl) Get() *websocket.Conn {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.conn
+}
+
+func (c *wsControl) Set(conn *websocket.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conn = conn
+}
+
+func (c *wsControl) Clear() { c.Set(nil) }
+
+func (c *wsControl) IsSet() bool { return c.Get() != nil }
+
+func (c *wsControl) Close() {
+	if conn := c.Get(); conn != nil {
+		conn.Close()
+	}
 }
 
 // runState holds the context of the run a transport is currently on.

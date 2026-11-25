@@ -170,13 +170,13 @@ func TestThePckWizardAsksNothingAboutATun(t *testing.T) {
 	// Iran: kharej address, tunnel port, ports, UDP, name, preset, fine-tune,
 	// restart schedule, create — and the final Enter. Accepting every default
 	// but the address and the ports.
-	restore := tui.SetInput(strings.NewReader("203.0.113.9\n\n9443,2053=8443\ny\n\n1\nn\n0\nn\n"))
+	restore := tui.SetInput(strings.NewReader("203.0.113.9\n\n9443,2053=8443\n3\n\n1\nn\n0\nn\n"))
 	var out string
 	func() {
 		defer restore()
 		out = capture(t, func() { setupPckForTest(sideIran) })
 	}()
-	for _, ask := range []string{"Kharej IP Or Domain", "Tunnel Port", "Forwarded Ports", "Carry UDP", "Tunnel Name",
+	for _, ask := range []string{"Kharej IP Or Domain", "Tunnel Port", "Forwarded Ports", "What Do The Forwarded Ports Carry?", "Tunnel Name",
 		"How Should The Tunnel Be Tuned?", "Fine-Tune", "Create This Tunnel"} {
 		if !strings.Contains(out, ask) {
 			t.Errorf("the Iran wizard never asked %q:\n%s", ask, out)

@@ -58,7 +58,7 @@ type PresetOption struct {
 var PresetOptions = []PresetOption{
 	{"Balance", "light on CPU and RAM — best for small or shared VPS", PresetBalance, false},
 	{"Turbo", "recommended — the tuned default for Iran to abroad links", PresetTurbo, false},
-	{"Aggressive", "maximum gaming headroom, noticeably more CPU — for strong servers", PresetAggressive, false},
+	{"Aggressive", "highest speed and lowest ping — holds more connections, for strong servers", PresetAggressive, false},
 	{"Throughput", "maximum bandwidth for udp+kcp+fec — trades steady ping for speed", PresetThroughput, true},
 }
 
@@ -243,8 +243,8 @@ func ApplyPreset(s *Spec, preset string) {
 		}
 	}
 
-	if preset == PresetTurbo && onPlainEngine(s.Transport) {
-		applyBackhaulDefaults(s)
+	if onPlainEngine(s.Transport) {
+		applyPlainPreset(s, preset)
 	}
 
 	ApplyKCPPreset(s, preset)
@@ -384,7 +384,7 @@ func PresetLabel(name string) string {
 func PresetValueLabel(value string) string { return presetLabel(value) }
 
 // onPlainEngine reports whether a transport runs on the plain engine,
-// Backhaul's (internal/plain).
+// Backpack's plain engine (internal/plain).
 func onPlainEngine(transport string) bool {
 	switch transport {
 	case "tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux":
@@ -393,11 +393,15 @@ func onPlainEngine(transport string) bool {
 	return false
 }
 
-// applyBackhaulDefaults is Turbo on the plain engine: Backhaul's own defaults
-// (its cmd/defaults.go), which are what that engine is tuned around. Socket
-// buffers and MSS stay the kernel's, as Backhaul leaves them unless asked.
-func applyBackhaulDefaults(s *Spec) {
-	s.Nodelay = false
+// applyPlainDefaults is Turbo on the plain engine: its own defaults, which are what that engine is tuned around. Socket
+// buffers and MSS stay the kernel's unless asked.
+//
+// One departure: nodelay is on.
+// Its code default (off) leaves Nagle on the tunnel connections, and on a
+// lossy path that held small requests back — p99 414 ms where nodelay gives
+// 146 at the same throughput (soak, 100 ms path, 0.5% loss, BBR).
+func applyPlainDefaults(s *Spec) {
+	s.Nodelay = true
 	s.KeepAlive = 75
 	s.Heartbeat = 40
 	s.ChannelSize = 2048
@@ -413,4 +417,36 @@ func applyBackhaulDefaults(s *Spec) {
 	s.MuxFrameSize = 32768
 	s.MuxRecvBuffer = 4194304
 	s.MuxStreamBuffer = 65536
+}
+
+// applyPlainPreset is the three presets on the plain engine, around Turbo's
+// plain-engine defaults. Measured on soak (100 Mbit/s 1% loss and 100 ms 1 Gbit/s
+// 0.5% loss, BBR; m-preset in the soak harness):
+//
+//   - Aggressive is the fastest to answer: a pool of 32 kept full halves a new
+//     connection's first byte on tcp (225 → 98 ms), and four streams to a mux
+//     session instead of eight cut the latency of small requests beside a
+//     bulk transfer (p50/p99 136/297 → 76/197 ms) at the same throughput.
+//   - Balance holds the fewest idle connections: a pool of 4 on tcp and ws.
+//     A mux tunnel keeps Turbo's 8 sessions of 8 streams — 4 sessions, or
+//     16 to 32 streams to one, let a bulk transfer hold small requests back
+//     for a second and more (wsmux p50 1.1 s, p99 2.2–3.7 s).
+//   - Throughput is the same across the three on these paths, and so is the
+//     cost at rest: about 22 MB and 1% CPU each end, idle, whichever preset.
+//     What differs is how fast a new connection is served.
+func applyPlainPreset(s *Spec, preset string) {
+	applyPlainDefaults(s)
+	switch preset {
+	case PresetBalance:
+		if !isMux(s.Transport) {
+			s.ConnectionPool = 4
+		}
+		s.ChannelSize = 1024
+	case PresetAggressive:
+		s.ConnectionPool = 32
+		s.AggressivePool = true
+		s.Heartbeat = 20
+		s.ChannelSize = 4096
+		s.MuxCon = 4
+	}
 }

@@ -203,7 +203,11 @@ func setupL3(side directSide) {
 	}
 
 	if side == sideIran && len(cfg.Ports) > 0 {
-		cfg.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP On Those Ports", false)
+		proto, ok := askPortProtocol(allPortProtocols, config.PortsTCP)
+		if !ok {
+			return
+		}
+		cfg.SetPortProtocol(proto)
 		// A second kharej asking for the first one's ports means "serve them
 		// from both", not "fail to bind". See l3share.go. Asked after UDP,
 		// because a shared port takes this tunnel's answer to it.
@@ -670,9 +674,7 @@ func summariseL3(cfg l3Spec, link string) {
 		ports := "none (TUN)"
 		if len(cfg.Ports) > 0 {
 			ports = strings.Join(cfg.Ports, ", ")
-			if cfg.AcceptUDP {
-				ports += "  (TCP + UDP)"
-			}
+			ports += "  (" + portProtocolLabel(cfg.PortProtocol()) + ")"
 		}
 		row("Forwarded Ports", ports)
 	} else if !kernel {

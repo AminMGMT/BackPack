@@ -81,5 +81,8 @@ func NewLoggerWithFormat(logLevel, format string) *logrus.Logger {
 		log.SetFormatter(&CustomFormatter{})
 	}
 
+	// Warnings and errors in plain words, with what to do. See explain.go.
+	log.AddHook(explainHook{})
+
 	return log
 }

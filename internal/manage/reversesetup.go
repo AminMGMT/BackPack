@@ -139,7 +139,12 @@ func SetupServer() {
 	// The udp transport's forwarded ports are UDP by nature, so it has
 	// nothing to ask here.
 	if transport != "udp" && !managedTransport(transport) {
-		s.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP On Those Ports", false)
+		if !choosePortProtocol(&s, config.PortsTCP) {
+			return
+		}
+	}
+	if !managedTransport(transport) && !chooseEncryption(&s, config.EncNone) {
+		return
 	}
 
 	// The transport's own questions.
@@ -433,6 +438,7 @@ func reverseClientFromLink(link ShareLink, host string) TunnelSpec {
 	if link.MuxVer > 0 {
 		s.MuxVersion = link.MuxVer
 	}
+	s.Encryption = link.encryptionOf()
 	if link.Tr == "kcp" {
 		s.KCPDataShards, s.KCPParityShards = link.FECData, link.FECParity
 	}
@@ -500,12 +506,12 @@ func summariseReverse(s TunnelSpec, host, link string) {
 		if host != "" {
 			row("Kharej Dials", net.JoinHostPort(host, addrPort(managedEndpoint(s))))
 		}
-		ports := strings.Join(s.Ports, ", ")
-		if s.AcceptUDP {
-			ports += "  (TCP + UDP)"
-		}
+		ports := strings.Join(s.Ports, ", ") + "  (" + portProtocolLabel(s.PortProtocol()) + ")"
 		row("Forwarded Ports", ports)
 		row("Kharej Serves", strings.Join(forwardTargets(s.Ports), ", "))
+		if s.Encryption.Encrypted() {
+			row("Encryption", encryptionLabel(s.Encryption.EncryptionMode()))
+		}
 		if needsTLS(s.Transport) {
 			switch {
 			case s.ACMEDomain != "":

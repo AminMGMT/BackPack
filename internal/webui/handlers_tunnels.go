@@ -48,6 +48,10 @@ func (s *server) handleTunnelOptions(w http.ResponseWriter, r *http.Request) {
 		"spoofProfiles": manage.SpoofProfiles(),
 		"pckFlags":      manage.PckFlagCycles(),
 		"interfaces":    manage.RoutableInterfaces(),
+		// The stream transports' encryption: every mode, and which
+		// transport carries which.
+		"encryptionChoices": manage.EncryptionChoices(),
+		"encryption":        manage.EncryptionByTransport(),
 	})
 }
 

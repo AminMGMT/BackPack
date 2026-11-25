@@ -180,6 +180,9 @@ func editPortsMenu(name string) {
 				tui.Info("Real Client IP  : " + onOff(spec.ProxyProtocol))
 			}
 			tui.Info("Limits          : " + limitsSummary(spec))
+			if len(spec.EncryptionModes()) > 1 {
+				tui.Info("Encryption      : " + encryptionLabel(spec.Encryption.EncryptionMode()))
+			}
 			if !isDatagram(spec.Transport) {
 				tui.Info("TCP MSS Clamp   : " + mssLabel(spec.MSS))
 			}
@@ -212,10 +215,17 @@ func editPortsMenu(name string) {
 				func() { editLimits(name, spec) },
 			}
 			opts = append(opts, tui.Option{
-				Title: "Forward UDP: " + onOff(spec.AcceptUDP),
-				Desc:  "off unless you need UDP",
+				Title: "Forwarded Ports Carry: " + portProtocolLabel(spec.PortProtocol()),
+				Desc:  "TCP, UDP or both",
 			})
-			actions = append(actions, func() { toggleAcceptUDP(name, spec) })
+			actions = append(actions, func() { changePortProtocol(name, spec) })
+			if len(spec.EncryptionModes()) > 1 {
+				opts = append(opts, tui.Option{
+					Title: "Encryption: " + encryptionLabel(spec.Encryption.EncryptionMode()),
+					Desc:  "the other side must match",
+				})
+				actions = append(actions, func() { changeEncryption(name, spec) })
+			}
 			opts = append(opts, tui.Option{
 				Title: "Fallback Transports",
 				Desc:  "tried when this one is blocked",
@@ -261,6 +271,9 @@ func editPortsMenu(name string) {
 			tui.Info("Fallbacks      : " + chainSummary(spec.Transport, spec.FallbackTransports))
 			tui.Info("Preset         : " + presetLabel(spec.Preset))
 			tui.Info("Load Balancing : " + onOff(spec.LoadBalance))
+			if len(spec.EncryptionModes()) > 1 {
+				tui.Info("Encryption     : " + encryptionLabel(spec.Encryption.EncryptionMode()))
+			}
 			if !isDatagram(spec.Transport) {
 				tui.Info("TCP MSS Clamp  : " + mssLabel(spec.MSS))
 			}
@@ -285,6 +298,13 @@ func editPortsMenu(name string) {
 				func() { changeFallbackTransports(name, spec) },
 				func() { changeTunnelPreset(name, spec) },
 				func() { toggleLoadBalance(name, spec) },
+			}
+			if len(spec.EncryptionModes()) > 1 {
+				opts = append(opts, tui.Option{
+					Title: "Encryption: " + encryptionLabel(spec.Encryption.EncryptionMode()),
+					Desc:  "must match the Iran side",
+				})
+				actions = append(actions, func() { changeEncryption(name, spec) })
 			}
 			if !isDatagram(spec.Transport) {
 				opts = append(opts, tui.Option{
@@ -643,30 +663,26 @@ func editPckFlags(name string, spec TunnelSpec) {
 	tui.PressEnter()
 }
 
-// toggleAcceptUDP turns forwarding of UDP on the exposed ports on or off. It is
-// the CLI's way to undo the v1.7.1 default on an existing tunnel, since a tunnel
-// created then carries an explicit accept_udp = true that only an edit clears.
-func toggleAcceptUDP(name string, spec TunnelSpec) {
+// changePortProtocol sets what the forwarded ports carry: TCP, UDP or both.
+func changePortProtocol(name string, spec TunnelSpec) {
 	fmt.Println()
-	tui.Title("Forward UDP — " + name)
-	tui.Warn("Only for UDP services (VPN, games); on ws/mux it can starve TCP.")
-	tui.Info("Now: " + onOff(spec.AcceptUDP))
+	tui.Title("Forwarded Ports — " + name)
+	tui.Info("Now: " + portProtocolLabel(spec.PortProtocol()))
 	fmt.Println()
 
-	want := !spec.AcceptUDP
-	verb := "Enable"
-	if !want {
-		verb = "Disable"
-	}
-	if !tui.Confirm(verb+" UDP Forwarding", false) {
+	want := spec
+	if !choosePortProtocol(&want, spec.PortProtocol()) {
 		return
 	}
-	if err := SetAcceptUDP(name, want); err != nil {
+	if want.PortProtocol() == spec.PortProtocol() {
+		return
+	}
+	if err := SetPortProtocol(name, want.PortProtocol()); err != nil {
 		tui.Error("Failed: " + err.Error())
 		tui.PressEnter()
 		return
 	}
-	tui.Success("UDP Forwarding: " + onOff(want) + " — Restarted.")
+	tui.Success("Forwarded ports: " + portProtocolLabel(want.PortProtocol()) + " — Restarted.")
 	tui.PressEnter()
 }
 

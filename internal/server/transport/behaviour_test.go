@@ -164,6 +164,23 @@ func TestSameHostComparesAddressesNotStrings(t *testing.T) {
 	}
 }
 
+// A listener with no certificate gets one generated for it, and the name in it
+// has to be something a client can actually be pointed at.
+func TestCertHostNamesTheBindAddress(t *testing.T) {
+	for in, want := range map[string]string{
+		"1.2.3.4:443": "1.2.3.4",
+		// Bound to everything, so it has no particular name of its own.
+		"0.0.0.0:443": "localhost",
+		"[::]:443":    "localhost",
+		":443":        "localhost",
+		"nonsense":    "localhost",
+	} {
+		if got := certHost(in); got != want {
+			t.Fatalf("certHost(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // netControl holds the control channel across a generation swap. Reading it
 // while the next generation replaces it is the ordinary case, not the exotic
 // one.
@@ -198,6 +215,18 @@ func TestNetControlIsSafeAcrossAGenerationSwap(t *testing.T) {
 	wg.Wait()
 }
 
+func TestWSControlIsSafeAcrossAGenerationSwap(t *testing.T) {
+	var c wsControl
+	if c.IsSet() {
+		t.Fatal("an empty holder reported a control channel")
+	}
+	c.Close()
+	c.Clear()
+	if c.Get() != nil {
+		t.Fatal("clearing left something behind")
+	}
+}
+
 // Running() is what a fallback chain asks of the server end, and it has to
 // mean "a client has paired with me".
 func TestEveryServerTransportAnswersRunning(t *testing.T) {
@@ -207,17 +236,23 @@ func TestEveryServerTransportAnswersRunning(t *testing.T) {
 		run  func() bool
 	}
 	tcp := &TcpTransport{}
+	mux := &TcpMuxTransport{}
 	kcp := &KcpTransport{}
 	q := &QuicTransport{}
+	ws := &WsTransport{}
+	wsm := &WsMuxTransport{}
 	udp := &UdpTransport{}
 	each := []probe{
 		{"tcp", tcp.status.set, tcp.Running},
+		{"tcpmux", mux.status.set, mux.Running},
 		{"kcp", kcp.status.set, kcp.Running},
 		{"quic", q.status.set, q.Running},
+		{"ws", ws.status.set, ws.Running},
+		{"wsmux", wsm.status.set, wsm.Running},
 		{"udp", udp.status.set, udp.Running},
 	}
-	if len(each) != 4 {
-		t.Fatalf("checked %d transports, the package has 4", len(each))
+	if len(each) != 7 {
+		t.Fatalf("checked %d transports, the package has 7", len(each))
 	}
 	for _, e := range each {
 		if e.run() {

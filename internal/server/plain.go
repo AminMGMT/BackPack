@@ -2,13 +2,14 @@ package server
 
 import (
 	"context"
+	"github.com/backpack/backpack/internal/plain/core"
 	"time"
 
 	"github.com/backpack/backpack/config"
 	plain "github.com/backpack/backpack/internal/plain/server"
 )
 
-// usesPlainEngine reports whether tr runs on the plain engine — Backhaul's
+// usesPlainEngine reports whether tr runs on the plain engine — its
 // tcp, tcpmux, ws, wss, wsmux and wssmux, ported in internal/plain.
 //
 // tcp under a managed HTTPS carrier (naive, xhttp, REALITY) is the exception:
@@ -25,17 +26,27 @@ func usesPlainEngine(tr config.TransportType, managed bool) bool {
 }
 
 // startPlain starts tr on the plain engine.
-func (s *Server) startPlain(ctx context.Context, tr config.TransportType) runner {
+// onLegacy is called when the other end turns out to run Backpack v2.0.0;
+// see compat.go.
+func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLegacy func()) runner {
 	c := s.config
 	keepAlive := time.Duration(c.Keepalive) * time.Second
 	heartbeat := time.Duration(c.Heartbeat) * time.Second
 
-	// Backhaul's own default where none is set: version 1. Backpack's config
+	// The plain engine's own default where none is set: version 1. Backpack's config
 	// leaves 0 (negotiate), which this engine has no handshake to settle.
 	muxVersion := c.MuxVersion
 	if muxVersion != 1 && muxVersion != 2 {
 		muxVersion = 1
 	}
+
+	if c.ForwardsUDP() && tr != config.TCP {
+		s.logger.Warnf("UDP is not forwarded: the %s transport carries TCP only. "+
+			"For UDP use transport \"tcp\" (or kcp, quic); to silence this, set port_protocol = \"tcp\".", tr)
+	}
+
+	// Backpack: the tunnel's encryption; nil (none) leaves the plain wire.
+	layer := core.NewLayer(c.EncryptionConfig, c.Token)
 
 	switch tr {
 	case config.TCP:
@@ -51,10 +62,13 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType) runner
 			WebPort:       c.WebPort,
 			SnifferLog:    c.SnifferLog,
 			AcceptUDP:     c.ForwardsUDP(),
+			UDPOnly:       !c.ForwardsTCP(),
 			MSS:           c.MSS,
 			SO_RCVBUF:     c.SO_RCVBUF,
 			SO_SNDBUF:     c.SO_SNDBUF,
 			ProxyProtocol: c.ProxyProtocol,
+			OnLegacyClaim: onLegacy,
+			Layer:         layer,
 		}, s.logger)
 		go t.Start()
 		return t
@@ -80,28 +94,32 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType) runner
 			SO_RCVBUF:        c.SO_RCVBUF,
 			SO_SNDBUF:        c.SO_SNDBUF,
 			ProxyProtocol:    c.ProxyProtocol,
+			OnLegacyClaim:    onLegacy,
+			Layer:            layer,
 		}, s.logger)
 		go t.Start()
 		return t
 
 	case config.WS, config.WSS:
 		t := plain.NewWSServer(ctx, &plain.WsConfig{
-			BindAddr:     c.BindAddr,
-			Nodelay:      c.Nodelay,
-			KeepAlive:    keepAlive,
-			Heartbeat:    heartbeat,
-			Token:        c.Token,
-			ChannelSize:  c.ChannelSize,
-			Ports:        c.Ports,
-			Sniffer:      c.Sniffer,
-			WebPort:      c.WebPort,
-			SnifferLog:   c.SnifferLog,
-			Mode:         tr,
-			TLSCertFile:  c.TLSCertFile,
-			TLSKeyFile:   c.TLSKeyFile,
-			ACMEDomain:   c.ACMEDomain,
-			ACMEEmail:    c.ACMEEmail,
-			ACMECacheDir: acmeCacheDir,
+			BindAddr:      c.BindAddr,
+			Nodelay:       c.Nodelay,
+			KeepAlive:     keepAlive,
+			Heartbeat:     heartbeat,
+			Token:         c.Token,
+			ChannelSize:   c.ChannelSize,
+			Ports:         c.Ports,
+			Sniffer:       c.Sniffer,
+			WebPort:       c.WebPort,
+			SnifferLog:    c.SnifferLog,
+			Mode:          tr,
+			TLSCertFile:   c.TLSCertFile,
+			TLSKeyFile:    c.TLSKeyFile,
+			ACMEDomain:    c.ACMEDomain,
+			ACMEEmail:     c.ACMEEmail,
+			ACMECacheDir:  acmeCacheDir,
+			OnLegacyClaim: onLegacy,
+			Layer:         layer,
 		}, s.logger)
 		go t.Start()
 		return t
@@ -130,6 +148,8 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType) runner
 			ACMEEmail:        c.ACMEEmail,
 			ACMECacheDir:     acmeCacheDir,
 			ProxyProtocol:    c.ProxyProtocol,
+			OnLegacyClaim:    onLegacy,
+			Layer:            layer,
 		}, s.logger)
 		go t.Start()
 		return t

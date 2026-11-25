@@ -6,9 +6,11 @@ import (
 	"math/rand"
 	"net"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 	"github.com/backpack/backpack/internal/optimize"
 )
@@ -112,6 +114,9 @@ type FineTune struct {
 
 	ChannelSize int  `json:"channelSize"` // server
 	AcceptUDP   bool `json:"acceptUDP"`   // server
+	// PortProtocol is what the forwarded ports carry — "tcp", "udp" or
+	// "both" — and wins over AcceptUDP when sent. Server-side.
+	PortProtocol string `json:"portProtocol"`
 
 	ConnectionPool int  `json:"connectionPool"` // client
 	AggressivePool bool `json:"aggressivePool"` // client
@@ -130,6 +135,13 @@ type FineTune struct {
 	KCPParityShards int `json:"kcpParityShards"`
 
 	ZeroCopy bool `json:"zeroCopy"` // plain TCP only
+
+	// Encryption is the stream transports' encryption mode ("none",
+	// "stealth", ...), Splash and ShadowSNI its other two keys. Both ends must
+	// carry the same. See config.EncryptionConfig.
+	Encryption string `json:"encryption"`
+	Splash     bool   `json:"splash"`
+	ShadowSNI  string `json:"shadowSni"`
 
 	// sent is the set of keys a form actually posted, when it came from JSON.
 	// See UnmarshalJSON. Nil means built in code, where every field counts.
@@ -245,6 +257,7 @@ func tuneOf(s TunnelSpec) FineTune {
 		MSS:             s.MSS,
 		ChannelSize:     s.ChannelSize,
 		AcceptUDP:       s.AcceptUDP,
+		PortProtocol:    s.PortProtocol(),
 		ConnectionPool:  s.ConnectionPool,
 		AggressivePool:  s.AggressivePool,
 		MuxCon:          s.MuxCon,
@@ -259,6 +272,9 @@ func tuneOf(s TunnelSpec) FineTune {
 		KCPDataShards:   s.KCPDataShards,
 		KCPParityShards: s.KCPParityShards,
 		ZeroCopy:        s.ZeroCopy,
+		Encryption:      s.Encryption.EncryptionMode(),
+		Splash:          s.Encryption.Splash,
+		ShadowSNI:       s.Encryption.ShadowSNI,
 	}
 }
 
@@ -279,9 +295,31 @@ func (f FineTune) apply(s *TunnelSpec) {
 	}
 	if f.has("acceptUDP") {
 		s.AcceptUDP = f.AcceptUDP
+		s.UDPOnly = false
+	}
+	// What the ports carry, among what the transport can forward; anything
+	// else is TCP, as the form shows it.
+	if f.has("portProtocol") && f.PortProtocol != "" {
+		proto := f.PortProtocol
+		if !slices.Contains(s.PortProtocols(), proto) {
+			proto = config.PortsTCP
+		}
+		s.SetPortProtocol(proto)
 	}
 	if f.has("zeroCopy") {
 		s.ZeroCopy = f.ZeroCopy && s.Transport == "tcp"
+	}
+	// The encryption, among what the transport carries; anything else is none.
+	if f.has("shadowSni") {
+		s.Encryption.ShadowSNI = strings.TrimSpace(f.ShadowSNI)
+	}
+	if f.has("splash") {
+		s.Encryption.Splash = f.Splash
+	}
+	if f.has("encryption") {
+		s.SetEncryption(f.Encryption)
+	} else if f.has("splash") {
+		s.SetEncryption(s.Encryption.EncryptionMode())
 	}
 	// Heartbeat is the one number whose zero is meaningful — it disables the
 	// heartbeat, which the CLI offers in as many words.

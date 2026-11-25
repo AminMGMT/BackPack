@@ -33,7 +33,7 @@ func TestEveryDialerRetryBacksOff(t *testing.T) {
 	// The loop body, from the backoff being created to the end of the function.
 	dialer := regexp.MustCompile(`(?s)bo := newBackoff\(.*?\n}`)
 
-	for _, name := range []string{"tcp.go", "kcp.go", "udp.go"} {
+	for _, name := range []string{"tcp.go", "tcpmux.go", "kcp.go", "udp.go", "ws.go", "wsmux.go"} {
 		src, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatalf("cannot read %s: %v", name, err)

@@ -350,7 +350,7 @@ func TestTheReverseWizardOrder(t *testing.T) {
 			`"Forwarded Ports (e.g. 443, 8080=127.0.0.1:2096): "`,
 			`tui.PromptDefault("Tunnel Name"`,
 			`tui.PromptDefault("Security Token", randomToken(64))`,
-			`tui.Confirm("Carry UDP As Well As TCP On Those Ports"`,
+			"choosePortProtocol(&s, config.PortsTCP)",
 			"setupServerTLS(&s)",
 			"askPck(&s)",
 			"askProxyProtocol(&s)",

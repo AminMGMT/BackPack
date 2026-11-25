@@ -66,11 +66,13 @@ type QuicTransport struct {
 }
 
 type QuicConfig struct {
-	BindAddr      string
-	SnifferLog    string
-	Token         string
-	Ports         []string
-	AcceptUDP     bool
+	BindAddr   string
+	SnifferLog string
+	Token      string
+	Ports      []string
+	AcceptUDP  bool
+	// UDPOnly opens no TCP listener on the forwarded ports (port_protocol = "udp").
+	UDPOnly       bool
 	Sniffer       bool
 	ChannelSize   int
 	WebPort       int
@@ -562,7 +564,7 @@ func (s *QuicTransport) handleLoop(g *quicGen) {
 // forwarder is this transport's forwarded ports for one generation.
 func (s *QuicTransport) forwarder(g *quicGen) portForwarder {
 	return portForwarder{
-		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP,
+		ctx: g.ctx, ports: s.config.Ports, acceptUDP: s.config.AcceptUDP, udpOnly: s.config.UDPOnly,
 		queue: g.localChannel, limits: s.limits, listeners: &s.listeners, log: s.logger,
 		tune:   alwaysNodelay(s.logger),
 		queued: nil,

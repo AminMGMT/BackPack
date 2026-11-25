@@ -398,7 +398,7 @@ func TestAKharejFromALinkFailsOverToTheLinksBackupAddress(t *testing.T) {
 		t.Fatalf("building the engine: %v", err)
 	}
 	cert, key := testCertPair(t)
-	// tcp, tcpmux, ws, wss and wsmux run on the plain engine, Backhaul's,
+	// tcp, tcpmux, ws, wss and wsmux run on the plain engine,
 	// which dials the one address it is given.
 	for _, tr := range []string{"kcp", "quic", "udp"} {
 		tr := tr

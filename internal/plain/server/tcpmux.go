@@ -16,7 +16,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// TcpMuxTransport is Backhaul's tcpmux server: the client's pool connections
+// TcpMuxTransport is the plain tcpmux server: the client's pool connections
 // are smux sessions, and each user connection is a stream on one of them, at
 // most MuxCon to a session.
 type TcpMuxTransport struct {
@@ -63,6 +63,10 @@ type TcpMuxConfig struct {
 	SO_RCVBUF        int
 	SO_SNDBUF        int
 	ProxyProtocol    bool
+	// OnLegacyClaim: see TcpConfig.OnLegacyClaim.
+	OnLegacyClaim func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewTcpMuxServer(parentCtx context.Context, config *TcpMuxConfig, logger *logrus.Logger) *TcpMuxTransport {
@@ -183,6 +187,12 @@ func (s *TcpMuxTransport) channelHandshake(g *tcpMuxGen) {
 				continue
 			}
 			msg, transport, err := core.ReceiveBinaryTransportString(conn)
+			if core.LegacyClaim(transport) && err == nil && s.config.OnLegacyClaim != nil {
+				s.logger.Info("the kharej runs Backpack v2.0.0: serving this tunnel on its engine until it is updated")
+				conn.Close()
+				s.config.OnLegacyClaim()
+				continue
+			}
 			if transport != core.SG_Chan {
 				s.logger.Errorf("invalid signal received for channel, Discarding connection")
 				conn.Close()
@@ -212,7 +222,7 @@ func (s *TcpMuxTransport) channelHandshake(g *tcpMuxGen) {
 				continue
 			}
 
-			tcpConn, ok := conn.(*net.TCPConn)
+			tcpConn, ok := core.TCPOf(conn)
 			if !ok {
 				conn.Close()
 				continue
@@ -238,7 +248,7 @@ func (s *TcpMuxTransport) channelHandler(g *tcpMuxGen) {
 
 	messageChan := make(chan byte, 1)
 
-	// One read, as in Backhaul: the only thing a tcpmux client sends on
+	// One read: the only thing a tcpmux client sends on
 	// its control channel is SG_Closed, and a read error is the channel gone.
 	go func() {
 		message, err := core.ReceiveBinaryByte(control)
@@ -303,6 +313,9 @@ func (s *TcpMuxTransport) tunnelListener(g *tcpMuxGen) {
 		return
 	}
 
+	// Backpack: the tunnel's encryption, run on every connection accepted.
+	listener = s.config.Layer.Listener(listener, s.logger)
+
 	defer s.holds.Hold()()
 	defer listener.Close()
 
@@ -326,7 +339,7 @@ func (s *TcpMuxTransport) acceptTunnelConn(g *tcpMuxGen, listener net.Listener) 
 				continue
 			}
 
-			tcpConn, ok := conn.(*net.TCPConn)
+			tcpConn, ok := core.TCPOf(conn)
 			if !ok {
 				s.logger.Warnf("disarded non-TCP tunnel connection from %s", conn.RemoteAddr().String())
 				conn.Close()
@@ -356,6 +369,9 @@ func (s *TcpMuxTransport) acceptTunnelConn(g *tcpMuxGen, listener net.Listener) 
 			if err := tcpConn.SetKeepAlivePeriod(s.config.KeepAlive); err != nil {
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
 			}
+
+			// Speed edit: see core.MuxSocket.
+			core.MuxSocket(conn)
 
 			if control == nil {
 				s.logger.Info("control channel not found, attempting to establish a new session")

@@ -7,7 +7,7 @@ import (
 	"net"
 )
 
-// The control signals, one byte each, exactly as Backhaul numbers them.
+// The control signals, one byte each, exactly as the plain wire numbers them.
 const (
 	SG_HB     byte = iota // for heartbeat
 	SG_Chan               // for channel, req a new conn

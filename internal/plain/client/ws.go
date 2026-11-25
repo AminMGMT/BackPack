@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,7 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// WsTransport is Backhaul's ws and wss client: a /channel websocket for
+// WsTransport is the plain ws and wss client: a /channel websocket for
 // control, and a pool of /tunnel websockets that each carry one user
 // connection.
 type WsTransport struct {
@@ -42,6 +43,10 @@ type WsConfig struct {
 	Mode           config.TransportType
 	AggressivePool bool
 	EdgeIP         string
+	// OnLegacyServer: see TcpConfig.OnLegacyServer.
+	OnLegacyServer func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewWSClient(parentCtx context.Context, config *WsConfig, logger *logrus.Logger) *WsTransport {
@@ -114,13 +119,28 @@ func (c *WsTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 0, 0)
+			var he *core.HandshakeError
+			if err != nil && errors.As(err, &he) && he.LegacyServerAnswer() && c.config.OnLegacyServer != nil {
+				// Backpack: a v2.0.0 Iran server answers this claim with its
+				// decoy page; the tunnel then runs on that engine.
+				c.logger.Info("the Iran server runs Backpack v2.0.0: using its engine until it is updated")
+				c.config.OnLegacyServer()
+				return
+			}
 			if err != nil {
 				c.logger.Errorf("control channel dialer: %v", err)
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
-			g.wsControl.Set(tunnelWSConn)
+			// Backpack: the tunnel's encryption on the control messages.
+			control, err := c.config.Layer.WSClient(tunnelWSConn)
+			if err != nil {
+				c.logger.Errorf("control channel dialer: %s handshake: %v", c.config.Layer.Mode(), err)
+				time.Sleep(c.config.RetryInterval)
+				continue
+			}
+			g.wsControl.Set(control)
 			c.logger.Info("control channel established successfully")
 
 			c.status.Set(fmt.Sprintf("Connected (%s)", c.config.Mode))
@@ -213,9 +233,15 @@ func wsChannelHandler(g *clientGen, logger *logrus.Logger, restart func(), dial 
 func (c *WsTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new websocket tunnel connection to address %s", c.config.RemoteAddr)
 
-	tunnelConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 1024*1024, 1024*1024)
+	rawWS, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 1024*1024, 1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
+		return
+	}
+	// Backpack: the tunnel's encryption on the websocket's messages.
+	tunnelConn, err := c.config.Layer.WSClient(rawWS)
+	if err != nil {
+		c.logger.Errorf("tunnel server dialer: %s handshake: %v", c.config.Layer.Mode(), err)
 		return
 	}
 
@@ -258,7 +284,7 @@ func (c *WsTransport) tunnelDialer(g *clientGen) {
 	}
 }
 
-func (c *WsTransport) localDialer(g *clientGen, tunnelCon *websocket.Conn, remoteAddr string, port int) {
+func (c *WsTransport) localDialer(g *clientGen, tunnelCon *core.WSConn, remoteAddr string, port int) {
 	var sendBuf, recvBuf int
 
 	if strings.Contains(remoteAddr, "127.0.0.1") {

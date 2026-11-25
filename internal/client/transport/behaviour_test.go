@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/backpack/backpack/internal/utils/network"
+	"github.com/gorilla/websocket"
 )
 
 // Behaviour on the client transports that can be exercised without a tunnel.
@@ -143,6 +144,12 @@ func TestEveryClientTransportAnswersRunning(t *testing.T) {
 		set  func(string)
 		run  func() bool
 	}{"tcp", tcp.status.set, tcp.Running})
+	mux := &TcpMuxTransport{}
+	each = append(each, struct {
+		name string
+		set  func(string)
+		run  func() bool
+	}{"tcpmux", mux.status.set, mux.Running})
 	kcp := &KcpTransport{}
 	each = append(each, struct {
 		name string
@@ -155,6 +162,18 @@ func TestEveryClientTransportAnswersRunning(t *testing.T) {
 		set  func(string)
 		run  func() bool
 	}{"quic", q.status.set, q.Running})
+	ws := &WsTransport{}
+	each = append(each, struct {
+		name string
+		set  func(string)
+		run  func() bool
+	}{"ws", ws.status.set, ws.Running})
+	wsm := &WsMuxTransport{}
+	each = append(each, struct {
+		name string
+		set  func(string)
+		run  func() bool
+	}{"wsmux", wsm.status.set, wsm.Running})
 	udp := &UdpTransport{}
 	each = append(each, struct {
 		name string
@@ -162,8 +181,8 @@ func TestEveryClientTransportAnswersRunning(t *testing.T) {
 		run  func() bool
 	}{"udp", udp.status.set, udp.Running})
 
-	if len(each) != 4 {
-		t.Fatalf("checked %d transports, the package has 4", len(each))
+	if len(each) != 7 {
+		t.Fatalf("checked %d transports, the package has 7", len(each))
 	}
 	for _, e := range each {
 		if e.run() {
@@ -276,4 +295,41 @@ func TestTunnelStatusIsSafeUnderConcurrentWrites(t *testing.T) {
 	if !strings.HasPrefix(s.get(), "Connected") {
 		t.Fatalf("status = %q", s.get())
 	}
+}
+
+// wsPair gives a connected pair of websocket connections over loopback.
+func wsPair(t *testing.T) (server, client *websocket.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	up := websocket.Upgrader{}
+	done := make(chan *websocket.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			done <- nil
+			return
+		}
+		// A minimal handshake: the gorilla upgrader wants an http.Server, so
+		// this serves exactly one request on the raw connection.
+		srv := &oneShot{conn: c, up: up, out: done}
+		srv.serve()
+	}()
+
+	client, _, err = websocket.DefaultDialer.Dial("ws://"+ln.Addr().String()+"/", nil)
+	if err != nil {
+		t.Fatalf("dialling: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+
+	server = <-done
+	if server == nil {
+		t.Fatal("the server end never came up")
+	}
+	t.Cleanup(func() { server.Close() })
+	return server, client
 }

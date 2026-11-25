@@ -63,7 +63,7 @@ func TestEveryPairingLoopTimesOutAndCleansUpOnShutdown(t *testing.T) {
 	// already hold, so nothing is ever parked waiting.
 	// Where each one's pairing loop lives: udp keeps its flows in a file of
 	// their own.
-	for name, file := range map[string]string{"tcp": "tcp.go", "quic": "quic.go", "udp": "udp_flows.go"} {
+	for name, file := range map[string]string{"tcp": "tcp.go", "ws": "ws.go", "quic": "quic.go", "udp": "udp_flows.go"} {
 		t.Run(name, func(t *testing.T) {
 			src := readTransportSource(t, file)
 			if strings.Contains(src, "pairing[") && strings.Contains(src, "}.run()") {
@@ -93,7 +93,7 @@ func TestEveryPairingLoopTimesOutAndCleansUpOnShutdown(t *testing.T) {
 // machine deliberately does not make, because giving a stale connection a fresh
 // timer would double its life.
 func TestATransportOnTheSkeletonStillDropsAStaleConnection(t *testing.T) {
-	for _, name := range []string{"tcp", "quic"} {
+	for _, name := range []string{"tcp", "ws", "quic"} {
 		t.Run(name, func(t *testing.T) {
 			src := readTransportSource(t, name+".go")
 			if !strings.Contains(src, "pairing[") {
@@ -130,7 +130,7 @@ func cleansUpOnDone(src string) bool {
 // The timeout is one number, written once. It was written seven times as a bare
 // 3000, and the number was never the part that differed.
 func TestNoTransportCarriesItsOwnPairingTimeout(t *testing.T) {
-	for _, name := range []string{"tcp", "kcp", "quic", "udp"} {
+	for _, name := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic", "udp"} {
 		src := readTransportSource(t, name+".go")
 		if strings.Contains(src, "> 3000") {
 			t.Errorf("%s.go carries its own copy of the pairing timeout", name)

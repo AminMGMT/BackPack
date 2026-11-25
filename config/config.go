@@ -401,6 +401,11 @@ type ServerConfig struct {
 	// well. The pointer distinguishes "not set" (off) from an explicit
 	// accept_udp = true, so a config with no line does not forward UDP.
 	AcceptUDP *bool `toml:"accept_udp"`
+	// PortProtocol is what the forwarded ports carry: "tcp", "udp" or "both".
+	// Empty falls back to accept_udp (true = both, otherwise tcp), which is
+	// how every file written before this key reads. See ForwardsUDP and
+	// ForwardsTCP.
+	PortProtocol string `toml:"port_protocol"`
 	// SkipOptz stops the engine applying its own socket and sysctl tuning at
 	// start. For a machine whose tuning is managed elsewhere.
 	SkipOptz bool `toml:"skip_optz"`
@@ -448,6 +453,9 @@ type ServerConfig struct {
 	// Embedded so the pck_* keys sit at the top level too. Only used when
 	// transport = "pck".
 	PckConfig
+	// Embedded so encryption, splash and shadow_sni sit at the top level too.
+	// Used by the stream transports only.
+	EncryptionConfig
 }
 
 // ForwardsUDP reports whether the forwarded ports should carry UDP as well as
@@ -465,7 +473,34 @@ type ServerConfig struct {
 // an Xray inbound — turn it on, and a plain web or proxy tunnel is not made to
 // carry traffic nobody asked it to.
 func (s ServerConfig) ForwardsUDP() bool {
+	switch s.PortProtocol {
+	case PortsUDP, PortsBoth:
+		return true
+	case PortsTCP:
+		return false
+	}
 	return s.AcceptUDP != nil && *s.AcceptUDP
+}
+
+// ForwardsTCP reports whether the forwarded ports listen for TCP: always,
+// unless the tunnel was set up to carry UDP only.
+func (s ServerConfig) ForwardsTCP() bool { return s.PortProtocol != PortsUDP }
+
+// What a tunnel's forwarded ports carry (port_protocol).
+const (
+	PortsTCP  = "tcp"
+	PortsUDP  = "udp"
+	PortsBoth = "both"
+)
+
+// ValidPortProtocol reports whether v is a port_protocol value; empty is
+// valid and means "decided by accept_udp".
+func ValidPortProtocol(v string) bool {
+	switch v {
+	case "", PortsTCP, PortsUDP, PortsBoth:
+		return true
+	}
+	return false
 }
 
 // ClientConfig represents the configuration for the client.
@@ -648,6 +683,9 @@ type ClientConfig struct {
 	// Embedded so the pck_* keys sit at the top level too. Only used when
 	// transport = "pck".
 	PckConfig
+	// Embedded so encryption, splash and shadow_sni sit at the top level too.
+	// Used by the stream transports only.
+	EncryptionConfig
 }
 
 // Config represents the complete configuration, including both server and client settings.

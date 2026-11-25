@@ -41,6 +41,22 @@ func eachClientTransport(t *testing.T, parent context.Context) map[string]restar
 			RemoteAddr: remote, Endpoints: eps, Token: "t", ConnPoolSize: 2,
 			RetryInterval: time.Second, DialTimeOut: time.Second, KeepAlive: time.Second,
 		}, log),
+		"tcpmux": NewMuxClient(parent, &TcpMuxConfig{
+			RemoteAddr: remote, Endpoints: eps, Token: "t", ConnPoolSize: 2,
+			RetryInterval: time.Second, DialTimeOut: time.Second, KeepAlive: time.Second,
+			MuxVersion: 2, MaxFrameSize: 4096, MaxReceiveBuffer: 1 << 16, MaxStreamBuffer: 4096,
+		}, log),
+		"ws": NewWSClient(parent, &WsConfig{
+			RemoteAddr: remote, Endpoints: eps, Token: "t", ConnPoolSize: 2,
+			RetryInterval: time.Second, DialTimeOut: time.Second, KeepAlive: time.Second,
+			Mode: "ws",
+		}, log),
+		"wsmux": NewWSMuxClient(parent, &WsMuxConfig{
+			RemoteAddr: remote, Endpoints: eps, Token: "t", ConnPoolSize: 2,
+			RetryInterval: time.Second, DialTimeOut: time.Second, KeepAlive: time.Second,
+			Mode: "wsmux", MuxVersion: 2, MaxFrameSize: 4096,
+			MaxReceiveBuffer: 1 << 16, MaxStreamBuffer: 4096,
+		}, log),
 		"kcp": NewKcpClient(parent, &KcpConfig{
 			RemoteAddr: remote, Endpoints: eps, Token: "t", ConnPoolSize: 2,
 			RetryInterval: time.Second, DialTimeOut: time.Second, KeepAlive: time.Second,
@@ -62,6 +78,12 @@ func setClientStatus(t *testing.T, tr restartable, v string) {
 	t.Helper()
 	switch c := tr.(type) {
 	case *TcpTransport:
+		c.status.set(v)
+	case *TcpMuxTransport:
+		c.status.set(v)
+	case *WsTransport:
+		c.status.set(v)
+	case *WsMuxTransport:
 		c.status.set(v)
 	case *KcpTransport:
 		c.status.set(v)
@@ -150,10 +172,10 @@ func TestEveryClientTransportIsCoveredByTheRestartTable(t *testing.T) {
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 	got := eachClientTransport(t, dead)
-	if len(got) != 4 {
-		t.Fatalf("the restart table holds %d transports; this package has 4", len(got))
+	if len(got) != 7 {
+		t.Fatalf("the restart table holds %d transports; this package has 7", len(got))
 	}
-	for _, want := range []string{"tcp", "kcp", "quic", "udp"} {
+	for _, want := range []string{"tcp", "tcpmux", "ws", "wsmux", "kcp", "quic", "udp"} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("%s is missing from the restart table", want)
 		}

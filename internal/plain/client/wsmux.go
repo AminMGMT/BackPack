@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +18,7 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// WsMuxTransport is Backhaul's wsmux and wssmux client: its /tunnel
+// WsMuxTransport is the plain wsmux and wssmux client: its /tunnel
 // websockets are smux sessions the server opens a stream on per user
 // connection.
 type WsMuxTransport struct {
@@ -47,6 +49,10 @@ type WsMuxConfig struct {
 	Mode             config.TransportType
 	AggressivePool   bool
 	EdgeIP           string
+	// OnLegacyServer: see TcpConfig.OnLegacyServer.
+	OnLegacyServer func()
+	// Layer is the tunnel's encryption (Backpack); nil is none.
+	Layer *core.Layer
 }
 
 func NewWSMuxClient(parentCtx context.Context, config *WsMuxConfig, logger *logrus.Logger) *WsMuxTransport {
@@ -127,14 +133,29 @@ func (c *WsMuxTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Token, c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 0, 0)
+			var he *core.HandshakeError
+			if err != nil && errors.As(err, &he) && he.LegacyServerAnswer() && c.config.OnLegacyServer != nil {
+				// Backpack: a v2.0.0 Iran server answers this claim with its
+				// decoy page; the tunnel then runs on that engine.
+				c.logger.Info("the Iran server runs Backpack v2.0.0: using its engine until it is updated")
+				c.config.OnLegacyServer()
+				return
+			}
 			if err != nil {
 				c.logger.Errorf("control channel dialer: %v", err)
 				time.Sleep(c.config.RetryInterval)
 				continue
 			}
+			// Backpack: the tunnel's encryption on the control messages.
+			control, err := c.config.Layer.WSClient(tunnelWSConn)
+			if err != nil {
+				c.logger.Errorf("control channel dialer: %s handshake: %v", c.config.Layer.Mode(), err)
+				time.Sleep(c.config.RetryInterval)
+				continue
+			}
 
-			g.wsControl.Set(tunnelWSConn)
+			g.wsControl.Set(control)
 			c.logger.Info("control channel established successfully")
 
 			c.status.Set(fmt.Sprintf("Connected (%s)", c.config.Mode))
@@ -159,23 +180,30 @@ func (c *WsMuxTransport) channelHandler(g *clientGen) {
 func (c *WsMuxTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new %s tunnel connection to address %s", c.config.Mode, c.config.RemoteAddr)
 
-	tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Token, c.config.Mode, 3, 2*1024*1024, 2*1024*1024)
+	tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 2*1024*1024, 2*1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 		return
 	}
 
+	// Backpack: the tunnel's encryption on the raw stream smux runs on.
+	stream, err := c.config.Layer.Client(tunnelWSConn.NetConn())
+	if err != nil {
+		c.logger.Errorf("tunnel server dialer: %s handshake: %v", c.config.Layer.Mode(), err)
+		return
+	}
+
 	atomic.AddInt32(&g.poolConnections, 1)
 
-	c.handleSession(g, tunnelWSConn)
+	c.handleSession(g, tunnelWSConn, stream)
 }
 
-func (c *WsMuxTransport) handleSession(g *clientGen, tunnelConn *websocket.Conn) {
+func (c *WsMuxTransport) handleSession(g *clientGen, tunnelConn *websocket.Conn, stream net.Conn) {
 	defer func() {
 		atomic.AddInt32(&g.poolConnections, -1)
 	}()
 
-	session, err := smux.Server(tunnelConn.NetConn(), c.smuxConfig)
+	session, err := smux.Server(stream, c.smuxConfig)
 	if err != nil {
 		c.logger.Errorf("failed to create mux session: %v", err)
 		return

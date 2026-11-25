@@ -197,8 +197,15 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 		endpoints.SetReachProbe(nil)
 	}
 	if usesPlainEngine(tr, c.config.Naive.Enabled() || c.config.Xray.Enabled()) {
-		return c.startPlain(ctx, tr)
+		return c.startCompat(ctx, tr, endpoints, outbound)
 	}
+	return c.startEngine(ctx, tr, endpoints, outbound)
+}
+
+// startEngine starts tr on Backpack's own engines. For tcp, tcpmux, ws, wss,
+// wsmux and wssmux that is the v2.0.0 engine, kept to reach an Iran server
+// still on v2.0.0 (see compat.go).
+func (c *Client) startEngine(ctx context.Context, tr config.TransportType, endpoints *network.Endpoints, outbound *network.Outbound) runner {
 	switch tr {
 	case config.TCP, config.STEALTH:
 		tcpConfig := &transport.TcpConfig{
@@ -228,6 +235,33 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 		go tcpClient.Start()
 		return tcpClient
 
+	case config.TCPMUX:
+		tcpMuxConfig := &transport.TcpMuxConfig{
+			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
+			Nodelay:          c.config.Nodelay,
+			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:     c.config.ConnectionPool,
+			Token:            c.config.Token,
+			MuxVersion:       c.config.MuxVersion,
+			MaxFrameSize:     c.config.MaxFrameSize,
+			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
+			MaxStreamBuffer:  c.config.MaxStreamBuffer,
+			Sniffer:          c.config.Sniffer,
+			WebPort:          c.config.WebPort,
+			SnifferLog:       c.config.SnifferLog,
+			AggressivePool:   c.config.AggressivePool,
+			MSS:              c.config.MSS,
+			SO_RCVBUF:        c.config.SO_RCVBUF,
+			SO_SNDBUF:        c.config.SO_SNDBUF,
+			Outbound:         outbound,
+			Guard:            c.guard,
+		}
+		tcpMuxClient := transport.NewMuxClient(ctx, tcpMuxConfig, c.logger)
+		go tcpMuxClient.Start()
+		return tcpMuxClient
 	case config.KCP, config.XDI, config.PCK:
 		kcp := c.config.KCPConfig.WithDefaults()
 		useICMP := tr == config.XDI
@@ -289,6 +323,59 @@ func (c *Client) startTransport(ctx context.Context, tr config.TransportType, en
 		go quicClient.Start()
 		return quicClient
 
+	case config.WS, config.WSS:
+		WsConfig := &transport.WsConfig{
+			RemoteAddr:     c.config.RemoteAddr,
+			Endpoints:      endpoints,
+			Nodelay:        c.config.Nodelay,
+			KeepAlive:      time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:  time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:    time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:   c.config.ConnectionPool,
+			Token:          c.config.Token,
+			Sniffer:        c.config.Sniffer,
+			WebPort:        c.config.WebPort,
+			SnifferLog:     c.config.SnifferLog,
+			Mode:           tr,
+			SimpleAuth:     c.config.SimpleAuth,
+			AggressivePool: c.config.AggressivePool,
+			EdgeIP:         c.config.EdgeIP,
+			MSS:            c.config.MSS,
+			Outbound:       outbound,
+			Guard:          c.guard,
+		}
+		WsClient := transport.NewWSClient(ctx, WsConfig, c.logger)
+		go WsClient.Start()
+		return WsClient
+
+	case config.WSMUX, config.WSSMUX:
+		wsMuxConfig := &transport.WsMuxConfig{
+			RemoteAddr:       c.config.RemoteAddr,
+			Endpoints:        endpoints,
+			Nodelay:          c.config.Nodelay,
+			KeepAlive:        time.Duration(c.config.Keepalive) * time.Second,
+			RetryInterval:    time.Duration(c.config.RetryInterval) * time.Second,
+			DialTimeOut:      time.Duration(c.config.DialTimeout) * time.Second,
+			ConnPoolSize:     c.config.ConnectionPool,
+			Token:            c.config.Token,
+			MuxVersion:       c.config.MuxVersion,
+			MaxFrameSize:     c.config.MaxFrameSize,
+			MaxReceiveBuffer: c.config.MaxReceiveBuffer,
+			MaxStreamBuffer:  c.config.MaxStreamBuffer,
+			Sniffer:          c.config.Sniffer,
+			WebPort:          c.config.WebPort,
+			SnifferLog:       c.config.SnifferLog,
+			Mode:             tr,
+			SimpleAuth:       c.config.SimpleAuth,
+			AggressivePool:   c.config.AggressivePool,
+			EdgeIP:           c.config.EdgeIP,
+			MSS:              c.config.MSS,
+			Outbound:         outbound,
+			Guard:            c.guard,
+		}
+		wsMuxClient := transport.NewWSMuxClient(ctx, wsMuxConfig, c.logger)
+		go wsMuxClient.Start()
+		return wsMuxClient
 	case config.UDP:
 		udpConfig := &transport.UdpConfig{
 			RemoteAddr:     c.config.RemoteAddr,

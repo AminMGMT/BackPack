@@ -2318,6 +2318,11 @@ func runConnTestKharejLink(ctx context.Context, link ConnTestLink, out io.Writer
 	// The verdict, and the rows as they fill until it comes.
 	for {
 		ctSleep(ctx, 2*time.Second)
+		// Checked here, not only after the last reply: an Iran server that
+		// keeps answering "live" would otherwise hold a cancelled run forever.
+		if ctx.Err() != nil {
+			return nil, ConnTestBest{}, fmt.Errorf("the verdict never arrived from the Iran server — read it there")
+		}
 		for _, e := range engines {
 			// Kept for the verdict rather than printed: a line written here
 			// would land in the middle of the live table.

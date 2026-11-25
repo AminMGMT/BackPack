@@ -183,7 +183,11 @@ func setupPckAsking(side directSide, skipPcap bool) {
 			tui.PressEnter()
 			return
 		}
-		cfg.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP On Those Ports", false)
+		proto, ok := askPortProtocol(allPortProtocols, config.PortsTCP)
+		if !ok {
+			return
+		}
+		cfg.SetPortProtocol(proto)
 		// The key, made here: both ends must hold the same one, and the setup
 		// link carries it across.
 		cfg.Token = randomToken(64)
@@ -258,9 +262,7 @@ func summarisePck(cfg l3Spec, link string) {
 	if cfg.Side == sideIran {
 		row("Dials", cfg.Addr)
 		ports := strings.Join(cfg.Ports, ", ")
-		if cfg.AcceptUDP {
-			ports += "  (TCP + UDP)"
-		}
+		ports += "  (" + portProtocolLabel(cfg.PortProtocol()) + ")"
 		row("Forwarded Ports", ports)
 	} else {
 		row("Listens On", cfg.Addr)
@@ -459,9 +461,11 @@ func editPck(t Tunnel, l config.L3Config) bool {
 			saveL3(t, l)
 			return true
 		})
-		add("UDP Forwarding", "now "+onOff(l.AcceptUDP), func() bool {
-			l.AcceptUDP = tui.Confirm("Carry UDP As Well As TCP", l.AcceptUDP)
-			saveL3(t, l)
+		add("Forwarded Ports Carry", "now "+portProtocolLabel(l3PortProtocol(l)), func() bool {
+			if proto, ok := askPortProtocol(allPortProtocols, l3PortProtocol(l)); ok {
+				setL3PortProtocol(&l, proto)
+				saveL3(t, l)
+			}
 			return true
 		})
 	}

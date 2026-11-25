@@ -1,12 +1,20 @@
 package transport
 
 import (
+	"crypto/subtle"
 	"fmt"
+	"github.com/sirupsen/logrus"
+	"log"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // controlClaimTimeout is how long the server waits for a freshly accepted peer
@@ -26,6 +34,19 @@ import (
 // admission runs in the connection's own goroutine precisely so that a peer
 // which connects and says nothing never delays the ones behind it.
 const controlClaimTimeout = 15 * time.Second
+
+// tunnelHeaderTimeout bounds how long the ws/wsmux tunnel port waits for a
+// request's headers — and, on wss, for the TLS handshake, which net/http times
+// by the same setting.
+//
+// The port is public and unauthenticated until a request arrives, and it had
+// no bound at all: a peer that connected and sent nothing held a goroutine and
+// a file descriptor for as long as it liked, and a slow one also stalled the
+// server's graceful shutdown at every restart. Fifteen seconds is the budget
+// the direct engine's websocket listener already uses. net/http clears the
+// deadline once the headers are in, so an upgraded tunnel is not affected.
+// A variable so a test can shorten it.
+var tunnelHeaderTimeout = 15 * time.Second
 
 // portListen is one listener a forwarding mapping expands into: the address to
 // bind, and the port on its own, which is the target for a mapping that named
@@ -127,6 +148,59 @@ func parseListenPort(s string) (int, error) {
 	return p, nil
 }
 
+// isTunnelRequest reports whether a request is a genuine tunnel connection —
+// a websocket upgrade, on a tunnel path, carrying a valid credential. Anything
+// else (a browser, a scanner, a probe with the wrong token) is not, and is
+// answered with the decoy site instead.
+func isTunnelRequest(r *http.Request, token string, simpleAuth bool) bool {
+	if !websocket.IsWebSocketUpgrade(r) {
+		return false
+	}
+	if r.URL.Path != "/channel" && !strings.HasPrefix(r.URL.Path, "/tunnel") {
+		return false
+	}
+	return authorizeWSRequest(r, token, simpleAuth)
+}
+
+// authorizeWSRequest checks the Authorization header on a websocket upgrade.
+//
+// Over plain ws there is no session to bind to, so the header carries the token
+// itself and is compared to the configured one. Over wss the client sends a
+// proof bound to the TLS session instead of the token, and the server recomputes
+// the expected proof from its own side of that session; a man in the middle that
+// terminated the client's TLS holds a different session and cannot produce it.
+// Either way the comparison is constant time, and a wss connection whose keying
+// material cannot be exported is rejected rather than waved through.
+//
+// simpleAuth turns the binding off and compares the raw token even over TLS.
+// That is exactly what the binding exists to prevent — anyone who terminates
+// the TLS then sees a token they could replay — so it is off by default. It is
+// here for one deployment the binding otherwise makes impossible: a TLS
+// terminating reverse proxy in front of the tunnel, NGINX being the usual one.
+// There the proxy legitimately holds a different TLS session from the client,
+// so a bound proof can never match; the operator who puts a trusted proxy there
+// is choosing to trust it with the token, which is the same thing the raw ws
+// transport already does.
+func authorizeWSRequest(r *http.Request, token string, simpleAuth bool) bool {
+	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+
+	if r.TLS == nil || simpleAuth {
+		return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+	}
+
+	want, err := network.WSSServerProof(r.TLS, token)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+type TunnelChannel struct { // for websocket
+	conn *websocket.Conn
+	ping chan struct{}
+	mu   *sync.Mutex
+}
+
 type LocalTCPConn struct {
 	conn        net.Conn
 	remoteAddr  string
@@ -148,4 +222,60 @@ type TunnelUDPConn struct {
 	listener    *net.UDPConn
 	ping        chan struct{}
 	mu          *sync.Mutex //mutex for ping channel
+}
+
+// The websocket buffers.
+//
+// The relay hands the websocket up to 64 KiB at a time (see handlers.relaybuf);
+// with a 16 KiB write buffer each of those went out as four frames and four
+// system calls, which held plain ws to 2.8 Gbit/s on loopback where wsmux made
+// 5; with these, and the relay reading each message through its pooled buffer
+// (handlers.transferWebSocketToTCP), it makes 6.7–7.0 (internal/e2e
+// TestTransportThroughput). A write
+// buffer is only in use while a message is being written, so they come from
+// one pool rather than one per connection — plain ws is a websocket per user,
+// and 64 KiB held for each would be the tunnel's memory. The read buffer stays
+// small: a read as large as the relay's goes around it straight into the
+// relay buffer.
+const (
+	wsReadBufferSize  = 16 * 1024
+	wsWriteBufferSize = 64 * 1024
+)
+
+var wsWriteBuffers = &sync.Pool{}
+
+// serverProof is the response header that proves this server holds the token,
+// on a wss upgrade bound to its TLS session (see network.WSSServerAnswer); nil
+// over plain ws, and with simpleAuth, where a proxy in front holds a different
+// session and no answer could match.
+func serverProof(r *http.Request, token string, simpleAuth bool) http.Header {
+	if r.TLS == nil || simpleAuth {
+		return nil
+	}
+	answer, err := network.WSSServerAnswer(r.TLS, token)
+	if err != nil {
+		return nil
+	}
+	return http.Header{network.WSSServerProofHeader: {answer}}
+}
+
+// httpErrorLog routes what net/http has to say about a ws or wss listener into
+// the tunnel's own log, at debug.
+//
+// It wrote to standard error on its own otherwise, outside the log's level and
+// format: "http: TLS handshake error from …: EOF" for every scanner that
+// touched a public wss port and every client that went away mid-handshake,
+// and "use of closed network connection" for each one in flight when the
+// listener shut down. Hundreds of them in a Connection Test's log, none of
+// them anything an operator can act on — a real client that cannot connect is
+// reported by the tunnel's own checks with what is wrong.
+func httpErrorLog(l *logrus.Logger) *log.Logger {
+	return log.New(debugWriter{l}, "", 0)
+}
+
+type debugWriter struct{ l *logrus.Logger }
+
+func (w debugWriter) Write(p []byte) (int, error) {
+	w.l.Debug(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
 }

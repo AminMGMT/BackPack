@@ -1,6 +1,10 @@
 # ADR 0006 — The plain transports prove both ends
 
 **Status:** accepted (v2.0.0, 2026-11-20). Closes audit finding F-11.
+After v2.0.0 it holds for `udp` only: `tcp`, `tcpmux`, `ws` and `wsmux` run
+the plain engine and wire (`internal/plain`), which sends the token as it is.
+The v2.0.0 engine is kept to serve a v2.0.0 peer until it is updated
+(`internal/{server,client}/compat.go`), and proves both ends while it does.
 
 ## Context
 

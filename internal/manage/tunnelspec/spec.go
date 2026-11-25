@@ -3,6 +3,7 @@ package tunnelspec
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -74,7 +75,14 @@ type Spec struct {
 	SOPinTCP       bool
 	AggressivePool bool
 	AcceptUDP      bool
-	LogLevel       string
+	// UDPOnly forwards the ports over UDP alone (AcceptUDP is then true too);
+	// see PortProtocol.
+	UDPOnly bool
+	// Encryption is what wraps the tunnel's connections on the stream
+	// transports (encryption, splash, shadow_sni); both ends carry the same.
+	// See config.EncryptionConfig.
+	Encryption config.EncryptionConfig
+	LogLevel   string
 	// LogFormat is "" for human-readable output or "json" for machine parsing.
 	LogFormat string
 
@@ -294,6 +302,8 @@ func (s Spec) Render() string {
 		// out so the file says what the tunnel does rather than relying on a
 		// default that has changed once already.
 		p("accept_udp = %t\n", s.AcceptUDP)
+		p("port_protocol = %q\n", s.PortProtocol())
+		s.writeEncryption(p)
 		if needsTLS(s.Transport) {
 			p("tls_cert = %q\n", s.TLSCert)
 			p("tls_key = %q\n", s.TLSKey)
@@ -394,6 +404,7 @@ func (s Spec) Render() string {
 	if needsTLS(s.Transport) && s.SimpleAuth {
 		p("simple_auth = true\n")
 	}
+	s.writeEncryption(p)
 	if s.Proxy != "" {
 		p("proxy = %q\n", s.Proxy)
 	}
@@ -524,4 +535,88 @@ func (s Spec) writeFallbackChain(p func(string, ...any), b *strings.Builder) {
 	if s.FallbackDwell > 0 {
 		p("fallback_dwell = %d\n", s.FallbackDwell)
 	}
+}
+
+// PortProtocol is what the forwarded ports carry: "tcp", "udp" or "both".
+// UDP alone on a transport that forwards TCP only (the tunnel was moved to
+// one) reads as TCP, so the file written never asks for ports that listen for
+// nothing.
+func (s Spec) PortProtocol() string {
+	switch {
+	case !s.AcceptUDP:
+		return config.PortsTCP
+	case s.UDPOnly:
+		if !slices.Contains(s.PortProtocols(), config.PortsUDP) {
+			return config.PortsTCP
+		}
+		return config.PortsUDP
+	}
+	return config.PortsBoth
+}
+
+// SetPortProtocol sets what the forwarded ports carry; anything but "udp" or
+// "both" is TCP.
+func (s *Spec) SetPortProtocol(v string) {
+	s.AcceptUDP = v == config.PortsUDP || v == config.PortsBoth
+	s.UDPOnly = v == config.PortsUDP
+}
+
+// writeEncryption writes the encryption keys, and only when one is set: a
+// tunnel without one keeps a file byte-identical to what it was.
+func (s Spec) writeEncryption(p func(string, ...any)) {
+	e := s.Encryption
+	if !e.Encrypted() && !e.Splash {
+		return
+	}
+	if e.Encrypted() {
+		p("encryption = %q\n", e.EncryptionMode())
+	}
+	if e.Splash {
+		p("splash = true\n")
+	}
+	if e.ShadowSNI != "" && e.EncryptionMode() == config.EncShadow {
+		p("shadow_sni = %q\n", e.ShadowSNI)
+	}
+}
+
+// managed reports whether a managed HTTPS helper (naive, xhttp, REALITY)
+// carries the tunnel; it is encrypted by the helper.
+func (s Spec) managed() bool {
+	return s.NaiveServer.Enabled() || s.NaiveClient.Enabled() || s.XrayServer.Enabled() || s.XrayClient.Enabled()
+}
+
+// EncryptionModes is what this spec's transport can be encrypted with, none
+// first; nil for a transport that takes no encryption.
+func (s Spec) EncryptionModes() []string {
+	if s.managed() {
+		return nil
+	}
+	return config.EncryptionModes(config.TransportType(s.Transport))
+}
+
+// SetEncryption sets the encryption mode, falling back to none for a mode
+// the transport does not carry, and drops a splash the result cannot carry.
+func (s *Spec) SetEncryption(mode string) {
+	if mode == "" || !slices.Contains(s.EncryptionModes(), mode) {
+		mode = config.EncNone
+	}
+	s.Encryption.Encryption = mode
+	if mode == config.EncNone {
+		s.Encryption.Encryption = ""
+	}
+	if s.Encryption.Splash && !config.SplashAllowed(config.TransportType(s.Transport), mode) {
+		s.Encryption.Splash = false
+	}
+}
+
+// PortProtocols is what this spec's transport can forward, for a setup form:
+// the plain engine's mux and websocket transports carry TCP only.
+func (s Spec) PortProtocols() []string {
+	switch s.Transport {
+	case "tcpmux", "ws", "wss", "wsmux", "wssmux":
+		return []string{config.PortsTCP}
+	case "udp":
+		return []string{config.PortsUDP}
+	}
+	return []string{config.PortsTCP, config.PortsUDP, config.PortsBoth}
 }

@@ -65,7 +65,9 @@ type ForwardStats struct {
 type Forwarder struct {
 	mappings  []portmap.Mapping
 	acceptUDP bool
-	log       *logrus.Logger
+	// tcp is false when the ports carry UDP alone (port_protocol = "udp").
+	tcp bool
+	log *logrus.Logger
 
 	// limiter is nil unless the config asked for a cap. It covers the
 	// forwarded ports only — routed traffic goes through the interface and
@@ -141,6 +143,7 @@ func NewForwarder(cfg Config, log *logrus.Logger) (*Forwarder, error) {
 	return &Forwarder{
 		mappings:  mappings,
 		acceptUDP: cfg.AcceptUDP,
+		tcp:       !cfg.UDPOnly,
 		log:       log,
 		ready:     make(chan struct{}),
 		limiter: limits.New(limits.Config{
@@ -200,7 +203,9 @@ func (f *Forwarder) Run(ctx context.Context) error {
 	// readiness from out here because the binds happen inside the serve
 	// loops, so each of them says when it is past that point.
 	var binding sync.WaitGroup
-	binding.Add(len(f.mappings))
+	if f.tcp {
+		binding.Add(len(f.mappings))
+	}
 	if f.acceptUDP {
 		binding.Add(len(f.mappings))
 	}
@@ -273,8 +278,10 @@ func (f *Forwarder) Run(ctx context.Context) error {
 		}
 	}
 	for _, mapping := range f.mappings {
-		wg.Add(1)
-		go serve("tcp", mapping, f.serveTCP)
+		if f.tcp {
+			wg.Add(1)
+			go serve("tcp", mapping, f.serveTCP)
+		}
 		if f.acceptUDP {
 			wg.Add(1)
 			go serve("udp", mapping, f.serveUDP)

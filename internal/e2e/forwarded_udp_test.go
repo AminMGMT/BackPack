@@ -86,7 +86,7 @@ func startForwardingTunnel(t *testing.T, transport, backendAddr string) string {
 // forwardedUDPTransports are the stream transports, all of which now carry
 // datagrams on a forwarded port. The raw udp transport is not here: it forwards
 // only UDP and has its own test.
-// tcpmux, ws and wsmux run on the plain engine, Backhaul's, which forwards
+// tcpmux, ws and wsmux run on the plain engine, which forwards
 // UDP on tcp only.
 var forwardedUDPTransports = []string{"tcp", "kcp", "quic"}
 

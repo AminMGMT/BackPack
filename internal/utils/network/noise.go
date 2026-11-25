@@ -122,6 +122,32 @@ func NoiseServerConn(raw net.Conn, token string, timeout time.Duration) (net.Con
 }
 
 func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Duration) (net.Conn, error) {
+	return noiseHandshakeWith(raw, token, initiator, timeout, noiseOpts{prologue: noisePrologue})
+}
+
+// noiseOpts are what the handshake's variants (stealth, stealth+) differ in.
+type noiseOpts struct {
+	prologue string
+	// hsPad adds random filler to both handshake messages, so their lengths
+	// are not fixed. Both ends must agree: the payload's first byte is the
+	// version either way, and the filler is ignored.
+	hsPad bool
+}
+
+// noiseHandshakePad is the most filler a handshake message gets with hsPad.
+const noiseHandshakePad = 320
+
+// handshakePayload is a handshake message's payload: the version, and with
+// hsPad some filler.
+func (o noiseOpts) handshakePayload() []byte {
+	p := []byte{noiseVersion}
+	if o.hsPad {
+		p = append(p, make([]byte, rand.IntN(noiseHandshakePad+1))...)
+	}
+	return p
+}
+
+func noiseHandshakeWith(raw net.Conn, token string, initiator bool, timeout time.Duration, o noiseOpts) (net.Conn, error) {
 	psk, err := noisePSK(token)
 	if err != nil {
 		return nil, err
@@ -130,7 +156,7 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 		CipherSuite:           noiseSuite,
 		Pattern:               noise.HandshakeNN,
 		Initiator:             initiator,
-		Prologue:              []byte(noisePrologue),
+		Prologue:              []byte(o.prologue),
 		PresharedKey:          psk,
 		PresharedKeyPlacement: 0,
 	})
@@ -153,7 +179,7 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 
 	if initiator {
 		// -> e
-		msg, _, _, err := hs.WriteMessage(nil, []byte{noiseVersion})
+		msg, _, _, err := hs.WriteMessage(nil, o.handshakePayload())
 		if err != nil {
 			return nil, fmt.Errorf("noise: build first message: %w", err)
 		}
@@ -189,7 +215,7 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 		// as it always did.
 		var reply []byte
 		if peerVersion > 0 {
-			reply = []byte{noiseVersion}
+			reply = o.handshakePayload()
 		}
 		// <- e, ee
 		msg, cs0, cs1, err := hs.WriteMessage(nil, reply)
@@ -214,6 +240,9 @@ func noiseHandshake(raw net.Conn, token string, initiator bool, timeout time.Dur
 
 	return &noiseConn{Conn: raw, send: sendCS, recv: recvCS, pad: pad}, nil
 }
+
+// randPad draws one record's filler length.
+func randPad() int { return rand.IntN(noiseMaxPad + 1) }
 
 // versionFromPayload reads the version a peer advertised. An empty payload is
 // a peer that predates the negotiation, which is version 0.
@@ -263,6 +292,10 @@ type noiseConn struct {
 
 // Write encrypts p and sends it as one or more Noise records. It honours
 // net.Conn semantics: on success every byte of p has been written.
+// NetConn is the connection under the record layer, as tls.Conn names it: for
+// socket options, never for reading or writing.
+func (c *noiseConn) NetConn() net.Conn { return c.Conn }
+
 func (c *noiseConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -309,7 +342,7 @@ func (c *noiseConn) plaintext(chunk []byte) []byte {
 		return chunk
 	}
 
-	padLen := rand.IntN(noiseMaxPad + 1)
+	padLen := randPad()
 	need := 1 + len(chunk) + padLen
 	if cap(c.padBuf) < need {
 		c.padBuf = make([]byte, need)

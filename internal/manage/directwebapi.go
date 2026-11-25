@@ -63,6 +63,9 @@ type NewDirectTunnel struct {
 
 	// AcceptUDP forwards UDP as well as TCP on those ports.
 	AcceptUDP bool `json:"acceptUdp"`
+	// PortProtocol is what those ports carry — "tcp", "udp" or "both" — and
+	// wins over AcceptUDP when sent.
+	PortProtocol string `json:"portProtocol"`
 
 	// LocalIP and PeerIP are the two ends of the private network. Empty picks a
 	// free /30, which is what the wizard does.
@@ -510,6 +513,12 @@ func (n NewDirectTunnel) spec() (l3Spec, error) {
 			return l3Spec{}, err
 		}
 		spec.AcceptUDP = n.AcceptUDP
+		if n.PortProtocol != "" {
+			if !config.ValidPortProtocol(n.PortProtocol) {
+				return l3Spec{}, fmt.Errorf("forwarded ports carry tcp, udp or both, not %q", n.PortProtocol)
+			}
+			spec.SetPortProtocol(n.PortProtocol)
+		}
 	}
 
 	if n.FECData > 0 && n.FECParity > 0 {
@@ -586,6 +595,8 @@ type DirectSettings struct {
 	Preset    string `json:"preset"`
 	Ports     string `json:"ports"`
 	AcceptUDP bool   `json:"acceptUdp"`
+	// PortProtocol is what the ports carry: "tcp", "udp" or "both".
+	PortProtocol string `json:"portProtocol"`
 
 	MaxConnections int `json:"maxConnections"`
 	BandwidthMbps  int `json:"bandwidthMbps"`
@@ -643,6 +654,7 @@ type DirectEdit struct {
 	Carrier        *string `json:"carrier"`
 	Ports          *string `json:"ports"`
 	AcceptUDP      *bool   `json:"acceptUdp"`
+	PortProtocol   *string `json:"portProtocol"`
 	Preset         *string `json:"preset"`
 	MTU            *int    `json:"mtu"`
 	AutoMTU        *bool   `json:"autoMtu"`
@@ -742,7 +754,8 @@ func directSettingsFrom(name string, l config.L3Config) DirectSettings {
 		Preset:     orDefault(l.Preset, PresetTurbo),
 		Ports:      strings.Join(l.Ports, ", "),
 
-		AcceptUDP:      l.AcceptUDP,
+		AcceptUDP:      l.ForwardsUDP(),
+		PortProtocol:   l3PortProtocol(l),
 		MaxConnections: l.MaxConnections,
 		BandwidthMbps:  l.BandwidthMbps,
 
@@ -1064,6 +1077,13 @@ func applyDirectEdit(l config.L3Config, e DirectEdit) (config.L3Config, error) {
 	}
 	if e.AcceptUDP != nil {
 		l.AcceptUDP = *e.AcceptUDP
+		l.PortProtocol = ""
+	}
+	if e.PortProtocol != nil && *e.PortProtocol != "" {
+		if !config.ValidPortProtocol(*e.PortProtocol) {
+			return l, fmt.Errorf("forwarded ports carry tcp, udp or both, not %q", *e.PortProtocol)
+		}
+		setL3PortProtocol(&l, *e.PortProtocol)
 	}
 	if pck && ((e.MTU != nil && *e.MTU != 0) || e.AutoMTU != nil) {
 		return l, fmt.Errorf("a PCK tunnel has no TUN device, so no MTU to set: " +
@@ -1160,7 +1180,8 @@ func directSpecFrom(name string, l config.L3Config) l3Spec {
 		FECData: l.FECData, FECParity: l.FECParity,
 		Preset: l.Preset, TxQueueLen: l.TxQueueLen, Qdisc: l.Qdisc,
 		Ports:          l.Ports,
-		AcceptUDP:      l.AcceptUDP,
+		AcceptUDP:      l.ForwardsUDP(),
+		UDPOnly:        !l.ForwardsTCP(),
 		MaxConnections: l.MaxConnections,
 		BandwidthMbps:  l.BandwidthMbps,
 		Spoof:          l.SpoofConfig,

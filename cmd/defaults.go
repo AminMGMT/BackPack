@@ -231,6 +231,8 @@ func validateConfig(cfg *config.Config) error {
 		checkGRE,
 		checkFallbackChain,
 		checkPeerAuth,
+		checkPortProtocol,
+		checkEncryption,
 		// Last: the specific checks above explain a refusal better than the
 		// engine's own validation of the same field would.
 		checkEngine,
@@ -240,6 +242,72 @@ func validateConfig(cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// checkEncryption refuses an encryption the transport does not carry, rather
+// than starting a tunnel that silently runs without it.
+func checkEncryption(cfg *config.Config) error {
+	for _, side := range []struct {
+		name    string
+		tr      config.TransportType
+		enc     config.EncryptionConfig
+		managed bool
+	}{
+		{"server", cfg.Server.Transport, cfg.Server.EncryptionConfig, cfg.Server.Naive.Enabled() || cfg.Server.Xray.Enabled()},
+		{"client", cfg.Client.Transport, cfg.Client.EncryptionConfig, cfg.Client.Naive.Enabled() || cfg.Client.Xray.Enabled()},
+	} {
+		mode := side.enc.EncryptionMode()
+		if !config.ValidEncryption(side.enc.Encryption) {
+			return fmt.Errorf("[%s] encryption = %q: use one of %q", side.name, side.enc.Encryption,
+				[]string{config.EncNone, config.EncStealth, config.EncStealthPlus, config.EncShadow, config.EncScrap})
+		}
+		if mode != config.EncNone && side.managed {
+			return fmt.Errorf("[%s] encryption = %q: a tunnel under a managed HTTPS helper is already encrypted by it — leave encryption out", side.name, mode)
+		}
+		if !config.EncryptionAllowed(side.tr, mode) {
+			if modes := config.EncryptionModes(side.tr); modes != nil {
+				return fmt.Errorf("[%s] encryption = %q: the %s transport carries %q", side.name, mode, side.tr, modes)
+			}
+			return fmt.Errorf("[%s] encryption = %q: only tcp, tcpmux, ws, wss, wsmux and wssmux take an encryption", side.name, mode)
+		}
+		if side.enc.Splash && !config.SplashAllowed(side.tr, mode) {
+			return fmt.Errorf("[%s] splash = true: padding in the clear hides nothing — use wss/wssmux or set an encryption", side.name)
+		}
+	}
+	return nil
+}
+
+// checkPortProtocol refuses a port_protocol the tunnel cannot carry, rather
+// than starting a tunnel whose ports listen for nothing.
+func checkPortProtocol(cfg *config.Config) error {
+	s := cfg.Server
+	if !config.ValidPortProtocol(s.PortProtocol) {
+		return fmt.Errorf("port_protocol = %q: use \"tcp\", \"udp\" or \"both\"", s.PortProtocol)
+	}
+	// Only UDP alone is refused: with "both" (or an older file's
+	// accept_udp = true) the ports still carry TCP, and the engine says that
+	// UDP is not forwarded — a tunnel that worked keeps working.
+	if s.ForwardsTCP() {
+		return nil
+	}
+	switch s.Transport {
+	case config.TCPMUX, config.WS, config.WSS, config.WSMUX, config.WSSMUX:
+		return fmt.Errorf("port_protocol = %q: the %s transport forwards TCP only — "+
+			"use transport = \"tcp\" (or kcp, quic) for UDP, or set port_protocol = \"tcp\"",
+			portProtocolOf(s), s.Transport)
+	}
+	return nil
+}
+
+// portProtocolOf names what a server's ports carry, for messages.
+func portProtocolOf(s config.ServerConfig) string {
+	switch {
+	case !s.ForwardsUDP():
+		return config.PortsTCP
+	case !s.ForwardsTCP():
+		return config.PortsUDP
+	}
+	return config.PortsBoth
 }
 
 func checkNaive(cfg *config.Config) error {
