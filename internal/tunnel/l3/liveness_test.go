@@ -2,6 +2,9 @@ package l3
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
+	"net"
 	"testing"
 	"time"
 )
@@ -24,7 +27,7 @@ func TestADiallerRecoversFromAListenerThatRestarted(t *testing.T) {
 	// The first listener, on a context of its own so it can be killed alone.
 	firstCtx, killFirst := context.WithCancel(context.Background())
 	firstDev := newFakeDevice(1400)
-	first, err := New(cfg(ModeListen, "127.0.0.1:0", "10.10.0.2/30", "10.10.0.1"), quietLogger())
+	first, err := New(cfg(ModeListen, fixedLoopbackAddr(t), "10.10.0.2/30", "10.10.0.1"), quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,4 +105,25 @@ func TestSilenceIsMeasuredFromTheFirstUnansweredSend(t *testing.T) {
 	if listen.unanswered.Load() != 0 {
 		t.Fatal("the listener started a silence clock")
 	}
+}
+
+// fixedLoopbackAddr is a free UDP port on loopback below the kernel's
+// ephemeral range. The restart above frees the listener's port and binds it
+// again; a port the kernel hands out itself can go to any socket opened with
+// port 0 in that gap — the dialler's own reopened socket, or another package's
+// test — and the second listener then cannot bind. Below the range only an
+// explicit bind can take it.
+func fixedLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	for range 200 {
+		addr := fmt.Sprintf("127.0.0.1:%d", 20000+rand.IntN(12000))
+		c, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			continue
+		}
+		c.Close()
+		return addr
+	}
+	t.Fatal("no free UDP port below the ephemeral range")
+	return ""
 }
