@@ -24,7 +24,7 @@ refused with a plain message if the raw socket is not available.
 
 ## The setup
 
-The TCP walkthrough, with **`Experimental` → `xDi (ICMP)`** on both ends.
+The TCP walkthrough, with **`ICMP` → `xDiRvs`** on both ends (`transport = "xdi"` in the file).
 
 The differences are all consequences of ICMP having **no ports**:
 
@@ -95,7 +95,7 @@ If TCP or UDP works at all on your route, use it instead.
 
 **پیش‌نیاز:** لینوکس و دسترسی root روی **هر دو** طرف.
 
-راه‌اندازی مثل [TCP](tcp.md) با انتخاب `Experimental` → `xDi (ICMP)` در دو طرف.
+راه‌اندازی مثل [TCP](tcp.md) با انتخاب `ICMP` → `xDiRvs` در دو طرف (در فایل `transport = "xdi"`).
 چون ICMP پورت ندارد: پورت تونل فقط اسم و شناسهٔ session است و **نیازی به باز
 کردنش در فایروال نیست**، اما **ICMP باید در دو جهت باز باشد**. قبل از هر کاری از
 سرور خارج `ping -c3 IRAN_IP` بگیر؛ اگر پینگ ساده کار نکند، این ترنسپورت هم کار

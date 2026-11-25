@@ -1,5 +1,6 @@
 #!/bin/bash
-# revpcklive.sh — a reverse engine over transport = "pck", run for real between
+# revpcklive.sh — a reverse engine over transport = "pck" (or TRANSPORT, e.g.
+# "xdi", the reverse xDi — xDiRvs in the menus), run for real between
 # two network namespaces: Iran is the [server] (listens, forwards ports), the
 # kharej is the [client] (dials back, serves the targets), a veth between them
 # stands in for the path.
@@ -9,7 +10,8 @@
 # so nothing here touches the host's network. The last line it prints is
 # "RESULT OK <detail>" or "RESULT FAIL <detail>".
 #
-# Environment: BIN (required), W (a working directory, required),
+# Environment: BIN (required), W (a working directory, required), TRANSPORT
+# (pck or xdi, default pck),
 # RECOVER (seconds the tunnel gets to carry traffic again after a link comes
 # back up, default 20).
 #
@@ -20,6 +22,11 @@
 set -u
 mkdir -p "$W"
 RECOVER="${RECOVER:-20}"
+TRANSPORT="${TRANSPORT:-pck}"
+# pck names the interface its packet socket is bound to; xdi rides a raw ICMP
+# socket and needs none.
+PCKI=""; PCKK=""
+if [ "$TRANSPORT" = pck ]; then PCKI='pck_interface = "vi"'; PCKK='pck_interface = "vk"'; fi
 
 mount -t tmpfs none /run 2>/dev/null; mkdir -p /run/netns
 ip netns add iran; ip netns add kharej
@@ -36,22 +43,22 @@ TOKEN="rpck-live-token-0123456789abcdef"
 cat > "$W/iran.toml" <<EOT
 [server]
 bind_addr = "10.99.0.1:9000"
-transport = "pck"
+transport = "$TRANSPORT"
 preset = "turbo"
 token = "$TOKEN"
 log_level = "info"
-pck_interface = "vi"
+$PCKI
 accept_udp = true
 ports = ["6001", "6002"]
 EOT
 cat > "$W/kharej.toml" <<EOT
 [client]
 remote_addr = "10.99.0.1:9000"
-transport = "pck"
+transport = "$TRANSPORT"
 preset = "turbo"
 token = "$TOKEN"
 log_level = "info"
-pck_interface = "vk"
+$PCKK
 connection_pool = 4
 EOT
 

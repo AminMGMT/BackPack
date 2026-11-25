@@ -28,13 +28,13 @@ type transportEntry struct {
 // belong to, so the setup menu asks "which kind of connection?" before asking
 // for a specific variant.
 //
-// There was an Experimental family here, holding xDi and — before it — IP
-// spoofing. Both are direct-tunnel carriers now, for the same reason: a reverse
-// tunnel is a control channel plus a pool of connections, each its own session,
-// and neither carrier gives a receiver anything to tell those sessions apart
-// by. They were offered here long after they had stopped being able to carry
-// traffic in this shape. They are chosen under Direct, where the single session
-// is what they can actually serve.
+// IP spoofing is a direct-tunnel carrier only: a reverse tunnel is a control
+// channel plus a pool of connections, each its own session, and forged-source
+// packets give the receiver nothing to tell those sessions apart by. xDi was
+// taken off this menu for the same reason, and is back as xDiRvs (transport =
+// "xdi"): every session now carries its own echo identifier, which the server
+// keys its sessions on (see icmpconn_linux.go), so the reverse shape works over
+// ICMP. Under Direct it remains the xDi carrier.
 type transportGroup struct {
 	label, desc string
 	entries     []transportEntry
@@ -60,8 +60,14 @@ var transportGroups = []transportGroup{
 	}},
 }
 
-// The engine's transports plus the managed HTTPS ones. The panel offers the
-// HTTPS ones on the Iran side only; see TransportFamilies.
+// icmpGroup is the reverse xDi. It comes after HTTPS, so the families that
+// were there before it keep their numbers.
+var icmpGroup = transportGroup{"ICMP", "rides inside ping — for a path that filters TCP and UDP but not ICMP", []transportEntry{
+	{"xDiRvs", "reverse xDi: KCP + FEC inside ICMP echo — experimental; Linux, needs root", "xdi"},
+}}
+
+// The engine's transports plus the managed HTTPS ones, then ICMP. The panel
+// offers the HTTPS ones on the Iran side only; see TransportFamilies.
 func cliTransportGroups() []transportGroup {
 	return append(append([]transportGroup(nil), transportGroups...), transportGroup{
 		"HTTPS", "encrypted reverse TCP — Linux, matching versions on both sides", []transportEntry{
@@ -69,7 +75,7 @@ func cliTransportGroups() []transportGroup {
 			{"XHTTP / TLS", "HTTP/2 streaming — certificate or a private trust file", "xhttp"},
 			{"REALITY / Vision", "TLS cover endpoint — no local certificate required", "reality"},
 		},
-	})
+	}, icmpGroup)
 }
 
 func managedTransport(value string) bool {

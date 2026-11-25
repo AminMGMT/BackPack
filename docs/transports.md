@@ -255,7 +255,7 @@ given at the bottom of this page.
 | WS Mux | WebSocket | proof only¹ | ✅ | — | [→](../tutorial/websocket.md) |
 | WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
 | WSS Mux | WebSocket | ✅ (TLS) | ✅ | certificate | [→](../tutorial/websocket-tls.md) |
-| **xDi (ICMP)** | Experimental | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
+| **xDiRvs** (xDi, ICMP) | ICMP | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
 
 "Encrypted handshake" means the tunnel's own credential is protected on the
 wire. ¹ Since v2.0.0 the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) do not
@@ -397,12 +397,16 @@ thing to try. Test it on your own route before committing to it.
 
 ---
 
-## Experimental family
+## ICMP family
 
-Not flavours of TCP or UDP but different ideas about how to move bytes at all.
-Both are Linux-only and need root.
+Not a flavour of TCP or UDP but a different idea about how to move bytes at
+all. Linux-only, and needs root.
 
-### xDi (ICMP)
+### xDiRvs (reverse xDi)
+`transport = "xdi"`. On the menu it is **xDiRvs**, to tell it from the **xDi**
+carrier of the [direct tunnel](l3-direct-tunnel.md), which rides the same ICMP
+framing.
+
 The KCP transport with its packets inside **ICMP echo requests and replies**
 instead of UDP datagrams. Everything above the packet layer — reliability, error
 correction, encryption — is identical.
@@ -421,7 +425,7 @@ default.
 
 ### IP Spoofing
 
-Moved. The forged-source carrier is part of the **direct tunnel** now, not a
+Not here: IP Spoofing is not a reverse transport. Moved. The forged-source carrier is part of the **direct tunnel** now, not a
 reverse transport: `transport = "spoof"` is refused at startup and the wizard
 offers it under **Direct** instead. Everything it does is unchanged — the same
 profiles, the same forged sources, the same evasion knobs — and it is documented
@@ -502,9 +506,10 @@ from **Edit → Certificate**.
 fingerprint واقعی کروم، توکنی که فرستاده نمی‌شود، و یک **سایت تقلبی** که به هر
 کاوشگری صفحهٔ nginx نشان می‌دهد.
 
-**خانوادهٔ آزمایشی:** *xDi* که تونل را داخل پینگ می‌برد (برای شبکه‌ای که TCP و
-UDP را می‌بندد ولی ICMP را نه) و *IP Spoofing* که مبدأ پکت‌ها را جعل می‌کند
-(برای مسیری که بر اساس آدرس محدود می‌کند). هر دو لینوکس + root می‌خواهند.
+**خانوادهٔ ICMP:** *xDiRvs* (در فایل `transport = "xdi"`) که تونل معکوس را
+داخل پینگ می‌برد، برای شبکه‌ای که TCP و UDP را می‌بندد ولی ICMP را نه؛ لینوکس +
+root می‌خواهد. *IP Spoofing* که مبدأ پکت‌ها را جعل می‌کند فقط در تونل مستقیم
+(Direct) است.
 
 روی **همهٔ** ترنسپورت‌ها می‌شود UDP پورت‌های forward شده را هم عبور داد — یک
 تنظیم جدا و پیش‌فرض خاموش است: [Forwarded UDP](forwarded-udp.md).

@@ -28,7 +28,19 @@ import (
 // an interface going down once left a reverse pck tunnel dead for good, its
 // receive loop ended by the packet socket's ENETDOWN and its control channel by
 // the send that failed.
-func TestReversePckOverARealPath(t *testing.T) {
+func TestReversePckOverARealPath(t *testing.T) { reverseOverARealPath(t, "pck") }
+
+// The reverse xDi — xDiRvs in the menus, transport = "xdi" — the same way: its
+// KCP sessions ride raw ICMP echo, which loopback carries but a test without
+// privilege cannot open, so it runs between the two namespaces too. It was
+// taken off the menu when every session of a tunnel looked alike on the wire;
+// this is what says it carries TCP and UDP, and comes back after a link drops,
+// now that each has an echo identifier of its own.
+//
+//	BP_L3_LIVE=1 go test ./internal/e2e -run TestReverseXdiOverARealPath -v
+func TestReverseXdiOverARealPath(t *testing.T) { reverseOverARealPath(t, "xdi") }
+
+func reverseOverARealPath(t *testing.T, transport string) {
 	if os.Getenv("BP_L3_LIVE") == "" {
 		t.Skip("set BP_L3_LIVE=1 on a host that allows unprivileged user namespaces to run this")
 	}
@@ -54,7 +66,7 @@ func TestReversePckOverARealPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd.Stdout, cmd.Stderr = outFile, outFile
-	cmd.Env = append(os.Environ(), "BIN="+bin, "W="+filepath.Join(dir, "run"))
+	cmd.Env = append(os.Environ(), "BIN="+bin, "W="+filepath.Join(dir, "run"), "TRANSPORT="+transport)
 	err = cmd.Run()
 	outFile.Close()
 	out := tailOf(filepath.Join(dir, "script.out"), 16<<10)
@@ -63,7 +75,7 @@ func TestReversePckOverARealPath(t *testing.T) {
 		last = last[i:]
 	}
 	if err != nil || !strings.HasPrefix(last, "RESULT OK") {
-		t.Fatalf("reverse pck: %v\n%s", err, out)
+		t.Fatalf("reverse %s: %v\n%s", transport, err, out)
 	}
 	t.Log(strings.TrimSpace(strings.TrimPrefix(last, "RESULT OK")))
 }

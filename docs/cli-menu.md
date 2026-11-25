@@ -66,7 +66,7 @@ server pastes.
 
 | Prompt | Notes |
 |---|---|
-| **Select Transport Family** / **Select … Transport** | TCP / UDP / WebSocket, then the variant. [Transports](transports.md) |
+| **Select Transport Family** / **Select … Transport** | TCP / UDP / WebSocket / HTTPS / ICMP (**xDiRvs**), then the variant. [Transports](transports.md) |
 | **Iran IP Or Domain (What Kharej Dials)** | this server's detected public IP is the default; the setup link carries it to kharej |
 | **Backup Addresses For The Kharej** | optional — this server's other IPs, a domain, a CDN edge (`host` or `host:port`). The link carries them and the kharej fails over to them on its own |
 | **Tunnel Port** | what the client dials. Refused if already in use for that protocol. `85.10.11.51:443` pins it to one address — see [Port mappings](port-mappings.md#binding-to-one-local-address) |
