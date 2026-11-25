@@ -193,7 +193,7 @@ func TestStartDoesNotReturnUntilThePortsAreFree(t *testing.T) {
 			go func() { defer close(done); s.Start() }()
 
 			// Wait until it is actually listening, rather than assuming.
-			if !eventually(5*time.Second, func() bool { return bound(cfg.BindAddr, tr) }) {
+			if !eventually(5*time.Second, func() bool { return listening(cfg.BindAddr, tr) }) {
 				t.Fatalf("%s never bound %s", tr, cfg.BindAddr)
 			}
 
@@ -221,6 +221,18 @@ func TestStartDoesNotReturnUntilThePortsAreFree(t *testing.T) {
 // udp is in both lists on purpose and it is not a mistake in the table: its
 // *data* is UDP and its *control channel* is TCP, so it holds both and either
 // one still being held is a port the next generation cannot take.
+// listening reports whether the server has its port, without taking it: a
+// stream transport is asked by dialling. bound's probe holds the port for a
+// moment, and a server that tries to bind in that moment fails and gives up,
+// so waiting with it can be what keeps the port from ever being bound.
+func listening(addr string, tr config.TransportType) bool {
+	switch tr {
+	case config.KCP, config.QUIC, config.UDP:
+		return bound(addr, tr)
+	}
+	return dialable(addr)
+}
+
 func bound(addr string, tr config.TransportType) bool {
 	switch tr {
 	case config.KCP, config.QUIC:
