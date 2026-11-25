@@ -64,14 +64,20 @@ func telegramForwardTest(t *testing.T, transport string) {
 	// redirected — exactly what tunnelledClient does.
 	pool := upstream.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 	local := fmt.Sprintf("127.0.0.1:%d", exposed)
+	// Each attempt gets a few seconds, not the whole readiness budget: the
+	// exposed port is open before the kharej has joined, and a request accepted
+	// in that window can wait on a session that is not there yet. One such
+	// attempt holding the full 20 s left no time for the retry that would have
+	// gone through (seen once on CI, wsmux under the race detector).
 	client := &http.Client{
-		Timeout: 20 * time.Second,
+		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
+			DisableKeepAlives: true,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				if addr == "api.telegram.org:443" {
 					addr = local
 				}
-				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+				return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, addr)
 			},
 			// The stand-in certificate is issued for example.com, so that is
 			// the name to verify; the redirect being tested is the dial.
