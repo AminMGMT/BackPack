@@ -7,7 +7,7 @@ require (
 	github.com/cilium/ebpf v0.22.0
 	github.com/flynn/noise v1.1.0
 	github.com/gopacket/gopacket v1.7.7
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/klauspost/reedsolomon v1.14.2
 	github.com/quic-go/quic-go v0.65.0
 	github.com/refraction-networking/utls v1.8.2

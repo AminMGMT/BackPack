@@ -100,7 +100,8 @@ func TestStealthPlusNeedsTheToken(t *testing.T) {
 	errs := make(chan error, 2)
 	go func() { _, err := StealthPlusClientConn(a, "one", time.Second); errs <- err }()
 	go func() { _, err := StealthPlusServerConn(b, "two", time.Second); b.Close(); errs <- err }()
-	if (<-errs) == nil && (<-errs) == nil {
+	first, second := <-errs, <-errs
+	if first == nil && second == nil {
 		t.Fatal("two ends with different tokens completed a stealth+ handshake")
 	}
 }

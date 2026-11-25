@@ -201,7 +201,10 @@ func TestBothFamiliesCarryRealTrafficThroughOneLinkInSequence(t *testing.T) {
 	connTestSoak = 2
 	connTestBinary = func() (string, error) { return bin, nil }
 	defer func() { connTestReverse, connTestSoak, connTestBinary = previous, soak, binary }()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// Two families of four carriers each, measured one after the other, take
+	// about three minutes under the race detector on a CI runner; the budget
+	// is for a run that hangs, not for one that is slow.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	suite, raw, err := StartConnTestSuite(ConnTestOptions{Context: ctx}, []string{"127.0.0.1", "::1"})
 	if err != nil {

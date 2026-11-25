@@ -175,7 +175,7 @@ jobs:
       - uses: ./.github/actions/libpcap
       - name: Selection, fallback, sequencing, cancellation and panel API regressions
         run: |
-          go test ./internal/manage ./internal/webui -race -count=1 -v -timeout 6m \
+          go test ./internal/manage ./internal/webui -race -count=1 -v -timeout 8m \
             -run '^(TestConnectionTest|TestAnUnreachablePath|TestIPv6RawCarriers|TestBothFamilies|TestUnjoinedFamilies|TestStoppingASuite|TestStoppingBetweenPaths|TestBackgroundProbes|TestTheScreensReadTunnelStateThroughOnePlace|TestEveryPanelCallReachesAHandlerThatReadsWhatItSends)'
       - name: Native transports, direct UDP/QUIC, PMTU and unsupported raw carriers
         run: |
