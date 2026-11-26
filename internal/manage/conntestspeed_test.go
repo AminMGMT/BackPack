@@ -355,3 +355,25 @@ func (l *rateLimit) reserve(n int) time.Duration {
 	l.mu.Unlock()
 	return d
 }
+
+// The kharej keeps its tunnels up for as long as every tunnel could take to
+// be measured, not for as long as a test usually takes. It used to stop them
+// at the usual time plus five minutes; on a fast path, where most tunnels
+// climbed to sixty-four connections, that came while the Iran side was still
+// measuring, and every direct tunnel — measured last — failed its speed test.
+func TestTheKharejOutlastsEveryTunnelUsingItsWholeSpeedBudget(t *testing.T) {
+	// Every stage of both directions, run to its maximum.
+	allStages := time.Duration(2*len(ctSpeedStages)) * (ctSpeedWarmup + ctSpeedMaximum)
+	firstPass := min(allStages, ctSpeedBudget)
+	worst := ctStabilityTime() + time.Duration(ctSpeedTunnels())*(firstPass+ctSpeedSecondPass())
+	if connTestRunLimit() < worst {
+		t.Fatalf("the kharej stops after %s, but every tunnel at full budget takes %s", connTestRunLimit(), worst)
+	}
+	if allStages > ctSpeedBudget {
+		t.Fatalf("the budget %s cuts the climb short: all %d stages take %s", ctSpeedBudget, len(ctSpeedStages), allStages)
+	}
+	// The countdown is the usual time, and stays below the limit.
+	if ConnTestRunTime() > connTestRunLimit() {
+		t.Fatalf("the usual run time %s is above the limit %s", ConnTestRunTime(), connTestRunLimit())
+	}
+}

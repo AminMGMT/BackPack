@@ -108,7 +108,7 @@ func StartConnTestSuite(o ConnTestOptions, hosts []string) (*ConnTestSuite, stri
 	}
 	s := &ConnTestSuite{changed: make(chan struct{}, 1), tests: make([]*ConnTestIran, len(hosts))}
 	routes := make([]connTestAddr, len(hosts))
-	until := time.Now().Add(connTestJoinWait + time.Duration(len(hosts))*ConnTestRunTime() + connTestSlack).Unix()
+	until := time.Now().Add(connTestJoinWait + time.Duration(len(hosts))*connTestRunLimit() + connTestSlack).Unix()
 	available := 0
 	o.ports = make(map[int]bool)
 	for i, host := range hosts {
@@ -391,7 +391,7 @@ func runConnTestSuiteKharej(ctx context.Context, routes []connTestAddr, out io.W
 		fmt.Fprintf(out, "\nTesting %s · %s\n", paths[i].Family, paths[i].Host)
 		// Bound a failed result channel to this path, not the lifetime of
 		// the whole suite, so a later family still gets its turn.
-		pathCtx, cancelPath := context.WithTimeout(ctx, ConnTestRunTime()+connTestSlack)
+		pathCtx, cancelPath := context.WithTimeout(ctx, connTestRunLimit()+connTestSlack)
 		rows, best, err := runConnTestKharejLink(pathCtx, links[i], out, func(rows []ConnTestResult) { paths[i].Rows = rows; report(i) })
 		cancelPath()
 		paths[i].Rows, paths[i].Best = rows, best

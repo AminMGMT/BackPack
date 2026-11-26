@@ -495,7 +495,7 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 	s.link = ConnTestLink{
 		ID: id, Host: host, Tok: ctNewSecret(), Preset: preset,
 		TCP: ctPickPort(used, false), UDP: ctPickPort(used, false), L3: ctPickPort(used, false),
-		Until:       time.Now().Add(connTestJoinWait + ConnTestRunTime() + connTestSlack).Unix(),
+		Until:       time.Now().Add(connTestJoinWait + connTestRunLimit() + connTestSlack).Unix(),
 		DirectPorts: true,
 	}
 	s.link.Coord = ctPickPort(used, true)

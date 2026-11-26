@@ -41,7 +41,9 @@ func TestTheConnectionTestAcrossARealPath(t *testing.T) {
 	}{{"clean path", ""}, {"a path that cuts every flow after 12 packets", "12"}} {
 		t.Run(path.name, func(t *testing.T) {
 			w := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+			// Every tunnel's speed test, climbing to sixty-four connections,
+			// takes longer than twenty minutes on its own.
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "unshare", "--map-auto", "--map-root-user", "--net", "--mount", "--fork", "--", script)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -16,8 +16,37 @@ func ConnTestJoinWait() time.Duration { return connTestJoinWait }
 // It is what the panel counts down from, so it errs a little long rather than
 // reaching zero with rows still filling.
 func ConnTestRunTime() time.Duration {
-	return connTestConnectWait + time.Duration(connTestSoak)*time.Second + 45*time.Second +
-		ConnTestSpeedTime(len(connTestReverse)-1+len(connTestDirect))
+	return ctStabilityTime() + ConnTestSpeedTime(ctSpeedTunnels())
+}
+
+// connTestRunLimit is the longest the tunnels can take to be judged: every
+// one of them using the whole of its speed budget in both passes. It is what
+// the kharej keeps its tunnels up for, where ConnTestRunTime is what a test
+// usually takes and the panel counts down from.
+//
+// The kharej used to be held to ConnTestRunTime plus connTestSlack. Once the
+// speed test climbed to sixty-four connections, a fast path took longer than
+// that estimate, the kharej stopped its tunnels while the Iran side was still
+// measuring, and the rows measured last — the direct tunnels, after every
+// reverse one — failed their speed test.
+func connTestRunLimit() time.Duration {
+	return ctStabilityTime() + time.Duration(ctSpeedTunnels())*ctSpeedTunnelLimit()
+}
+
+// ctStabilityTime is the stability phase: the connect wait, the echoes, and
+// time to spare for the rows to settle.
+func ctStabilityTime() time.Duration {
+	return connTestConnectWait + time.Duration(connTestSoak)*time.Second + 45*time.Second
+}
+
+// ctSpeedTunnels is how many tunnels the speed phase is counted for.
+func ctSpeedTunnels() int { return len(connTestReverse) - 1 + len(connTestDirect) }
+
+// ctSpeedTunnelLimit is the most one tunnel's two speed passes take: the first
+// is cut off at ctSpeedBudget, and the second measures each direction once,
+// with time for its connections to open.
+func ctSpeedTunnelLimit() time.Duration {
+	return ctSpeedBudget + ctSpeedSecondPass() + 10*time.Second
 }
 
 // ConnTestSpeedTime estimates the serial speed phase for healthy tunnels:
