@@ -115,8 +115,13 @@ jobs:
         # still produces every asset and simply publishes no signature, which
         # is what a fork gets — and what this repository got until a key was
         # generated. See tools/signsums and internal/manage/releasesig.go.
+        #
+        # RELEASE_TAG is the tag the signature is made for. Without it the tool
+        # took GITHUB_REF_NAME, which on a manual run is the branch: v2.0.0 was
+        # signed for "main", and every updater refused it.
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: make release
 
       - name: Verify the tag matches the built version
