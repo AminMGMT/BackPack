@@ -100,8 +100,9 @@ func (r *socksRelay) serve(c net.Conn) {
 // count checks: a tunnel that quietly dialled directly would carry traffic just
 // as well, and the test would say nothing.
 func TestTunnelThroughASocks5Proxy(t *testing.T) {
-	// stealth: tcp, tcpmux and ws run on the plain engine, which dials directly.
-	for _, transport := range []string{"stealth"} {
+	// tcp, tcpmux, ws and wsmux run on the plain engine, which dialled
+	// directly until it was given a route (plain/core/route.go).
+	for _, transport := range []string{"stealth", "tcp", "tcpmux", "ws", "wsmux"} {
 		t.Run(transport, func(t *testing.T) {
 			backend := startEchoBackend(t)
 			relay := startSocksRelay(t)

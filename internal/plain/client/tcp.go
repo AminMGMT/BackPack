@@ -45,6 +45,10 @@ type TcpConfig struct {
 	// OnLegacyServer is called when the Iran server answers as Backpack v2.0.0
 	// does, so the tunnel can run on that engine.
 	OnLegacyServer func()
+	// Route is where tunnel connections go and how: fallback_addrs,
+	// load_balance, health_failover and the outbound settings. nil dials
+	// remote_addr directly. Backpack.
+	Route *core.Route
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -119,8 +123,9 @@ func (c *TcpTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := c.config.Route.Dial(g.ctx, c.config.Route.Control(c.config.RemoteAddr), c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
+				c.config.Route.ControlFailed(c.logger)
 				c.logger.Errorf("channel dialer: %v", err)
 				time.Sleep(c.config.RetryInterval)
 				continue
@@ -259,7 +264,7 @@ func (c *TcpTransport) channelHandler(g *clientGen) {
 func (c *TcpTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new connection to tunnel server at %s", c.config.RemoteAddr)
 
-	rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	rawConn, err := c.config.Route.Dial(g.ctx, c.config.Route.Data(c.config.RemoteAddr), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Error("tunnel server dialer: ", err)
 		return
@@ -297,7 +302,7 @@ func (c *TcpTransport) tunnelDialer(g *clientGen) {
 		c.localDialer(g, tcpConn, resolvedAddr, port)
 
 	case core.SG_UDP:
-		UDPDialer(core.Counted(tcpConn), resolvedAddr, c.logger, g.usageMonitor, port, c.config.Sniffer)
+		UDPDialer(core.Counted(tcpConn), core.PickBackend(resolvedAddr), c.logger, g.usageMonitor, port, c.config.Sniffer)
 
 	default:
 		c.logger.Error("undefined transport. close the connection.")
@@ -317,7 +322,10 @@ func (c *TcpTransport) localDialer(g *clientGen, tcpConn net.Conn, resolvedAddr 
 		recvBuf = c.config.SO_RCVBUF
 	}
 
-	localConnection, err := core.TcpDialer(g.ctx, resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	// Backpack: a backend list ("a|b") is tried in turn; see core.DialBackend.
+	localConnection, err := core.DialBackend(resolvedAddr, func(addr string) (*net.TCPConn, error) {
+		return core.TcpDialer(g.ctx, addr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	})
 	if err != nil {
 		c.logger.Errorf("local dialer: %v", err)
 		tcpConn.Close()

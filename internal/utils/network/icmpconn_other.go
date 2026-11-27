@@ -14,10 +14,10 @@ import (
 
 var errXdiNotLinux = errors.New("the xdi transport is only available on Linux")
 
-func newICMPServerConn(token string, sockBuf int) (net.PacketConn, error) {
+func newICMPServerConn(token string, sockBuf int, v6 bool) (net.PacketConn, error) {
 	return nil, errXdiNotLinux
 }
-func newICMPClientConn(token string, sockBuf int) (net.PacketConn, error) {
+func newICMPClientConn(token string, sockBuf int, v6 bool) (net.PacketConn, error) {
 	return nil, errXdiNotLinux
 }
 

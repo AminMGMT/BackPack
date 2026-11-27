@@ -2,6 +2,64 @@
 
 All notable changes to Backpack are documented here.
 
+## Unreleased
+
+Not a release yet: the version and date are set when it is tagged.
+
+### Changed
+
+- **tcp, tcpmux, ws, wss, wsmux and wssmux run the plain engine**
+  (`internal/plain`), a port of an AGPL-3.0 engine with its wire, handshake
+  and signals. Turbo on these six is that engine's default config. An updated
+  end still makes a tunnel with a v2.0.0 one: it notices, runs v2.0.0's engine
+  for that tunnel, and both move to the plain engine once the other end is
+  updated (`.<name>.compat` beside the config on the Iran server).
+- **The plain handshake carries the token as it is** on tcp, tcpmux, ws and
+  wsmux, as that wire does. Set an encryption to keep it off the wire (below).
+- **WSS answers a request without the token with `401`.** The nginx decoy
+  page was v2.0.0's WSS engine. `encryption = "scrap"` on tcp and tcpmux
+  answers as nginx.
+- **Log lines say what happened and what to do**, with the original line kept
+  after them (`[detail: …]`).
+
+### Added
+
+- **Encryption on the stream transports:** `encryption = "stealth"`,
+  `"stealth+"` or, on tcp and tcpmux, `"scrap"`, and `splash = true`. Asked at
+  setup and in Edit; both ends must match. See docs/encryption.md.
+- **`port_protocol = "tcp" | "udp" | "both"`** on every reverse transport and
+  on direct tunnels, asked at setup.
+- **Forwarded UDP on tcpmux, ws, wss, wsmux and wssmux.**
+- **xDiRvs:** xDi as a reverse transport (`transport = "xdi"`), in the ICMP
+  family of the setup menu.
+- **xDi over IPv6** (ICMPv6), direct and reverse: an IPv6 address picks it, and
+  an xDiRvs server binds `[::]:<port>`. The Connection Test runs both on an
+  IPv6 path.
+- **PROXY protocol on xDiRvs.**
+- **Connection Test:** xDiRvs is tested, and the speed test climbs 4 → 16 → 32
+  → 64 connections while each step is at least 10% faster, so the maximum is
+  the path's. About 25–60 s per healthy tunnel.
+
+### Fixed
+
+- **v2.0.0 could not be installed by the updater**: its checksums were signed
+  for `main`, the branch its manual release run started on. The release tool
+  now signs for the tag the workflow resolved, refuses anything that is not a
+  release tag, and checks its signature against the key builds carry before
+  anything is published.
+- **On the plain transports, `max_connections`, `bandwidth_mbps`,
+  `fallback_addrs`, `load_balance`, `health_failover`, the outbound settings
+  (`proxy`, `local_addr`, `interface`, `so_mark`), backend lists (`a|b`) and
+  IPv6 targets (`[2001:db8::1]:443`)** were accepted and never applied, or
+  failed every connection. All of them work again.
+- **One busy forwarded port no longer takes the tunnel down.** The plain
+  engine ended the process on it; the port is now tried again every 5 s and
+  the others stay up.
+- **A `mux_version` that differs between the two ends is said in the log.**
+  The tunnel reported itself up and carried nothing.
+- **The kharej keeps its Connection Test tunnels up for the longest the test
+  can take**, so the tunnels measured last are not stopped mid-measurement.
+
 ## v2.0.0 — 2026-11-20
 
 v1.9.0 was tagged but never published (its release run failed), so this is

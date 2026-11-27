@@ -14,7 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func WebSocketDialer(ctx context.Context, route *Route, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, retry int, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	var tunnelWSConn *websocket.Conn
 	var err error
 
@@ -23,7 +23,7 @@ func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path strin
 
 	for i := 0; i < retries; i++ {
 		// Attempt to dial the WebSocket
-		tunnelWSConn, err = attemptDialWebSocket(ctx, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, SO_RCVBUF, SO_SNDBUF)
+		tunnelWSConn, err = attemptDialWebSocket(ctx, route, addr, edgeIP, path, timeout, keepalive, nodelay, token, mode, SO_RCVBUF, SO_SNDBUF)
 		if err == nil {
 			// If successful, return the connection
 			return tunnelWSConn, nil
@@ -42,7 +42,7 @@ func WebSocketDialer(ctx context.Context, addr string, edgeIP string, path strin
 	return nil, err
 }
 
-func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
+func attemptDialWebSocket(ctx context.Context, route *Route, addr string, edgeIP string, path string, timeout time.Duration, keepalive time.Duration, nodelay bool, token string, mode config.TransportType, SO_RCVBUF int, SO_SNDBUF int) (*websocket.Conn, error) {
 	// Generate a random X-user-id
 	randomUserID := rand.Int31() // Generate a random int64 number
 
@@ -125,7 +125,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 			WriteBufferSize: wsWriteBufferSize,
 			WriteBufferPool: WSWriteBuffers,
 			NetDial: func(_, addr string) (net.Conn, error) {
-				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
+				conn, err := route.Dial(ctx, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
 					return nil, err
 				}
@@ -152,7 +152,7 @@ func attemptDialWebSocket(ctx context.Context, addr string, edgeIP string, path 
 			WriteBufferSize: wsWriteBufferSize,
 			WriteBufferPool: WSWriteBuffers,
 			NetDial: func(_, addr string) (net.Conn, error) {
-				conn, err := TcpDialer(ctx, edgeIP, "", timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
+				conn, err := route.Dial(ctx, edgeIP, timeout, keepalive, nodelay, 1, SO_RCVBUF, SO_SNDBUF, 0)
 				if err != nil {
 					return nil, err
 				}

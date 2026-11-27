@@ -1,10 +1,12 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
 
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 // Bare datagram access to the obfuscated carriers.
@@ -32,6 +34,9 @@ import (
 // header, and the tag-and-direction prefix that lets several tunnels share the
 // host's single raw ICMP socket.
 func XdiOverhead() int { return ipv4.HeaderLen + icmpMTUOverhead }
+
+// XdiOverheadV6 is XdiOverhead over ICMPv6, whose IPv6 header is 40 bytes.
+func XdiOverheadV6() int { return ipv6.HeaderLen + icmpMTUOverhead }
 
 // SpoofOverhead is what the forged-source carrier costs for a profile: the IP
 // header and the profile's L4 header. It does not include the optional DPI
@@ -81,20 +86,20 @@ func NewPckPacketConn(listening bool, token, addr string, carrier PcapCarrier) (
 // from their token. sockBuf sizes the socket's buffers; 0 takes the default.
 func NewXdiPacketConn(listening bool, token, addr string, sockBuf int) (net.PacketConn, net.Addr, error) {
 	if listening {
-		conn, err := newICMPServerConn(token, sockBuf)
+		// An IPv6 listen address ("[::]:port") is an ICMPv6 carrier.
+		conn, err := newICMPServerConn(token, sockBuf, bindIsIPv6(addr))
 		if err != nil {
 			return nil, nil, err
 		}
 		return conn, nil, nil
 	}
 
-	conn, err := newICMPClientConn(token, sockBuf)
+	peer, err := hostToXdiAddrContext(context.Background(), addr)
 	if err != nil {
 		return nil, nil, err
 	}
-	peer, err := hostToIPAddr(addr)
+	conn, err := newICMPClientConn(token, sockBuf, peer.IP.To4() == nil)
 	if err != nil {
-		conn.Close()
 		return nil, nil, err
 	}
 	return conn, peer, nil

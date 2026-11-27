@@ -122,9 +122,10 @@ func (c *icmpConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	if n == 0 {
 		return 0, nil
 	}
-	typ := icmpEchoRequest
+	request, reply := c.icmpTypes()
+	typ := request
 	if c.server {
-		typ = icmpEchoReply
+		typ = reply
 	}
 	id := uint16(c.echoIDFor(to))
 
@@ -138,9 +139,9 @@ func (c *icmpConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	}
 	msgs := c.batch.wmsg[:n]
 	for i, p := range bufs {
-		frame := appendEcho(c.batch.frames[i][:0], byte(typ), id, uint16(c.seq.Add(1)))
+		frame := appendEcho(c.batch.frames[i][:0], typ, id, uint16(c.seq.Add(1)))
 		frame = appendXdiPayload(frame, c.tag, outboundDir(c.server), p)
-		setICMPChecksum(frame)
+		c.checksum(frame)
 		c.batch.frames[i] = frame
 		msgs[i].Buffers = [][]byte{frame}
 		msgs[i].Addr = ipAddr
@@ -150,6 +151,11 @@ func (c *icmpConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	for sent < n {
 		k, err := p4.WriteBatch(msgs[sent:], 0)
 		if err != nil {
+			if droppedOnTheWayOut(err) {
+				// The queue was full: this one is lost, and the rest go on.
+				sent++
+				continue
+			}
 			return sent, err
 		}
 		if k == 0 {

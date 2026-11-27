@@ -51,8 +51,10 @@ Third-party attribution (required by AGPL-3.0)
 --------------------------------------------------------------------------------
 
 Portions of the tunnel data-plane are derived from prior AGPL-3.0 / GPL-3.0
-open-source work. This single line is retained only to satisfy the copyleft
-attribution requirement of that license; all product branding, CLI, web UI, and
+open-source work — among them the plain engine in internal/plain, which carries
+the tcp, tcpmux, ws, wss, wsmux and wssmux transports and is a port of such an
+engine, kept under AGPL-3.0. This attribution is retained to satisfy the
+copyleft requirement of that license; all product branding, CLI, web UI, and
 management code are original to Backpack by Amin Mohammadi.
 
 The SNI-spoofing carrier reimplements a DPI-bypass technique first described by

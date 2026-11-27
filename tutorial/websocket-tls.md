@@ -3,20 +3,11 @@
 WebSocket over **TLS** — the transport that makes the Iran server look like an
 ordinary HTTPS website. **WSS Mux** adds multiplexing and the PROXY protocol.
 
-Three things make it more than "WS with TLS":
-
-- **A real Chrome TLS fingerprint.** Go's default ClientHello is itself
-  identifiable; Backpack sends a current Chrome one, so the handshake blends into
-  normal browser traffic.
-- **A session-bound credential.** The token is never sent. Each side derives
-  keying material from the TLS session and the client proves it holds the token
-  with an HMAC over that material — a man in the middle has a different session
-  and cannot replay it.
-- **A decoy site.** Anything that is not a genuine tunnel connection — a browser,
-  a scanner, a probe with the wrong token — gets a stock nginx: the "Welcome to
-  nginx!" page at `/` and a normal `404` on every other path. Each install wears
-  its own nginx version and page date, derived from its token, so no two servers
-  look the same. Built in, always on. [More](../docs/camouflage.md).
+- **The token** goes in the upgrade's `Authorization` header, inside TLS. Pick
+  an **Encryption** at setup (Stealth or Stealth+) and the header carries a
+  value derived from it instead, with the traffic encrypted inside the TLS too.
+  [More](../docs/encryption.md).
+- **A request without the token** gets `401 unauthorized`.
 
 **Reach for it when:** you want a CDN in front, or where unidentifiable traffic
 would itself be suspicious. (Where it would not be, [Stealth](tcp-stealth.md) is
@@ -99,9 +90,9 @@ Let's Encrypt with the port-80 challenge, 80/tcp too.
 
 ## Checking the camouflage
 
-Open `https://IRAN_IP:<tunnel port>/` in a browser. You should get the nginx
-welcome page, not an error and not a hint of a tunnel. That is the decoy
-answering, and it is what a scanner sees.
+Open `https://IRAN_IP:<tunnel port>/` in a browser. You get `401 unauthorized`,
+which is what a scanner sees too. For a port that answers like nginx instead,
+use TCP or TCP Mux with Encryption → Scrap.
 
 ---
 

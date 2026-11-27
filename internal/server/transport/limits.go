@@ -303,3 +303,36 @@ func waitFor(ctx context.Context, bucket *rate.Limiter, n int) error {
 
 // UnderlyingConn exposes the socket for directional EOF, without bypassing pacing.
 func (c *limitedConn) UnderlyingConn() net.Conn { return c.Conn }
+
+// Admitter is the plain engine's way in to these limits: it admits a forwarded
+// connection the way portForwarder does — a slot under max_connections, then
+// the bandwidth cap — and hands back the connection to carry, whose Close frees
+// the slot. nil when nothing is limited, so an unlimited tunnel pays nothing.
+//
+// The plain engine came without limits, and max_connections and bandwidth_mbps
+// were accepted, saved and shown on its six transports and never applied.
+func Admitter(l Limits) func(ctx context.Context, conn net.Conn) (net.Conn, bool) {
+	lim := newLimiter(l)
+	if lim == nil {
+		return nil
+	}
+	return func(ctx context.Context, conn net.Conn) (net.Conn, bool) {
+		if !lim.acquire() {
+			return nil, false
+		}
+		return &releasingConn{Conn: lim.wrap(ctx, conn), release: lim.release}, true
+	}
+}
+
+// releasingConn frees its connection slot when it is closed, once, however
+// many times Close is called.
+type releasingConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *releasingConn) Close() error {
+	c.once.Do(c.release)
+	return c.Conn.Close()
+}

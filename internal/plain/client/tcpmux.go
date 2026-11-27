@@ -47,6 +47,10 @@ type TcpMuxConfig struct {
 	SO_SNDBUF        int
 	// OnLegacyServer: see TcpConfig.OnLegacyServer.
 	OnLegacyServer func()
+	// Route is where tunnel connections go and how: fallback_addrs,
+	// load_balance, health_failover and the outbound settings. nil dials
+	// remote_addr directly. Backpack.
+	Route *core.Route
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -129,8 +133,9 @@ func (c *TcpMuxTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
+			rawConn, err := c.config.Route.Dial(g.ctx, c.config.Route.Control(c.config.RemoteAddr), c.config.DialTimeOut, c.config.KeepAlive, true, 3, 0, 0, 0)
 			if err != nil {
+				c.config.Route.ControlFailed(c.logger)
 				c.logger.Errorf("channel dialer: %v", err)
 				time.Sleep(c.config.RetryInterval)
 				continue
@@ -260,7 +265,7 @@ func (c *TcpMuxTransport) channelHandler(g *clientGen) {
 func (c *TcpMuxTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new tunnel connection to address %s", c.config.RemoteAddr)
 
-	rawConn, err := core.TcpDialer(g.ctx, c.config.RemoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
+	rawConn, err := c.config.Route.Dial(g.ctx, c.config.Route.Data(c.config.RemoteAddr), c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, 3, c.config.SO_RCVBUF, c.config.SO_SNDBUF, c.config.MSS)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 		return
@@ -296,6 +301,8 @@ func (c *TcpMuxTransport) handleSession(g *clientGen, tunnelConn net.Conn) {
 		default:
 			stream, err := session.AcceptStream()
 			if err != nil {
+				// Backpack: a mux_version mismatch is said out loud.
+				core.NoteMuxMismatch(c.logger, err, c.config.MuxVersion)
 				c.logger.Trace("session is closed: ", err)
 				session.Close()
 				return
@@ -322,7 +329,7 @@ func (c *TcpMuxTransport) localDialer(g *clientGen, stream *smux.Stream, remoteA
 		return
 	}
 	if udp {
-		UDPDialer(core.Counted(stream), resolvedAddr, c.logger, g.usageMonitor, port, c.config.Sniffer)
+		UDPDialer(core.Counted(stream), core.PickBackend(resolvedAddr), c.logger, g.usageMonitor, port, c.config.Sniffer)
 		return
 	}
 
@@ -336,7 +343,10 @@ func (c *TcpMuxTransport) localDialer(g *clientGen, stream *smux.Stream, remoteA
 		recvBuf = c.config.SO_RCVBUF
 	}
 
-	localConnection, err := core.TcpDialer(g.ctx, resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	// Backpack: a backend list ("a|b") is tried in turn; see core.DialBackend.
+	localConnection, err := core.DialBackend(resolvedAddr, func(addr string) (*net.TCPConn, error) {
+		return core.TcpDialer(g.ctx, addr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, c.config.MSS)
+	})
 	if err != nil {
 		c.logger.Errorf("local dialer: %v", err)
 		stream.Close()

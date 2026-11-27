@@ -26,7 +26,7 @@ func usesPlainEngine(tr config.TransportType, managed bool) bool {
 // startPlain starts tr on the plain engine.
 // onLegacy is called when the Iran server turns out to run Backpack v2.0.0;
 // see compat.go.
-func (c *Client) startPlain(ctx context.Context, tr config.TransportType, onLegacy func()) runner {
+func (c *Client) startPlain(ctx context.Context, tr config.TransportType, route *core.Route, onLegacy func()) runner {
 	cfg := c.config
 	keepAlive := time.Duration(cfg.Keepalive) * time.Second
 	retry := time.Duration(cfg.RetryInterval) * time.Second
@@ -60,6 +60,7 @@ func (c *Client) startPlain(ctx context.Context, tr config.TransportType, onLega
 			SO_RCVBUF:      cfg.SO_RCVBUF,
 			SO_SNDBUF:      cfg.SO_SNDBUF,
 			OnLegacyServer: onLegacy,
+			Route:          route,
 			Layer:          layer,
 		}, c.logger)
 		go t.Start()
@@ -86,6 +87,7 @@ func (c *Client) startPlain(ctx context.Context, tr config.TransportType, onLega
 			SO_RCVBUF:        cfg.SO_RCVBUF,
 			SO_SNDBUF:        cfg.SO_SNDBUF,
 			OnLegacyServer:   onLegacy,
+			Route:            route,
 			Layer:            layer,
 		}, c.logger)
 		go t.Start()
@@ -107,6 +109,7 @@ func (c *Client) startPlain(ctx context.Context, tr config.TransportType, onLega
 			AggressivePool: cfg.AggressivePool,
 			EdgeIP:         cfg.EdgeIP,
 			OnLegacyServer: onLegacy,
+			Route:          route,
 			Layer:          layer,
 		}, c.logger)
 		go t.Start()
@@ -132,6 +135,7 @@ func (c *Client) startPlain(ctx context.Context, tr config.TransportType, onLega
 			AggressivePool:   cfg.AggressivePool,
 			EdgeIP:           cfg.EdgeIP,
 			OnLegacyServer:   onLegacy,
+			Route:            route,
 			Layer:            layer,
 		}, c.logger)
 		go t.Start()

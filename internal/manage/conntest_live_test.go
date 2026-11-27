@@ -185,7 +185,7 @@ func TestTheConnectionTestAcrossAnIPv6OnlyPath(t *testing.T) {
 	script, _ := filepath.Abs(filepath.Join("testdata", "conntestlive.sh"))
 	self, _ := os.Executable()
 	w := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	args := []string{"--net", "--mount", "--fork", "--", script}
 	if os.Geteuid() != 0 {
@@ -211,7 +211,9 @@ func TestTheConnectionTestAcrossAnIPv6OnlyPath(t *testing.T) {
 		t.Fatalf("missing IPv6 results: %+v", rows)
 	}
 	for _, r := range rows {
-		unsupported := r.Kind == "spoof" || r.Transport == "pck" || ctDirectCarrier(r.Transport) == "xdi" || r.Transport == "sni"
+		// xDi, direct and reverse (xDiRvs), runs over ICMPv6; the rest of
+		// the raw carriers do not.
+		unsupported := r.Kind == "spoof" || r.Transport == "pck" || r.Transport == "sni"
 		if unsupported {
 			if r.Status != ctSkipped || !strings.Contains(r.Detail, "IPv6 is not supported") {
 				t.Errorf("raw IPv6 verdict: %+v", r)

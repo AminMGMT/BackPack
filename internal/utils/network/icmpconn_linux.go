@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
 )
 
@@ -57,6 +58,9 @@ type icmpConn struct {
 	pc     icmpSocket
 	proto  int  // ProtocolICMP, for parsing
 	server bool // server sends replies and reads requests; client the reverse
+	// v6 is an ICMPv6 carrier: echo types 128 and 129 instead of 8 and 0, and
+	// the checksum is the kernel's to fill in. See icmpTypes.
+	v6 bool
 	// id is the echo identifier this carrier answers to. On the client it names
 	// this one session and is drawn per socket; on the server it is unused,
 	// because one socket serves every session and each packet carries the
@@ -77,6 +81,10 @@ type icmpConn struct {
 	// SetForeignHook.
 	foreign atomic.Pointer[func(net.Addr)]
 }
+
+// IPv6 reports whether this carrier runs over ICMPv6, whose larger IP header
+// a tunnel inside it has to leave room for.
+func (c *icmpConn) IPv6() bool { return c.v6 }
 
 // SetForeignHook asks the server to report client echoes that carry another
 // tunnel's tag — the only trace a token copied wrong leaves, since such a
@@ -105,8 +113,12 @@ const xdiSockBuf = 8 << 20
 // listenICMP opens the raw ICMP socket both ends share. It needs privilege, and
 // says so plainly when it does not have it rather than failing obscurely later.
 // sockBuf sizes its buffers; 0 takes xdiSockBuf.
-func listenICMP(sockBuf int) (*icmp.PacketConn, error) {
-	pc, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+func listenICMP(sockBuf int, v6 bool) (*icmp.PacketConn, error) {
+	network, addr := "ip4:icmp", "0.0.0.0"
+	if v6 {
+		network, addr = "ip6:ipv6-icmp", "::"
+	}
+	pc, err := icmp.ListenPacket(network, addr)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			return nil, fmt.Errorf("xdi needs a raw ICMP socket, which requires root or CAP_NET_RAW: %w", err)
@@ -128,11 +140,13 @@ func sizeICMPBuffers(pc *icmp.PacketConn, sockBuf int) {
 	if sockBuf <= 0 {
 		sockBuf = xdiSockBuf
 	}
-	p4 := pc.IPv4PacketConn()
-	if p4 == nil {
-		return
+	var under net.PacketConn
+	if p4 := pc.IPv4PacketConn(); p4 != nil {
+		under = p4.PacketConn
+	} else if p6 := pc.IPv6PacketConn(); p6 != nil {
+		under = p6.PacketConn
 	}
-	sc, ok := p4.PacketConn.(syscall.Conn)
+	sc, ok := under.(syscall.Conn)
 	if !ok {
 		return
 	}
@@ -151,15 +165,17 @@ func sizeICMPBuffers(pc *icmp.PacketConn, sockBuf int) {
 
 // newICMPServerConn opens the server side: it will read echo requests and
 // answer with echo replies.
-func newICMPServerConn(token string, sockBuf int) (net.PacketConn, error) {
-	pc, err := listenICMP(sockBuf)
+func newICMPServerConn(token string, sockBuf int, v6 bool) (net.PacketConn, error) {
+	pc, err := listenICMP(sockBuf, v6)
 	if err != nil {
 		return nil, err
 	}
-	attachICMPFilter(pc, uint8(icmpEchoRequest), -1)
 	c := newICMPServerConnWith(pc, token).(*icmpConn)
-	c.echoGuard = installXdiEchoGuard(c.tag)
-	c.accept = installXdiAcceptRule(c.tag, true)
+	c.v6 = v6
+	request, _ := c.icmpTypes()
+	attachICMPFilter(pc, request, -1, v6)
+	c.echoGuard = installXdiEchoGuard(c.tag, v6)
+	c.accept = installXdiAcceptRule(c.tag, true, v6)
 	return c, nil
 }
 
@@ -171,14 +187,16 @@ func newICMPServerConnWith(pc icmpSocket, token string) net.PacketConn {
 
 // newICMPClientConn opens the client side: it will send echo requests and read
 // the replies.
-func newICMPClientConn(token string, sockBuf int) (net.PacketConn, error) {
-	pc, err := listenICMP(sockBuf)
+func newICMPClientConn(token string, sockBuf int, v6 bool) (net.PacketConn, error) {
+	pc, err := listenICMP(sockBuf, v6)
 	if err != nil {
 		return nil, err
 	}
-	c := newICMPClientConnWith(pc, token)
-	attachICMPFilter(pc, uint8(icmpEchoReply), int(c.(*icmpConn).id))
-	c.(*icmpConn).accept = installXdiAcceptRule(c.(*icmpConn).tag, false)
+	c := newICMPClientConnWith(pc, token).(*icmpConn)
+	c.v6 = v6
+	_, reply := c.icmpTypes()
+	attachICMPFilter(pc, reply, int(c.id), v6)
+	c.accept = installXdiAcceptRule(c.tag, false, v6)
 	return c, nil
 }
 
@@ -209,9 +227,10 @@ func (c *icmpConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 		return 0, err
 	}
 
-	typ := icmpEchoRequest
+	request, reply := c.icmpTypes()
+	typ := request
 	if c.server {
-		typ = icmpEchoReply
+		typ = reply
 	}
 	// The echo is built straight into one pooled buffer: header, tag,
 	// direction, payload, then the checksum over all of it. It used to go
@@ -220,16 +239,30 @@ func (c *icmpConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 	// datagram the tunnel sends.
 	wp := xdiBuffers.Get().(*[]byte)
 	defer xdiBuffers.Put(wp)
-	wire := appendEcho((*wp)[:0], byte(typ), uint16(c.echoIDFor(dst)), uint16(c.seq.Add(1)))
+	wire := appendEcho((*wp)[:0], typ, uint16(c.echoIDFor(dst)), uint16(c.seq.Add(1)))
 	wire = appendXdiPayload(wire, c.tag, outboundDir(c.server), p)
-	setICMPChecksum(wire)
+	c.checksum(wire)
 	if _, err := c.pc.WriteTo(wire, ipAddr); err != nil {
+		if droppedOnTheWayOut(err) {
+			return len(p), nil
+		}
 		return 0, err
 	}
 	// Report the caller's byte count, not the wire count: KCP measures what it
 	// asked to send, and the framing is ours to account for, not its concern.
 	return len(p), nil
 }
+
+// droppedOnTheWayOut reports an error that means only that this one packet
+// was dropped on its way out: ENOBUFS, from an interface queue that was full.
+//
+// A raw IPv4 socket never reports it — the kernel turns it into success unless
+// IP_RECVERR is set — but a raw IPv6 one does, and kcp-go takes any write error
+// as the end of the session. Over ICMPv6 a tunnel whose queue overflowed once
+// under load stopped carrying anything: a speed test's streams went silent
+// while the echoes still passed. It is a lost packet, as it is over IPv4, and
+// KCP resends it.
+func droppedOnTheWayOut(err error) bool { return errors.Is(err, syscall.ENOBUFS) }
 
 // ReadFrom returns the next datagram addressed to this tunnel, dropping ICMP
 // traffic that belongs to another tunnel, to a bare ping, or to the kernel's
@@ -241,9 +274,10 @@ func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	bp := xdiBuffers.Get().(*[]byte)
 	defer xdiBuffers.Put(bp)
 	buf := *bp
-	wantType := icmpEchoRequest // the server reads requests
+	request, reply := c.icmpTypes()
+	wantType := request // the server reads requests
 	if !c.server {
-		wantType = icmpEchoReply // the client reads replies
+		wantType = reply // the client reads replies
 	}
 	wantDir := inboundDir(c.server)
 
@@ -255,7 +289,7 @@ func (c *icmpConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		// The type, and on the client the echo identifier below. The socket
 		// filter normally keeps everything else away already; this is what is
 		// left where it could not be attached.
-		if n < 8 || buf[0] != byte(wantType) {
+		if n < 8 || buf[0] != wantType {
 			continue
 		}
 		// An echo is eight bytes of header and then its data; nothing in it
@@ -356,6 +390,25 @@ var (
 	icmpEchoRequest = ipv4.ICMPTypeEcho
 	icmpEchoReply   = ipv4.ICMPTypeEchoReply
 )
+
+// icmpTypes is the echo request and reply type this carrier sends and reads:
+// ICMP's 8 and 0, or ICMPv6's 128 and 129.
+func (c *icmpConn) icmpTypes() (request, reply byte) {
+	if c.v6 {
+		return byte(ipv6.ICMPTypeEchoRequest), byte(ipv6.ICMPTypeEchoReply)
+	}
+	return byte(icmpEchoRequest), byte(icmpEchoReply)
+}
+
+// checksum fills in an outgoing echo's checksum. ICMPv6's covers a
+// pseudo-header of both addresses, which only the kernel knows at this point,
+// and Linux computes it for every raw ICMPv6 socket (RFC 3542), so the field is
+// left zero for it.
+func (c *icmpConn) checksum(msg []byte) {
+	if !c.v6 {
+		setICMPChecksum(msg)
+	}
+}
 
 // toIPAddr coerces whatever address KCP hands back into the *net.IPAddr the raw
 // socket needs. KCP passes through exactly what ReadFrom returned, which is

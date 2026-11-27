@@ -86,3 +86,18 @@ type wsControl struct {
 
 func (c *wsControl) Set(conn *core.WSConn) { c.p.Store(conn) }
 func (c *wsControl) Get() *core.WSConn     { return c.p.Load() }
+
+// admit puts a forwarded connection under the tunnel's limits; see the
+// configs' Admit. A refused connection is closed here.
+func admit(a func(context.Context, net.Conn) (net.Conn, bool), ctx context.Context, conn net.Conn, logger *logrus.Logger) (net.Conn, bool) {
+	if a == nil {
+		return conn, true
+	}
+	admitted, ok := a(ctx, conn)
+	if !ok {
+		logger.Warnf("connection limit reached, refusing %s", conn.RemoteAddr())
+		conn.Close()
+		return nil, false
+	}
+	return admitted, true
+}

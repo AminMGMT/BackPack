@@ -1,5 +1,12 @@
 # Decoy site (WSS camouflage)
 
+> **This is v2.0.0's WSS engine.** Since the plain engine, WSS and WSS Mux
+> answer a request without the token with `401 unauthorized`; an updated server
+> still runs the engine below only for a kharej on v2.0.0. For a tunnel port
+> that answers like a web server, use TCP or TCP Mux with
+> `encryption = "scrap"`, which answers as nginx — see
+> [Encryption](encryption.md).
+
 A WSS tunnel is meant to be indistinguishable from an ordinary HTTPS website —
 same port 443, a real domain, a valid certificate. But looking like a website
 only to the tunnel's own client is not enough: **anything else that reaches the

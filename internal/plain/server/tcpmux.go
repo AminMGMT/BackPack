@@ -68,6 +68,10 @@ type TcpMuxConfig struct {
 	UDPOnly   bool
 	// OnLegacyClaim: see TcpConfig.OnLegacyClaim.
 	OnLegacyClaim func()
+	// Admit takes a forwarded connection under the tunnel's limits
+	// (max_connections, bandwidth_mbps) and returns the one to carry, or false
+	// to refuse it. nil admits everything. Backpack.
+	Admit func(ctx context.Context, conn net.Conn) (net.Conn, bool)
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -441,9 +445,9 @@ func (s *TcpMuxTransport) queue(g *tcpMuxGen, c LocalTCPConn) bool {
 }
 
 func (s *TcpMuxTransport) localListener(g *tcpMuxGen, localAddr string, remoteAddr string) {
-	listener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		s.logger.Fatalf("failed to listen on %s: %v", localAddr, err)
+	// Backpack: a busy port is tried again, not the end of the process.
+	listener := core.ListenPort(g.ctx, s.logger, localAddr)
+	if listener == nil {
 		return
 	}
 
@@ -485,6 +489,11 @@ func (s *TcpMuxTransport) acceptLocalConn(g *tcpMuxGen, listener net.Listener, r
 				} else {
 					s.logger.Tracef("TCP_NODELAY disabled for %s", tcpConn.RemoteAddr().String())
 				}
+			}
+
+			// Backpack: max_connections and bandwidth_mbps.
+			if conn, ok = admit(s.config.Admit, g.ctx, conn, s.logger); !ok {
+				continue
 			}
 
 			if s.queue(g, LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}) {

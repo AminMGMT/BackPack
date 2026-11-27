@@ -18,8 +18,8 @@ transports are for.
 - **Use TCP + Stealth.** It wraps the tunnel in a Noise layer with no
   fingerprint — on the wire it is indistinguishable from random bytes, so there
   is nothing for inspection to match, and the connection comes up.
-- **Or use WSS**, which looks like a browser loading an ordinary HTTPS website
-  (Chrome TLS fingerprint + a [decoy site](camouflage.md)).
+- **Or use WSS**, which is ordinary HTTPS on the wire; with
+  [Encryption](encryption.md) → Stealth+ the traffic inside it is masked too.
 
 > This works in practice, not just in theory: a Germany server that was filtered
 > from Iran came back online as soon as its tunnel was switched to **TCP +

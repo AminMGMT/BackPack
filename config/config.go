@@ -370,7 +370,10 @@ type ServerConfig struct {
 	// NGINX — in front of the tunnel, which holds a different TLS session from
 	// the client so a bound proof can never match. It is off by default because
 	// it hands the token to whoever terminates the TLS; turn it on only when a
-	// trusted proxy is doing so, and set it on both ends.
+	// trusted proxy is doing so, and set it on both ends. Only v2.0.0's wss
+	// engine (which an updated server runs for a v2.0.0 peer) binds the proof;
+	// the plain engine sends a bearer header, which such a proxy passes on, so
+	// it needs nothing here.
 	SimpleAuth bool `toml:"simple_auth"`
 	// PeerAuth is "required" to refuse a peer on the handshake before v2.0.0
 	// on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake
@@ -379,7 +382,10 @@ type ServerConfig struct {
 	// its two servers are upgraded one after the other, until the other end
 	// has once proved itself the new way; from then on the old handshake is
 	// refused anyway (remembered beside this file). Setup Links from v2.0.0
-	// write "required".
+	// write "required". Since tcp, tcpmux, ws and wsmux moved to the plain
+	// engine it acts on udp, and on v2.0.0's engine where an updated server
+	// runs it for a v2.0.0 peer; the plain engine's own handshake does not
+	// read it.
 	PeerAuth string `toml:"peer_auth"`
 	// PeerPinPath is where the engine remembers that the other end has proved
 	// itself; set from the config file's path at start, never from the file.
@@ -598,7 +604,10 @@ type ClientConfig struct {
 	// NGINX — in front of the tunnel, which holds a different TLS session from
 	// the client so a bound proof can never match. It is off by default because
 	// it hands the token to whoever terminates the TLS; turn it on only when a
-	// trusted proxy is doing so, and set it on both ends.
+	// trusted proxy is doing so, and set it on both ends. Only v2.0.0's wss
+	// engine (which an updated server runs for a v2.0.0 peer) binds the proof;
+	// the plain engine sends a bearer header, which such a proxy passes on, so
+	// it needs nothing here.
 	SimpleAuth bool `toml:"simple_auth"`
 	// PeerAuth is "required" to refuse a peer on the handshake before v2.0.0
 	// on the plain transports (tcp, tcpmux, ws, wsmux, udp). That handshake
@@ -607,7 +616,10 @@ type ClientConfig struct {
 	// its two servers are upgraded one after the other, until the other end
 	// has once proved itself the new way; from then on the old handshake is
 	// refused anyway (remembered beside this file). Setup Links from v2.0.0
-	// write "required".
+	// write "required". Since tcp, tcpmux, ws and wsmux moved to the plain
+	// engine it acts on udp, and on v2.0.0's engine where an updated server
+	// runs it for a v2.0.0 peer; the plain engine's own handshake does not
+	// read it.
 	PeerAuth string `toml:"peer_auth"`
 	// PeerPinPath is where the engine remembers that the other end has proved
 	// itself; set from the config file's path at start, never from the file.

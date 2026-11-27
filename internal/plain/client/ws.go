@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,10 @@ type WsConfig struct {
 	EdgeIP         string
 	// OnLegacyServer: see TcpConfig.OnLegacyServer.
 	OnLegacyServer func()
+	// Route is where tunnel connections go and how: fallback_addrs,
+	// load_balance, health_failover and the outbound settings. nil dials
+	// remote_addr directly. Backpack.
+	Route *core.Route
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -119,7 +124,7 @@ func (c *WsTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.Route, c.config.Route.Control(c.config.RemoteAddr), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 0, 0)
 			var he *core.HandshakeError
 			if err != nil && errors.As(err, &he) && he.LegacyServerAnswer() && c.config.OnLegacyServer != nil {
 				// Backpack: a v2.0.0 Iran server answers this claim with its
@@ -129,6 +134,7 @@ func (c *WsTransport) channelDialer(g *clientGen) {
 				return
 			}
 			if err != nil {
+				c.config.Route.ControlFailed(c.logger)
 				c.logger.Errorf("control channel dialer: %v", err)
 				time.Sleep(c.config.RetryInterval)
 				continue
@@ -233,7 +239,7 @@ func wsChannelHandler(g *clientGen, logger *logrus.Logger, restart func(), dial 
 func (c *WsTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new websocket tunnel connection to address %s", c.config.RemoteAddr)
 
-	rawWS, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 1024*1024, 1024*1024)
+	rawWS, err := core.WebSocketDialer(g.ctx, c.config.Route, c.config.Route.Data(c.config.RemoteAddr), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 1024*1024, 1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 		return
@@ -278,7 +284,7 @@ func (c *WsTransport) tunnelDialer(g *clientGen) {
 				return
 			}
 			if udp {
-				UDPDialer(core.Counted(core.WSStream(tunnelConn)), resolvedAddr, c.logger, g.usageMonitor, port, c.config.Sniffer)
+				UDPDialer(core.Counted(core.WSStream(tunnelConn)), core.PickBackend(resolvedAddr), c.logger, g.usageMonitor, port, c.config.Sniffer)
 				return
 			}
 
@@ -299,7 +305,10 @@ func (c *WsTransport) localDialer(g *clientGen, tunnelCon *core.WSConn, remoteAd
 		recvBuf = 0
 	}
 
-	localConnection, err := core.TcpDialer(g.ctx, remoteAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	// Backpack: a backend list ("a|b") is tried in turn; see core.DialBackend.
+	localConnection, err := core.DialBackend(remoteAddr, func(addr string) (*net.TCPConn, error) {
+		return core.TcpDialer(g.ctx, addr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	})
 	if err != nil {
 		c.logger.Errorf("local dialer: %v", err)
 		tunnelCon.Close()

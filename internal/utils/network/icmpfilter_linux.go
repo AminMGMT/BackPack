@@ -46,11 +46,45 @@ func icmpFilter(wantType uint8, id int) []bpf.Instruction {
 	return prog
 }
 
-// attachICMPFilter installs icmpFilter on a real raw socket. Best effort: a
-// socket the filter cannot be put on keeps filtering in userspace.
-func attachICMPFilter(pc icmpSocket, wantType uint8, id int) {
+// icmpFilter6 is icmpFilter for an ICMPv6 socket, which the kernel hands the
+// message without its IPv6 header: the ICMPv6 header is at the start.
+func icmpFilter6(wantType uint8, id int) []bpf.Instruction {
+	if id < 0 {
+		return []bpf.Instruction{
+			bpf.LoadAbsolute{Off: 0, Size: 1}, // A = ICMPv6 type
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(wantType), SkipTrue: 1},
+			bpf.RetConstant{Val: 0xffff},
+			bpf.RetConstant{Val: 0},
+		}
+	}
+	return []bpf.Instruction{
+		bpf.LoadAbsolute{Off: 0, Size: 1}, // A = ICMPv6 type
+		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(wantType), SkipTrue: 3},
+		bpf.LoadAbsolute{Off: 4, Size: 2}, // A = echo identifier
+		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(id), SkipTrue: 1},
+		bpf.RetConstant{Val: 0xffff},
+		bpf.RetConstant{Val: 0},
+	}
+}
+
+// attachICMPFilter installs icmpFilter (icmpFilter6 on an ICMPv6 socket) on a
+// real raw socket. Best effort: a socket the filter cannot be put on keeps
+// filtering in userspace.
+func attachICMPFilter(pc icmpSocket, wantType uint8, id int, v6 bool) {
 	real, ok := pc.(*icmp.PacketConn)
 	if !ok {
+		return
+	}
+	if v6 {
+		p6 := real.IPv6PacketConn()
+		if p6 == nil {
+			return
+		}
+		raw, err := bpf.Assemble(icmpFilter6(wantType, id))
+		if err != nil {
+			return
+		}
+		_ = p6.SetBPF(raw)
 		return
 	}
 	p4 := real.IPv4PacketConn()

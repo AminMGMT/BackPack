@@ -164,7 +164,7 @@ func TestAnUnreachablePathDoesNotHoldTheOtherFamilyForTheJoinTimeout(t *testing.
 func TestIPv6RawCarriersAreSkippedBeforeStartingAnEngine(t *testing.T) {
 	ctRequireIPv6(t)
 	previous := connTestReverse
-	connTestReverse = []string{"pck"}
+	connTestReverse = []string{"pck", "xdi"}
 	defer func() { connTestReverse = previous }()
 	s, _, err := StartConnTestIran(ConnTestOptions{Host: "::1", Direct: true, SpoofSrc: ConnTestSpoofSource})
 	if err != nil {
@@ -172,7 +172,12 @@ func TestIPv6RawCarriersAreSkippedBeforeStartingAnEngine(t *testing.T) {
 	}
 	defer s.Close()
 	for _, c := range s.cases {
-		raw := c.kind == "spoof" || c.tr == "pck" || c.tr == "sni" || c.tr == "xdi"
+		// xDi, direct and reverse, runs over ICMPv6; the other raw carriers
+		// do not.
+		raw := c.kind == "spoof" || c.tr == "pck" || c.tr == "sni"
+		if !raw && strings.Contains(c.skip, "IPv6 is not supported") {
+			t.Errorf("%s/%s runs over IPv6 and was skipped as if it did not: %s", c.kind, c.tr, c.skip)
+		}
 		if raw && !strings.Contains(c.skip, "IPv6 is not supported") {
 			t.Errorf("%s/%s not explicitly unsupported: %s", c.kind, c.tr, c.skip)
 		}

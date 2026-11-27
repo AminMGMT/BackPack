@@ -18,6 +18,11 @@ heavy on ICMP rate limits.
 **Requirements:** Linux, root (or `cap_net_raw`) on **both** ends. Startup is
 refused with a plain message if the raw socket is not available.
 
+**IPv4 or IPv6.** xDi runs over ICMPv6 as well: give the kharej the Iran
+server's IPv6 address, and bind the Iran server to `[::]:<port>`. One tunnel is
+one family — an IPv6 bind takes ICMPv6 only — and over IPv6 the guard rules go
+into `ip6tables`.
+
 > Read [TCP](tcp.md) for the parts of the wizard not covered here.
 
 ---
@@ -94,6 +99,9 @@ If TCP or UDP works at all on your route, use it instead.
 می‌خورد.
 
 **پیش‌نیاز:** لینوکس و دسترسی root روی **هر دو** طرف.
+
+روی **IPv6** هم کار می‌کند (ICMPv6): به خارج آدرس IPv6 سرور ایران را بدهید و
+سرور ایران را روی `[::]:<port>` بایند کنید.
 
 راه‌اندازی مثل [TCP](tcp.md) با انتخاب `ICMP` → `xDiRvs` در دو طرف (در فایل `transport = "xdi"`).
 چون ICMP پورت ندارد: پورت تونل فقط اسم و شناسهٔ session است و **نیازی به باز

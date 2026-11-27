@@ -51,7 +51,8 @@ func IsDatagram(t string) bool {
 // protocol header that tells the service behind the tunnel the real client IP.
 func SupportsProxyProtocol(t string) bool {
 	switch t {
-	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth", "quic", "pck":
+	// xdi is KCP inside ICMP echo: the same server, so the same header.
+	case "tcp", "tcpmux", "kcp", "wsmux", "wssmux", "stealth", "quic", "pck", "xdi":
 		return true
 	}
 	return false

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net"
 	"runtime"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/backpack/backpack/internal/utils/network"
 )
 
 // TcpDialer dials remoteAddress, retrying retry times with a doubling backoff
@@ -136,22 +136,11 @@ func ReusePortControl(network, address string, s syscall.RawConn) error {
 
 // ResolveRemoteAddr turns what the server names into a port and an address to
 // dial: a bare port means 127.0.0.1.
+//
+// Backpack: Backpack's own resolver. The one ported split on ':' and read the
+// second field as the port, so an IPv6 target ("[2001:db8::1]:443") was
+// refused on every connection, and a backend list ("8443|127.0.0.1:8444") was
+// not understood at all; see DialBackend.
 func ResolveRemoteAddr(remoteAddr string) (int, string, error) {
-	parts := strings.Split(remoteAddr, ":")
-	var port int
-	var err error
-
-	if len(parts) < 2 {
-		port, err = strconv.Atoi(parts[0])
-		if err != nil {
-			return 0, "", fmt.Errorf("invalid port format: %v", err)
-		}
-		return port, fmt.Sprintf("127.0.0.1:%d", port), nil
-	}
-
-	port, err = strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, "", fmt.Errorf("invalid port format: %v", err)
-	}
-	return port, remoteAddr, nil
+	return network.ResolveRemoteAddr(remoteAddr)
 }

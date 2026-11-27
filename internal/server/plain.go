@@ -7,6 +7,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	plain "github.com/backpack/backpack/internal/plain/server"
+	"github.com/backpack/backpack/internal/server/transport"
 )
 
 // usesPlainEngine reports whether tr runs on the plain engine — its
@@ -42,6 +43,9 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 
 	// Backpack: the tunnel's encryption; nil (none) leaves the plain wire.
 	layer := core.NewLayer(c.EncryptionConfig, c.Token)
+	// The limits every other transport applies; the plain engine came without
+	// them.
+	admit := transport.Admitter(transport.Limits{MaxConnections: c.MaxConnections, BandwidthMbps: c.BandwidthMbps})
 
 	switch tr {
 	case config.TCP:
@@ -63,6 +67,7 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			SO_SNDBUF:     c.SO_SNDBUF,
 			ProxyProtocol: c.ProxyProtocol,
 			OnLegacyClaim: onLegacy,
+			Admit:         admit,
 			Layer:         layer,
 		}, s.logger)
 		go t.Start()
@@ -92,6 +97,7 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			AcceptUDP:        c.ForwardsUDP(),
 			UDPOnly:          !c.ForwardsTCP(),
 			OnLegacyClaim:    onLegacy,
+			Admit:            admit,
 			Layer:            layer,
 		}, s.logger)
 		go t.Start()
@@ -118,6 +124,7 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			AcceptUDP:     c.ForwardsUDP(),
 			UDPOnly:       !c.ForwardsTCP(),
 			OnLegacyClaim: onLegacy,
+			Admit:         admit,
 			Layer:         layer,
 		}, s.logger)
 		go t.Start()
@@ -150,6 +157,7 @@ func (s *Server) startPlain(ctx context.Context, tr config.TransportType, onLega
 			AcceptUDP:        c.ForwardsUDP(),
 			UDPOnly:          !c.ForwardsTCP(),
 			OnLegacyClaim:    onLegacy,
+			Admit:            admit,
 			Layer:            layer,
 		}, s.logger)
 		go t.Start()

@@ -516,7 +516,8 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 			s.cases = append(s.cases, c)
 			continue
 		}
-		if ctFamily(host) == "IPv6" && (tr == "pck" || tr == "xdi") {
+		// xDiRvs runs over ICMPv6 as well; pck builds IPv4 packets.
+		if ctFamily(host) == "IPv6" && tr == "pck" {
 			c.skip = ctNameOf("reverse", tr) + " uses raw IPv4 packets; IPv6 is not supported"
 			s.cases = append(s.cases, c)
 			continue
@@ -578,7 +579,9 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 				s.cases = append(s.cases, c)
 				continue
 			}
-			if ctFamily(host) == "IPv6" {
+			// xDi runs over ICMPv6 as well; the other raw carriers build
+			// IPv4 packets.
+			if ctFamily(host) == "IPv6" && carrier != "xdi" {
 				c.skip = "this raw carrier uses IPv4 packets; IPv6 is not supported"
 				s.cases = append(s.cases, c)
 				continue

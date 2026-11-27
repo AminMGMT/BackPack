@@ -283,7 +283,7 @@ func KCPListen(bindAddr, token string, s KCPSettings) (*kcp.Listener, io.Closer,
 	// meaningless here, and the session tag is what separates tunnels. KCP is
 	// handed that socket and does not know the difference.
 	if s.UseICMP {
-		conn, err := newICMPServerConn(token, max(s.SO_RCVBUF, s.SO_SNDBUF))
+		conn, err := newICMPServerConn(token, max(s.SO_RCVBUF, s.SO_SNDBUF), bindIsIPv6(bindAddr))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -358,7 +358,9 @@ func KCPDialContext(ctx context.Context, remoteAddr, token string, s KCPSettings
 	// a background resolver; pass it a numeric address to avoid a second lookup.
 	var ipAddr *net.IPAddr
 	var err error
-	if s.UseICMP || s.Pck != nil {
+	if s.UseICMP {
+		ipAddr, err = hostToXdiAddrContext(ctx, remoteAddr)
+	} else if s.Pck != nil {
 		ipAddr, err = hostToIPAddrContext(ctx, remoteAddr)
 	} else {
 		var address *net.UDPAddr
@@ -381,7 +383,7 @@ func KCPDialContext(ctx context.Context, remoteAddr, token string, s KCPSettings
 
 	var session *kcp.UDPSession
 	if s.UseICMP {
-		conn, err := newICMPClientConn(token, max(s.SO_RCVBUF, s.SO_SNDBUF))
+		conn, err := newICMPClientConn(token, max(s.SO_RCVBUF, s.SO_SNDBUF), ipAddr.IP.To4() == nil)
 		if err != nil {
 			return nil, err
 		}
@@ -491,6 +493,48 @@ func hostToIPAddrContext(ctx context.Context, remoteAddr string) (*net.IPAddr, e
 		}
 	}
 	return nil, &net.AddrError{Err: "no suitable IPv4 address found", Addr: remoteAddr}
+}
+
+// hostToXdiAddrContext is hostToIPAddrContext for the xdi carrier, which runs
+// over ICMPv6 as well as ICMP: an IPv6 address is taken as it is, and a name
+// gives its IPv4 address, or its IPv6 one when it has no IPv4 address.
+func hostToXdiAddrContext(ctx context.Context, remoteAddr string) (*net.IPAddr, error) {
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return &net.IPAddr{}, nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return &net.IPAddr{IP: ip}, nil
+	}
+	addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range addresses {
+		if ip.To4() != nil {
+			return &net.IPAddr{IP: ip}, nil
+		}
+	}
+	for _, ip := range addresses {
+		return &net.IPAddr{IP: ip}, nil
+	}
+	return nil, &net.AddrError{Err: "no address found", Addr: remoteAddr}
+}
+
+// bindIsIPv6 reports whether a bind address names an IPv6 one — "[::]:443" or
+// "[2001:db8::1]:443" — which is what puts an xdi server on ICMPv6. Anything
+// else, an empty host included, is IPv4.
+func bindIsIPv6(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.To4() == nil
 }
 
 // portOf returns the port of a "host:port" address, or 0 when there is none.

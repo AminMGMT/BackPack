@@ -255,30 +255,23 @@ given at the bottom of this page.
 | WS Mux | WebSocket | proof only¹ | ✅ | — | [→](../tutorial/websocket.md) |
 | WSS | WebSocket | ✅ (TLS) | — | certificate | [→](../tutorial/websocket-tls.md) |
 | WSS Mux | WebSocket | ✅ (TLS) | ✅ | certificate | [→](../tutorial/websocket-tls.md) |
-| **xDiRvs** (xDi, ICMP) | ICMP | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
+| **xDiRvs** (xDi, ICMP) | ICMP / ICMPv6 | ✅ (token key) | ✅ | Linux, root, ICMP open | [→](../tutorial/xdi-icmp.md) |
 
 "Encrypted handshake" means the tunnel's own credential is protected on the
-wire. ¹ Since v2.0.0 the plain transports (TCP, TCP Mux, UDP, WS, WS Mux) do not
-send the token either: both ends prove they hold it with a challenge and
-response, and every address the Iran server tells the kharej to dial is sealed
-with the session's key, so something on the path can neither learn the token,
-pose as either server, nor make the kharej dial somewhere the Iran server never
-named. What they still do not do is encrypt: the traffic itself is as readable
-on the path as before, so use one of the encrypted transports where that
-matters. TCP + Stealth, QUIC and the token-keyed transports (UDP + KCP + FEC,
-TCP + PCK, xDi) encrypt as well; WSS does too, except with Simple Token Auth,
-where a trusted TLS-terminating proxy in front (NGINX, usually) stands in for
-the server and neither end's proof is used.
+wire. ¹ TCP, TCP Mux, WS and WS Mux run the plain engine, whose handshake
+carries the token as it is and whose traffic is not encrypted. Set an
+[encryption](encryption.md) on them (`stealth`, `stealth+`, or `scrap` on TCP
+and TCP Mux) to keep both off the wire. UDP proves the token with a challenge
+and response and does not encrypt. TCP + Stealth, QUIC and the token-keyed
+transports (UDP + KCP + FEC, TCP + PCK, xDi) encrypt; WSS and WSS Mux carry the
+token inside TLS.
 
-**Mixed versions.** A v2.0.0 end still makes a tunnel with a v1.9 end on the
-plain transports, using the old handshake (the log says so): upgrade the other
-server when you can. A new client against an old server takes two failed
-attempts, 8–16 seconds, to fall back. Once the two ends have connected the new
-way, the old handshake is refused for that tunnel from then on — remembered in
-`.<name>.peer` beside its config — so nothing on the path can push it back. A
-kharej made from a v2.0.0 Setup Link refuses it from the start
-(`peer_auth = "required"`). Clients older than v1.7.0 are no longer accepted.
-See [ADR 0006](adr/0006-plain-transports-prove-both-ends.md).
+**Mixed versions.** An updated end still makes a tunnel with a v2.0.0 end on
+TCP, TCP Mux, WS and WS Mux: it notices the older one and runs v2.0.0's engine
+for that tunnel, with v2.0.0's handshake
+([ADR 0006](adr/0006-plain-transports-prove-both-ends.md)), until the other end
+is updated too; then both move to the plain engine on their own. Update one end
+at a time — see [Updates](updates.md).
 
 QUIC binds the credential to its TLS session, as WSS does. The client does
 not verify the server's certificate — the tunnel trusts its token — so it does
@@ -444,34 +437,23 @@ HTTP/HTTPS gets through, or where you want to sit behind a CDN.
 Plain (unencrypted) WebSocket. `WS Mux` adds multiplexing over a connection pool
 and supports the PROXY protocol. Because the transport itself is not encrypted,
 the token travels in the clear — fine behind TLS termination you control, but
-prefer WSS on an untrusted path.
+prefer WSS, or set an [encryption](encryption.md), on an untrusted path.
 
 ### WSS / WSS Mux
 WebSocket over **TLS**. `WSS Mux` adds multiplexing (and the PROXY protocol).
-Two things make these more than "WS with TLS":
 
-- **Browser TLS fingerprint.** A WSS tunnel is meant to look like ordinary
-  HTTPS, but Go's default TLS ClientHello has a fingerprint of its own that
-  filtering can pick out. Backpack sends a current **Chrome** fingerprint
-  instead, so the handshake blends into normal browser traffic.
-- **Session-bound credential.** The certificate is not verified (the tunnel
-  trusts its token, and the cert is often self-signed), which would leave a
-  bearer token readable by anything that terminates the TLS on the path. So the
-  token is not sent: each side derives keying material from the TLS session and
-  the client proves it holds the token with an HMAC over that material. A man in
-  the middle has a different session and cannot replay it. The server proves
-  itself back the same way, in the upgrade response, and the client refuses a
-  wrong answer — and a missing one from a server that has answered it since the
-  client process started. An older server sends no answer, so a new client
-  still reaches it; upgrade the Iran server to close the gap. (With Simple
-  Token Auth neither proof applies.)
-- **Decoy site.** Anything that is not a genuine tunnel connection — a browser,
-  a scanner, a probe with the wrong token — is answered by a stock **nginx**:
-  the "Welcome to nginx!" page at `/`, a normal `404` everywhere else, with the
-  headers a real file carries. Each install derives its own nginx version, page
-  date and `ETag` from its token, so no two servers answer alike and the fleet
-  cannot be found with one scan. Built in and always on. See
-  [Decoy site (WSS camouflage)](camouflage.md).
+- **The token** travels in the upgrade's `Authorization` header, inside TLS.
+  The certificate is not verified (the tunnel trusts its token, and the cert is
+  often self-signed), so something that terminates the TLS on the path could
+  read it. With an [encryption](encryption.md) set, the header carries a value
+  derived from the token instead, and the traffic is encrypted inside the TLS
+  as well.
+- **A request without the token** — a browser, a scanner — is answered
+  `401 unauthorized`. The nginx decoy page was v2.0.0's WSS engine
+  ([Decoy site](camouflage.md)); for a port that answers like a web server,
+  use TCP or TCP Mux with `encryption = "scrap"`.
+- **Splash** (`splash = true`) pads the first records so their sizes do not
+  give the tunnel's handshake away. See [Encryption → Splash](encryption.md#splash).
 
 **Certificate:** at setup you can get a **Let's Encrypt** certificate
 (renewed automatically, needs a domain pointing at the server) or use a
@@ -502,13 +484,13 @@ from **Edit → Certificate**.
 کم‌تأخیر بازی با تصحیح خطای همیشه‌روشن؛ *UDP + QUIC* که فقط «در دسترس» است و
 پیشنهاد نمی‌شود چون روی مسیر واقعی ایران handshake را کامل نمی‌کرد.
 
-**خانوادهٔ WebSocket:** شبیه ترافیک وب معمولی و سازگار با CDN. *WSS* با
-fingerprint واقعی کروم، توکنی که فرستاده نمی‌شود، و یک **سایت تقلبی** که به هر
-کاوشگری صفحهٔ nginx نشان می‌دهد.
+**خانوادهٔ WebSocket:** شبیه ترافیک وب معمولی و سازگار با CDN. *WSS* توکن را
+داخل TLS می‌فرستد؛ با [Encryption](encryption.md) (Stealth یا Stealth+) به‌جای
+توکن مقداری مشتق‌شده از آن می‌رود و ترافیک داخل TLS هم رمز می‌شود.
 
 **خانوادهٔ ICMP:** *xDiRvs* (در فایل `transport = "xdi"`) که تونل معکوس را
-داخل پینگ می‌برد، برای شبکه‌ای که TCP و UDP را می‌بندد ولی ICMP را نه؛ لینوکس +
-root می‌خواهد. *IP Spoofing* که مبدأ پکت‌ها را جعل می‌کند فقط در تونل مستقیم
+داخل پینگ می‌برد، برای شبکه‌ای که TCP و UDP را می‌بندد ولی ICMP را نه؛ روی IPv4
+و IPv6 (ICMPv6)؛ لینوکس + root می‌خواهد. *IP Spoofing* که مبدأ پکت‌ها را جعل می‌کند فقط در تونل مستقیم
 (Direct) است.
 
 روی **همهٔ** ترنسپورت‌ها می‌شود UDP پورت‌های forward شده را هم عبور داد — یک

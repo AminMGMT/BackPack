@@ -134,9 +134,13 @@ func openXdi(cfg Config) (DatagramCarrier, net.Addr, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	overhead := network.XdiOverhead()
+	if v6, ok := conn.(interface{ IPv6() bool }); ok && v6.IPv6() {
+		overhead = network.XdiOverheadV6()
+	}
 	base := &obfuscatedCarrier{
 		PacketConn: conn,
-		overhead:   network.XdiOverhead(),
+		overhead:   overhead,
 		name:       "xdi",
 	}
 	if f, ok := conn.(interface{ FirewallNote() string }); ok {

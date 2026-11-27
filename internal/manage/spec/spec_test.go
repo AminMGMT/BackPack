@@ -74,6 +74,13 @@ func TestTheTransportFamilies(t *testing.T) {
 	if SupportsProxyProtocol("udp") {
 		t.Error("udp was reported as supporting the PROXY protocol")
 	}
+	// The ones that do: kcp, pck and xdi (xDiRvs) all run on the kcp server,
+	// which writes the header.
+	for _, t2 := range []string{"kcp", "pck", "xdi", "quic"} {
+		if !SupportsProxyProtocol(t2) {
+			t.Errorf("%s runs a stream inside its carrier and was reported as not supporting the PROXY protocol", t2)
+		}
+	}
 }
 
 func TestAddressesComeApartTheWayTheyWentTogether(t *testing.T) {

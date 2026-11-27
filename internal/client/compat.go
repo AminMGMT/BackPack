@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"github.com/backpack/backpack/internal/plain/core"
 	"sync"
 	"time"
 
@@ -48,7 +49,7 @@ func (c *Client) startCompat(ctx context.Context, tr config.TransportType, endpo
 			if legacy {
 				r = c.startEngine(run, tr, endpoints, outbound)
 			} else {
-				r = c.startPlain(run, tr, func() {
+				r = c.startPlain(run, tr, &core.Route{Endpoints: endpoints, Outbound: outbound}, func() {
 					select {
 					case found <- struct{}{}:
 					default:

@@ -126,6 +126,10 @@ mappings.
 A single backend is never health-checked, so ordinary tunnels behave exactly as
 before.
 
+On TCP, TCP Mux, WS and WS Mux there is no background check: each new
+connection starts at the next backend in turn and moves on to the next when a
+backend refuses the dial. A UDP flow goes to the next backend in turn.
+
 On a **layer-3** tunnel the choice is by load instead: each new connection goes
 to the backend with the fewest connections open, and one whose dial fails is
 passed over for 20 seconds. That is what lets one port be spread over several

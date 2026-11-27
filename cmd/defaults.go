@@ -207,7 +207,7 @@ func warnIgnoredProxyProtocol(cfg *config.Config) {
 	}
 	switch cfg.Server.Transport {
 	case config.WS, config.WSS, config.UDP:
-		logger.Warnf("proxy_protocol has no effect on the %s transport and is ignored: use tcp, tcpmux, stealth, kcp, pck, quic, wsmux or wssmux to pass the client's address to the service", cfg.Server.Transport)
+		logger.Warnf("proxy_protocol has no effect on the %s transport and is ignored: use tcp, tcpmux, stealth, kcp, pck, xdi, quic, wsmux or wssmux to pass the client's address to the service", cfg.Server.Transport)
 	}
 }
 
@@ -698,7 +698,7 @@ func transportIgnoresOutbound(t config.TransportType) bool {
 // the server, and the answer is 2 whenever both ends are new enough to be
 // asked — so the setting will be applied unless the peer is too old, which is
 // reported on the control channel instead.
-const unusedStreamBufferWarning = "mux_streambuffer has no effect while mux_version is pinned to 1: smux only applies a per-stream window on version 2. Remove mux_version to let the two ends agree on it, or set it to 2 on both."
+const unusedStreamBufferWarning = "mux_streambuffer has no effect while mux_version is pinned to 1: smux only applies a per-stream window on version 2. Set mux_version = 2 on both servers to use it."
 
 func warnUnusedStreamBuffer(cfg *config.Config) {
 	if cfg.Server.MaxStreamBuffer > 0 && cfg.Server.MuxVersion == 1 && cfg.Server.BindAddr != "" {

@@ -43,7 +43,21 @@ type icmpEchoGuard struct {
 	port   uint16
 	rule   []string
 	active bool
+	// v6 puts the rule in ip6tables, for an ICMPv6 carrier.
+	v6 bool
 }
+
+// tool is the firewall command the guard's rule goes into.
+func (g *icmpEchoGuard) tool() string {
+	if g.v6 {
+		return "ip6tables"
+	}
+	return "iptables"
+}
+
+// key names the rule for the count of carriers relying on it: the same body
+// in iptables and in ip6tables are two rules.
+func (g *icmpEchoGuard) key() string { return g.tool() + " " + strings.Join(g.rule, " ") }
 
 // installICMPEchoGuard adds the reply-drop rule for a tunnel port and returns a
 // handle that remembers whether it took, so remove() only undoes what it added.
@@ -66,13 +80,16 @@ func installICMPEchoGuard(port uint16) *icmpEchoGuard {
 // tag, and what only the kernel's copies carry on the way out is the client's
 // direction byte — the server's own replies are stamped with its own. So the
 // rule matches the two together.
-func installXdiEchoGuard(tag [xdiTagLen]byte) *icmpEchoGuard {
+func installXdiEchoGuard(tag [xdiTagLen]byte, v6 bool) *icmpEchoGuard {
+	if v6 {
+		return installEchoRule(&icmpEchoGuard{rule: xdiEchoRule6(tag), v6: true})
+	}
 	return installEchoRule(&icmpEchoGuard{rule: xdiEchoRule(tag)})
 }
 
 // installEchoRule inserts a guard's rule and records whether it took.
 func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
-	key := strings.Join(g.rule, " ")
+	key := g.key()
 	echoRules.Lock()
 	defer echoRules.Unlock()
 	// Shared within the process: the sessions of one reverse xdi tunnel each
@@ -84,15 +101,15 @@ func installEchoRule(g *icmpEchoGuard) *icmpEchoGuard {
 		g.active = true
 		return g
 	}
-	if _, err := exec.LookPath("iptables"); err != nil {
+	if _, err := exec.LookPath(g.tool()); err != nil {
 		return g
 	}
 	// A rule already there is one a crashed run left behind — the process
 	// died before it could remove it. It is adopted rather than doubled, so
 	// crash after crash does not stack copies, and this run's exit removes it.
-	if exec.Command("iptables", append([]string{"-C"}, g.rule...)...).Run() == nil {
+	if exec.Command(g.tool(), append([]string{"-C"}, g.rule...)...).Run() == nil {
 		g.active = true
-	} else if exec.Command("iptables", append([]string{"-I"}, g.rule...)...).Run() == nil {
+	} else if exec.Command(g.tool(), append([]string{"-I"}, g.rule...)...).Run() == nil {
 		g.active = true
 	}
 	if g.active {
@@ -114,14 +131,14 @@ func (g *icmpEchoGuard) remove() {
 		return
 	}
 	g.active = false
-	key := strings.Join(g.rule, " ")
+	key := g.key()
 	echoRules.Lock()
 	defer echoRules.Unlock()
 	if echoRules.users[key]--; echoRules.users[key] > 0 {
 		return
 	}
 	delete(echoRules.users, key)
-	_ = exec.Command("iptables", append([]string{"-D"}, g.rule...)...).Run()
+	_ = exec.Command(g.tool(), append([]string{"-D"}, g.rule...)...).Run()
 }
 
 // Installed reports whether the rule is in place, so the carrier can log which
@@ -183,7 +200,10 @@ func xdiEchoRule(tag [xdiTagLen]byte) []string {
 // accepts the client's requests, the client the server's replies — so the
 // host stays as silent to ping as it was. Inserted at the top of INPUT so a
 // drop further down cannot pre-empt it, and removed when the carrier closes.
-func installXdiAcceptRule(tag [xdiTagLen]byte, server bool) *icmpEchoGuard {
+func installXdiAcceptRule(tag [xdiTagLen]byte, server, v6 bool) *icmpEchoGuard {
+	if v6 {
+		return installEchoRule(&icmpEchoGuard{rule: xdiAcceptRule6(tag, server), v6: true})
+	}
 	return installEchoRule(&icmpEchoGuard{rule: xdiAcceptRule(tag, server)})
 }
 
@@ -199,6 +219,40 @@ func xdiAcceptRule(tag [xdiTagLen]byte, server bool) []string {
 		"-p", "icmp",
 		"--icmp-type", typ,
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@8=0x%08x&&0>>22&0x3C@12>>24=0x%02x", word, dir),
+		"-m", "comment", "--comment", fmt.Sprintf("backpack-xdi-in-%s-%08x", side, word),
+		"-j", "ACCEPT",
+	}
+}
+
+// The ICMPv6 rules, for an xdi carrier over IPv6. ip6tables' u32 counts from
+// the start of the IPv6 header, which is a fixed 40 bytes — an echo carries no
+// extension headers — so the echo's data, and the tag in it, starts at 48.
+
+// xdiEchoRule6 is xdiEchoRule for ip6tables.
+func xdiEchoRule6(tag [xdiTagLen]byte) []string {
+	word := uint32(tag[0])<<24 | uint32(tag[1])<<16 | uint32(tag[2])<<8 | uint32(tag[3])
+	return []string{
+		"OUTPUT",
+		"-p", "ipv6-icmp",
+		"--icmpv6-type", "echo-reply",
+		"-m", "u32", "--u32", fmt.Sprintf("48=0x%08x&&52>>24=0x%02x", word, xdiDirClient),
+		"-m", "comment", "--comment", fmt.Sprintf("backpack-xdi-echo-%08x", word),
+		"-j", "DROP",
+	}
+}
+
+// xdiAcceptRule6 is xdiAcceptRule for ip6tables.
+func xdiAcceptRule6(tag [xdiTagLen]byte, server bool) []string {
+	word := uint32(tag[0])<<24 | uint32(tag[1])<<16 | uint32(tag[2])<<8 | uint32(tag[3])
+	typ, dir, side := "echo-reply", xdiDirServer, "client"
+	if server {
+		typ, dir, side = "echo-request", xdiDirClient, "server"
+	}
+	return []string{
+		"INPUT",
+		"-p", "ipv6-icmp",
+		"--icmpv6-type", typ,
+		"-m", "u32", "--u32", fmt.Sprintf("48=0x%08x&&52>>24=0x%02x", word, dir),
 		"-m", "comment", "--comment", fmt.Sprintf("backpack-xdi-in-%s-%08x", side, word),
 		"-j", "ACCEPT",
 	}

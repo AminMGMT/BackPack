@@ -42,14 +42,10 @@ func (f *LocalAcceptUDPConn) port() int { return f.listener.LocalAddr().(*net.UD
 // dropped. Every plain transport forwards UDP through it (Backpack: the plain
 // engine did on tcp alone).
 func listenUDP(ctx context.Context, holds *core.Holds, logger *logrus.Logger, localAddr, remoteAddr string, accept func(*LocalAcceptUDPConn) bool) {
-	localUDPAddr, err := net.ResolveUDPAddr("udp", localAddr)
-	if err != nil {
-		logger.Fatalf("failed to resolve local address: %v", err)
-	}
-
-	listener, err := net.ListenUDP("udp", localUDPAddr)
-	if err != nil {
-		logger.Fatalf("failed to listen on local UDP port: %v", err)
+	// Backpack: a busy port is tried again, not the end of the process.
+	listener := core.ListenPortUDP(ctx, logger, localAddr)
+	if listener == nil {
+		return
 	}
 
 	defer holds.Hold()()

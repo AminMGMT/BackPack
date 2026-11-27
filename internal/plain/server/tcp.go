@@ -62,6 +62,10 @@ type TcpConfig struct {
 	// OnLegacyClaim is called when a client claims the control channel the
 	// Backpack v2.0.0 way, so the tunnel can serve it on that engine.
 	OnLegacyClaim func()
+	// Admit takes a forwarded connection under the tunnel's limits
+	// (max_connections, bandwidth_mbps) and returns the one to carry, or false
+	// to refuse it. nil admits everything. Backpack.
+	Admit func(ctx context.Context, conn net.Conn) (net.Conn, bool)
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -404,9 +408,9 @@ func (s *TcpTransport) startListeners(g *tcpGen, localAddr, remoteAddr string) {
 }
 
 func (s *TcpTransport) localListener(g *tcpGen, localAddr string, remoteAddr string) {
-	listener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		s.logger.Fatalf("failed to listen on %s: %v", localAddr, err)
+	// Backpack: a busy port is tried again, not the end of the process.
+	listener := core.ListenPort(g.ctx, s.logger, localAddr)
+	if listener == nil {
 		return
 	}
 
@@ -449,6 +453,11 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 				} else {
 					s.logger.Tracef("TCP_NODELAY disabled for %s", tcpConn.RemoteAddr().String())
 				}
+			}
+
+			// Backpack: max_connections and bandwidth_mbps.
+			if conn, ok = admit(s.config.Admit, g.ctx, conn, s.logger); !ok {
+				continue
 			}
 
 			select {

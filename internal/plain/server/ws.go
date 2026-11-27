@@ -70,6 +70,10 @@ type WsConfig struct {
 	// OnLegacyClaim is called when a client claims /channel the Backpack
 	// v2.0.0 way, so the tunnel can serve it on that engine.
 	OnLegacyClaim func()
+	// Admit takes a forwarded connection under the tunnel's limits
+	// (max_connections, bandwidth_mbps) and returns the one to carry, or false
+	// to refuse it. nil admits everything. Backpack.
+	Admit func(ctx context.Context, conn net.Conn) (net.Conn, bool)
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -409,9 +413,9 @@ func (s *WsTransport) queue(g *wsGen, c LocalTCPConn) bool {
 }
 
 func (s *WsTransport) localListener(g *wsGen, localAddr string, remoteAddr string) {
-	portListener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		s.logger.Fatalf("failed to start listener on %s: %v", localAddr, err)
+	// Backpack: a busy port is tried again, not the end of the process.
+	portListener := core.ListenPort(g.ctx, s.logger, localAddr)
+	if portListener == nil {
 		return
 	}
 
@@ -461,6 +465,11 @@ func (s *WsTransport) acceptLocalConn(g *wsGen, listener net.Listener, remoteAdd
 			}
 			if err := tcpConn.SetKeepAlivePeriod(s.config.KeepAlive); err != nil {
 				s.logger.Warnf("failed to set TCP keep-alive period for %s: %v", tcpConn.RemoteAddr().String(), err)
+			}
+
+			// Backpack: max_connections and bandwidth_mbps.
+			if conn, ok = admit(s.config.Admit, g.ctx, conn, s.logger); !ok {
+				continue
 			}
 
 			if s.queue(g, LocalTCPConn{conn: conn, remoteAddr: remoteAddr, timeCreated: time.Now().UnixMilli()}) {

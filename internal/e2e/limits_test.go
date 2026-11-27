@@ -12,7 +12,19 @@ import (
 // TestConnectionLimitIsEnforced checks that a connection cap actually refuses
 // connections past the limit, and — just as important — that it does not refuse
 // connections below it.
+//
+// The plain engine (tcp, tcpmux, ws, wsmux) came without limits and applied
+// neither, so each of them is checked as well as kcp.
 func TestConnectionLimitIsEnforced(t *testing.T) {
+	for _, tr := range limitedTransports {
+		t.Run(tr, func(t *testing.T) { connectionLimitOver(t, tr) })
+	}
+}
+
+// limitedTransports are the transports the limit tests run over.
+var limitedTransports = []string{"kcp", "tcp", "tcpmux", "ws", "wsmux"}
+
+func connectionLimitOver(t *testing.T, tr string) {
 	backend := startEchoBackend(t)
 
 	tunnelPort := freePort(t)
@@ -20,9 +32,9 @@ func TestConnectionLimitIsEnforced(t *testing.T) {
 	const token = "limits-token-0123456789abcdefgh"
 	const cap = 3
 
-	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
+	srvCfg := baseServerConfig(tr, tunnelPort, entryPort, backend.addr, token)
 	srvCfg.MaxConnections = cap
-	cliCfg := baseClientConfig("kcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	cliCfg := baseClientConfig(tr, fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
 	if err := tun.waitReady(tunnelReadyTimeout); err != nil {
@@ -107,6 +119,12 @@ func TestBandwidthLimitSlowsTransfer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-based — skipped under -short")
 	}
+	for _, tr := range limitedTransports {
+		t.Run(tr, func(t *testing.T) { bandwidthLimitOver(t, tr) })
+	}
+}
+
+func bandwidthLimitOver(t *testing.T, tr string) {
 	backend := startEchoBackend(t)
 
 	tunnelPort := freePort(t)
@@ -114,9 +132,9 @@ func TestBandwidthLimitSlowsTransfer(t *testing.T) {
 	const token = "bwlimit-token-0123456789abcdefg"
 	const mbps = 8 // 1 MB/s
 
-	srvCfg := baseServerConfig("kcp", tunnelPort, entryPort, backend.addr, token)
+	srvCfg := baseServerConfig(tr, tunnelPort, entryPort, backend.addr, token)
 	srvCfg.BandwidthMbps = mbps
-	cliCfg := baseClientConfig("kcp", fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+	cliCfg := baseClientConfig(tr, fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
 
 	tun := runPair(t, srvCfg, cliCfg, entryPort, tunnelPort)
 	if err := tun.waitReady(tunnelReadyTimeout); err != nil {

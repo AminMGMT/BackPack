@@ -51,6 +51,10 @@ type WsMuxConfig struct {
 	EdgeIP           string
 	// OnLegacyServer: see TcpConfig.OnLegacyServer.
 	OnLegacyServer func()
+	// Route is where tunnel connections go and how: fallback_addrs,
+	// load_balance, health_failover and the outbound settings. nil dials
+	// remote_addr directly. Backpack.
+	Route *core.Route
 	// Layer is the tunnel's encryption (Backpack); nil is none.
 	Layer *core.Layer
 }
@@ -133,7 +137,7 @@ func (c *WsMuxTransport) channelDialer(g *clientGen) {
 		case <-g.ctx.Done():
 			return
 		default:
-			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 0, 0)
+			tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.Route, c.config.Route.Control(c.config.RemoteAddr), c.config.EdgeIP, "/channel", c.config.DialTimeOut, c.config.KeepAlive, true, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 0, 0)
 			var he *core.HandshakeError
 			if err != nil && errors.As(err, &he) && he.LegacyServerAnswer() && c.config.OnLegacyServer != nil {
 				// Backpack: a v2.0.0 Iran server answers this claim with its
@@ -143,6 +147,7 @@ func (c *WsMuxTransport) channelDialer(g *clientGen) {
 				return
 			}
 			if err != nil {
+				c.config.Route.ControlFailed(c.logger)
 				c.logger.Errorf("control channel dialer: %v", err)
 				time.Sleep(c.config.RetryInterval)
 				continue
@@ -180,7 +185,7 @@ func (c *WsMuxTransport) channelHandler(g *clientGen) {
 func (c *WsMuxTransport) tunnelDialer(g *clientGen) {
 	c.logger.Debugf("initiating new %s tunnel connection to address %s", c.config.Mode, c.config.RemoteAddr)
 
-	tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.RemoteAddr, c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 2*1024*1024, 2*1024*1024)
+	tunnelWSConn, err := core.WebSocketDialer(g.ctx, c.config.Route, c.config.Route.Data(c.config.RemoteAddr), c.config.EdgeIP, "/tunnel", c.config.DialTimeOut, c.config.KeepAlive, c.config.Nodelay, c.config.Layer.Bearer(c.config.Token), c.config.Mode, 3, 2*1024*1024, 2*1024*1024)
 	if err != nil {
 		c.logger.Errorf("tunnel server dialer: %v", err)
 		return
@@ -216,6 +221,8 @@ func (c *WsMuxTransport) handleSession(g *clientGen, tunnelConn *websocket.Conn,
 		default:
 			stream, err := session.AcceptStream()
 			if err != nil {
+				// Backpack: a mux_version mismatch is said out loud.
+				core.NoteMuxMismatch(c.logger, err, c.config.MuxVersion)
 				c.logger.Debug("session is closed: ", err)
 				session.Close()
 				return
@@ -242,7 +249,7 @@ func (c *WsMuxTransport) localDialer(g *clientGen, stream *smux.Stream, remoteAd
 		return
 	}
 	if udp {
-		UDPDialer(core.Counted(stream), resolvedAddr, c.logger, g.usageMonitor, port, c.config.Sniffer)
+		UDPDialer(core.Counted(stream), core.PickBackend(resolvedAddr), c.logger, g.usageMonitor, port, c.config.Sniffer)
 		return
 	}
 
@@ -256,7 +263,10 @@ func (c *WsMuxTransport) localDialer(g *clientGen, stream *smux.Stream, remoteAd
 		recvBuf = 0
 	}
 
-	localConnection, err := core.TcpDialer(g.ctx, resolvedAddr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	// Backpack: a backend list ("a|b") is tried in turn; see core.DialBackend.
+	localConnection, err := core.DialBackend(resolvedAddr, func(addr string) (*net.TCPConn, error) {
+		return core.TcpDialer(g.ctx, addr, "", c.config.DialTimeOut, c.config.KeepAlive, true, 1, recvBuf, sendBuf, 0)
+	})
 	if err != nil {
 		c.logger.Errorf("local dialer: %v", err)
 		stream.Close()
