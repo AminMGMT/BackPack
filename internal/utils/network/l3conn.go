@@ -91,6 +91,7 @@ func NewXdiPacketConn(listening bool, token, addr string, sockBuf int) (net.Pack
 		if err != nil {
 			return nil, nil, err
 		}
+		sendWhole(conn)
 		return conn, nil, nil
 	}
 
@@ -102,5 +103,6 @@ func NewXdiPacketConn(listening bool, token, addr string, sockBuf int) (net.Pack
 	if err != nil {
 		return nil, nil, err
 	}
+	sendWhole(conn)
 	return conn, peer, nil
 }

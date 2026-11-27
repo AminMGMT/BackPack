@@ -181,9 +181,11 @@ jobs:
         run: |
           # sudo starts a clean environment: without the cgo variables the
           # libpcap action exported, the build cannot find pcap.h.
+          # The run takes 8.5-9 minutes now that xDi is measured over IPv6
+          # too; 10m left too little room on a slow runner.
           sudo env PATH="$PATH" GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" BP_L3_LIVE=1 \
             CGO_ENABLED="$CGO_ENABLED" CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" \
-            go test ./internal/manage -run '^TestTheConnectionTestAcrossAnIPv6OnlyPath$' -count=1 -v -timeout 10m
+            go test ./internal/manage -run '^TestTheConnectionTestAcrossAnIPv6OnlyPath$' -count=1 -v -timeout 15m
 
   audit:
     name: Vulnerabilities and static analysis

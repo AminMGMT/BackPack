@@ -1,8 +1,10 @@
 package network
 
 import (
+	"errors"
 	"net"
 	"sync"
+	"syscall"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -151,8 +153,9 @@ func (c *icmpConn) WriteBatch(bufs [][]byte, to net.Addr) (int, error) {
 	for sent < n {
 		k, err := p4.WriteBatch(msgs[sent:], 0)
 		if err != nil {
-			if droppedOnTheWayOut(err) {
-				// The queue was full: this one is lost, and the rest go on.
+			if droppedOnTheWayOut(err) || errors.Is(err, syscall.EMSGSIZE) {
+				// The queue was full, or this one is larger than the
+				// interface (see sendWhole): it is lost, and the rest go on.
 				sent++
 				continue
 			}

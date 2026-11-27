@@ -253,14 +253,22 @@ func (c *WsTransport) tunnelDialer(g *clientGen) {
 
 	atomic.AddInt32(&g.poolConnections, 1)
 
+	// Backpack: an idle pool connection closes with its generation (see
+	// TcpTransport.tunnelDialer).
+	idle := context.AfterFunc(g.ctx, func() { tunnelConn.Close() })
+
 	for {
 		select {
 		case <-g.ctx.Done():
+			idle()
+			tunnelConn.Close()
+			atomic.AddInt32(&g.poolConnections, -1)
 			return
 		default:
 			_, remoteAddrBytes, err := tunnelConn.ReadMessage()
 			if err != nil {
 				c.logger.Debugf("unable to get port from websocket connection %s: %v", tunnelConn.RemoteAddr().String(), err)
+				idle()
 				tunnelConn.Close()
 
 				atomic.AddInt32(&g.poolConnections, -1)
@@ -274,6 +282,7 @@ func (c *WsTransport) tunnelDialer(g *clientGen) {
 			}
 
 			atomic.AddInt32(&g.poolConnections, -1)
+			idle()
 
 			remoteAddr, udp := core.SplitTarget(string(remoteAddrBytes))
 

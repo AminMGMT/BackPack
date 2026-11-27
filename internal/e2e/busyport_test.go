@@ -21,13 +21,18 @@ func TestABusyForwardedPortLeavesTheOthersUp(t *testing.T) {
 		t.Run(tr, func(t *testing.T) {
 			t.Parallel()
 			backend := startEchoBackend(t).addr
-			busyPort, freeEntry, tunnelPort := freePort(t), freePort(t), freePort(t)
-			// Another program on the port the tunnel wants.
-			squatter, err := net.Listen("tcp", fmt.Sprintf(":%d", busyPort))
+			freeEntry, tunnelPort := freePort(t), freePort(t)
+			// Another program on the port the tunnel wants. The kernel picks
+			// the port: one picked first and bound after could be taken in
+			// between by a socket of another parallel test ("bind: address
+			// already in use", once under -race). Held on loopback, it still
+			// stops the server's listener on every address.
+			squatter, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer squatter.Close()
+			busyPort := squatter.Addr().(*net.TCPAddr).Port
 
 			dir := t.TempDir()
 			token := "busy-port-token-0123456789abcdef"

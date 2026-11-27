@@ -20,6 +20,7 @@ func newICMPServerConn(token string, sockBuf int, v6 bool) (net.PacketConn, erro
 func newICMPClientConn(token string, sockBuf int, v6 bool) (net.PacketConn, error) {
 	return nil, errXdiNotLinux
 }
+func sendWhole(net.PacketConn) {}
 
 // icmpMTUOverhead mirrors the Linux value so the MTU arithmetic in kcp.go is
 // identical on every platform, even though the socket is never opened here.

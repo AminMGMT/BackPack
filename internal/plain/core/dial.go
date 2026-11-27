@@ -87,7 +87,13 @@ func attemptTcpDialer(ctx context.Context, remoteAddress string, localSrc string
 		},
 		Timeout:         timeout,
 		KeepAliveConfig: net.KeepAliveConfig{Enable: true, Interval: keepAlive, Count: 9, Idle: 0},
-		LocalAddr:       localTCPAddr,
+	}
+	// Backpack: only a real address. A nil *net.TCPAddr in the interface is
+	// not a nil LocalAddr, and every dial error then read "dial tcp
+	// <nil>->203.0.113.1:443", which the log explainer passed on as the
+	// Iran server's address.
+	if localTCPAddr != nil {
+		dialer.LocalAddr = localTCPAddr
 	}
 
 	conn, err := dialer.DialContext(ctx, "tcp", tcpAddr.String())

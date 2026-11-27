@@ -293,6 +293,10 @@ func (c *TcpMuxTransport) handleSession(g *clientGen, tunnelConn net.Conn) {
 		c.logger.Errorf("failed to create mux session: %v", err)
 		return
 	}
+	// Backpack: the session closes with its generation; AcceptStream does
+	// not look at the context, so without this a stopped client's pool stayed
+	// open until the server dropped it.
+	defer context.AfterFunc(g.ctx, func() { session.Close() })()
 
 	for {
 		select {

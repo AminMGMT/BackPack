@@ -278,8 +278,14 @@ func (c *TcpTransport) tunnelDialer(g *clientGen) {
 	// Increment active connections counter
 	atomic.AddInt32(&g.poolConnections, 1)
 
+	// Backpack: an idle pool connection closes with its generation, so a
+	// client stopped in a process that keeps running leaves nothing open on
+	// the server.
+	idle := context.AfterFunc(g.ctx, func() { tcpConn.Close() })
+
 	// Attempt to receive the remote address from the tunnel server
 	remoteAddr, transport, err := core.ReceiveBinaryTransportString(tcpConn)
+	idle()
 
 	// Decrement active connections after successful or failed connection
 	atomic.AddInt32(&g.poolConnections, -1)

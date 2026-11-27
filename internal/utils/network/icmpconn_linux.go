@@ -140,6 +140,17 @@ func sizeICMPBuffers(pc *icmp.PacketConn, sockBuf int) {
 	if sockBuf <= 0 {
 		sockBuf = xdiSockBuf
 	}
+	icmpSocketControl(pc, func(fd int) {
+		for _, o := range [][2]int{{unix.SO_RCVBUFFORCE, unix.SO_RCVBUF}, {unix.SO_SNDBUFFORCE, unix.SO_SNDBUF}} {
+			if unix.SetsockoptInt(fd, unix.SOL_SOCKET, o[0], sockBuf) != nil {
+				_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, o[1], sockBuf)
+			}
+		}
+	})
+}
+
+// icmpSocketControl runs f on the raw socket under pc.
+func icmpSocketControl(pc *icmp.PacketConn, f func(fd int)) {
 	var under net.PacketConn
 	if p4 := pc.IPv4PacketConn(); p4 != nil {
 		under = p4.PacketConn
@@ -154,11 +165,37 @@ func sizeICMPBuffers(pc *icmp.PacketConn, sockBuf int) {
 	if err != nil {
 		return
 	}
-	_ = raw.Control(func(fd uintptr) {
-		for _, o := range [][2]int{{unix.SO_RCVBUFFORCE, unix.SO_RCVBUF}, {unix.SO_SNDBUFFORCE, unix.SO_SNDBUF}} {
-			if unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, o[0], sockBuf) != nil {
-				_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, o[1], sockBuf)
-			}
+	_ = raw.Control(func(fd uintptr) { f(int(fd)) })
+}
+
+// sendWhole makes the carrier send each packet whole or not at all: the
+// don't-fragment bit on every packet, and a packet larger than the interface
+// refused here (EMSGSIZE) instead of split in two by this host.
+//
+// The layer-3 tunnel needs it to measure the path (mtuprobe.go). A raw socket
+// otherwise fragments whatever does not fit, so every probe size came back
+// answered: on a 1400-byte path the tunnel concluded it carried 1426 bytes
+// over ICMP and 1406 over ICMPv6, and every full-size packet after that went
+// out as two fragments — twice the packets, and a whole packet lost with
+// either half. Over ICMPv6 with FEC on two CPUs a speed test's streams went
+// silent. The probe now sees the refusal and settles on what fits.
+//
+// Not for KCP over xdi: kcp-go ends the session on any write error, so there
+// a kcp_mtu too large for the path is left to fragment as before.
+func sendWhole(conn net.PacketConn) {
+	c, ok := conn.(*icmpConn)
+	if !ok {
+		return
+	}
+	pc, ok := c.pc.(*icmp.PacketConn)
+	if !ok {
+		return
+	}
+	icmpSocketControl(pc, func(fd int) {
+		if c.v6 {
+			_ = unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MTU_DISCOVER, unix.IPV6_PMTUDISC_PROBE)
+		} else {
+			_ = unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_MTU_DISCOVER, unix.IP_PMTUDISC_PROBE)
 		}
 	})
 }

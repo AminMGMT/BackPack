@@ -59,6 +59,14 @@ Not a release yet: the version and date are set when it is tagged.
   The tunnel reported itself up and carried nothing.
 - **The kharej keeps its Connection Test tunnels up for the longest the test
   can take**, so the tunnels measured last are not stopped mid-measurement.
+- **Direct xDi measures its path MTU correctly.** The raw socket split every
+  packet too large for the path in two, so the MTU probe found every size
+  carried and full-size packets went out as fragments. They are now sent whole
+  or refused, and the probe settles on what fits. Over IPv6 on a 1400-byte
+  path with two CPUs: Direct xDi 157 → 265 Mbps, with FEC 120 → 210 Mbps and
+  no more stalls; over IPv4, with FEC 126 → 223 Mbps.
+- **A stopped kharej closes its idle pool connections at once** on the plain
+  transports, instead of leaving them on the Iran server until it dropped them.
 
 ## v2.0.0 — 2026-11-20
 
