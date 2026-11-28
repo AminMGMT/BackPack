@@ -56,6 +56,10 @@ Not a release yet: the version and date are set when it is tagged.
 
 ### Fixed
 
+- **An Iran server that ran out of file descriptors** with an encryption on
+  closed its tunnel port until the tunnel was restarted. It now waits until
+  descriptors are free and goes on. The plain transports' accept loops also
+  back off instead of spinning a core while descriptors are short.
 - **v2.0.0 could not be installed by the updater**: its checksums were signed
   for `main`, the branch its manual release run started on. The release tool
   now signs for the tag the workflow resolved, refuses anything that is not a

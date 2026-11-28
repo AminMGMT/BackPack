@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -84,8 +85,15 @@ func startEchoBackend(t *testing.T) *echoBackend {
 	go func() {
 		for {
 			conn, err := l.Accept()
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			if err != nil {
-				return // listener closed
+				// Out of descriptors, as fdchaos_test.go makes this process
+				// on purpose: the backend shares the tunnel's limit, and one
+				// that gave up here would leave the tunnel nothing to reach.
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 			go func(c net.Conn) {
 				defer c.Close()

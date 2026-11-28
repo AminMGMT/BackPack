@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"io"
 	"math/rand/v2"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/utils/acceptloop"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/sirupsen/logrus"
 )
@@ -185,16 +187,31 @@ type layerListener struct {
 
 func (ll *layerListener) run(l *Layer, logger *logrus.Logger) {
 	sem := make(chan struct{}, layerHandshakes)
+	// Only a closed listener ends the loop. Anything else — above all running
+	// out of file descriptors, which every accept returns at once until some
+	// are free — is waited out and retried, or one bad moment would close the
+	// tunnel port until the next restart.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-ll.done
+		cancel()
+	}()
+	var backoff acceptloop.Backoff
 	for {
 		c, err := ll.Listener.Accept()
 		if err != nil {
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				continue
+			if errors.Is(err, net.ErrClosed) {
+				ll.closeWith(err)
+				return
 			}
-			ll.closeWith(err)
-			return
+			logger.Debugf("accepting a connection failed, retrying: %v", err)
+			if !backoff.Fail(ctx) {
+				return
+			}
+			continue
 		}
+		backoff = acceptloop.Backoff{}
 		select {
 		case sem <- struct{}{}:
 		case <-ll.done:

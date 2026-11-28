@@ -2,8 +2,10 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -97,5 +99,59 @@ func TestLayerBearerHidesTheToken(t *testing.T) {
 	}
 	if !l.BearerOK("Bearer "+b, "tunnel-token") || l.BearerOK("Bearer tunnel-token", "tunnel-token") {
 		t.Fatal("the bearer check takes the wrong value")
+	}
+}
+
+// failingListener fails its first accepts the way a process out of file
+// descriptors does, then accepts normally.
+type failingListener struct {
+	net.Listener
+	failures int
+}
+
+func (f *failingListener) Accept() (net.Conn, error) {
+	if f.failures > 0 {
+		f.failures--
+		return nil, &net.OpError{Op: "accept", Net: "tcp", Err: syscall.EMFILE}
+	}
+	return f.Listener.Accept()
+}
+
+// Running out of descriptors is waited out: the listener keeps serving once
+// accepts work again, instead of closing the tunnel port until a restart.
+func TestLayerListenerOutlastsRunningOutOfDescriptors(t *testing.T) {
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := stealth("tunnel-token")
+	ln := l.Listener(&failingListener{Listener: raw, failures: 5}, logrus.New())
+	defer ln.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+	c, err := net.Dial("tcp", raw.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := l.Client(c)
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	defer client.Close()
+	select {
+	case server := <-accepted:
+		server.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the listener stopped serving after accepts failed for a moment")
+	}
+
+	ln.Close()
+	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("a closed listener reports %v", err)
 	}
 }

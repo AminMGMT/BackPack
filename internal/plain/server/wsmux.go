@@ -13,6 +13,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/plain/core"
+	"github.com/backpack/backpack/internal/utils/acceptloop"
 	"github.com/backpack/backpack/internal/utils/network"
 	"github.com/backpack/backpack/internal/web"
 
@@ -460,6 +461,7 @@ func (s *WsMuxTransport) localListener(g *wsMuxGen, localAddr string, remoteAddr
 }
 
 func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, remoteAddr string) {
+	var backoff acceptloop.Backoff
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -469,8 +471,12 @@ func (s *WsMuxTransport) acceptLocalConn(g *wsMuxGen, listener net.Listener, rem
 			conn, err := listener.Accept()
 			if err != nil {
 				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr().String(), err)
+				if !backoff.Fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff = acceptloop.Backoff{}
 
 			tcpConn, ok := conn.(*net.TCPConn)
 			if !ok {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/internal/plain/core"
+	"github.com/backpack/backpack/internal/utils/acceptloop"
 	"github.com/backpack/backpack/internal/web"
 
 	"github.com/sirupsen/logrus"
@@ -333,6 +334,7 @@ func (s *TcpTransport) tunnelListener(g *tcpGen) {
 }
 
 func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
+	var backoff acceptloop.Backoff
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -342,8 +344,12 @@ func (s *TcpTransport) acceptTunnelConn(g *tcpGen, listener net.Listener) {
 			conn, err := listener.Accept()
 			if err != nil {
 				s.logger.Debugf("failed to accept tunnel connection on %s: %v", listener.Addr().String(), err)
+				if !backoff.Fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff = acceptloop.Backoff{}
 
 			//discard any non tcp connection
 			tcpConn, ok := core.TCPOf(conn)
@@ -425,6 +431,7 @@ func (s *TcpTransport) localListener(g *tcpGen, localAddr string, remoteAddr str
 }
 
 func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteAddr string) {
+	var backoff acceptloop.Backoff
 	for {
 		select {
 		case <-g.ctx.Done():
@@ -435,8 +442,12 @@ func (s *TcpTransport) acceptLocalConn(g *tcpGen, listener net.Listener, remoteA
 			conn, err := listener.Accept()
 			if err != nil {
 				s.logger.Debugf("failed to accept connection on %s: %v", listener.Addr().String(), err)
+				if !backoff.Fail(g.ctx) {
+					return
+				}
 				continue
 			}
+			backoff = acceptloop.Backoff{}
 
 			// discard any non-tcp connection
 			tcpConn, ok := conn.(*net.TCPConn)
