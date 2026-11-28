@@ -169,6 +169,10 @@ func (s *TcpMuxTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// Backpack: by now the old generation's loops have returned.
+	closeLeft(old.tunnelChannel, func(s *smux.Session) { s.Close() })
+	closeLeft(old.localChannel, LocalTCPConn.drop)
+
 	if s.parentctx.Err() != nil {
 		s.logger.SetLevel(level)
 		return

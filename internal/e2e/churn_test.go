@@ -3,7 +3,10 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,4 +109,78 @@ func settle() sample {
 		prev = cur
 	}
 	return prev
+}
+
+// A kharej that leaves ends a generation, and what that generation still
+// held — pooled tunnel connections nobody had used, users' connections still
+// waiting for one — is closed then, not left for the garbage collector. With
+// the collector off, the sockets the process holds must not climb with every
+// client: on tcp they did by four or more each, which a server whose kharej
+// reconnects all day carries until the next collection happens to run.
+func TestARestartClosesWhatItsGenerationHeld(t *testing.T) {
+	if testing.Short() {
+		t.Skip("churns four clients per transport")
+	}
+	for _, transport := range []string{"tcp", "ws"} {
+		t.Run(transport, func(t *testing.T) {
+			defer debug.SetGCPercent(debug.SetGCPercent(-1))
+			backend := startEchoBackend(t)
+			tunnelPort, entryPort := freePort(t), freePort(t)
+			token := "churn-token-0123456789abcdef"
+
+			srvCtx, stopServer := context.WithCancel(context.Background())
+			var srvWG sync.WaitGroup
+			srv := server.NewServer(baseServerConfig(transport, tunnelPort, entryPort, backend.addr, token), srvCtx)
+			srvWG.Add(1)
+			go func() { defer srvWG.Done(); srv.Start() }()
+			defer func() { stopServer(); srv.Stop(); srvWG.Wait() }()
+			time.Sleep(300 * time.Millisecond)
+
+			cliCfg := baseClientConfig(transport, fmt.Sprintf("127.0.0.1:%d", tunnelPort), token, nil)
+			visit := func(i int) int {
+				ctx, cancel := context.WithCancel(context.Background())
+				tun := startClientAgainst(t, ctx, cliCfg, entryPort, tunnelPort)
+				tun.cancel = cancel
+				if err := tun.waitReady(tunnelReadyTimeout); err != nil {
+					t.Fatalf("client %d never came up: %v", i, err)
+				}
+				if err := tun.roundTrip(randomPayload(t, 64*1024)); err != nil {
+					t.Fatalf("client %d could not carry traffic: %v", i, err)
+				}
+				tun.Stop()
+				if err := tun.waitGone(10 * time.Second); err != nil {
+					t.Fatalf("client %d: %v", i, err)
+				}
+				// The server's restart: it waits two seconds, then builds the
+				// next generation.
+				time.Sleep(3 * time.Second)
+				return countSockets()
+			}
+
+			base := visit(0)
+			var after int
+			for i := 1; i < 4; i++ {
+				after = visit(i)
+			}
+			if after > base+2 {
+				t.Errorf("sockets grew from %d to %d over three clients, with the garbage collector off", base, after)
+			}
+		})
+	}
+}
+
+// countSockets is the process's open sockets. Pipes are left out: the
+// splice pool keeps a few for reuse and frees them only when it is collected.
+func countSockets() int {
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if target, err := os.Readlink("/proc/self/fd/" + e.Name()); err == nil && strings.HasPrefix(target, "socket:") {
+			n++
+		}
+	}
+	return n
 }

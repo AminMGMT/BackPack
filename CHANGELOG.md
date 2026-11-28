@@ -60,6 +60,10 @@ Not a release yet: the version and date are set when it is tagged.
   closed its tunnel port until the tunnel was restarted. It now waits until
   descriptors are free and goes on. The plain transports' accept loops also
   back off instead of spinning a core while descriptors are short.
+- **Every time the kharej reconnected, the Iran server kept a few sockets
+  open** on the plain transports (tcp most: four or more each time): pooled
+  tunnel connections the ended generation never used. Only the garbage
+  collector closed them. They are now closed when the generation ends.
 - **v2.0.0 could not be installed by the updater**: its checksums were signed
   for `main`, the branch its manual release run started on. The release tool
   now signs for the tag the workflow resolved, refuses anything that is not a

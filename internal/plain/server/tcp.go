@@ -157,6 +157,10 @@ func (s *TcpTransport) Restart() {
 
 	time.Sleep(2 * time.Second)
 
+	// Backpack: by now the old generation's loops have returned.
+	closeLeft(old.tunnelChannel, func(c net.Conn) { c.Close() })
+	closeLeft(old.localChannel, LocalTCPConn.drop)
+
 	// Backpack: a restart that finds the whole tunnel stopped builds nothing.
 	if s.parentctx.Err() != nil {
 		s.logger.SetLevel(level)

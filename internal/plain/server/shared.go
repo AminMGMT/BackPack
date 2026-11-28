@@ -18,6 +18,22 @@ type TunnelChannel struct {
 	mu   *sync.Mutex
 }
 
+// closeLeft closes what a finished generation still holds in ch: tunnel
+// connections accepted for it that it never handed out, and users' connections
+// still waiting for one. Nothing else reads ch once its generation is over,
+// and left there they stay open until the garbage collector finds them, a
+// handful of descriptors for every time the kharej reconnects.
+func closeLeft[T any](ch chan T, close func(T)) {
+	for {
+		select {
+		case v := <-ch:
+			close(v)
+		default:
+			return
+		}
+	}
+}
+
 // LocalTCPConn is a user's connection waiting for a tunnel connection: a TCP
 // connection, or on the mux and ws transports a UDP flow (udp, with conn nil).
 type LocalTCPConn struct {
