@@ -579,16 +579,20 @@ func (s Spec) writeEncryption(p func(string, ...any)) {
 	}
 }
 
-// managed reports whether a managed HTTPS helper (naive, xhttp, REALITY)
+// managed reports whether a managed HTTPS helper (naive, xhttp, Vision)
 // carries the tunnel; it is encrypted by the helper.
 func (s Spec) managed() bool {
 	return s.NaiveServer.Enabled() || s.NaiveClient.Enabled() || s.XrayServer.Enabled() || s.XrayClient.Enabled()
 }
 
 // EncryptionModes is what this spec's transport can be encrypted with, none
-// first; nil for a transport that takes no encryption.
+// first; nil for a transport that takes no encryption. Of the managed HTTPS
+// helpers only Vision carries one, inside it.
 func (s Spec) EncryptionModes() []string {
 	if s.managed() {
+		if s.XrayServer.Vision() || s.XrayClient.Vision() {
+			return config.ManagedEncryptionModes
+		}
 		return nil
 	}
 	return config.EncryptionModes(config.TransportType(s.Transport))

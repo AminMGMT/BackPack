@@ -70,12 +70,12 @@ them both ends have to agree on. This says what exists.
 | `binary` | `string` | Binary is the absolute path to official Xray; the managed contract is tested with v26.3.27. |
 | `ca_file` | `string` | CAFile optionally adds a PEM trust anchor for XHTTP; normal TLS verification remains enabled. |
 | `host` | `string` | Host optionally overrides the XHTTP HTTP host; empty uses server_name. |
-| `mode` | `string` | Mode selects xhttp (verified TLS/HTTP2) or reality (RAW, REALITY and Vision). |
-| `path` | `string` | Path is an explicit non-root private XHTTP path shared by both helpers; unused by REALITY. |
-| `public_key` | `string` | PublicKey is the server's 32-byte unpadded base64url X25519 public key for REALITY. |
+| `mode` | `string` | Mode selects xhttp (verified TLS/HTTP2) or vision (RAW, REALITY and the Vision flow). |
+| `path` | `string` | Path is an explicit non-root private XHTTP path shared by both helpers; unused by Vision. |
+| `public_key` | `string` | PublicKey is the server's 32-byte unpadded base64url X25519 public key for Vision. |
 | `server` | `string` | Server is the outer Xray host:port; client.remote_addr remains the Iran loopback reverse listener. |
-| `server_name` | `string` | ServerName is the explicit DNS name for TLS verification or REALITY authentication. |
-| `short_id` | `string` | ShortID is the shared 16-character hexadecimal REALITY identifier. |
+| `server_name` | `string` | ServerName is the explicit DNS name for TLS verification or Vision's cover authentication. |
+| `short_id` | `string` | ShortID is the shared 16-character hexadecimal Vision identifier. |
 | `uuid` | `string` | UUID is one canonical UUID shared by the two helper accounts, separate from the reverse token. |
 
 ## [client]
@@ -122,7 +122,7 @@ them both ends have to agree on. This says what exists.
 | `transport` | `TransportType` | Transport is the carrier this tunnel uses. Both ends must name the same one; see docs/transports.md for what each is for. |
 | `web_bind` | `string` | WebBind is the address the sniffer/monitor page listens on. It has no authentication of any kind and reports the host's CPU, memory, disk and network along with the tunnel's status and per-port traffic, so it defaults to 127.0.0.1 and is reached over an SSH tunnel: ssh -L 2060:127.0.0.1:2060 root@server Set it to 0.0.0.0 to serve it on every interface as it used to be, or to one address to serve it on a private network only. |
 | `web_port` | `int` | WebPort is the port the per-tunnel monitor page listens on. 0 turns it off. |
-| `xray` | `XrayClientConfig` | Xray optionally reaches the loopback reverse target through a restricted tunnel-owned XHTTP/TLS or RAW/REALITY helper. |
+| `xray` | `XrayClientConfig` | Xray optionally reaches the loopback reverse target through a restricted tunnel-owned XHTTP/TLS or Vision helper. |
 | `zero_copy` | `bool` | ZeroCopy lets the kernel move the bytes of forwarded connections directly between the two sockets, without them passing through this process. It is faster and it is the least proven path here, so it is off by default and turned on per tunnel. |
 
 ## [direct] — removed in v2.0.0, read only to refuse it
@@ -216,12 +216,12 @@ them both ends have to agree on. This says what exists.
 | `host` | `string` | Host is the optional shared XHTTP HTTP host; empty uses server_name. |
 | `key` | `string` | Key is the XHTTP PEM private key paired with certificate. |
 | `listen` | `string` | Listen is the public TCP host:port, separate from the loopback server.bind_addr. |
-| `mode` | `string` | Mode selects xhttp or reality and must match the client. |
-| `path` | `string` | Path is the private XHTTP path shared with the client; unused by REALITY. |
-| `private_key` | `string` | PrivateKey is the secret 32-byte unpadded base64url X25519 REALITY key. |
-| `server_name` | `string` | ServerName is the DNS name in the XHTTP certificate or REALITY target's TLS identity. |
-| `short_id` | `string` | ShortID is the shared 16-character hexadecimal REALITY identifier. |
-| `target` | `string` | Target is an explicit reachable TLS1.3/H2 host:port used as the REALITY cover endpoint; choose one you control. |
+| `mode` | `string` | Mode selects xhttp or vision and must match the client. |
+| `path` | `string` | Path is the private XHTTP path shared with the client; unused by Vision. |
+| `private_key` | `string` | PrivateKey is the secret 32-byte unpadded base64url X25519 Vision key. |
+| `server_name` | `string` | ServerName is the DNS name in the XHTTP certificate or Vision target's TLS identity. |
+| `short_id` | `string` | ShortID is the shared 16-character hexadecimal Vision identifier. |
+| `target` | `string` | Target is an explicit reachable TLS1.3/H2 host:port used as Vision's cover endpoint; choose one you control. |
 | `uuid` | `string` | UUID is the canonical VLESS account UUID shared with the client. |
 
 ## [server]
@@ -269,7 +269,7 @@ them both ends have to agree on. This says what exists.
 | `transport` | `TransportType` | Transport is the carrier this tunnel uses. Both ends must name the same one; see docs/transports.md for what each is for. |
 | `web_bind` | `string` | WebBind is the address the sniffer/monitor page listens on. It has no authentication of any kind and reports the host's CPU, memory, disk and network along with the tunnel's status and per-port traffic, so it defaults to 127.0.0.1 and is reached over an SSH tunnel: ssh -L 2060:127.0.0.1:2060 root@server Set it to 0.0.0.0 to serve it on every interface as it used to be, or to one address to serve it on a private network only. |
 | `web_port` | `int` | WebPort is the port the per-tunnel monitor page listens on. 0 turns it off. |
-| `xray` | `XrayServerConfig` | Xray optionally wraps the loopback reverse TCP listener in XHTTP/TLS or RAW/REALITY using a tunnel-owned official helper. |
+| `xray` | `XrayServerConfig` | Xray optionally wraps the loopback reverse TCP listener in XHTTP/TLS or Vision using a tunnel-owned official helper. |
 | `zero_copy` | `bool` | ZeroCopy lets the kernel move the bytes of forwarded connections directly between the two sockets, without them passing through this process. It is faster and it is the least proven path here, so it is off by default and turned on per tunnel. |
 
 ---
@@ -295,4 +295,4 @@ them both ends have to agree on. This says what exists.
 
 ---
 
-*Generated from `config/` on 2026-11-27. Last verified against Backpack v2.0.0.*
+*Generated from `config/` on 2026-11-28. Last verified against Backpack v2.0.0.*

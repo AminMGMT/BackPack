@@ -21,6 +21,12 @@ Not a release yet: the version and date are set when it is tagged.
   answers as nginx.
 - **Log lines say what happened and what to do**, with the original line kept
   after them (`[detail: …]`).
+- **REALITY / Vision is now called Vision**, in the menus, the panel, the
+  Connection Test, the docs and the config (`mode = "vision"`). A config or
+  setup link that says `"reality"` still reads as Vision.
+- **Vision's setup asks only for the cover site.** It finds the Xray helper,
+  picks the local engine port and generates the identity itself. The UUID,
+  key and Short ID can still be changed when editing an existing tunnel.
 
 ### Added
 
@@ -36,6 +42,14 @@ Not a release yet: the version and date are set when it is tagged.
   an xDiRvs server binds `[::]:<port>`. The Connection Test runs both on an
   IPv6 path.
 - **PROXY protocol on xDiRvs.**
+- **Backpack installs the HTTPS helpers itself** (Xray, sing-box and
+  NaiveProxy), so `BP_HELPERS` is optional: in the wizard, the panel, a setup
+  link, the Connection Test, and when a tunnel starts without its helper. It
+  is the release `install.sh` pins, refused unless its checksum matches.
+  Offline, it takes the archive copied into `/root/BackPack`.
+- **Encryption inside Vision:** `encryption = "stealth"` or `"stealth+"` runs
+  end to end inside the Xray helper, so it relays only ciphertext. Asked at
+  setup and in Edit, in the panel too, and carried by the setup link.
 - **Connection Test:** xDiRvs is tested, and the speed test climbs 4 → 16 → 32
   → 64 connections while each step is at least 10% faster, so the maximum is
   the path's. About 25–60 s per healthy tunnel.

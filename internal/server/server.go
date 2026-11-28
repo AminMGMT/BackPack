@@ -197,7 +197,9 @@ func (s *Server) startEngine(ctx context.Context, tr config.TransportType, onPla
 			BandwidthMbps:  s.config.BandwidthMbps,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth:       tr == config.STEALTH,
+			// Under a managed helper, stealth and stealth+ are its encryption.
+			Stealth:       tr == config.STEALTH || s.config.ManagedEncryption() == config.EncStealth,
+			StealthPlus:   s.config.ManagedEncryption() == config.EncStealthPlus,
 			ManagedHelper: s.config.Naive.Enabled() || s.config.Xray.Enabled(),
 			Guard:         s.guard,
 			OnPlainClaim:  onPlain,

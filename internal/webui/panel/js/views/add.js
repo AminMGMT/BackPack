@@ -83,7 +83,7 @@ export function addView(ctx) {
          put a key in the config that transport never reads. */
       const isMux = t => ['tcpmux', 'wsmux', 'wssmux', 'kcp', 'xdi', 'spoof', 'pck'].includes(t);
       const isKCP = t => ['kcp', 'xdi', 'spoof', 'pck'].includes(t);
-      const isHTTPS = t => ['naive', 'xhttp', 'reality'].includes(t);
+      const isHTTPS = t => ['naive', 'xhttp', 'vision'].includes(t);
       const needsTLS = t => ['wss', 'wssmux'].includes(t);
       /* Both taken from internal/manage/config.go, because the server refuses
          these combinations by name and a form that offers them is a form that
@@ -113,12 +113,12 @@ export function addView(ctx) {
 
 
         /* The HTTPS transports: built here on the Iran side only, so their
-           note, and REALITY's cover, show only there. */
+           note, and Vision's cover, show only there. */
         const https = isHTTPS(t) && chosen.side === 'server';
         const hr = root.querySelector('#httpsRow');
         if (hr) hr.hidden = !https;
         const cr = root.querySelector('#coverRow');
-        if (cr) cr.hidden = !(https && t === 'reality');
+        if (cr) cr.hidden = !(https && t === 'vision');
         const tn = root.querySelector('#tlsNameRow');
         if (tn) tn.hidden = !(https && t === 'xhttp');
       }
@@ -141,7 +141,7 @@ export function addView(ctx) {
         // Encryption: offered where the transport carries more than none, with
         // only the modes it carries; a mode it does not falls back to none.
         const modes = (opts.encryption || {})[t] || [];
-        set('#ft-encryption', modes.length > 1 && !isHTTPS(t));
+        set('#ft-encryption', modes.length > 1); // Vision's list is the server's; Naive and XHTTP have none
         // Splash needs encrypted traffic: wss, wssmux, or an encryption
         // (config.SplashAllowed); the switch shows where it can be on.
         const encOn = (root.querySelector('input[name="tune.encryption"]')?.value || 'none') !== 'none';

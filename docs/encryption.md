@@ -13,12 +13,16 @@ tunnel that never comes up — never one that quietly runs in the clear.
 | `encryption` | On | What it is |
 |---|---|---|
 | `none` (default) | all six | the plain wire — fastest |
-| `stealth` | all six | Noise encryption: no fingerprint, the token never on the wire, and a probe on a TCP port is answered with nothing |
-| `stealth+` | all six | Stealth, with the whole connection masked — handshake and record lengths included — and the sizes of small records shaped from the token, so packet sizes and timing say less |
+| `stealth` | all six, Vision | Noise encryption: no fingerprint, the token never on the wire, and a probe on a TCP port is answered with nothing |
+| `stealth+` | all six, Vision | Stealth, with the whole connection masked — handshake and record lengths included — and the sizes of small records shaped from the token, so packet sizes and timing say less |
 | `scrap` | TCP, TCP Mux | Stealth+ inside an ordinary HTTP/1.1 upload: a `POST` with a one-use cookie and a chunked body. Anything without the token is answered as nginx: `404` to a request, `400` to anything that is not HTTP, and a copied request is refused the second time |
 
 On WS and WSS with an encryption, the upgrade's `Authorization` header carries
 a value derived from the token; the token itself is refused.
+
+Under [Vision](transports.md#vision) the encryption runs inside the Xray
+helper, end to end between the two engines; Vision takes no `scrap` or
+`splash`.
 
 ## Splash
 

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -73,13 +72,13 @@ func cliTransportGroups() []transportGroup {
 		"HTTPS", "encrypted reverse TCP — Linux, matching versions on both sides", []transportEntry{
 			{"Naive / HTTP2", "HTTPS proxy — certificate or a private trust file", "naive"},
 			{"XHTTP / TLS", "HTTP/2 streaming — certificate or a private trust file", "xhttp"},
-			{"REALITY / Vision", "TLS cover endpoint — no local certificate required", "reality"},
+			{"Vision", "shows a real site's TLS — no certificate or domain needed", "vision"},
 		},
 	}, icmpGroup)
 }
 
 func managedTransport(value string) bool {
-	return value == "naive" || value == "xhttp" || value == "reality"
+	return value == "naive" || value == "xhttp" || value == "vision"
 }
 
 func selectedTransport(s TunnelSpec) string {
@@ -87,10 +86,10 @@ func selectedTransport(s TunnelSpec) string {
 		return "naive"
 	}
 	if s.XrayServer.Enabled() {
-		return s.XrayServer.Mode
+		return config.XrayMode(s.XrayServer.Mode)
 	}
 	if s.XrayClient.Enabled() {
-		return s.XrayClient.Mode
+		return config.XrayMode(s.XrayClient.Mode)
 	}
 	return s.Transport
 }
@@ -117,11 +116,6 @@ func managedEndpoint(s TunnelSpec) string {
 func clearManagedTransport(s *TunnelSpec) {
 	s.NaiveServer, s.NaiveClient = config.NaiveServerConfig{}, config.NaiveClientConfig{}
 	s.XrayServer, s.XrayClient = config.XrayServerConfig{}, config.XrayClientConfig{}
-}
-
-func managedHelperPath(tool string) string {
-	version := map[string]string{"naive": "v154.0.8037.49-5", "sing-box": "v1.14.2", "xray": "v26.3.27"}[tool]
-	return filepath.Join("/usr/local/lib/backpack/helpers", tool, version+"-"+runtime.GOARCH, tool)
 }
 
 func defaultString(value, fallback string) string {
@@ -182,7 +176,7 @@ func managedUUID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]), nil
 }
 
-func managedRealityKey(current string) (string, string, error) {
+func managedVisionKey(current string) (string, string, error) {
 	var key *ecdh.PrivateKey
 	var err error
 	if current == "" {
@@ -195,7 +189,7 @@ func managedRealityKey(current string) (string, string, error) {
 		}
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("invalid REALITY private key: %w", err)
+		return "", "", fmt.Errorf("invalid Vision private key: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(key.Bytes()), base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), nil
 }
@@ -230,10 +224,10 @@ func managedEndpointClash(s TunnelSpec) string {
 // setupManagedCarrier collects a complete role-specific configuration before
 // modifying the caller. The public endpoint and private reverse port are distinct.
 func setupManagedCarrier(s *TunnelSpec, chosen, public, host string) bool {
-	return setupManagedCarrierWithProbe(s, chosen, public, host, probeRealitySetup)
+	return setupManagedCarrierWithProbe(s, chosen, public, host, probeVisionSetup)
 }
 
-func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, probe realitySetupProbe) bool {
+func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, probe visionSetupProbe) bool {
 	if !managedTransport(chosen) || (s.Role != "server" && s.Role != "client") {
 		tui.Error("Invalid managed HTTPS transport or tunnel role.")
 		return false
@@ -242,7 +236,7 @@ func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, pr
 		tui.Error("Managed HTTPS transports require Linux.")
 		return false
 	}
-	if chosen == "reality" {
+	if chosen == "vision" {
 		defer tui.QuickDefaults()()
 	}
 	n := *s
@@ -255,11 +249,16 @@ func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, pr
 			internal = addrPort(n.RemoteAddr)
 		}
 	}
-	tui.Info("TCP Forwarding Only. Set The Same Internal Port And Security Token On Both Sides.")
-	if chosen == "reality" && n.Role == "server" && !wasManaged {
-		internal = realityInternalPort(public, n.Ports)
+	if chosen == "vision" && n.Role == "server" && !wasManaged {
+		internal = visionInternalPort(public, n.Ports)
 	}
-	internal = strings.TrimSpace(tui.PromptDefault("Internal Reverse Port On Iran (Must Match Kharej)", internal))
+	// Vision's Iran end picks its loopback port itself and the setup link
+	// carries it, so it asks only when none is free. A kharej set up by hand
+	// must type Iran's, and Naive and XHTTP ask as before.
+	if chosen != "vision" || n.Role == "client" || !validPort(internal) || internal == addrPort(public) {
+		tui.Info("TCP Forwarding Only. Set The Same Internal Port And Security Token On Both Sides.")
+		internal = strings.TrimSpace(tui.PromptDefault("Internal Reverse Port On Iran (Must Match Kharej)", internal))
+	}
 	if !validPort(internal) || internal == addrPort(public) {
 		tui.Error("The internal port must be valid and differ from the public HTTPS port.")
 		return false
@@ -276,14 +275,14 @@ func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, pr
 		n.RemoteAddr = net.JoinHostPort("127.0.0.1", internal)
 	}
 	clearManagedTransport(&n)
-	if chosen == "reality" {
-		if !configureReality(&n, *s, public, probe) {
+	if chosen == "vision" {
+		if !configureVision(&n, *s, public, wasManaged, probe) {
 			return false
 		}
 	} else if chosen == "naive" {
 		if n.Role == "server" {
 			x := s.NaiveServer
-			x.Binary = tui.PromptDefault("Sing-Box Binary", defaultString(x.Binary, managedHelperPath("sing-box")))
+			x.Binary = tui.PromptDefault("Sing-Box Binary", helperFor("sing-box", x.Binary))
 			x.Listen = public
 			x.Username = tui.PromptDefault("Naive Username (Same On Kharej)", defaultString(x.Username, "backpack"))
 			x.Password = managedSecret("Naive Password (Same On Kharej)", x.Password, randomToken(32))
@@ -295,7 +294,7 @@ func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, pr
 			n.NaiveServer = x
 		} else {
 			x := s.NaiveClient
-			x.Binary = tui.PromptDefault("NaiveProxy Binary", defaultString(x.Binary, managedHelperPath("naive")))
+			x.Binary = tui.PromptDefault("NaiveProxy Binary", helperFor("naive", x.Binary))
 			x.Server = public
 			x.Username = tui.PromptDefault("Naive Username (From Iran)", defaultString(x.Username, "backpack"))
 			x.Password = managedSecret("Naive Password (From Iran)", x.Password, "")
@@ -325,7 +324,7 @@ func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, pr
 		path = tui.PromptDefault("XHTTP Path (Same On Both Sides)", path)
 		if n.Role == "server" {
 			x := config.XrayServerConfig{Listen: public, Mode: chosen, UUID: id, ServerName: serverName, Path: path}
-			x.Binary = tui.PromptDefault("Xray Binary", defaultString(s.XrayServer.Binary, managedHelperPath("xray")))
+			x.Binary = tui.PromptDefault("Xray Binary", helperFor("xray", s.XrayServer.Binary))
 			x.Host = tui.PromptDefault("HTTP Host (Optional; Same On Kharej)", s.XrayServer.Host)
 			var ok bool
 			x.Certificate, x.Key, ok = managedCertificate(n, serverName, s.XrayServer.Certificate, s.XrayServer.Key)
@@ -335,13 +334,16 @@ func setupManagedCarrierWithProbe(s *TunnelSpec, chosen, public, host string, pr
 			n.XrayServer = x
 		} else {
 			x := config.XrayClientConfig{Server: public, Mode: chosen, UUID: id, ServerName: serverName, Path: path}
-			x.Binary = tui.PromptDefault("Xray Binary", defaultString(s.XrayClient.Binary, managedHelperPath("xray")))
+			x.Binary = tui.PromptDefault("Xray Binary", helperFor("xray", s.XrayClient.Binary))
 			x.Host = tui.PromptDefault("HTTP Host (Optional; From Iran)", s.XrayClient.Host)
 			x.CAFile = tui.PromptDefault("CA File (Required For A Private Certificate; Empty For Public TLS)", s.XrayClient.CAFile)
 			n.XrayClient = x
 		}
 	}
 	tui.StopIfInputGone()
+	// Vision keeps the encryption it can carry; Naive and XHTTP take none.
+	n.Encryption.Splash, n.Encryption.ShadowSNI = false, ""
+	n.SetEncryption(n.Encryption.EncryptionMode())
 	if err := validateManagedSpec(n); err != nil {
 		tui.Error("HTTPS configuration: " + err.Error())
 		return false

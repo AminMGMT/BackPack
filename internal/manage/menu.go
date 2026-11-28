@@ -479,7 +479,7 @@ func changeTunnelTransport(name string, spec TunnelSpec) {
 }
 
 func editManagedSettings(name string, spec TunnelSpec, chosen string) {
-	if chosen == "reality" {
+	if chosen == "vision" {
 		defer tui.QuickDefaults()()
 	}
 	label := "Public HTTPS Listen Address (IP:Port)"
@@ -527,8 +527,12 @@ func editManagedTunnelMenu(name string, spec TunnelSpec) bool {
 		internal = spec.RemoteAddr
 	}
 	tui.Info("Internal Target : " + internal)
+	settings := "public endpoint, internal port, certificate and credentials"
+	if chosen == "vision" {
+		settings = "public port and cover site"
+	}
 	opts := []tui.Option{
-		{Title: "HTTPS Settings", Desc: "public endpoint, internal port, certificate and credentials"},
+		{Title: "HTTPS Settings", Desc: settings},
 		{Title: "Transport", Desc: "change the protocol on both sides"},
 		{Title: "Preset", Desc: "tune the TCP engine"},
 		{Title: "TCP MSS Clamp", Desc: "for a path that drops full-size packets"},
@@ -538,6 +542,15 @@ func editManagedTunnelMenu(name string, spec TunnelSpec) bool {
 		func() { changeTunnelTransport(name, spec) },
 		func() { changeTunnelPreset(name, spec) },
 		func() { editMSS(name, spec) },
+	}
+	// Vision carries an encryption inside it; Naive and XHTTP have none.
+	if len(spec.EncryptionModes()) > 1 {
+		tui.Info("Encryption      : " + encryptionLabel(spec.Encryption.EncryptionMode()))
+		opts = append(opts, tui.Option{
+			Title: "Encryption: " + encryptionLabel(spec.Encryption.EncryptionMode()),
+			Desc:  "the other side must match",
+		})
+		actions = append(actions, func() { changeEncryption(name, spec) })
 	}
 	if spec.Role == "server" {
 		tui.Info("Forwarded Ports : " + strings.Join(VisiblePorts(spec.Ports, spec.Token), ", "))

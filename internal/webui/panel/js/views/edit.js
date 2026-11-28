@@ -185,7 +185,7 @@ function shapeForTransport(root, settings, tunnel) {
   // The HTTPS helpers and udp offer one kind only, so there is nothing to
   // choose there.
   show(byName('tune.portProtocol'), server && t !== 'udp' &&
-    !['naive', 'xhttp', 'reality'].includes(t));
+    !['naive', 'xhttp', 'vision'].includes(t));
   show(byName('tune.channelSize'), server);
   // Encryption: where the transport carries more than none, offering only the
   // modes it carries (config.EncryptionModes, as the server sends it).
@@ -193,7 +193,7 @@ function shapeForTransport(root, settings, tunnel) {
   show(byName('tune.encryption'), !direct && encModes.length > 1);
   // Splash needs encrypted traffic (config.SplashAllowed): wss, wssmux, or
   // any of the others with an encryption; the server drops it elsewhere.
-  show(byName('tune.splash'), !direct && encModes.length > 1);
+  show(byName('tune.splash'), !direct && encModes.length > 1 && t !== 'vision');
   root.querySelectorAll('.sel[data-name="tune.encryption"] .selopt').forEach(b => {
     b.hidden = !encModes.includes(b.dataset.value);
   });

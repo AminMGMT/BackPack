@@ -25,7 +25,7 @@ import (
 )
 
 func TestManagedHTTPSChoicesReachBothReverseWizards(t *testing.T) {
-	for i, want := range []string{"naive", "xhttp", "reality"} {
+	for i, want := range []string{"naive", "xhttp", "vision"} {
 		restore := tui.SetInput(strings.NewReader(fmt.Sprintf("%d\n%d\n", len(transportGroups)+1, i+1)))
 		var got string
 		capture(t, func() { got = chooseTransport() })
@@ -72,7 +72,7 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 		t.Skip("managed helpers require Linux")
 	}
 	binary, cert, key := managedWizardFixture(t)
-	_, pub, err := managedRealityKey("")
+	_, pub, err := managedVisionKey("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 		return addrPort(ln.Addr().String())
 	}
 	for _, role := range []string{"server", "client"} {
-		for _, chosen := range []string{"naive", "xhttp", "reality"} {
+		for _, chosen := range []string{"naive", "xhttp", "vision"} {
 			t.Run(role+"/"+chosen, func(t *testing.T) {
 				internal, outer, entry := port(), port(), port()
 				s := TunnelSpec{Name: "https-menu-proof", Role: role, Transport: "tcp", Token: "shared-token", Ports: []string{"127.0.0.1:" + entry + "=127.0.0.1:8081"}}
@@ -112,7 +112,7 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 					}
 				} else {
 					if role == "server" {
-						input = []string{internal, binary, "", "n"}
+						input = []string{binary, ""}
 					} else {
 						input = []string{internal, binary, id, "cover.example.com", "0123456789abcdef", pub}
 					}
@@ -133,6 +133,13 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 				if _, err := toml.Decode(s.Render(), &cfg); err != nil {
 					t.Fatal(err)
 				}
+				if role == "server" && chosen == "vision" {
+					// Vision's Iran end picks its own; the link carries it.
+					internal = addrPort(cfg.Server.BindAddr)
+					if !validPort(internal) || internal == outer {
+						t.Fatalf("Vision picked internal port %q", internal)
+					}
+				}
 				if role == "server" && cfg.Server.BindAddr != "127.0.0.1:"+internal || role == "client" && cfg.Client.RemoteAddr != "127.0.0.1:"+internal {
 					t.Fatal("internal target was not kept private")
 				}
@@ -149,14 +156,14 @@ func TestManagedHTTPSWizardProducesValidRoleConfigurations(t *testing.T) {
 					if err != nil || peer.RemoteAddr != "127.0.0.1:"+internal || managedEndpoint(peer) != "localhost:"+outer || selectedTransport(peer) != chosen {
 						t.Fatalf("managed peer: %v %s", err, peer.Render())
 					}
-					_, expectedPublic, _ := managedRealityKey(s.XrayServer.PrivateKey)
-					if peer.XrayClient.PublicKey != expectedPublic && chosen == "reality" {
-						t.Fatal("REALITY public key changed")
+					_, expectedPublic, _ := managedVisionKey(s.XrayServer.PrivateKey)
+					if peer.XrayClient.PublicKey != expectedPublic && chosen == "vision" {
+						t.Fatal("Vision public key changed")
 					}
-					if link.HelperCA == "" && chosen != "reality" {
+					if link.HelperCA == "" && chosen != "vision" {
 						t.Fatal("private certificate trust was omitted")
 					}
-					if link.HelperPublicKey == s.XrayServer.PrivateKey && chosen == "reality" || peer.XrayServer.PrivateKey != "" || strings.Contains(link.HelperCA, "PRIVATE KEY") {
+					if link.HelperPublicKey == s.XrayServer.PrivateKey && chosen == "vision" || peer.XrayServer.PrivateKey != "" || strings.Contains(link.HelperCA, "PRIVATE KEY") {
 						t.Fatal("private server key escaped")
 					}
 				} else if raw != "" {
@@ -211,12 +218,12 @@ func TestManagedHTTPSInputLossDoesNotReplaceTheSpec(t *testing.T) {
 		t.Skip("Linux helper wizard")
 	}
 	binary, _, _ := managedWizardFixture(t)
-	_, pub, err := managedRealityKey("")
+	_, pub, err := managedVisionKey("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := TunnelSpec{Name: "https-input-loss", Role: "client", Transport: "tcp", RemoteAddr: "127.0.0.1:3080"}
-	s.XrayClient = config.XrayClientConfig{Binary: binary, Mode: "reality", Server: "203.0.113.1:443", UUID: "6bf7a33e-7833-4e72-9219-506585657345", ServerName: "cover.example.com", ShortID: "0123456789abcdef", PublicKey: pub}
+	s.XrayClient = config.XrayClientConfig{Binary: binary, Mode: config.XrayModeVision, Server: "203.0.113.1:443", UUID: "6bf7a33e-7833-4e72-9219-506585657345", ServerName: "cover.example.com", ShortID: "0123456789abcdef", PublicKey: pub}
 	before := s
 	// All defaults would be valid, but input ends before the last answer.
 	restore := tui.SetInput(strings.NewReader("\n\n\n\n\n"))
@@ -225,7 +232,7 @@ func TestManagedHTTPSInputLossDoesNotReplaceTheSpec(t *testing.T) {
 	defer tui.OnInputEnd(func() { runtime.Goexit() })()
 	go func() {
 		defer close(stopped) // wait for wizard cleanup, including its input scope
-		setupManagedCarrier(&s, "reality", s.XrayClient.Server, "cover.example.com")
+		setupManagedCarrier(&s, "vision", s.XrayClient.Server, "cover.example.com")
 	}()
 	select {
 	case <-stopped:

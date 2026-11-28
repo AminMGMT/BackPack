@@ -425,9 +425,9 @@ type NewTunnel struct {
 	Conn   *ConnTune     `json:"conn"`
 	Limits *TunnelLimits `json:"limits"`
 
-	// RealityCover is the REALITY cover endpoint (hostname:port). Empty picks
+	// VisionCover is the Vision cover endpoint (hostname:port). Empty picks
 	// the first suggestion that passes a check from this server.
-	RealityCover string `json:"realityCover"`
+	VisionCover string `json:"visionCover"`
 
 	// TLSName is the name XHTTP's TLS presents. It must be a DNS name; empty
 	// takes Host when that is one.
@@ -581,7 +581,7 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 		return s, fmt.Errorf("role must be server or client")
 	}
 
-	s.Transport = strings.ToLower(strings.TrimSpace(n.Transport))
+	s.Transport = config.XrayMode(strings.ToLower(strings.TrimSpace(n.Transport)))
 	// The HTTPS transports are plain TCP inside a helper; managedFromPanel
 	// turns the plain tunnel built below into one, once it is complete.
 	managed := managedTransport(s.Transport)
@@ -699,9 +699,9 @@ func specFromNew(n NewTunnel) (TunnelSpec, error) {
 		if host == "" {
 			host = PublicIPv4()
 		}
-		form := managedForm{chosen: strings.ToLower(strings.TrimSpace(n.Transport)), host: host,
-			cover: n.RealityCover, tlsName: n.TLSName}
-		if err := managedFromPanel(&s, form, panelRealityProbe); err != nil {
+		form := managedForm{chosen: config.XrayMode(strings.ToLower(strings.TrimSpace(n.Transport))), host: host,
+			cover: n.VisionCover, tlsName: n.TLSName}
+		if err := managedFromPanel(&s, form, panelVisionProbe); err != nil {
 			return s, err
 		}
 	}

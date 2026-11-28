@@ -277,7 +277,7 @@ type PckConfig struct {
 type ServerConfig struct {
 	// Naive optionally wraps the loopback TCP reverse listener in HTTP/2 with a tunnel-owned sing-box helper; experimental and disabled when empty.
 	Naive NaiveServerConfig `toml:"naive"`
-	// Xray optionally wraps the loopback reverse TCP listener in XHTTP/TLS or RAW/REALITY using a tunnel-owned official helper.
+	// Xray optionally wraps the loopback reverse TCP listener in XHTTP/TLS or Vision using a tunnel-owned official helper.
 	Xray XrayServerConfig `toml:"xray"`
 	// BindAddr is the address and port this server listens on for the
 	// control channel — "0.0.0.0:443" for every interface, or one address to pin
@@ -513,7 +513,7 @@ func ValidPortProtocol(v string) bool {
 type ClientConfig struct {
 	// Naive optionally reaches the loopback reverse target through a tunnel-owned official Chromium Naive helper; experimental and disabled when empty.
 	Naive NaiveClientConfig `toml:"naive"`
-	// Xray optionally reaches the loopback reverse target through a restricted tunnel-owned XHTTP/TLS or RAW/REALITY helper.
+	// Xray optionally reaches the loopback reverse target through a restricted tunnel-owned XHTTP/TLS or Vision helper.
 	Xray XrayClientConfig `toml:"xray"`
 	// RemoteAddr is the server's address and port, as the client dials it. The
 	// port must match the server's bind_addr.

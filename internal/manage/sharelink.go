@@ -20,6 +20,7 @@ import (
 
 	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
+	"github.com/backpack/backpack/internal/tui"
 	"github.com/backpack/backpack/internal/tunnel/l3"
 )
 
@@ -240,6 +241,12 @@ func DecodeShareLink(s string) (out ShareLink, err error) {
 	defer func() {
 		if err != nil {
 			out = ShareLink{}
+		}
+	}()
+	// A link made before Vision was renamed names it "reality".
+	defer func() {
+		if err == nil {
+			out.Tr = config.XrayMode(out.Tr)
 		}
 	}()
 	s = strings.TrimSpace(s)
@@ -791,14 +798,14 @@ func shareLinkOf(name, host string, cfg config.Config) (string, error) {
 			cert = x.Certificate
 		} else {
 			x := cfg.Server.Xray
-			l.Tr, l.Port = x.Mode, addrPort(x.Listen)
+			l.Tr, l.Port = config.XrayMode(x.Mode), addrPort(x.Listen)
 			l.HelperUUID, l.HelperSNI, l.HelperPath, l.HelperHost = x.UUID, x.ServerName, x.Path, x.Host
 			cert = x.Certificate
-			if x.Mode == "reality" {
+			if x.Vision() {
 				if strings.TrimSpace(x.PrivateKey) == "" {
-					return "", fmt.Errorf("REALITY server has no private key; repair its configuration before exporting a setup link")
+					return "", fmt.Errorf("Vision server has no private key; repair its configuration before exporting a setup link")
 				}
-				_, public, err := managedRealityKey(x.PrivateKey)
+				_, public, err := managedVisionKey(x.PrivateKey)
 				if err != nil {
 					return "", err
 				}
@@ -882,6 +889,15 @@ func prepareManagedLink(s TunnelSpec, link ShareLink) error {
 	outer, _ := strconv.Atoi(link.Port)
 	if link.Kind != "reverse" || link.From != "iran" || !validPort(link.InnerPort) || !validPort(link.Port) || inner == outer || link.AcceptUDP || len(link.Fallbacks) != 0 || len(link.Hosts) != 0 {
 		return fmt.Errorf("invalid managed HTTPS setup link; generate a new link on Iran")
+	}
+	tool, binary := "xray", s.XrayClient.Binary
+	if link.Tr == "naive" {
+		tool, binary = "naive", s.NaiveClient.Binary
+	}
+	if binary == managedHelperPath(tool) {
+		if _, err := ensureHelper(tool, func(line string) { tui.Info(line) }); err != nil {
+			return fmt.Errorf("the %s helper is not installed, and installing it failed: %w", helperName(tool), err)
+		}
 	}
 	if link.HelperCA != "" {
 		if _, err := managedLinkCertificates(link.HelperCA); err != nil {

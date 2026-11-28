@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,35 +21,35 @@ import (
 	"github.com/backpack/backpack/internal/tunnel/naive"
 )
 
-type realitySetupProbe func(context.Context, string, string, string) error
+type visionSetupProbe func(context.Context, string, string, string) error
 
 // These are suggestions, never assumed to work on the operator's route.
-var realityCoverSuggestions = []string{"www.microsoft.com:443", "www.bing.com:443", "www.apple.com:443"}
+var visionCoverSuggestions = []string{"www.microsoft.com:443", "www.bing.com:443", "www.apple.com:443"}
 
-type realityCoverResult struct {
+type visionCoverResult struct {
 	target string
 	delay  time.Duration
 	err    error
 }
 
-func probeRealitySetup(ctx context.Context, target, sni, binary string) error {
-	log, err := os.CreateTemp("", "backpack-reality-check-*.log")
+func probeVisionSetup(ctx context.Context, target, sni, binary string) error {
+	log, err := os.CreateTemp("", "backpack-vision-check-*.log")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(log.Name())
 	defer log.Close()
 	ctx = naive.WithHelperOutput(ctx, log)
-	if err := probeRealityTLS(ctx, target, sni, nil); err != nil {
+	if err := probeVisionTLS(ctx, target, sni, nil); err != nil {
 		return err
 	}
-	return probeRealityTransport(ctx, target, sni, binary)
+	return probeVisionTransport(ctx, target, sni, binary)
 }
 
 // Bounded parallel checks give a menu of authenticated covers, including the
 // failure reasons. They create only temporary loopback helper listeners.
-func scanRealityCovers(ctx context.Context, targets []string, binary string, probe realitySetupProbe) []realityCoverResult {
-	results := make([]realityCoverResult, len(targets))
+func scanVisionCovers(ctx context.Context, targets []string, binary string, probe visionSetupProbe) []visionCoverResult {
+	results := make([]visionCoverResult, len(targets))
 	var wg sync.WaitGroup
 	for i, target := range targets {
 		wg.Add(1)
@@ -64,7 +65,7 @@ func scanRealityCovers(ctx context.Context, targets []string, binary string, pro
 				}
 				cancel()
 			}
-			results[i] = realityCoverResult{target: target, delay: time.Since(start), err: err}
+			results[i] = visionCoverResult{target: target, delay: time.Since(start), err: err}
 		}(i, target)
 	}
 	wg.Wait()
@@ -74,7 +75,7 @@ func scanRealityCovers(ctx context.Context, targets []string, binary string, pro
 	return results
 }
 
-func realityPublicPort() string {
+func visionPublicPort() string {
 	if !portHeld("0.0.0.0:443") {
 		return "443"
 	}
@@ -86,7 +87,7 @@ func realityPublicPort() string {
 	return strconv.Itoa(ctPickPort(map[int]bool{}, false))
 }
 
-func realityInternalPort(public string, ports []string) string {
+func visionInternalPort(public string, ports []string) string {
 	used := map[int]bool{}
 	if p, err := strconv.Atoi(addrPort(public)); err == nil {
 		used[p] = true
@@ -106,7 +107,7 @@ func realityInternalPort(public string, ports []string) string {
 	return "" // leave the field editable; validation refuses an empty port
 }
 
-func realityBinary(current string) string {
+func visionBinary(current string) string {
 	if current != "" {
 		return current
 	}
@@ -121,23 +122,23 @@ func realityBinary(current string) string {
 	return managedHelperPath("xray")
 }
 
-func manualRealityCover(target, sni, binary string, probe realitySetupProbe) (string, string, bool) {
+func manualVisionCover(target, sni, binary string, probe visionSetupProbe) (string, string, bool) {
 	base, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	for {
 		previousTarget := target
-		target = tui.PromptDefault("Cover endpoint (hostname:port)", defaultString(target, realityCoverSuggestions[0]))
+		target = tui.PromptDefault("Cover Site (Host:Port)", defaultString(target, visionCoverSuggestions[0]))
 		if target != previousTarget {
 			sni = ""
 		}
 		host, port, err := net.SplitHostPort(target)
 		if err != nil || host == "" || !validPort(port) {
-			tui.Error("Use a cover hostname and port, such as www.microsoft.com:443.")
+			tui.Error("Use A Site And Port, Such As www.microsoft.com:443.")
 			tui.StopIfInputGone()
 			continue
 		}
-		sni = tui.PromptDefault("SNI (cover hostname)", defaultString(sni, host))
-		tui.Info("Checking TLS and an authenticated REALITY connection...")
+		sni = tui.PromptDefault("SNI", defaultString(sni, host))
+		tui.Info("Checking The Site From This Server...")
 		ctx, cancel := context.WithTimeout(base, connTestCoverWait)
 		err = probe(ctx, target, sni, binary)
 		if err == nil {
@@ -148,57 +149,57 @@ func manualRealityCover(target, sni, binary string, probe realitySetupProbe) (st
 			return target, sni, true
 		}
 		if base.Err() != nil {
-			tui.Warn("Cover check cancelled.")
+			tui.Warn("Cover Check Cancelled.")
 			return "", "", false
 		}
-		tui.Error("Cover check failed: " + err.Error())
-		if !tui.Confirm("Try another cover", true) {
+		tui.Error("This Site Did Not Pass: " + err.Error())
+		if !tui.Confirm("Try Another Site", true) {
 			return "", "", false
 		}
 	}
 }
 
-func selectRealityCover(current config.XrayServerConfig, binary string, probe realitySetupProbe) (string, string, bool) {
+func selectVisionCover(current config.XrayServerConfig, binary string, probe visionSetupProbe) (string, string, bool) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if current.Mode == "reality" && current.Target != "" && current.ServerName != "" {
-		switch tui.ChooseOptDefault("REALITY cover", []tui.Option{
-			{Title: "Keep current cover", Desc: current.Target + " · SNI " + current.ServerName},
-			{Title: "Test suggested covers", Desc: "choose from endpoints that work from this server"},
-			{Title: "Custom endpoint and SNI", Desc: "test your own cover before saving"},
+	if current.Vision() && current.Target != "" && current.ServerName != "" {
+		switch tui.ChooseOptDefault("Cover Site", []tui.Option{
+			{Title: "Keep The Current Site", Desc: current.Target + " · SNI " + current.ServerName},
+			{Title: "Check The Suggested Sites", Desc: "pick one that works from this server"},
+			{Title: "Another Site", Desc: "type a site and check it"},
 		}, 0) {
 		case 0:
 			return current.Target, current.ServerName, true
 		case 1:
 		case 2:
-			return manualRealityCover(current.Target, current.ServerName, binary, probe)
+			return manualVisionCover(current.Target, current.ServerName, binary, probe)
 		default:
 			return "", "", false
 		}
 	}
 	for {
-		tui.Title("Checking REALITY covers")
-		tui.Warn("Testing TLS 1.3, HTTP/2 and authenticated data; this checks the cover, not the Iran/Kharej path.")
-		results := scanRealityCovers(ctx, realityCoverSuggestions, binary, probe)
+		tui.Title("Checking Cover Sites")
+		tui.Info("Vision Shows A Real Site's TLS To Anyone Looking. Checking Which Sites Answer From Here...")
+		results := scanVisionCovers(ctx, visionCoverSuggestions, binary, probe)
 		if ctx.Err() != nil {
-			tui.Warn("Cover check cancelled.")
+			tui.Warn("Cover Check Cancelled.")
 			return "", "", false
 		}
 		var options []tui.Option
 		var targets []string
 		for _, result := range results {
 			if result.err != nil {
-				tui.Warn(result.target + " · unavailable: " + result.err.Error())
+				tui.Warn(result.target + " · Did Not Pass: " + result.err.Error())
 				continue
 			}
-			options = append(options, tui.Option{Title: result.target, Desc: fmt.Sprintf("verified · %d ms · SNI set automatically", result.delay.Milliseconds())})
+			options = append(options, tui.Option{Title: result.target, Desc: fmt.Sprintf("works · %d ms", result.delay.Milliseconds())})
 			targets = append(targets, result.target)
 		}
-		options = append(options, tui.Option{Title: "Custom endpoint and SNI", Desc: "enter and test your own cover"}, tui.Option{Title: "Test again", Desc: "retry the suggested endpoints"})
+		options = append(options, tui.Option{Title: "Another Site", Desc: "type a site and check it"}, tui.Option{Title: "Check Again", Desc: "retry the suggested sites"})
 		if len(targets) == 0 {
-			tui.Error("No suggested cover passed. Try a custom endpoint or test again.")
+			tui.Error("No Suggested Site Passed. Try Another Site Or Check Again.")
 		}
-		choice := tui.ChooseOptDefault("Select a REALITY cover", options, 0)
+		choice := tui.ChooseOptDefault("Cover Site", options, 0)
 		if choice < 0 {
 			return "", "", false
 		}
@@ -208,47 +209,67 @@ func selectRealityCover(current config.XrayServerConfig, binary string, probe re
 			return target, host, true
 		}
 		if choice == len(targets) {
-			return manualRealityCover(current.Target, "", binary, probe)
+			return manualVisionCover(current.Target, "", binary, probe)
 		}
 	}
 }
 
-func configureReality(n *TunnelSpec, old TunnelSpec, public string, probe realitySetupProbe) bool {
-	tui.Title("REALITY / Vision")
-	tui.Warn("Space/Enter keeps each suggestion. Type a replacement and Enter to change it.")
+// visionHelperFor is the Xray helper Vision runs: the installed one, or
+// the pinned one installed now. Its path is asked for only when neither works.
+func visionHelperFor(current string) (string, bool) {
+	binary := helperFor("xray", current)
+	for !executable(binary) {
+		tui.Error("The Xray Helper Is Not Installed. Enter Its Path.")
+		binary = strings.TrimSpace(tui.PromptDefault("Xray Binary", binary))
+		tui.StopIfInputGone()
+		if !executable(binary) && !tui.Confirm("Try Another Path", true) {
+			return "", false
+		}
+	}
+	return binary, true
+}
+
+// configureVision is Vision's own part of the wizard. A new Iran end asks
+// one thing — which checked cover site to borrow — and makes the rest: the
+// helper is found, the UUID, key pair and Short ID generated. The Kharej end
+// takes all of it from the setup link; typed by hand, it asks for the four
+// values the link would carry.
+func configureVision(n *TunnelSpec, old TunnelSpec, public string, editing bool, probe visionSetupProbe) bool {
+	tui.Title("Vision")
 	if n.Role == "client" {
-		tui.Info("The Iran setup link fills UUID, SNI, Short ID and public key automatically. Manual values must match Iran.")
+		binary, ok := visionHelperFor(old.XrayClient.Binary)
+		if !ok {
+			return false
+		}
+		tui.Info("The Iran Setup Link Fills These In. Typed By Hand, They Must Match Iran.")
 		x := old.XrayClient
-		x.Mode, x.Server = "reality", public
+		x.Mode, x.Server, x.Binary = config.XrayModeVision, public, binary
 		x.Path, x.Host, x.CAFile = "", "", ""
-		x.Binary = tui.PromptDefault("Xray binary", realityBinary(x.Binary))
-		x.UUID = tui.PromptDefault("UUID (from Iran)", x.UUID)
-		x.ServerName = tui.PromptDefault("SNI (from Iran)", x.ServerName)
-		x.ShortID = tui.PromptDefault("Short ID (from Iran)", x.ShortID)
-		x.PublicKey = tui.PromptDefault("Public key (from Iran)", x.PublicKey)
+		x.UUID = tui.PromptDefault("UUID (From Iran)", x.UUID)
+		x.ServerName = tui.PromptDefault("Cover Site (From Iran)", x.ServerName)
+		x.ShortID = tui.PromptDefault("Short ID (From Iran)", x.ShortID)
+		x.PublicKey = tui.PromptDefault("Public Key (From Iran)", x.PublicKey)
 		n.XrayClient = x
 		return true
 	}
-	x := old.XrayServer
-	x.Mode, x.Listen = "reality", public
-	x.Path, x.Host, x.Certificate, x.Key = "", "", "", ""
-	x.Binary = tui.PromptDefault("Xray binary", realityBinary(x.Binary))
-	info, err := os.Stat(x.Binary)
-	if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
-		tui.Error("Xray is not executable at this path. Install the Xray helper or enter its installed path.")
-		return false
-	}
-	var ok bool
-	x.Target, x.ServerName, ok = selectRealityCover(old.XrayServer, x.Binary, probe)
+	binary, ok := visionHelperFor(old.XrayServer.Binary)
 	if !ok {
 		return false
 	}
+	x := old.XrayServer
+	x.Mode, x.Listen, x.Binary = config.XrayModeVision, public, binary
+	x.Path, x.Host, x.Certificate, x.Key = "", "", "", ""
+	x.Target, x.ServerName, ok = selectVisionCover(old.XrayServer, x.Binary, probe)
+	if !ok {
+		return false
+	}
+	var err error
 	if x.UUID == "" {
 		x.UUID, err = managedUUID()
 	}
 	var publicKey string
 	if err == nil {
-		x.PrivateKey, publicKey, err = managedRealityKey(x.PrivateKey)
+		x.PrivateKey, publicKey, err = managedVisionKey(x.PrivateKey)
 	}
 	if err != nil {
 		tui.Error(err.Error())
@@ -262,17 +283,18 @@ func configureReality(n *TunnelSpec, old TunnelSpec, public string, probe realit
 		}
 		x.ShortID = hex.EncodeToString(raw[:])
 	}
-	tui.Info("Security token, UUID, key pair and Short ID are ready. The Kharej setup link carries the matching public settings.")
-	if tui.Confirm("Change generated identity settings", false) {
-		n.Token = managedSecret("Security token", n.Token, "")
+	// A new tunnel's identity is generated and goes to the Kharej in the
+	// setup link; only an existing one is offered the change.
+	if editing && tui.Confirm("Change The Identity (Token, UUID, Key, Short ID)", false) {
+		n.Token = managedSecret("Security Token", n.Token, "")
 		x.UUID = tui.PromptDefault("UUID", x.UUID)
 		x.ShortID = tui.PromptDefault("Short ID", x.ShortID)
-		key := tui.Prompt("Private key (Enter = keep, generate = new key): ")
+		key := tui.Prompt("Private Key (Enter = Keep, generate = New Key): ")
 		if key != "" {
 			if key == "generate" {
 				key = ""
 			}
-			x.PrivateKey, publicKey, err = managedRealityKey(key)
+			x.PrivateKey, publicKey, err = managedVisionKey(key)
 			if err != nil {
 				tui.Error(err.Error())
 				return false
@@ -280,11 +302,11 @@ func configureReality(n *TunnelSpec, old TunnelSpec, public string, probe realit
 		}
 	}
 	if x.Target == "" || x.ServerName == "" {
-		tui.Error("A verified cover is required.")
+		tui.Error("A Checked Cover Site Is Required.")
 		return false
 	}
-	// The Setup Link carries this; a manual Kharej setup has no other source.
-	tui.Info("REALITY public key for a manual Kharej setup: " + publicKey)
+	tui.Success("Identity Ready — The Setup Link Carries It To The Kharej.")
+	tui.Info("Public Key (Only For A Kharej Set Up By Hand): " + publicKey)
 	n.XrayServer = x
 	return true
 }

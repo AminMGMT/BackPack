@@ -43,3 +43,31 @@ func TestEncryptionModeReadsEmptyAsNone(t *testing.T) {
 		t.Error("an unknown mode was accepted")
 	}
 }
+
+// "reality", Vision's name before the rename, still reads as Vision, and only
+// a Vision helper hands the engine an encryption to run inside it.
+func TestManagedEncryptionIsVisionsAlone(t *testing.T) {
+	if XrayMode("reality") != XrayModeVision || XrayMode("xhttp") != XrayModeXHTTP {
+		t.Fatal("XrayMode does not map the old name")
+	}
+	var s ServerConfig
+	s.Encryption = EncStealthPlus
+	if got := s.ManagedEncryption(); got != "" {
+		t.Errorf("no helper: %q, want none", got)
+	}
+	for _, mode := range []string{"vision", "reality"} {
+		s.Xray.Mode = mode
+		if got := s.ManagedEncryption(); got != EncStealthPlus {
+			t.Errorf("%s: %q, want stealth+", mode, got)
+		}
+	}
+	s.Xray.Mode = XrayModeXHTTP
+	if got := s.ManagedEncryption(); got != "" {
+		t.Errorf("xhttp: %q, want none", got)
+	}
+	var c ClientConfig
+	c.Xray.Mode, c.Encryption = XrayModeVision, EncScrap
+	if got := c.ManagedEncryption(); got != "" {
+		t.Errorf("scrap under Vision: %q, want none", got)
+	}
+}

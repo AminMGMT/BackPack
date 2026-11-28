@@ -71,9 +71,9 @@ func TestConnTestTableExplainsLocalFailuresWithoutClaimingFiltering(t *testing.T
 	table := ConnTestTable([]ConnTestResult{
 		{Kind: "reverse", Transport: "naive", Status: ctSkipped, Detail: "helper unavailable"},
 		{Kind: "reverse", Transport: "xhttp", Status: ctDown, Detail: "test stopped"},
-		{Kind: "reverse", Transport: "reality", Status: ctUnstable, Detail: "bulk transfer failed"},
+		{Kind: "reverse", Transport: "vision", Status: ctUnstable, Detail: "bulk transfer failed"},
 	})
-	for _, want := range []string{"Naive / HTTP2", "XHTTP / TLS", "REALITY / Vision", "helper unavailable", "test stopped", "bulk transfer failed"} {
+	for _, want := range []string{"Naive / HTTP2", "XHTTP / TLS", "Vision", "helper unavailable", "test stopped", "bulk transfer failed"} {
 		if !strings.Contains(table, want) {
 			t.Errorf("table is missing %q", want)
 		}
@@ -107,7 +107,7 @@ func TestTheLiveTableRewritesOnlyWhatChanged(t *testing.T) {
 
 func TestConnTestManagedNamesKeepColumnsAligned(t *testing.T) {
 	rows := []ConnTestResult{}
-	for _, tr := range []string{"tcp", "naive", "xhttp", "reality"} {
+	for _, tr := range []string{"tcp", "naive", "xhttp", "vision"} {
 		rows = append(rows, ConnTestResult{Kind: "reverse", Transport: tr, Status: ctOK, RTTms: 26, Mbps: 60.3})
 	}
 	table := ConnTestTable(rows)
@@ -135,7 +135,7 @@ func TestConnTestManagedNamesKeepColumnsAligned(t *testing.T) {
 		}
 	}
 	measured := -1
-	for _, tr := range []string{"tcp", "naive", "xhttp", "reality"} {
+	for _, tr := range []string{"tcp", "naive", "xhttp", "vision"} {
 		table := ConnTestBestTable(ConnTestBest{Transport: "reverse " + tr, Mbps: 60.3})
 		for _, line := range strings.Split(table, "\n") {
 			if !strings.HasPrefix(line, "Transport") {

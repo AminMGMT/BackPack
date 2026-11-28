@@ -30,10 +30,10 @@ func ctProbeHTTPS(parent context.Context, spec TunnelSpec) string {
 		attempt, stopAttempt := context.WithTimeout(ctx, time.Second)
 		conn, err := (&net.Dialer{}).DialContext(attempt, "tcp", endpoint)
 		if err == nil {
-			if spec.XrayClient.Mode == "reality" {
+			if spec.XrayClient.Vision() {
 				conn.Close()
 				stopAttempt()
-				return "tcp-ok" // only authenticated tunnel traffic can prove REALITY
+				return "tcp-ok" // only authenticated tunnel traffic can prove Vision
 			}
 			result = "tls-failed"
 			ca, caErr := os.ReadFile(caFile)
@@ -75,7 +75,7 @@ func ctValidHTTPSProbe(tr, probe string) bool {
 	case "tcp-failed":
 		return true
 	case "tcp-ok":
-		return tr == "reality"
+		return tr == "vision"
 	case "tls-ok", "tls-failed":
 		return tr == "naive" || tr == "xhttp"
 	}
@@ -87,7 +87,7 @@ func ctHTTPSProbeLabel(probe string) string {
 	case "tcp-failed":
 		return "public TCP connection failed"
 	case "tcp-ok":
-		return "public TCP reachable; REALITY authentication requires tunnel traffic"
+		return "public TCP reachable; Vision authentication requires tunnel traffic"
 	case "tls-failed":
 		return "TCP reachable; certificate/TLS/HTTP2 probe failed"
 	case "tls-ok":

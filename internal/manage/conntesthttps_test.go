@@ -100,12 +100,12 @@ func TestHTTPSPreflightCancellationClosesSilentPeer(t *testing.T) {
 
 func TestHTTPSProbeCoordinatorAuthenticatesBoundsAndFreezesReports(t *testing.T) {
 	c := &ctCoordinator{tok: "secret"}
-	for _, request := range []string{"https-probe wrong xhttp:tls-ok", "https-probe secret tcp:tls-ok", "https-probe secret reality:tls-ok", "https-probe secret naive:tcp-ok", "https-probe secret xhttp:untrusted-text", "https-probe secret xhttp:tls-ok extra"} {
+	for _, request := range []string{"https-probe wrong xhttp:tls-ok", "https-probe secret tcp:tls-ok", "https-probe secret vision:tls-ok", "https-probe secret naive:tcp-ok", "https-probe secret xhttp:untrusted-text", "https-probe secret xhttp:tls-ok extra"} {
 		if c.answer(request, "127.0.0.1") != "" || len(c.httpsProbes) != 0 {
 			t.Fatalf("invalid report accepted: %s", request)
 		}
 	}
-	for _, report := range []string{"xhttp:tls-ok", "naive:tls-failed", "reality:tcp-ok"} {
+	for _, report := range []string{"xhttp:tls-ok", "naive:tls-failed", "vision:tcp-ok"} {
 		if c.answer("https-probe secret "+report, "127.0.0.1") != "ok" {
 			t.Fatalf("valid report rejected: %s", report)
 		}

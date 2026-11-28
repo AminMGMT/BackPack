@@ -38,7 +38,7 @@ func SetupServer() {
 	if transport == "" {
 		return
 	}
-	if transport == "reality" {
+	if transport == "vision" {
 		defer tui.QuickDefaults()()
 		tui.Info("Space/Enter keeps each suggestion; type a replacement to change it.")
 	}
@@ -63,8 +63,8 @@ func SetupServer() {
 	// A port alone listens on every address; "85.10.11.51:443" pins it to
 	// one, so another service can hold the same port on another address.
 	portAnswer := ""
-	if transport == "reality" {
-		portAnswer = tui.PromptDefault("Tunnel Port", realityPublicPort())
+	if transport == "vision" {
+		portAnswer = tui.PromptDefault("Tunnel Port", visionPublicPort())
 	} else {
 		portAnswer = tui.Prompt("Tunnel Port: ")
 	}
@@ -122,7 +122,7 @@ func SetupServer() {
 	s.Name = uniqueName(tui.PromptDefault("Tunnel Name", "server-"+bind.Port))
 
 	// Iran makes the token; the setup link carries it to kharej.
-	if transport == "reality" {
+	if transport == "vision" {
 		s.Token = randomToken(64)
 	} else {
 		s.Token = strings.TrimSpace(tui.PromptDefault("Security Token", randomToken(64)))
@@ -151,6 +151,11 @@ func SetupServer() {
 	if managedTransport(transport) {
 		if !setupManagedCarrier(&s, transport, s.BindAddr, host) {
 			tui.PressEnter()
+			return
+		}
+		// Vision carries an encryption inside it, asked once it is Vision;
+		// the setup link takes the answer to the kharej.
+		if !chooseEncryption(&s, config.EncNone) {
 			return
 		}
 	} else {
@@ -199,7 +204,7 @@ func SetupClient() {
 	if transport == "" {
 		return
 	}
-	if transport == "reality" {
+	if transport == "vision" {
 		defer tui.QuickDefaults()()
 		tui.Info("Space/Enter keeps each suggestion; type a replacement to change it.")
 	}
@@ -223,7 +228,7 @@ func SetupClient() {
 
 	remoteHost := strings.Trim(strings.TrimSpace(tui.Prompt("Iran IP Or Domain: ")), "[]")
 	remotePort := ""
-	if transport == "reality" {
+	if transport == "vision" {
 		remotePort = tui.PromptDefault("Tunnel Port (From Iran)", "443")
 	} else {
 		remotePort = strings.TrimSpace(tui.Prompt("Tunnel Port: "))
@@ -255,6 +260,10 @@ func SetupClient() {
 	if managedTransport(transport) {
 		if !setupManagedCarrier(&s, transport, s.RemoteAddr, remoteHost) {
 			tui.PressEnter()
+			return
+		}
+		// Typed by hand, the encryption must be the Iran server's.
+		if !chooseEncryption(&s, config.EncNone) {
 			return
 		}
 	} else {
@@ -503,6 +512,9 @@ func summariseReverse(s TunnelSpec, host, link string) {
 
 	if s.Role == "server" {
 		row("Listens On", managedEndpoint(s))
+		if s.XrayServer.Vision() {
+			row("Cover Site", s.XrayServer.Target)
+		}
 		if host != "" {
 			row("Kharej Dials", net.JoinHostPort(host, addrPort(managedEndpoint(s))))
 		}
@@ -527,6 +539,12 @@ func summariseReverse(s TunnelSpec, host, link string) {
 		}
 	} else {
 		row("Dials", managedEndpoint(s))
+		if s.XrayClient.Vision() {
+			row("Cover Site", s.XrayClient.ServerName)
+			if s.Encryption.Encrypted() {
+				row("Encryption", encryptionLabel(s.Encryption.EncryptionMode()))
+			}
+		}
 		if s.EdgeIP != "" {
 			row("Edge IP", s.EdgeIP)
 		}

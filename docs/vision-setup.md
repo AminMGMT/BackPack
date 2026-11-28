@@ -1,55 +1,80 @@
-# Setting up REALITY / Vision
+# Setting up Vision
 
-Last verified against Backpack v2.0.0, 2026-10-11.
+Last verified against Backpack v2.0.0, 2026-11-28.
 
-On Iran, open **Setup Iran → Reverse → HTTPS → REALITY / Vision**. The wizard
-suggests the detected public address and a free HTTPS port (443 when available).
-Enter the ports you actually want to forward; the wizard cannot infer the
-service on Kharej. The tunnel name, private internal port and Balance preset
-have editable defaults.
+Vision shows a real site's TLS handshake to anyone who looks at the tunnel
+port. It needs no certificate and no domain of your own. It runs the Xray
+helper, and Backpack installs the pinned one itself when a server has none,
+also when a tunnel starts
+(see [Helpers without the installer](transports.md#helpers-without-the-installer)).
+Up to v2.0.0 it was called REALITY / Vision; tunnels and setup links made
+under that name keep working.
 
-Press **Space or Enter** to keep a displayed suggestion. On a Linux terminal,
-Space advances immediately. To override a value, start typing and finish with
-Enter. Advanced settings and scheduled restarts are off by default. In piped
-input, submit each answer as a line; closed input cancels rather than saving.
+## Iran
 
-The wizard detects the installed Xray helper and tests the suggested cover
-endpoints from Iran. Each successful endpoint must pass certificate verification,
-TLS 1.3, HTTP/2 and an authenticated data transfer using the actual Xray helper.
-Only successful endpoints appear in the selection menu. SNI is filled from the
-chosen hostname. This is a local cover compatibility check; it does not prove
-that the Iran/Kharej path allows REALITY.
+Open **Setup Iran → Reverse → HTTPS → Vision**. The wizard asks what every
+reverse tunnel asks:
 
-Choose **Custom endpoint and SNI** to enter your own destination and hostname.
-These are tested together before saving. Failed checks show their reason and
-offer a retry. Checks use temporary loopback listeners and have bounded
-timeouts; helper output goes to a private temporary log that is removed afterward.
+- **Iran IP Or Domain**: the detected public address is suggested.
+- **Tunnel Port**: 443 when it is free, otherwise a free HTTPS-like port.
+- **Forwarded Ports**: the services on the kharej, the one thing it cannot guess.
+- **Tunnel Name**.
 
-The security token, VLESS UUID, X25519 key pair and Short ID are generated for
-Iran. **Change generated identity settings** lets you override them. Keeping
-an existing configuration preserves its key, UUID, Short ID, target and SNI;
-rescanning or changing the cover is an explicit choice.
+Press **Space or Enter** to keep a suggestion; type to replace it.
 
-On Kharej, choose **Setup Link** and paste the link printed by Iran. It carries
-the public key and all matching settings, so you do not need to enter SNI or
-identity fields again. The private key stays on Iran. Manual setup remains
-available, but its token, UUID, SNI, Short ID, internal port and public key must
-match Iran; they cannot be safely guessed or generated independently on Kharej.
+Then come Vision's own steps:
 
-The wizard checks existing listeners when selecting defaults. It never frees a
-port by stopping another service. The final operating-system bind can still race
-another process, and no tunnel is created until you confirm its summary.
+1. **Cover Site.** The wizard checks the suggested sites (Microsoft, Bing,
+   then Apple) from this server, through the real Xray helper, and lists the
+   ones that pass. Pick one, or choose **Another Site** to type and check your
+   own. A site that fails shows why.
+2. **Encryption.** `None`, `Stealth` or `Stealth+`, run inside Vision. See
+   [Encryption inside Vision](transports.md#vision). The setup link carries
+   the choice to the kharej.
+3. **Preset**, then the usual optional fine-tuning and scheduled restart.
+
+The rest is done for you. The wizard finds the Xray helper, installs it when
+it is missing, and asks for its path only when that fails. It picks a free local port for the engine
+behind the helper. It generates the security token, UUID, X25519 key pair and
+Short ID. The summary shows the cover site and the setup link.
+
+## Kharej
+
+Choose **Setup Link** and paste the link from Iran. It carries the address,
+port, public key, cover site, UUID, Short ID and encryption, so there is
+nothing else to type, and Xray is installed first when the kharej has none.
+The private key stays on Iran.
+
+Setting up by hand is still possible. The UUID, cover site, Short ID, public
+key, token and encryption must then match Iran exactly. Iran prints the public
+key for this once, and the setup link under **Manage Tunnels** holds the rest.
+
+## Changing it later
+
+**Edit** a Vision tunnel to change the public port or cover site, the
+encryption, the preset, the MSS clamp or the forwarded ports. An existing
+tunnel keeps its key, UUID and Short ID unless you choose **Change The
+Identity**, and that choice is offered only when editing. Change the other
+side to match afterwards. The setup link is the easy way.
+
+## What the checks prove
+
+A cover check proves that the site works with Xray from this server. It does
+not prove that the path between Iran and the kharej carries Vision. The
+[Connection Test](cli-menu.md) checks that path.
+
+The wizard never stops another service to free a port. No tunnel is created
+until you confirm its summary.
 
 ## خلاصهٔ فارسی
 
 <div dir="rtl">
 
-برای سمت ایران، Reality را انتخاب کنید و پورت‌های سرویس موردنظر را وارد کنید.
-بقیهٔ موارد پیشنهادی را می‌توانید با Space یا Enter تأیید کنید؛ برای تغییر، مقدار
-جدید را بنویسید و Enter بزنید. مقصدهای پیشنهادی خودکار تست می‌شوند و فقط موارد
-موفق قابل انتخاب‌اند. SNI از مقصد انتخاب‌شده پر می‌شود و کلیدها و شناسه‌ها
-خودکار ساخته می‌شوند. برای سمت خارج، لینک ایران را وارد کنید تا تنظیمات دو طرف
-یکسان بماند. تست مقصد به‌تنهایی موفقیت تونل بین دو سرور را تضمین نمی‌کند.
+در سمت ایران، Vision را انتخاب کنید و پورت‌های سرویس را وارد کنید. بقیهٔ موارد
+پیشنهادی را با Space یا Enter تأیید کنید. اگر Xray نصب نباشد، خودش نصب می‌شود. ویزارد سایت‌های پوشش را خودش تست
+می‌کند و فقط موارد موفق را نشان می‌دهد. رمزگذاری داخل Vision (هیچ، Stealth یا
+Stealth+) را هم همان‌جا انتخاب کنید. کلیدها و شناسه‌ها خودکار ساخته می‌شوند. در
+سمت خارج فقط لینک ایران را وارد کنید. تست سایت پوشش به‌تنهایی موفقیت تونل بین
+دو سرور را تضمین نمی‌کند.
 
 </div>
-

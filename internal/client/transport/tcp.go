@@ -54,6 +54,9 @@ type TcpConfig struct {
 	// Stealth wraps every tunnel-carrying connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// StealthPlus is Stealth that also hides record sizes and timing; see the
+	// server's TcpConfig.
+	StealthPlus bool
 	// ManagedHelper carries directional EOF as records through an outer proxy.
 	ManagedHelper bool
 	// Guard is the peer handshake's policy and key; see network.PeerGuard.
@@ -65,13 +68,21 @@ type TcpConfig struct {
 // otherwise. Only tunnel-carrying connections are wrapped; the dial to the
 // local backend stays plain, since that traffic never leaves the machine.
 func (c *TcpTransport) wrapStealth(conn net.Conn) (net.Conn, error) {
+	var err error
+	switch {
+	case c.config.StealthPlus:
+		conn, err = network.StealthPlusClientConn(conn, c.config.Token, c.config.DialTimeOut)
+	case c.config.Stealth:
+		conn, err = network.NoiseClientConn(conn, c.config.Token, c.config.DialTimeOut)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Inside the encryption, as on the server: see admitTunnelConn.
 	if c.config.ManagedHelper {
 		return naive.WrapDuplex(conn), nil
 	}
-	if !c.config.Stealth {
-		return conn, nil
-	}
-	return network.NoiseClientConn(conn, c.config.Token, c.config.DialTimeOut)
+	return conn, nil
 }
 
 func NewTCPClient(parentCtx context.Context, config *TcpConfig, logger *logrus.Logger) *TcpTransport {

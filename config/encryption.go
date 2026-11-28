@@ -67,6 +67,31 @@ func EncryptionModes(tr TransportType) []string {
 	return nil
 }
 
+// ManagedEncryptionModes is what a tunnel under the Vision helper can carry
+// inside it, none first. The helper already looks like TLS to the cover site,
+// so only the modes that encrypt end to end are offered: what the helpers
+// relay is then ciphertext, and stealth+ also hides the record sizes and
+// timing a TLS-in-TLS check reads.
+var ManagedEncryptionModes = []string{EncNone, EncStealth, EncStealthPlus}
+
+// ManagedEncryption is the encryption the server runs inside its managed
+// helper: stealth or stealth+, or "" for none or no helper.
+func (c ServerConfig) ManagedEncryption() string {
+	return managedEncryption(c.Xray.Vision(), c.EncryptionConfig)
+}
+
+// ManagedEncryption is the client's; see ServerConfig.ManagedEncryption.
+func (c ClientConfig) ManagedEncryption() string {
+	return managedEncryption(c.Xray.Vision(), c.EncryptionConfig)
+}
+
+func managedEncryption(vision bool, e EncryptionConfig) string {
+	if mode := e.EncryptionMode(); vision && mode != EncNone && slices.Contains(ManagedEncryptionModes, mode) {
+		return mode
+	}
+	return ""
+}
+
 // EncryptionAllowed reports whether tr can carry mode.
 func EncryptionAllowed(tr TransportType, mode string) bool {
 	if mode == "" || mode == EncNone {

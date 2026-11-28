@@ -46,25 +46,25 @@ func ctMenuStartup(out io.Writer, s *ConnTestIran) {
 			break
 		}
 	}
-	if s.realityTarget != "" {
-		row(checkMark(CheckOK), "REALITY cover", s.realityTarget+" · verified")
+	if s.visionTarget != "" {
+		row(checkMark(CheckOK), "Vision cover", s.visionTarget+" · verified")
 		fmt.Fprintln(out, tui.Color(tui.Gray, "    Cover check passed here; the two-server test starts after Kharej joins."))
-		host, _, _ := net.SplitHostPort(s.realityTarget)
+		host, _, _ := net.SplitHostPort(s.visionTarget)
 		if host == "www.apple.com" {
 			row(checkMark(CheckWarn), "Cover note", "Apple fallback selected")
 			fmt.Fprintln(out, tui.Color(tui.Gray, "    Xray cautions against Apple/iCloud targets for permanent tunnels."))
 		}
-		fmt.Fprintln(out, tui.Color(tui.Gray, "    Test listeners use temporary ports. Prefer port 443 for a permanent REALITY tunnel."))
+		fmt.Fprintln(out, tui.Color(tui.Gray, "    Test listeners use temporary ports. Prefer port 443 for a permanent Vision tunnel."))
 	}
 	coverSkipped := false
 	for _, c := range s.cases {
 		if c.skip != "" && managedTransport(c.tr) {
-			coverSkipped = coverSkipped || c.tr == "reality"
+			coverSkipped = coverSkipped || c.tr == "vision"
 			row(checkMark(CheckWarn), ctNameOf(c.kind, c.tr), "Skipped")
 			fmt.Fprintln(out, tui.Color(tui.Gray, "    "+c.skip))
 		}
 	}
-	if s.realityLog != "" && coverSkipped {
-		fmt.Fprintln(out, tui.Color(tui.Gray, "    Probe details while this test is open: "+s.realityLog))
+	if s.visionLog != "" && coverSkipped {
+		fmt.Fprintln(out, tui.Color(tui.Gray, "    Probe details while this test is open: "+s.visionLog))
 	}
 }

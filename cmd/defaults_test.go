@@ -76,3 +76,33 @@ func TestEncryptionIsCheckedAgainstTheTransport(t *testing.T) {
 		t.Errorf("splash with stealth on tcp refused: %v", err)
 	}
 }
+
+// Vision carries stealth or stealth+ inside its helper, under its new name
+// and its old one; it takes no other mode and no splash. Naive and XHTTP
+// still take none.
+func TestVisionCarriesStealthInsideIt(t *testing.T) {
+	vision := func(mode, xrayMode string) *config.Config {
+		c := &config.Config{Server: config.ServerConfig{Transport: config.TCP}}
+		c.Server.Xray.Mode, c.Server.Xray.Listen = xrayMode, "0.0.0.0:443"
+		c.Server.Encryption = mode
+		return c
+	}
+	for _, xm := range []string{"vision", "reality"} {
+		for _, mode := range []string{"", "none", "stealth", "stealth+"} {
+			if err := checkEncryption(vision(mode, xm)); err != nil {
+				t.Errorf("%q under %s refused: %v", mode, xm, err)
+			}
+		}
+		if err := checkEncryption(vision("scrap", xm)); err == nil || !strings.Contains(err.Error(), "Vision carries") {
+			t.Errorf("scrap under %s: %v, want a refusal", xm, err)
+		}
+	}
+	s := vision("stealth", "vision")
+	s.Server.Splash = true
+	if err := checkEncryption(s); err == nil {
+		t.Error("splash under Vision was accepted")
+	}
+	if err := checkEncryption(vision("stealth", "xhttp")); err == nil || !strings.Contains(err.Error(), "managed HTTPS helper") {
+		t.Errorf("stealth under xhttp: %v, want a refusal", err)
+	}
+}

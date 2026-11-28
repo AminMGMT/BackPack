@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/backpack/backpack/config"
@@ -252,17 +253,28 @@ func checkEncryption(cfg *config.Config) error {
 		tr      config.TransportType
 		enc     config.EncryptionConfig
 		managed bool
+		vision  bool
 	}{
-		{"server", cfg.Server.Transport, cfg.Server.EncryptionConfig, cfg.Server.Naive.Enabled() || cfg.Server.Xray.Enabled()},
-		{"client", cfg.Client.Transport, cfg.Client.EncryptionConfig, cfg.Client.Naive.Enabled() || cfg.Client.Xray.Enabled()},
+		{"server", cfg.Server.Transport, cfg.Server.EncryptionConfig, cfg.Server.Naive.Enabled() || cfg.Server.Xray.Enabled(), cfg.Server.Xray.Vision()},
+		{"client", cfg.Client.Transport, cfg.Client.EncryptionConfig, cfg.Client.Naive.Enabled() || cfg.Client.Xray.Enabled(), cfg.Client.Xray.Vision()},
 	} {
 		mode := side.enc.EncryptionMode()
 		if !config.ValidEncryption(side.enc.Encryption) {
 			return fmt.Errorf("[%s] encryption = %q: use one of %q", side.name, side.enc.Encryption,
 				[]string{config.EncNone, config.EncStealth, config.EncStealthPlus, config.EncShadow, config.EncScrap})
 		}
-		if mode != config.EncNone && side.managed {
-			return fmt.Errorf("[%s] encryption = %q: a tunnel under a managed HTTPS helper is already encrypted by it — leave encryption out", side.name, mode)
+		if side.managed {
+			// Vision carries stealth or stealth+ inside it; Naive and XHTTP
+			// are encrypted by their helper and take none.
+			switch {
+			case side.vision && side.enc.Splash:
+				return fmt.Errorf("[%s] splash = true: Vision takes no splash — leave it out", side.name)
+			case side.vision && !slices.Contains(config.ManagedEncryptionModes, mode):
+				return fmt.Errorf("[%s] encryption = %q: Vision carries %q", side.name, mode, config.ManagedEncryptionModes)
+			case !side.vision && mode != config.EncNone:
+				return fmt.Errorf("[%s] encryption = %q: a tunnel under a managed HTTPS helper is already encrypted by it — leave encryption out", side.name, mode)
+			}
+			continue
 		}
 		if !config.EncryptionAllowed(side.tr, mode) {
 			if modes := config.EncryptionModes(side.tr); modes != nil {

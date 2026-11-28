@@ -116,5 +116,7 @@ func EncryptionByTransport() map[string][]string {
 	for _, tr := range []config.TransportType{config.TCP, config.TCPMUX, config.WS, config.WSS, config.WSMUX, config.WSSMUX} {
 		out[string(tr)] = config.EncryptionModes(tr)
 	}
+	// Vision runs one inside its helper; see config.ManagedEncryptionModes.
+	out["vision"] = config.ManagedEncryptionModes
 	return out
 }

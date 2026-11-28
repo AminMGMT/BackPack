@@ -76,7 +76,7 @@ const connTestKind = "test"
 // ConnTestOptions.SpoofSrc); pck, on either side, and the reverse xdi
 // (xDiRvs) need root on both servers.
 var (
-	connTestReverse = []string{"tcp", "tcpmux", "stealth", "pck", "ws", "wss", "wsmux", "wssmux", "kcp", "quic", "udp", "xdi", "naive", "xhttp", "reality"}
+	connTestReverse = []string{"tcp", "tcpmux", "stealth", "pck", "ws", "wss", "wsmux", "wssmux", "kcp", "quic", "udp", "xdi", "naive", "xhttp", "vision"}
 	// The direct tunnel's carriers, all raw since v2.0.0 took udp and quic
 	// out, and kernel GRE — over IPv4 or IPv6, whichever the two servers
 	// reach each other on. Spoof joins them as above.
@@ -127,6 +127,11 @@ var errConnTestStopped = errors.New("the Iran server stopped this connection tes
 // skipped test, rather than evidence that the network blocked a protocol.
 var connTestHelperBinary = func(tool string) (string, error) {
 	path := managedHelperPath(tool)
+	if !executable(path) {
+		if installed, err := ensureHelper(tool, nil); err == nil {
+			path = installed
+		}
+	}
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
 		return "", fmt.Errorf("%s helper is not installed at %s; reinstall with BP_HELPERS=naive,xray", tool, path)
@@ -404,16 +409,16 @@ type connTestCase struct {
 
 // ConnTestIran is a test the Iran side is running.
 type ConnTestIran struct {
-	dir           string
-	link          ConnTestLink
-	cases         []*connTestCase
-	coord         *ctCoordinator
-	mu            sync.Mutex
-	engines       []*ctEngine
-	root          bool
-	best          ConnTestBest
-	realityTarget string
-	realityLog    string
+	dir          string
+	link         ConnTestLink
+	cases        []*connTestCase
+	coord        *ctCoordinator
+	mu           sync.Mutex
+	engines      []*ctEngine
+	root         bool
+	best         ConnTestBest
+	visionTarget string
+	visionLog    string
 }
 
 // ConnTestOptions are what the Iran operator answers.
@@ -423,9 +428,9 @@ type ConnTestOptions struct {
 	Context   context.Context // optional cancellation, including startup
 	Host      string          // this server's address, as the kharej dials it
 	SNIDomain string          // what the sni carrier announces
-	// RealityTarget is an explicit reachable TLS 1.3/H2 hostname:port used
-	// for the REALITY cover handshake. Empty selects a verified endpoint automatically.
-	RealityTarget string
+	// VisionTarget is an explicit reachable TLS 1.3/H2 hostname:port used
+	// for the Vision cover handshake. Empty selects a verified endpoint automatically.
+	VisionTarget string
 	// Direct includes the direct tunnels. They need root on both servers.
 	Direct bool
 	// Preset is balance, turbo or aggressive; empty is turbo, the wizards'
@@ -673,7 +678,7 @@ func StartConnTestIran(o ConnTestOptions) (*ConnTestIran, string, error) {
 
 // ctCarrierSettings travels separately from the small configuration packet.
 // Only public trust material is sent; credentials come from the test secret,
-// and the certificate/private REALITY keys stay in the temporary Iran config.
+// and the certificate/private Vision keys stay in the temporary Iran config.
 type ctCarrierSettings struct {
 	TargetPort int    `json:"p"`
 	ServerName string `json:"s,omitempty"`
@@ -726,11 +731,11 @@ func ctCertificate(dir, name, host string) (cert, key, ca string, err error) {
 }
 
 // Probe from Iran: DNS, certificate trust, TLS version and ALPN can differ by route.
-func ctProbeRealityCover(ctx context.Context, target string, roots *x509.CertPool) error {
-	return probeRealityTLS(ctx, target, "", roots)
+func ctProbeVisionCover(ctx context.Context, target string, roots *x509.CertPool) error {
+	return probeVisionTLS(ctx, target, "", roots)
 }
 
-func probeRealityTLS(ctx context.Context, target, serverName string, roots *x509.CertPool) error {
+func probeVisionTLS(ctx context.Context, target, serverName string, roots *x509.CertPool) error {
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{
 		ServerName: serverName, MinVersion: tls.VersionTLS13, NextProtos: []string{"h2"}, RootCAs: roots,
 		CurvePreferences: []tls.CurveID{tls.X25519},
@@ -747,19 +752,19 @@ func probeRealityTLS(ctx context.Context, target, serverName string, roots *x509
 	return nil
 }
 
-// A normal TLS handshake can pass while the pinned REALITY parser rejects the
+// A normal TLS handshake can pass while the pinned Vision parser rejects the
 // cover's ServerHello or certificate records. Authenticate through the actual
 // Chrome/Vision helper pair before choosing a cover, so that case never gets
 // reported as a blocked Iran/Kharej route merely because its cover is unusable.
-func ctProbeRealityTransport(ctx context.Context, target, binary string) error {
+func ctProbeVisionTransport(ctx context.Context, target, binary string) error {
 	host, _, err := net.SplitHostPort(target)
 	if err != nil {
 		return err
 	}
-	return probeRealityTransport(ctx, target, host, binary)
+	return probeVisionTransport(ctx, target, host, binary)
 }
 
-func probeRealityTransport(ctx context.Context, target, host, binary string) error {
+func probeVisionTransport(ctx context.Context, target, host, binary string) error {
 	_, _, err := net.SplitHostPort(target)
 	if err != nil {
 		return err
@@ -788,29 +793,29 @@ func probeRealityTransport(ctx context.Context, target, host, binary string) err
 	used := map[int]bool{}
 	port := ctPickPort(used, false)
 	if port == 0 {
-		return errors.New("no free port for the REALITY cover probe")
+		return errors.New("no free port for the Vision cover probe")
 	}
-	private, public, err := managedRealityKey("")
+	private, public, err := managedVisionKey("")
 	if err != nil {
 		return err
 	}
-	token := ctCaseToken(ctNewSecret(), "cover", "reality")
+	token := ctCaseToken(ctNewSecret(), "cover", "vision")
 	server := config.ServerConfig{Transport: config.TCP, BindAddr: echo.Addr().String(),
-		Xray: config.XrayServerConfig{Binary: binary, Mode: "reality", Listen: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		Xray: config.XrayServerConfig{Binary: binary, Mode: config.XrayModeVision, Listen: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
 			UUID: ctUUID(token), ServerName: host, PrivateKey: private, ShortID: token[:16], Target: target}}
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	sh, err := naive.StartXrayServer(ctx, &server, logger)
 	if err != nil {
-		return fmt.Errorf("REALITY cover server: %w", err)
+		return fmt.Errorf("Vision cover server: %w", err)
 	}
 	defer sh.Close()
 	client := config.ClientConfig{Transport: config.TCP, RemoteAddr: server.BindAddr,
-		Xray: config.XrayClientConfig{Binary: binary, Mode: "reality", Server: server.Xray.Listen,
+		Xray: config.XrayClientConfig{Binary: binary, Mode: config.XrayModeVision, Server: server.Xray.Listen,
 			UUID: server.Xray.UUID, ServerName: host, PublicKey: public, ShortID: server.Xray.ShortID}}
 	ch, err := naive.StartXrayClient(ctx, &client, logger)
 	if err != nil {
-		return fmt.Errorf("REALITY cover client: %w", err)
+		return fmt.Errorf("Vision cover client: %w", err)
 	}
 	defer ch.Close()
 	dialer, err := proxy.SOCKS5("tcp", strings.TrimPrefix(ch.ProxyURL(), "socks5://"), nil, &net.Dialer{})
@@ -819,7 +824,7 @@ func probeRealityTransport(ctx context.Context, target, host, binary string) err
 	}
 	conn, err := dialer.(proxy.ContextDialer).DialContext(ctx, "tcp", server.BindAddr)
 	if err != nil {
-		return fmt.Errorf("REALITY cover authentication: %w", err)
+		return fmt.Errorf("Vision cover authentication: %w", err)
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
@@ -835,17 +840,17 @@ func probeRealityTransport(ctx context.Context, target, host, binary string) err
 	}
 	got := make([]byte, len(payload))
 	if _, err := io.ReadFull(conn, got); err != nil {
-		return fmt.Errorf("REALITY cover did not carry authenticated data: %w", err)
+		return fmt.Errorf("Vision cover did not carry authenticated data: %w", err)
 	}
 	if !bytes.Equal(got, payload) {
-		return errors.New("REALITY cover probe returned corrupt data")
+		return errors.New("Vision cover probe returned corrupt data")
 	}
 	return ctx.Err()
 }
 
 var connTestCoverWait = 8 * time.Second
 
-func ctFindRealityCover(ctx context.Context, targets []string, probe func(context.Context, string) error) (string, error) {
+func ctFindVisionCover(ctx context.Context, targets []string, probe func(context.Context, string) error) (string, error) {
 	var failures []string
 	for _, target := range targets {
 		if err := ctx.Err(); err != nil {
@@ -865,7 +870,7 @@ func ctFindRealityCover(ctx context.Context, targets []string, probe func(contex
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("no usable REALITY cover from Iran (%s)", strings.Join(failures, "; "))
+	return "", fmt.Errorf("no usable Vision cover from Iran (%s)", strings.Join(failures, "; "))
 }
 
 func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o ConnTestOptions) {
@@ -879,8 +884,8 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		return
 	}
 	coverHost := ""
-	coverTarget := strings.TrimSpace(o.RealityTarget)
-	if c.tr == "reality" {
+	coverTarget := strings.TrimSpace(o.VisionTarget)
+	if c.tr == "vision" {
 		if coverTarget == "" {
 			ctx := o.Context
 			if ctx == nil {
@@ -888,21 +893,21 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 			}
 			// The temporary loopback helpers emit banners and generic deployment
 			// warnings. Keep them out of the menu without discarding diagnostics.
-			s.realityLog = filepath.Join(s.dir, "reality-cover.log")
-			output, openErr := os.OpenFile(s.realityLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			s.visionLog = filepath.Join(s.dir, "vision-cover.log")
+			output, openErr := os.OpenFile(s.visionLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 			if openErr != nil {
-				c.skip = "creating REALITY probe diagnostics: " + openErr.Error()
+				c.skip = "creating Vision probe diagnostics: " + openErr.Error()
 				return
 			}
 			defer output.Close()
 			ctx = naive.WithHelperOutput(ctx, output)
-			coverTarget, err = ctFindRealityCover(ctx, []string{"www.microsoft.com:443", "www.bing.com:443", "www.apple.com:443"},
+			coverTarget, err = ctFindVisionCover(ctx, []string{"www.microsoft.com:443", "www.bing.com:443", "www.apple.com:443"},
 				func(ctx context.Context, target string) error {
-					fmt.Fprintf(output, "\nREALITY cover probe: %s\n", target)
-					if err := ctProbeRealityCover(ctx, target, nil); err != nil {
+					fmt.Fprintf(output, "\nVision cover probe: %s\n", target)
+					if err := ctProbeVisionCover(ctx, target, nil); err != nil {
 						return err
 					}
-					return ctProbeRealityTransport(ctx, target, binary)
+					return ctProbeVisionTransport(ctx, target, binary)
 				})
 			if err != nil {
 				c.skip = err.Error()
@@ -911,7 +916,7 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		}
 		coverHost, _, err = net.SplitHostPort(coverTarget)
 		if err != nil || coverHost == "" || net.ParseIP(coverHost) != nil {
-			c.skip = "set a REALITY cover endpoint (reachable TLS 1.3/H2 hostname:port) on Iran"
+			c.skip = "set a Vision cover endpoint (reachable TLS 1.3/H2 hostname:port) on Iran"
 			return
 		}
 	}
@@ -926,6 +931,10 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		BindAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(targetPort)),
 		Ports:    []string{fmt.Sprintf("127.0.0.1:%d=127.0.0.1:%d", c.entry, s.link.TCP)}}
 	ApplyPreset(&spec, s.link.Preset)
+	if c.tr == "vision" {
+		// On the spec before its link is made, so the kharej gets it too.
+		spec.SetEncryption(ctVisionEncryption)
+	}
 	// Reuse the existing reverse link's paired engine tuning; helper settings
 	// are exchanged only through the authenticated test coordinator.
 	c.link, err = DecodeShareLink(pendingReverseLink(spec, s.link.Host, linkExtras{}))
@@ -937,7 +946,7 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 	settings := ctCarrierSettings{TargetPort: targetPort, ServerName: "conntest.backpack.invalid"}
 	public := net.JoinHostPort(ctBindHost(s.link.Host), strconv.Itoa(port))
 	var cert, key string
-	if c.tr != "reality" {
+	if c.tr != "vision" {
 		cert, key, settings.CA, err = ctCertificate(s.dir, c.name, s.link.Host)
 		if err != nil {
 			c.skip = "creating the test certificate: " + err.Error()
@@ -952,9 +961,9 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		spec.XrayServer = config.XrayServerConfig{Binary: binary, Listen: public, Mode: c.tr,
 			UUID: ctUUID(token), ServerName: settings.ServerName, Path: "/" + token,
 			Certificate: cert, Key: key}
-	case "reality":
+	case "vision":
 		var private string
-		private, settings.PublicKey, err = managedRealityKey("")
+		private, settings.PublicKey, err = managedVisionKey("")
 		if err != nil {
 			c.skip = err.Error()
 			return
@@ -974,8 +983,8 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 		return
 	}
 	s.engines = append(s.engines, engine)
-	if c.tr == "reality" {
-		s.realityTarget = coverTarget
+	if c.tr == "vision" {
+		s.visionTarget = coverTarget
 	}
 	body, _ := json.Marshal(settings)
 	s.coord.mu.Lock()
@@ -985,6 +994,11 @@ func (s *ConnTestIran) startManagedCase(c *connTestCase, used map[int]bool, o Co
 	s.coord.carriers[c.tr] = gzipB64(body)
 	s.coord.mu.Unlock()
 }
+
+// ctVisionEncryption is what the Vision test tunnel runs inside its helper:
+// none in the Connection Test itself, which measures the transport; a test
+// sets stealth or stealth+ to carry traffic through them.
+var ctVisionEncryption = config.EncNone
 
 func ctManagedClient(ctx context.Context, link ConnTestLink, c ShareLink, dir string) (TunnelSpec, error) {
 	tool := "xray"
@@ -1016,7 +1030,7 @@ func ctManagedClient(ctx context.Context, link ConnTestLink, c ShareLink, dir st
 	}
 	spec := reverseClientFromLink(paired, link.Host)
 	var ca string
-	if c.Tr != "reality" {
+	if c.Tr != "vision" {
 		if settings.CA == "" {
 			return TunnelSpec{}, errors.New("the managed TLS test has no trust certificate")
 		}

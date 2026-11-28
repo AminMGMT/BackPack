@@ -25,7 +25,7 @@ import (
 
 // fakeHTTPSHelpers stands in for the installed helpers and the certificate
 // writer, so the panel's HTTPS path runs without an install or /etc/backpack.
-// The REALITY probe passes every cover unless the test replaces it.
+// The Vision probe passes every cover unless the test replaces it.
 func fakeHTTPSHelpers(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -34,14 +34,14 @@ func fakeHTTPSHelpers(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	prevPath, prevReality, prevCert, prevProbe := panelHelperPath, panelRealityBinary, panelCert, panelRealityProbe
+	prevPath, prevVision, prevCert, prevProbe := panelHelperPath, panelVisionBinary, panelCert, panelVisionProbe
 	t.Cleanup(func() {
-		panelHelperPath, panelRealityBinary, panelCert, panelRealityProbe = prevPath, prevReality, prevCert, prevProbe
+		panelHelperPath, panelVisionBinary, panelCert, panelVisionProbe = prevPath, prevVision, prevCert, prevProbe
 	})
 	panelHelperPath = func(tool string) string { return filepath.Join(dir, tool) }
-	panelRealityBinary = func() string { return filepath.Join(dir, "xray") }
+	panelVisionBinary = func() string { return filepath.Join(dir, "xray") }
 	panelCert = func(name, host string) (string, string, error) { return testCert(dir, name, host) }
-	panelRealityProbe = func(context.Context, string, string, string) error { return nil }
+	panelVisionProbe = func(context.Context, string, string, string) error { return nil }
 	return dir
 }
 
@@ -94,7 +94,7 @@ func freeHTTPSPort(t *testing.T) string {
 func TestThePanelBuildsTheIranEndOfEachHTTPSTransport(t *testing.T) {
 	fakeHTTPSHelpers(t)
 	const host = "203.0.113.7"
-	for _, tr := range []string{"naive", "xhttp", "reality"} {
+	for _, tr := range []string{"naive", "xhttp", "vision"} {
 		t.Run(tr, func(t *testing.T) {
 			public := freeHTTPSPort(t)
 			n := NewTunnel{Role: "server", Transport: tr, Name: "https-" + tr, TunnelPort: public,
@@ -147,10 +147,10 @@ func TestThePanelBuildsTheIranEndOfEachHTTPSTransport(t *testing.T) {
 				if kharej.XrayClient.UUID != s.XrayServer.UUID || kharej.XrayClient.Path != s.XrayServer.Path {
 					t.Error("the kharej got another UUID or path than Iran's")
 				}
-			case "reality":
-				if s.XrayServer.Target != realityCoverSuggestions[0] || kharej.XrayClient.PublicKey == "" ||
+			case "vision":
+				if s.XrayServer.Target != visionCoverSuggestions[0] || kharej.XrayClient.PublicKey == "" ||
 					kharej.XrayClient.ShortID != s.XrayServer.ShortID {
-					t.Errorf("REALITY: cover %q, kharej %+v", s.XrayServer.Target, kharej.XrayClient)
+					t.Errorf("Vision: cover %q, kharej %+v", s.XrayServer.Target, kharej.XrayClient)
 				}
 			}
 		})
@@ -184,14 +184,14 @@ func TestThePanelRefusesWhatItCannotBuildForHTTPS(t *testing.T) {
 		t.Errorf("XHTTP on an IP without a TLS name was accepted: %v", err)
 	}
 
-	panelRealityProbe = func(context.Context, string, string, string) error { return errors.New("no TLS 1.3") }
-	reality := base
-	reality.Transport = "reality"
-	if _, err := specFromNew(reality); err == nil || !strings.Contains(err.Error(), "cover") {
+	panelVisionProbe = func(context.Context, string, string, string) error { return errors.New("no TLS 1.3") }
+	vision := base
+	vision.Transport = "vision"
+	if _, err := specFromNew(vision); err == nil || !strings.Contains(err.Error(), "cover") {
 		t.Errorf("no passing cover was not reported: %v", err)
 	}
-	reality.RealityCover = "203.0.113.9:443"
-	if _, err := specFromNew(reality); err == nil || !strings.Contains(err.Error(), "hostname") {
+	vision.VisionCover = "203.0.113.9:443"
+	if _, err := specFromNew(vision); err == nil || !strings.Contains(err.Error(), "hostname") {
 		t.Errorf("an IP cover was accepted: %v", err)
 	}
 }
@@ -212,7 +212,7 @@ func TestThePanelOffersEveryTransport(t *testing.T) {
 	if https == nil || !https.IranOnly || len(https.Entries) != 3 {
 		t.Fatalf("the HTTPS family is missing or not marked Iran-only: %+v", https)
 	}
-	for _, tr := range []string{"tcp", "tcpmux", "stealth", "pck", "udp", "kcp", "quic", "ws", "wsmux", "wss", "wssmux", "naive", "xhttp", "reality"} {
+	for _, tr := range []string{"tcp", "tcpmux", "stealth", "pck", "udp", "kcp", "quic", "ws", "wsmux", "wss", "wssmux", "naive", "xhttp", "vision"} {
 		if !seen[tr] {
 			t.Errorf("%s is not offered", tr)
 		}

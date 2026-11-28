@@ -440,7 +440,7 @@ func tunnelChecksFor(t core.Tunnel, pairs [][2]string) []Check {
 			out = append(out, naiveReachability(g, spec.NaiveClient.Server))
 		case spec.XrayClient.Enabled():
 			out = append(out, Check{Group: g, Name: "Reachability", Level: CheckInfo,
-				Detail: "managed Xray " + spec.XrayClient.Mode + " via " + spec.XrayClient.Server + "; remote_addr is the loopback target on Iran",
+				Detail: "managed Xray " + config.XrayMode(spec.XrayClient.Mode) + " via " + spec.XrayClient.Server + "; remote_addr is the loopback target on Iran",
 				Fix:    "use the live engine state and verified traffic through the forwarded entry port"})
 		case isDatagram(spec.Transport):
 			// There is no connect step to test on UDP: a silent port and a

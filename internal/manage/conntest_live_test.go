@@ -125,10 +125,14 @@ func TestConnTestIranSide(t *testing.T) {
 			}
 		}
 	}
-	// CT_REALITY=host:port names the REALITY cover, for a namespace with no
+	// CT_VISION_ENC=stealth or stealth+ runs the Vision tunnel inside one.
+	if enc := os.Getenv("CT_VISION_ENC"); enc != "" {
+		ctVisionEncryption = enc
+	}
+	// CT_VISION=host:port names the Vision cover, for a namespace with no
 	// way to the public covers the test otherwise looks for.
 	s, link, err := StartConnTestIran(ConnTestOptions{Host: os.Getenv("CT_HOST"), Direct: true, SNIDomain: "www.example.com",
-		SpoofSrc: "10.10.10.10", Preset: os.Getenv("CT_PRESET"), RealityTarget: os.Getenv("CT_REALITY")})
+		SpoofSrc: "10.10.10.10", Preset: os.Getenv("CT_PRESET"), VisionTarget: os.Getenv("CT_VISION")})
 	if err != nil {
 		t.Fatal(err)
 	}

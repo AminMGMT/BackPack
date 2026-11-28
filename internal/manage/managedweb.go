@@ -10,17 +10,18 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/backpack/backpack/config"
 	"github.com/backpack/backpack/internal/app"
 )
 
-// The managed HTTPS carriers (Naive, XHTTP, REALITY) from the panel.
+// The managed HTTPS carriers (Naive, XHTTP, Vision) from the panel.
 //
 // The CLI wizard asks a dozen questions for these, and every one of them has a
 // default it offers: the helper's installed path, a generated user, password,
 // UUID, path or key pair, a private certificate for the address Kharej dials,
-// and — for REALITY — the first cover endpoint that passes a real check from
+// and — for Vision — the first cover endpoint that passes a real check from
 // this server. The panel takes exactly those defaults, so the form needs no
-// more than it already asks plus an optional REALITY cover.
+// more than it already asks plus an optional Vision cover.
 //
 // Only the Iran end is built here. The Kharej end needs the credentials and
 // the private certificate's public half, and the setup link this tunnel's
@@ -30,17 +31,17 @@ import (
 // What managedFromPanel reaches outside itself for, so a test can supply a
 // helper and a certificate without an install or /etc/backpack.
 var (
-	panelHelperPath    = managedHelperPath
-	panelRealityBinary = func() string { return realityBinary("") }
-	panelCert          = managedPrivateCert
-	panelRealityProbe  = probeRealitySetup
+	panelHelperPath   = managedHelperPath
+	panelVisionBinary = func() string { return visionBinary("") }
+	panelCert         = managedPrivateCert
+	panelVisionProbe  = probeVisionSetup
 )
 
 // managedForm is what the panel adds to a NewTunnel for a managed carrier.
 type managedForm struct {
-	chosen string // naive, xhttp or reality
+	chosen string // naive, xhttp or vision
 	host   string // the address Kharej dials: names the private certificate
-	cover  string // REALITY only: hostname:port, empty to pick one
+	cover  string // Vision only: hostname:port, empty to pick one
 	// tlsName is XHTTP's TLS name, a DNS name. The kharej dials host and
 	// checks the private certificate against this name, so it need not
 	// resolve; empty takes host when host is a name.
@@ -49,7 +50,7 @@ type managedForm struct {
 
 // managedFromPanel turns s — already built as a plain TCP Iran end whose
 // BindAddr is the public HTTPS listener — into a managed carrier.
-func managedFromPanel(s *TunnelSpec, f managedForm, probe realitySetupProbe) error {
+func managedFromPanel(s *TunnelSpec, f managedForm, probe visionSetupProbe) error {
 	if s.Role != "server" {
 		return fmt.Errorf("set up the kharej end of a %s tunnel from the Iran server's setup link", f.chosen)
 	}
@@ -57,7 +58,7 @@ func managedFromPanel(s *TunnelSpec, f managedForm, probe realitySetupProbe) err
 		return fmt.Errorf("the HTTPS transports need Linux")
 	}
 	public := s.BindAddr
-	internal := realityInternalPort(public, s.Ports)
+	internal := visionInternalPort(public, s.Ports)
 	if internal == "" {
 		return fmt.Errorf("no free local port for the tunnel behind %s", public)
 	}
@@ -113,12 +114,16 @@ func managedFromPanel(s *TunnelSpec, f managedForm, probe realitySetupProbe) err
 		x.Binary, x.Listen, x.Mode = binary, public, "xhttp"
 		x.UUID, x.ServerName, x.Path = id, name, "/"+randomToken(24)
 		x.Certificate, x.Key = cert, key
-	case "reality":
-		binary := panelRealityBinary()
+	case "vision":
+		binary := panelVisionBinary()
 		if !executable(binary) {
-			return helperMissing("xray", binary)
+			installed, err := ensureHelper("xray", nil)
+			if err != nil {
+				return fmt.Errorf("the Xray helper is not installed, and installing it failed: %w", err)
+			}
+			binary = installed
 		}
-		target, sni, err := realityCoverFor(f.cover, binary, probe)
+		target, sni, err := visionCoverFor(f.cover, binary, probe)
 		if err != nil {
 			return err
 		}
@@ -126,7 +131,7 @@ func managedFromPanel(s *TunnelSpec, f managedForm, probe realitySetupProbe) err
 		if err != nil {
 			return err
 		}
-		private, _, err := managedRealityKey("")
+		private, _, err := managedVisionKey("")
 		if err != nil {
 			return err
 		}
@@ -135,13 +140,16 @@ func managedFromPanel(s *TunnelSpec, f managedForm, probe realitySetupProbe) err
 			return err
 		}
 		x := &n.XrayServer
-		x.Binary, x.Listen, x.Mode = binary, public, "reality"
+		x.Binary, x.Listen, x.Mode = binary, public, config.XrayModeVision
 		x.Target, x.ServerName = target, sni
 		x.UUID, x.PrivateKey, x.ShortID = id, private, hex.EncodeToString(short[:])
 	default:
 		return fmt.Errorf("%q is not an HTTPS transport", f.chosen)
 	}
 
+	// Vision keeps the encryption it can carry; Naive and XHTTP take none.
+	n.Encryption.Splash, n.Encryption.ShadowSNI = false, ""
+	n.SetEncryption(n.Encryption.EncryptionMode())
 	if err := validateManagedSpec(n); err != nil {
 		return fmt.Errorf("HTTPS configuration: %w", err)
 	}
@@ -172,37 +180,44 @@ func managedPrivateCert(name, host string) (string, string, error) {
 	return cert, key, nil
 }
 
-// realityCoverFor checks the cover the form named, or tries the suggestions
+// visionCoverFor checks the cover the form named, or tries the suggestions
 // and takes the first that passes, in their order.
-func realityCoverFor(cover, binary string, probe realitySetupProbe) (string, string, error) {
+func visionCoverFor(cover, binary string, probe visionSetupProbe) (string, string, error) {
 	cover = strings.TrimSpace(cover)
 	if cover != "" {
 		host, port, err := net.SplitHostPort(cover)
 		if err != nil || host == "" || !validPort(port) || net.ParseIP(host) != nil {
-			return "", "", fmt.Errorf("the REALITY cover must be a hostname and port, such as www.microsoft.com:443")
+			return "", "", fmt.Errorf("the Vision cover must be a hostname and port, such as www.microsoft.com:443")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), connTestCoverWait)
 		defer cancel()
 		if err := probe(ctx, cover, host, binary); err != nil {
-			return "", "", fmt.Errorf("the REALITY cover %s did not pass: %w", cover, err)
+			return "", "", fmt.Errorf("the Vision cover %s did not pass: %w", cover, err)
 		}
 		return cover, host, nil
 	}
 	var reasons []string
-	for _, r := range scanRealityCovers(context.Background(), realityCoverSuggestions, binary, probe) {
+	for _, r := range scanVisionCovers(context.Background(), visionCoverSuggestions, binary, probe) {
 		if r.err == nil {
 			host, _, _ := net.SplitHostPort(r.target)
 			return r.target, host, nil
 		}
 		reasons = append(reasons, r.target+": "+r.err.Error())
 	}
-	return "", "", fmt.Errorf("no REALITY cover passed from this server (%s) — name one that does",
+	return "", "", fmt.Errorf("no Vision cover passed from this server (%s) — name one that does",
 		strings.Join(reasons, "; "))
 }
 
 // managedHelper is the installed helper's path, or why it cannot be used.
 func managedHelper(tool string) (string, error) {
 	path := panelHelperPath(tool)
+	if !executable(path) && path == managedHelperPath(tool) {
+		installed, err := ensureHelper(tool, nil)
+		if err != nil {
+			return "", fmt.Errorf("the %s helper is not installed, and installing it failed: %w", tool, err)
+		}
+		return installed, nil
+	}
 	if !executable(path) {
 		return "", helperMissing(tool, path)
 	}

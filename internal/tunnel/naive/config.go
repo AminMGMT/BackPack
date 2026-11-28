@@ -308,8 +308,8 @@ func xrayIdentity(binary, mode, id, serverName string) error {
 	if err := readableFile(binary); err != nil {
 		return fmt.Errorf("Xray helper binary: %w", err)
 	}
-	if mode != "xhttp" && mode != "reality" {
-		return errors.New("Xray mode must be xhttp or reality")
+	if mode = config.XrayMode(mode); mode != config.XrayModeXHTTP && mode != config.XrayModeVision {
+		return errors.New("Xray mode must be xhttp or vision")
 	}
 	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
 		return errors.New("Xray uuid must be a canonical 36-character UUID")
@@ -343,16 +343,16 @@ func xrayHTTP(path, host string) error {
 	return nil
 }
 
-func xrayReality(key, shortID string) error {
+func xrayVision(key, shortID string) error {
 	decoded, err := base64.RawURLEncoding.DecodeString(key)
 	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != key {
-		return errors.New("REALITY key must encode exactly 32 bytes using unpadded base64url")
+		return errors.New("Vision key must encode exactly 32 bytes using unpadded base64url")
 	}
 	if len(shortID) != 16 {
-		return errors.New("REALITY short_id must contain exactly 16 hexadecimal characters")
+		return errors.New("Vision short_id must contain exactly 16 hexadecimal characters")
 	}
 	if _, err := hex.DecodeString(shortID); err != nil {
-		return errors.New("REALITY short_id must contain exactly 16 hexadecimal characters")
+		return errors.New("Vision short_id must contain exactly 16 hexadecimal characters")
 	}
 	return nil
 }
@@ -380,14 +380,14 @@ func ValidateXrayClient(c *config.ClientConfig) error {
 	if err := xrayIdentity(x.Binary, x.Mode, x.UUID, x.ServerName); err != nil {
 		return err
 	}
-	if x.Mode == "reality" {
+	if x.Vision() {
 		if x.Path != "" || x.Host != "" || x.CAFile != "" {
-			return errors.New("REALITY does not accept XHTTP path, host or TLS ca_file")
+			return errors.New("Vision does not accept XHTTP path, host or TLS ca_file")
 		}
-		return xrayReality(x.PublicKey, x.ShortID)
+		return xrayVision(x.PublicKey, x.ShortID)
 	}
 	if x.PublicKey != "" || x.ShortID != "" {
-		return errors.New("XHTTP does not accept REALITY public_key or short_id")
+		return errors.New("XHTTP does not accept Vision public_key or short_id")
 	}
 	if err := xrayHTTP(x.Path, x.Host); err != nil {
 		return err
@@ -432,27 +432,27 @@ func ValidateXrayServer(c *config.ServerConfig) error {
 	if err := xrayIdentity(x.Binary, x.Mode, x.UUID, x.ServerName); err != nil {
 		return err
 	}
-	if x.Mode == "reality" {
+	if x.Vision() {
 		if x.Path != "" || x.Host != "" || x.Certificate != "" || x.Key != "" {
-			return errors.New("REALITY does not accept XHTTP path, host or TLS certificate/key")
+			return errors.New("Vision does not accept XHTTP path, host or TLS certificate/key")
 		}
-		realityHost, realityPort, err := xrayEndpoint(x.Target)
+		coverHost, coverPort, err := xrayEndpoint(x.Target)
 		if err != nil {
 			return fmt.Errorf("server.xray.target: %w", err)
 		}
-		realityIP, listenIP := net.ParseIP(realityHost), net.ParseIP(listenHost)
-		localTarget := realityIP != nil && realityIP.IsLoopback() || strings.EqualFold(strings.TrimSuffix(realityHost, "."), "localhost")
-		sameListener := strings.EqualFold(realityHost, listenHost) || realityIP != nil && listenIP != nil && realityIP.Equal(listenIP)
+		coverIP, listenIP := net.ParseIP(coverHost), net.ParseIP(listenHost)
+		localTarget := coverIP != nil && coverIP.IsLoopback() || strings.EqualFold(strings.TrimSuffix(coverHost, "."), "localhost")
+		sameListener := strings.EqualFold(coverHost, listenHost) || coverIP != nil && listenIP != nil && coverIP.Equal(listenIP)
 		if listenIP != nil && (listenIP.IsUnspecified() || listenIP.IsLoopback()) && localTarget {
 			sameListener = true
 		}
-		if realityPort == listenPort && sameListener || realityPort == targetPort && localTarget {
-			return errors.New("REALITY target must differ from the helper and reverse listeners")
+		if coverPort == listenPort && sameListener || coverPort == targetPort && localTarget {
+			return errors.New("Vision target must differ from the helper and reverse listeners")
 		}
-		return xrayReality(x.PrivateKey, x.ShortID)
+		return xrayVision(x.PrivateKey, x.ShortID)
 	}
 	if x.PrivateKey != "" || x.Target != "" || x.ShortID != "" {
-		return errors.New("XHTTP does not accept REALITY private_key, target or short_id")
+		return errors.New("XHTTP does not accept Vision private_key, target or short_id")
 	}
 	if err := xrayHTTP(x.Path, x.Host); err != nil {
 		return err
@@ -513,7 +513,7 @@ func XrayClientJSON(c *config.ClientConfig, socksAddr string) ([]byte, error) {
 	}
 	user := map[string]any{"id": x.UUID, "encryption": "none"}
 	var stream map[string]any
-	if x.Mode == "reality" {
+	if x.Vision() {
 		user["flow"] = "xtls-rprx-vision"
 		stream = map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{
 			"serverName": x.ServerName, "fingerprint": "chrome", "password": x.PublicKey, "shortId": x.ShortID,
@@ -575,7 +575,7 @@ func XrayServerJSON(c *config.ServerConfig) ([]byte, error) {
 	}
 	user := map[string]any{"id": x.UUID}
 	var stream map[string]any
-	if x.Mode == "reality" {
+	if x.Vision() {
 		user["flow"] = "xtls-rprx-vision"
 		stream = map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{
 			"show": false, "target": x.Target, "xver": 0, "serverNames": []string{x.ServerName},

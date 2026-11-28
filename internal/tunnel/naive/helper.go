@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/backpack/backpack/config"
+	"github.com/backpack/backpack/internal/helpers"
 	"github.com/sirupsen/logrus"
 )
 
@@ -32,7 +33,21 @@ type Helper struct {
 func (h *Helper) ProxyURL() string { return "socks5://" + h.addr }
 func (h *Helper) Close()           { h.once.Do(h.cancel); <-h.done }
 
+// ensureHelper installs the pinned helper this tunnel runs when it has gone
+// missing from its usual place, so a tunnel set up on another server, or one
+// whose helper was removed, still starts. The validation that follows says
+// why when it could not be installed.
+func ensureHelper(binary string, log *logrus.Logger) {
+	if log == nil {
+		log = logrus.StandardLogger()
+	}
+	if err := helpers.EnsureAt(binary, func(line string) { log.Info(line) }); err != nil {
+		log.Errorf("could not install the helper: %v", err)
+	}
+}
+
 func StartClient(ctx context.Context, c *config.ClientConfig, log *logrus.Logger) (*Helper, error) {
+	ensureHelper(c.Naive.Binary, log)
 	if err := ValidateClient(c); err != nil {
 		return nil, err
 	}
@@ -57,6 +72,7 @@ func StartClient(ctx context.Context, c *config.ClientConfig, log *logrus.Logger
 }
 
 func StartServer(ctx context.Context, c *config.ServerConfig, log *logrus.Logger) (*Helper, error) {
+	ensureHelper(c.Naive.Binary, log)
 	if err := ValidateServer(c); err != nil {
 		return nil, err
 	}
@@ -75,6 +91,7 @@ func StartServer(ctx context.Context, c *config.ServerConfig, log *logrus.Logger
 }
 
 func StartXrayClient(ctx context.Context, c *config.ClientConfig, log *logrus.Logger) (*Helper, error) {
+	ensureHelper(c.Xray.Binary, log)
 	if err := ValidateXrayClient(c); err != nil {
 		return nil, err
 	}
@@ -92,6 +109,7 @@ func StartXrayClient(ctx context.Context, c *config.ClientConfig, log *logrus.Lo
 }
 
 func StartXrayServer(ctx context.Context, c *config.ServerConfig, log *logrus.Logger) (*Helper, error) {
+	ensureHelper(c.Xray.Binary, log)
 	if err := ValidateXrayServer(c); err != nil {
 		return nil, err
 	}

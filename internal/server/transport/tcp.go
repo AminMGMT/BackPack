@@ -76,6 +76,10 @@ type TcpConfig struct {
 	// Stealth wraps every accepted tunnel connection in the Noise record layer,
 	// so the stream has no fingerprint for deep packet inspection to match.
 	Stealth bool
+	// StealthPlus is Stealth that also hides record sizes and timing
+	// (network.StealthPlusServerConn). Only a managed helper's tunnel sets it,
+	// as its encryption; a tunnel sets one of the two at most.
+	StealthPlus bool
 	// ManagedHelper requires explicit directional-EOF framing from the peer.
 	ManagedHelper bool
 	// Guard is the peer handshake's policy and key; see network.PeerGuard.
@@ -258,16 +262,19 @@ func (s *TcpTransport) tunnelPort(g *tcpGen) tcpTunnelPort {
 // connection.
 func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 	conn := raw
-	if s.config.ManagedHelper {
-		conn = naive.WrapDuplex(conn)
-	}
 
 	// In stealth mode the Noise handshake is completed first, so everything
 	// after it — the announcement, the control channel, the data conns — reads
 	// and writes through the encrypted record layer without knowing it is
 	// there. A peer without the token fails here and gets no further.
-	if s.config.Stealth {
-		wrapped, err := network.NoiseServerConn(raw, s.config.Token, 15*time.Second)
+	if s.config.Stealth || s.config.StealthPlus {
+		var wrapped net.Conn
+		var err error
+		if s.config.StealthPlus {
+			wrapped, err = network.StealthPlusServerConn(raw, s.config.Token, 15*time.Second)
+		} else {
+			wrapped, err = network.NoiseServerConn(raw, s.config.Token, 15*time.Second)
+		}
 		if err != nil {
 			s.logger.Debugf("stealth handshake failed from %s: %v", raw.RemoteAddr(), err)
 			raw.Close()
@@ -276,6 +283,11 @@ func (s *TcpTransport) admitTunnelConn(g *tcpGen, raw net.Conn) {
 		conn = wrapped
 		// The Noise handshake is keyed on the token: completing it proves it.
 		s.preauth.Prove(raw.RemoteAddr())
+	}
+	// A managed helper's directional-EOF records go inside the encryption,
+	// so the helper relays ciphertext and a half-close still crosses it.
+	if s.config.ManagedHelper {
+		conn = naive.WrapDuplex(conn)
 	}
 
 	ann, err := readAnnouncement(conn)

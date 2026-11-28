@@ -78,7 +78,7 @@ func TestTheTestSettingsFitOnePacketAndCarryNoToken(t *testing.T) {
 	previousHelper := connTestHelperBinary
 	connTestHelperBinary = func(string) (string, error) { return "/bin/true", nil }
 	defer func() { connTestHelperBinary = previousHelper }()
-	s, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1", Direct: true, SpoofSrc: ConnTestSpoofSource, RealityTarget: "example.com:443"})
+	s, link, err := StartConnTestIran(ConnTestOptions{Host: "127.0.0.1", Direct: true, SpoofSrc: ConnTestSpoofSource, VisionTarget: "example.com:443"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 	defer cover.Close()
 	_, coverPort, _ := net.SplitHostPort(cover.Listener.Addr().String())
 
-	iran, link, err := StartConnTestIran(ConnTestOptions{Host: host, RealityTarget: "localhost:" + coverPort})
+	iran, link, err := StartConnTestIran(ConnTestOptions{Host: host, VisionTarget: "localhost:" + coverPort})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestAConnectionTestOverLoopbackPassesEveryReverseTransport(t *testing.T) {
 		}
 		if managedTransport(r.Transport) {
 			want := "tls-ok"
-			if r.Transport == "reality" {
+			if r.Transport == "vision" {
 				want = "tcp-ok"
 			}
 			if r.HTTPSProbe != want || r.TestPort < 1 {
@@ -345,7 +345,7 @@ func TestConnTestUnavailableHelpersAreSkipped(t *testing.T) {
 	connTestHelperBinary = func(tool string) (string, error) { return "", fmt.Errorf("%s is unavailable", tool) }
 	defer func() { connTestHelperBinary = previous }()
 	s := &ConnTestIran{}
-	for _, tr := range []string{"naive", "xhttp", "reality"} {
+	for _, tr := range []string{"naive", "xhttp", "vision"} {
 		c := &connTestCase{kind: "reverse", tr: tr}
 		s.startManagedCase(c, map[int]bool{}, ConnTestOptions{})
 		if !strings.Contains(c.skip, "unavailable") {
@@ -523,7 +523,7 @@ func TestConnTestStopsAllUnresponsiveEnginesWithinOneDeadline(t *testing.T) {
 	engines = nil
 }
 
-func TestConnTestRealityCoverVerifiesTLSAndHTTP2(t *testing.T) {
+func TestConnTestVisionCoverVerifiesTLSAndHTTP2(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
 		version           uint16
@@ -547,7 +547,7 @@ func TestConnTestRealityCoverVerifiesTLSAndHTTP2(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			err := ctProbeRealityCover(ctx, server.Listener.Addr().String(), roots)
+			err := ctProbeVisionCover(ctx, server.Listener.Addr().String(), roots)
 			if (err == nil) != tc.pass {
 				t.Fatalf("compatible=%v, error=%v", tc.pass, err)
 			}
@@ -555,12 +555,12 @@ func TestConnTestRealityCoverVerifiesTLSAndHTTP2(t *testing.T) {
 	}
 }
 
-func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
+func TestConnTestVisionCoverFallbackAndCancellation(t *testing.T) {
 	previousWait := connTestCoverWait
 	connTestCoverWait = 100 * time.Millisecond
 	defer func() { connTestCoverWait = previousWait }()
 	tried := []string{}
-	target, err := ctFindRealityCover(context.Background(), []string{"blocked", "compatible", "unused"}, func(ctx context.Context, target string) error {
+	target, err := ctFindVisionCover(context.Background(), []string{"blocked", "compatible", "unused"}, func(ctx context.Context, target string) error {
 		tried = append(tried, target)
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("probe has no deadline")
@@ -573,15 +573,15 @@ func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
 	if err != nil || target != "compatible" || strings.Join(tried, ",") != "blocked,compatible" {
 		t.Fatalf("selection: %q %v %v", target, tried, err)
 	}
-	if target, err := ctFindRealityCover(context.Background(), []string{"blocked"}, func(context.Context, string) error { return errors.New("blocked") }); err == nil || target != "" {
+	if target, err := ctFindVisionCover(context.Background(), []string{"blocked"}, func(context.Context, string) error { return errors.New("blocked") }); err == nil || target != "" {
 		t.Fatal("unreachable cover was selected")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	target, err = ctFindRealityCover(ctx, []string{"cancelled", "unused"}, func(context.Context, string) error { cancel(); return nil })
+	target, err = ctFindVisionCover(ctx, []string{"cancelled", "unused"}, func(context.Context, string) error { cancel(); return nil })
 	if target != "" || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled selection succeeded: %q %v", target, err)
 	}
-	if target, err := ctFindRealityCover(context.Background(), []string{"expired"}, func(ctx context.Context, _ string) error {
+	if target, err := ctFindVisionCover(context.Background(), []string{"expired"}, func(ctx context.Context, _ string) error {
 		<-ctx.Done()
 		return nil
 	}); err == nil || target != "" {
@@ -603,7 +603,7 @@ func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
 	}()
 	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := ctProbeRealityCover(ctx, ln.Addr().String(), nil); !errors.Is(err, context.DeadlineExceeded) {
+	if err := ctProbeVisionCover(ctx, ln.Addr().String(), nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("stalled handshake: %v", err)
 	}
 	select {
@@ -615,9 +615,9 @@ func TestConnTestRealityCoverFallbackAndCancellation(t *testing.T) {
 
 // The real pinned helper must reject a cover that ordinary TLS accepts, fall
 // back to a working cover and release every process and socket on cancellation.
-func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
+func TestVisionCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	binary, err := connTestHelperBinary("xray")
-	if override := os.Getenv("BP_REALITY_TEST_BINARY"); override != "" {
+	if override := os.Getenv("BP_VISION_TEST_BINARY"); override != "" {
 		binary, err = override, nil
 	}
 	if err != nil {
@@ -654,7 +654,7 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	}
 	roots.AddCert(largeLeaf)
 	roots.AddCert(small.Certificate())
-	output, err := os.OpenFile(filepath.Join(t.TempDir(), "reality-cover.log"), os.O_CREATE|os.O_RDWR, 0600)
+	output, err := os.OpenFile(filepath.Join(t.TempDir(), "vision-cover.log"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +662,7 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	ctx = naive.WithHelperOutput(ctx, output)
-	if err := ctProbeRealityCover(ctx, large.Listener.Addr().String(), roots); err != nil {
+	if err := ctProbeVisionCover(ctx, large.Listener.Addr().String(), roots); err != nil {
 		t.Fatalf("large cover must pass ordinary TLS verification: %v", err)
 	}
 	target := func(s *httptest.Server) string {
@@ -672,14 +672,14 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	previousWait := connTestCoverWait
 	connTestCoverWait = 3 * time.Second
 	defer func() { connTestCoverWait = previousWait }()
-	selected, err := ctFindRealityCover(ctx, []string{target(large), target(small)}, func(ctx context.Context, target string) error {
-		return ctProbeRealityTransport(ctx, target, binary)
+	selected, err := ctFindVisionCover(ctx, []string{target(large), target(small)}, func(ctx context.Context, target string) error {
+		return ctProbeVisionTransport(ctx, target, binary)
 	})
 	if err != nil || selected != target(small) {
-		t.Fatalf("TLS-compatible but REALITY-incompatible cover was selected: %q %v", selected, err)
+		t.Fatalf("TLS-compatible but Vision-incompatible cover was selected: %q %v", selected, err)
 	}
 	if diagnostics, err := os.ReadFile(output.Name()); err != nil || !bytes.Contains(diagnostics, []byte("Xray")) {
-		t.Fatalf("REALITY authentication succeeded but helper diagnostics were lost: %v", err)
+		t.Fatalf("Vision authentication succeeded but helper diagnostics were lost: %v", err)
 	}
 	silent, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -700,7 +700,7 @@ func TestRealityCoverSelectionAuthenticatesWithThePinnedHelper(t *testing.T) {
 	defer stop()
 	start := time.Now()
 	_, port, _ := net.SplitHostPort(silent.Addr().String())
-	if err := ctProbeRealityTransport(attempt, "localhost:"+port, binary); err == nil {
+	if err := ctProbeVisionTransport(attempt, "localhost:"+port, binary); err == nil {
 		t.Fatal("silent cover passed authenticated probe")
 	}
 	if time.Since(start) > 4*time.Second {

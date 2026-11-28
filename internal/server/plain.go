@@ -13,7 +13,7 @@ import (
 // usesPlainEngine reports whether tr runs on the plain engine — its
 // tcp, tcpmux, ws, wss, wsmux and wssmux, ported in internal/plain.
 //
-// tcp under a managed HTTPS carrier (naive, xhttp, REALITY) is the exception:
+// tcp under a managed HTTPS carrier (naive, xhttp, vision) is the exception:
 // that carrier relies on the directional-EOF framing of Backpack's own tcp
 // transport, which keeps running it, as it keeps running stealth.
 func usesPlainEngine(tr config.TransportType, managed bool) bool {

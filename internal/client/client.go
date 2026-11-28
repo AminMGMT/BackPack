@@ -227,7 +227,9 @@ func (c *Client) startEngine(ctx context.Context, tr config.TransportType, endpo
 			Outbound:       outbound,
 			// Stealth is the TCP transport with a Noise record layer over every
 			// tunnel connection; everything else about it is identical.
-			Stealth:       tr == config.STEALTH,
+			// Under a managed helper, stealth and stealth+ are its encryption.
+			Stealth:       tr == config.STEALTH || c.config.ManagedEncryption() == config.EncStealth,
+			StealthPlus:   c.config.ManagedEncryption() == config.EncStealthPlus,
 			ManagedHelper: c.config.Naive.Enabled() || c.config.Xray.Enabled(),
 			Guard:         c.guard,
 		}

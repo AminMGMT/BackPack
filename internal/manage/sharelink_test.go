@@ -306,7 +306,7 @@ func TestManagedHTTPSLinksRejectPrivateOrMalformedTrust(t *testing.T) {
 	if filepath.Base(path) == "" || !strings.HasPrefix(filepath.Base(path), "https-peer-") || path != managedLinkCAPath(string(public)) {
 		t.Fatal("trust storage is not deterministic")
 	}
-	link := ShareLink{Kind: "reverse", From: "iran", Tr: "reality", InnerPort: "3080", Port: "443"}
+	link := ShareLink{Kind: "reverse", From: "iran", Tr: "vision", InnerPort: "3080", Port: "443"}
 	for _, tc := range []struct {
 		name   string
 		change func(*ShareLink)
@@ -329,7 +329,7 @@ func TestManagedHTTPSLinksRejectPrivateOrMalformedTrust(t *testing.T) {
 }
 
 func TestManagedHTTPSSetupInstructionsRequireMatchingBuild(t *testing.T) {
-	link := ShareLink{Kind: "reverse", From: "iran", Tok: "secret", Tr: "reality", Port: "443", InnerPort: "3080"}
+	link := ShareLink{Kind: "reverse", From: "iran", Tok: "secret", Tr: "vision", Port: "443", InnerPort: "3080"}
 	raw, err := link.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestManagedHTTPSSetupInstructionsRequireMatchingBuild(t *testing.T) {
 		t.Fatal("managed helper link would install the published legacy release")
 	}
 	out := capture(t, func() { printLinkBlock(raw, "unused") })
-	for _, expected := range []string{"BP_HELPERS=naive,xray", "HTTPS → Same Protocol → Setup Link", "sudo backpack link apply '" + raw + "'"} {
+	for _, expected := range []string{"Same BackPack Build On Kharej", "HTTPS → Same Protocol → Setup Link", "sudo backpack link apply '" + raw + "'"} {
 		if !strings.Contains(out, expected) {
 			t.Fatalf("missing setup instruction %q", expected)
 		}
@@ -349,16 +349,16 @@ func TestManagedHTTPSSetupInstructionsRequireMatchingBuild(t *testing.T) {
 	}
 }
 
-func TestManagedHTTPSRealityExportRequiresTheServerPrivateKey(t *testing.T) {
+func TestManagedHTTPSVisionExportRequiresTheServerPrivateKey(t *testing.T) {
 	cfg := config.Config{Server: config.ServerConfig{BindAddr: "127.0.0.1:3080", Token: "secret", Transport: config.TCP,
-		Xray: config.XrayServerConfig{Binary: "/usr/local/lib/backpack/xray", Mode: "reality", Listen: "0.0.0.0:443"}}}
+		Xray: config.XrayServerConfig{Binary: "/usr/local/lib/backpack/xray", Mode: config.XrayModeVision, Listen: "0.0.0.0:443"}}}
 	for _, key := range []string{"", "   ", "invalid"} {
 		cfg.Server.Xray.PrivateKey = key
 		if raw, err := shareLinkOf("test", "127.0.0.1", cfg); err == nil || raw != "" {
-			t.Fatalf("REALITY export accepted missing or invalid identity: %q %v", raw, err)
+			t.Fatalf("Vision export accepted missing or invalid identity: %q %v", raw, err)
 		}
 	}
-	private, public, err := managedRealityKey("")
+	private, public, err := managedVisionKey("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,5 +404,21 @@ func TestShareLinkRefusalsReturnNoPartialSettings(t *testing.T) {
 		if link, err := DecodeShareLink(raw); err == nil || !reflect.DeepEqual(link, ShareLink{}) {
 			t.Fatalf("rejected link retained partial settings: %+v %v", link, err)
 		}
+	}
+}
+
+// A setup link made before Vision was renamed names it "reality"; it still
+// reads as Vision, so an Iran server on the old build pairs with a new kharej.
+func TestALinkNamingRealityReadsAsVision(t *testing.T) {
+	raw, err := ShareLink{Kind: "reverse", From: "iran", Tr: "reality", Tok: "token", Port: "443", InnerPort: "3080"}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := DecodeShareLink(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Tr != "vision" || !managedTransport(l.Tr) {
+		t.Fatalf("transport %q, want vision", l.Tr)
 	}
 }

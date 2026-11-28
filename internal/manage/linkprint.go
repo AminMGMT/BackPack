@@ -40,7 +40,7 @@ func printLinkBlock(link, menuPath string) {
 	fmt.Println(tui.Color(tui.Bold+tui.White, link))
 	fmt.Println()
 	if command == "" {
-		tui.Info("Install The Same BackPack Build On Kharej With BP_HELPERS=naive,xray, Then Apply:")
+		tui.Info("Install The Same BackPack Build On Kharej, Then Apply:")
 		fmt.Println(tui.Color(tui.Bold+tui.White, "sudo backpack link apply '"+link+"'"))
 	} else {
 		tui.Info("Install BackPack And Set Up This Tunnel (Kharej Without BackPack, As Root):")

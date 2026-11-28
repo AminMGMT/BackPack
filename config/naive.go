@@ -57,47 +57,68 @@ type NaiveServerConfig struct {
 
 func (n NaiveServerConfig) Enabled() bool { return n != (NaiveServerConfig{}) }
 
+// The Xray helper's modes. Vision is RAW with Xray's REALITY security and the
+// XTLS Vision flow: the TLS handshake a probe sees is the cover site's own.
+// Configs written before the rename say "reality", which still reads as vision.
+const (
+	XrayModeXHTTP  = "xhttp"
+	XrayModeVision = "vision"
+	// xrayModeVisionOld is vision's name up to v2.0.0.
+	xrayModeVisionOld = "reality"
+)
+
+// XrayMode is mode under its current name: the old "reality" reads as vision.
+func XrayMode(mode string) string {
+	if mode == xrayModeVisionOld {
+		return XrayModeVision
+	}
+	return mode
+}
+
 // XrayClientConfig wraps the TCP reverse connection with an official Xray
-// helper. Mode selects XHTTP over verified TLS or RAW with REALITY and Vision.
+// helper. Mode selects XHTTP over verified TLS or Vision.
 type XrayClientConfig struct {
 	// Binary is the absolute path to official Xray; the managed contract is tested with v26.3.27.
 	Binary string `toml:"binary"`
 	// Server is the outer Xray host:port; client.remote_addr remains the Iran loopback reverse listener.
 	Server string `toml:"server"`
-	// Mode selects xhttp (verified TLS/HTTP2) or reality (RAW, REALITY and Vision).
+	// Mode selects xhttp (verified TLS/HTTP2) or vision (RAW, REALITY and the Vision flow).
 	Mode string `toml:"mode"`
 	// UUID is one canonical UUID shared by the two helper accounts, separate from the reverse token.
 	UUID string `toml:"uuid"`
-	// ServerName is the explicit DNS name for TLS verification or REALITY authentication.
+	// ServerName is the explicit DNS name for TLS verification or Vision's cover authentication.
 	ServerName string `toml:"server_name"`
-	// Path is an explicit non-root private XHTTP path shared by both helpers; unused by REALITY.
+	// Path is an explicit non-root private XHTTP path shared by both helpers; unused by Vision.
 	Path string `toml:"path"`
 	// Host optionally overrides the XHTTP HTTP host; empty uses server_name.
 	Host string `toml:"host"`
 	// CAFile optionally adds a PEM trust anchor for XHTTP; normal TLS verification remains enabled.
 	CAFile string `toml:"ca_file"`
-	// PublicKey is the server's 32-byte unpadded base64url X25519 public key for REALITY.
+	// PublicKey is the server's 32-byte unpadded base64url X25519 public key for Vision.
 	PublicKey string `toml:"public_key"`
-	// ShortID is the shared 16-character hexadecimal REALITY identifier.
+	// ShortID is the shared 16-character hexadecimal Vision identifier.
 	ShortID string `toml:"short_id"`
 }
 
 func (x XrayClientConfig) Enabled() bool { return x != (XrayClientConfig{}) }
 
+// Vision reports whether the helper runs Vision, under either of its names.
+func (x XrayClientConfig) Vision() bool { return XrayMode(x.Mode) == XrayModeVision }
+
 // XrayServerConfig accepts one VLESS account and permits only the existing
-// reverse engine's loopback target. REALITY Target is an explicit TLS endpoint.
+// reverse engine's loopback target. Vision's Target is an explicit TLS endpoint.
 type XrayServerConfig struct {
 	// Binary is the absolute path to official Xray, tested with v26.3.27.
 	Binary string `toml:"binary"`
 	// Listen is the public TCP host:port, separate from the loopback server.bind_addr.
 	Listen string `toml:"listen"`
-	// Mode selects xhttp or reality and must match the client.
+	// Mode selects xhttp or vision and must match the client.
 	Mode string `toml:"mode"`
 	// UUID is the canonical VLESS account UUID shared with the client.
 	UUID string `toml:"uuid"`
-	// ServerName is the DNS name in the XHTTP certificate or REALITY target's TLS identity.
+	// ServerName is the DNS name in the XHTTP certificate or Vision target's TLS identity.
 	ServerName string `toml:"server_name"`
-	// Path is the private XHTTP path shared with the client; unused by REALITY.
+	// Path is the private XHTTP path shared with the client; unused by Vision.
 	Path string `toml:"path"`
 	// Host is the optional shared XHTTP HTTP host; empty uses server_name.
 	Host string `toml:"host"`
@@ -105,12 +126,15 @@ type XrayServerConfig struct {
 	Certificate string `toml:"certificate"`
 	// Key is the XHTTP PEM private key paired with certificate.
 	Key string `toml:"key"`
-	// PrivateKey is the secret 32-byte unpadded base64url X25519 REALITY key.
+	// PrivateKey is the secret 32-byte unpadded base64url X25519 Vision key.
 	PrivateKey string `toml:"private_key"`
-	// Target is an explicit reachable TLS1.3/H2 host:port used as the REALITY cover endpoint; choose one you control.
+	// Target is an explicit reachable TLS1.3/H2 host:port used as Vision's cover endpoint; choose one you control.
 	Target string `toml:"target"`
-	// ShortID is the shared 16-character hexadecimal REALITY identifier.
+	// ShortID is the shared 16-character hexadecimal Vision identifier.
 	ShortID string `toml:"short_id"`
 }
 
 func (x XrayServerConfig) Enabled() bool { return x != (XrayServerConfig{}) }
+
+// Vision reports whether the helper runs Vision, under either of its names.
+func (x XrayServerConfig) Vision() bool { return XrayMode(x.Mode) == XrayModeVision }

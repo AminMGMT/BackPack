@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"time"
 
 	"fmt"
@@ -195,7 +196,7 @@ func TestXrayLoadEditPreservesSettingsAndRejectsBypass(t *testing.T) {
 	if err := os.MkdirAll(app.ConfigDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"xhttp", "reality"} {
+	for _, mode := range []string{"xhttp", "vision"} {
 		for _, role := range []string{"server", "client"} {
 			t.Run(mode+"/"+role, func(t *testing.T) {
 				s := Spec{Role: role, Transport: "tcp", BindAddr: "127.0.0.1:62001", RemoteAddr: "127.0.0.1:62001", Token: "reverse-token", Ports: []string{"62003=127.0.0.1:62004"}, KeepAlive: 15}
@@ -420,4 +421,29 @@ func naiveSpecFiles(t *testing.T) (binary, certificate, key string) {
 		t.Fatal(err)
 	}
 	return binary, certificate, key
+}
+
+// Vision, under either name, carries stealth and stealth+ inside its helper;
+// Naive and XHTTP carry none, and a mode Vision does not carry falls to none.
+func TestVisionOffersTheEncryptionItCarries(t *testing.T) {
+	for _, mode := range []string{"vision", "reality"} {
+		s := Spec{Role: "server", Transport: "tcp"}
+		s.XrayServer.Mode, s.XrayServer.Listen = mode, "0.0.0.0:443"
+		if got := s.EncryptionModes(); !slices.Equal(got, config.ManagedEncryptionModes) {
+			t.Errorf("%s offers %v", mode, got)
+		}
+		s.SetEncryption(config.EncScrap)
+		if s.Encryption.EncryptionMode() != config.EncNone {
+			t.Errorf("%s kept scrap", mode)
+		}
+		s.SetEncryption(config.EncStealthPlus)
+		if s.Encryption.EncryptionMode() != config.EncStealthPlus {
+			t.Errorf("%s dropped stealth+", mode)
+		}
+	}
+	s := Spec{Role: "server", Transport: "tcp"}
+	s.XrayServer.Mode, s.XrayServer.Listen = "xhttp", "0.0.0.0:443"
+	if got := s.EncryptionModes(); got != nil {
+		t.Errorf("xhttp offers %v", got)
+	}
 }

@@ -7,7 +7,7 @@ arm64; the installer prints their versioned absolute paths. Certificate/key
 renewal remains external, and valid file replacements reload the tunnel without
 a TOML edit. Invalid or incomplete replacements keep the current generation.
 The terminal's Reverse setup and Edit → Transport menus offer an HTTPS family
-with Naive / HTTP2, XHTTP / TLS and REALITY / Vision. The wizard collects helper
+with Naive / HTTP2, XHTTP / TLS and Vision. The wizard collects helper
 settings on each machine; these remain outside automatic transport selection.
 Each side owns its helper under the tunnel context; TCP forwarding
 and one endpoint are currently supported.
@@ -16,6 +16,28 @@ and one endpoint are currently supported.
 directory; `BP_HELPERS=naive,xray` installs both sets. Existing helper directories
 are retained. No helper is started by the installer. Xray transport settings
 require a Backpack build that implements the managed Xray wrapper.
+
+### Helpers without the installer
+
+`BP_HELPERS` is optional. Backpack installs the same pinned helpers itself
+the first time something needs one: Xray for Vision and XHTTP, sing-box on
+the Iran end and NaiveProxy on the kharej end for Naive. That happens in the
+wizard, the panel, when a setup link is applied, in the Connection Test, and
+when a tunnel starts and finds its helper missing from its usual place. A
+helper path of your own is never replaced.
+
+It downloads the release from GitHub, directly or through a tunnel relay, and
+refuses it unless it matches the checksum pinned in Backpack and in
+`install.sh`. A server that cannot reach GitHub takes the same archive copied
+into `/root/BackPack` or `/root`:
+
+| Helper | amd64 | arm64 |
+|---|---|---|
+| Xray `v26.3.27` | `Xray-linux-64.zip` | `Xray-linux-arm64-v8a.zip` |
+| sing-box `v1.14.2` | `sing-box-1.14.2-linux-amd64.tar.gz` | `sing-box-1.14.2-linux-arm64.tar.gz` |
+| NaiveProxy `v154.0.8037.49-5` | `naiveproxy-v154.0.8037.49-5-linux-x64.tar.xz` | `naiveproxy-v154.0.8037.49-5-linux-arm64.tar.xz` |
+
+NaiveProxy needs glibc and `xz` (xz-utils) to unpack.
 
 ## Managed HTTPS carriers
 
@@ -44,10 +66,10 @@ copies them. Existing PEM files
 can be used for Naive and XHTTP. The private-certificate option generates a
 certificate for the chosen hostname or IP; its public PEM travels in the
 Setup Link. For manual setup, copy only the public PEM to Kharej and enter
-that file as the CA file. REALITY generates its identity on Iran and copies the matching public settings
+that file as the CA file. Vision generates its identity on Iran and copies the matching public settings
 in the Setup Link. Its wizard tests suggested TLS 1.3/H2 cover endpoints and
 fills SNI automatically; custom endpoints remain editable and are tested
-before saving. See [the REALITY setup guide](reality-setup.md). UDP forwarding, proxy
+before saving. See [the Vision setup guide](vision-setup.md). UDP forwarding, proxy
 and routing bindings, address and transport fallbacks are excluded from this
 wizard because these wrappers cannot carry them. The helper binaries must be
 installed on both machines; the wizard suggests their pinned installer paths.
@@ -77,7 +99,7 @@ managed peers. Deploy the matching build to both sides together.
 
 Connection Test uses free temporary public ports, private certificates and a
 synthetic hostname for XHTTP; Naive connects by IP. Kharej also probes public TCP
-and verified TLS/HTTP2 on a **separate connection** (TCP only for REALITY).
+and verified TLS/HTTP2 on a **separate connection** (TCP only for Vision).
 The final table shows these checks alongside the actual test port. They never
 count as tunnel success: authentication, all stability echoes and verified
 download/upload still have to pass through the real helper. A successful TLS
@@ -86,14 +108,14 @@ carry traffic; it does not establish whether filtering, fingerprint differences
 or an application error caused that failure. A failed synthetic test cannot
 predict every deployment using a real site, certificate, port or CDN.
 
-Without an owned domain, REALITY can connect to an IP using a verified cover
+Without an owned domain, Vision can connect to an IP using a verified cover
 hostname, and private IP certificates can be shared for Naive. Neither
 guarantees that a filtered route will carry sustained data. Do not disable
 certificate verification or select an unverified SNI as a purported fix.
 
 ### Naive HTTP/2
 
-Install with `BP_HELPERS=naive bash install.sh`. The pinned versions are
+Backpack installs these itself when missing ([above](#helpers-without-the-installer)), or install them with `BP_HELPERS=naive bash install.sh`. The pinned versions are
 NaiveProxy `v154.0.8037.49-5` and sing-box `v1.14.2`. On amd64, for example:
 
 ```toml
@@ -141,7 +163,7 @@ something an observer can count; NaiveProxy names the option
 
 ### XHTTP over TLS
 
-Install with `BP_HELPERS=xray bash install.sh`; the tested contract uses official
+Backpack installs Xray itself when missing, or install it with `BP_HELPERS=xray bash install.sh`; the tested contract uses official
 Xray `v26.3.27`. Keep the ordinary reverse tables from the example above and
 replace the Naive tables with these, using a fresh UUID (`xray uuid`) and a
 random private path shared by both helpers:
@@ -188,12 +210,22 @@ TLS configuration. CDN deployment is route/provider dependent and has not been
 validated by the local integration tests. This first wrapper does not expose
 H3, split download settings, raw JSON overrides, or a website frontend.
 
-### RAW / REALITY / Vision
+### Vision
 
-For the automatic cover scan, editable defaults and Space/Enter workflow, see
-[Setting up REALITY / Vision](reality-setup.md).
+Vision is Xray's REALITY security with the XTLS Vision flow: anyone who looks
+at the tunnel port sees the TLS handshake of a real cover site, and no
+certificate or domain of your own is needed. For the wizard, see
+[Setting up Vision](vision-setup.md).
 
-Use `mode = "reality"` on both sides, the same UUID and a fresh 16-character
+**Encryption inside Vision.** Vision can carry `stealth` or `stealth+` (see
+[encryption](encryption.md)) inside it, set at setup or under **Edit →
+Encryption**; the setup link takes it to the kharej. Both ends then encrypt
+end to end, so the Xray helpers relay only ciphertext, and `stealth+` also
+hides the record sizes and timing that a TLS-in-TLS check reads. `scrap`,
+`shadow` and `splash` are refused under Vision: it already looks like TLS.
+
+Use `mode = "vision"` on both sides (a config from before the rename says
+`"reality"`, which still reads as Vision), the same UUID and a fresh 16-character
 hexadecimal `short_id`. Generate an X25519 pair with the installed `xray x25519`;
 put its private key only on Iran and its corresponding public value on the
 outside client (the pinned CLI names that value `Password`). Both are unpadded
@@ -206,10 +238,10 @@ both sides to the DNS name accepted by the cover endpoint's certificate. Choose
 a reachable TLS 1.3 endpoint with HTTP/2 that you control; it must differ from
 the helper and reverse listeners. There is no `ca_file` or HTTP `host` in this
 mode. The generated VLESS account uses Vision and the client uses the Chrome
-fingerprint. REALITY uses a direct outer connection and is not a CDN transport.
+fingerprint. Vision uses a direct outer connection and is not a CDN transport.
 
 The Xray SOCKS listener permits only the reverse target, and authenticated Iran
-traffic can reach only that target. The REALITY unauthenticated cover behavior
+traffic can reach only that target. The Vision unauthenticated cover behavior
 uses the explicitly configured cover endpoint. None of these carriers promises
 availability on every filtered network; validate your own Iran/outside route.
 
@@ -290,9 +322,9 @@ setting, off by default, and independent of the transport. See
 ---
 
 
-Connection Test checks each automatic REALITY cover with the pinned Xray
+Connection Test checks each automatic Vision cover with the pinned Xray
 Chrome/Vision helper pair and an authenticated echo before selecting it. A
-successful ordinary TLS 1.3/H2 connection alone is insufficient: the pinned
+successful ordinary TLS 1.3/H2 connection alone is insufficient: Xray's pinned
 REALITY parser can reject a cover's handshake records. Failed candidates are
 skipped in order; when none work, the skipped row includes each candidate's
 failure instead of treating it as an Iran/Kharej route failure. Each candidate
@@ -300,7 +332,7 @@ has an eight-second startup/handshake budget and temporary helpers are stopped.
 The automatic order is Microsoft, Bing, then Apple as a last fallback. The
 startup screen separates a locally verified cover from the two-server verdict,
 and shows skipped helpers with their reasons. Probe banners and generic Xray
-deployment warnings go to a private `reality-cover.log` in the temporary test
+deployment warnings go to a private `vision-cover.log` in the temporary test
 directory; a failed cover shows that path while the test is open. Apple and
 temporary-port caveats are shown once in the menu instead of repeated helper
 output. These files are removed when the test closes.
